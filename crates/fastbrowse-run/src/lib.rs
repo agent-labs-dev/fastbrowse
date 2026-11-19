@@ -1103,10 +1103,6 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         if task.record.is_some() {
             cdp = cdp.with_pointer_marks(pointer_marks.clone());
         }
-        // On Hyprland with deskpilot drawing the cursor, the recording films the browser's window, so the real agent
-        // cursor is in the clip and none is painted over it. A run with secrets keeps the screencast, which holds
-        // back the frames that show one.
-        let film = if task.record.is_some() && host.secrets.is_none() { cdp.film().await } else { None };
         let page: Arc<dyn Page> = Arc::new(cdp);
         let page: Arc<dyn Page> = match &search {
             Some(provider) => Arc::new(fetch::search::SearchPage::new(
@@ -1117,7 +1113,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             None => page,
         };
         if let Some(path) = &task.record {
-            match Recording::start_with_marks(opened.clone(), path, pointer_marks, film).await {
+            match Recording::start_with_marks(opened.clone(), path, pointer_marks).await {
                 Ok(started) => *recording.lock().await = Some(started),
                 Err(error) => {
                     recording_failed = Some(error.0.clone());

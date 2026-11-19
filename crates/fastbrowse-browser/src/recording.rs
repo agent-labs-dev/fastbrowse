@@ -71,17 +71,6 @@ pub struct ResultCard {
     pub known_dollars: f64,
 }
 
-/// Where a window's own frames come from: `program record WINDOW -o -`, deskpilot filming the window with the agent
-/// cursor the Hyprland plugin draws, as constant-rate PPM frames. With it a recording is the window as it is, cursor
-/// included, and no cursor is painted over it afterwards: there is one cursor, the real one.
-#[derive(Debug, Clone)]
-pub struct Film {
-    pub program: PathBuf,
-    pub window: String,
-    /// The deskpilot agent whose cursor is filmed.
-    pub agent: Option<String>,
-}
-
 #[derive(Default)]
 struct Frames {
     frame: Option<Vec<u8>>,
@@ -105,16 +94,13 @@ pub struct Recording {
     captions: Vec<(Instant, String)>,
     pointer_marks: Arc<Mutex<Vec<PointerMark>>>,
     card_at: Option<Instant>,
-    /// The deskpilot filming the window, when the frames are its own rather than the tab's screencast.
-    film: Option<Child>,
-    filmed: bool,
     /// The finished videos, set only once both are encoded: a failed run must not report a file it did not write.
     pub outputs: Vec<PathBuf>,
 }
 
 impl Recording {
     pub async fn start(session: BrowserSession, path: &Path) -> Result<Self, RecordingError> {
-        Self::start_with_marks(session, path, Arc::new(Mutex::new(Vec::new())), None).await
+        Self::start_with_marks(session, path, Arc::new(Mutex::new(Vec::new()))).await
     }
 
     /// start ffmpeg and the cast, and begin writing frames.
@@ -122,7 +108,6 @@ impl Recording {
         session: BrowserSession,
         path: &Path,
         pointer_marks: Arc<Mutex<Vec<PointerMark>>>,
-        film: Option<Film>,
     ) -> Result<Self, RecordingError> {
         if session.grant().is_some() {
             return Err(RecordingError(
@@ -143,39 +128,12 @@ impl Recording {
             let _ = std::fs::create_dir_all(parent);
         }
         let uncaptioned = scratch.join("uncaptioned.mkv");
-        // A filmed window's frames go straight from deskpilot into ffmpeg.
-        let mut filming = match &film {
-            Some(film) => {
-                let mut command = Command::new(&film.program);
-                command.args(["record", &film.window, "-o", "-", "--fps", &FPS.to_string()]);
-                if let Some(agent) = &film.agent {
-                    command.env("DESKPILOT_AGENT", agent);
-                }
-                let child = command
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .kill_on_drop(true)
-                    .spawn()
-                    .map_err(|e| {
-                        RecordingError(format!("could not start deskpilot to film the window: {}", e.kind()))
-                    })?;
-                Some(child)
-            }
-            None => None,
-        };
-        let input = match filming.as_mut().and_then(|child| child.stdout.take()) {
-            Some(out) => {
-                out.try_into().map_err(|e: std::io::Error| RecordingError(format!("could not pipe the film: {e}")))?
-            }
-            None => Stdio::piped(),
-        };
         let mut ffmpeg = Command::new(&ffmpeg_path)
             .args(["-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", &FPS.to_string(), "-i", "-"])
             // Lossless, so the captioning pass is the only lossy encode; 4:4:4 also takes the odd sizes a tab has.
             .args(["-c:v", "libx264", "-qp", "0", "-preset", "ultrafast", "-pix_fmt", "yuv444p"])
             .arg(&uncaptioned)
-            .stdin(input)
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -201,8 +159,7 @@ impl Recording {
             }
         })));
         let started = Instant::now();
-        // The screencast and its ticker feed a tab recording only.
-        let ticker = film.is_none().then(|| tokio::spawn(tick(session.clone(), frames.clone(), stdin.clone())));
+        let ticker = tokio::spawn(tick(session.clone(), frames.clone(), stdin.clone()));
         Ok(Self {
             session,
             path: path.to_owned(),
@@ -211,13 +168,11 @@ impl Recording {
             ffmpeg: Some(ffmpeg),
             stdin,
             frames,
-            ticker,
+            ticker: Some(ticker),
             started,
             captions: vec![],
             pointer_marks,
             card_at: None,
-            filmed: film.is_some(),
-            film: filming,
             outputs: vec![],
         })
     }
@@ -305,35 +260,8 @@ impl Recording {
         std::mem::take(&mut self.outputs)
     }
 
-    /// End a filmed recording: deskpilot is asked to stop with SIGTERM so its last frame is whole, which ends
-    /// ffmpeg's input, then the two encode passes run from the video's start.
-    async fn close_film(&mut self, mut film: Child, ffmpeg: Child) {
-        if let Some(pid) = film.id() {
-            let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status().await;
-        }
-        if timeout(secs(5.0), film.wait()).await.is_err() {
-            let _ = film.kill().await;
-        }
-        match ffmpeg.wait_with_output().await {
-            Ok(done) if done.status.success() => {}
-            Ok(done) => {
-                let error = String::from_utf8_lossy(&done.stderr);
-                warn(&format!("ffmpeg could not write {}: {}", self.path.display(), cut(error.trim(), 400)));
-                return;
-            }
-            Err(error) => {
-                warn(&format!("ffmpeg could not write {}: {}", self.path.display(), error.kind()));
-                return;
-            }
-        }
-        self.encode_all(self.started).await;
-    }
-
     async fn close(&mut self) {
         let Some(mut ffmpeg) = self.ffmpeg.take() else { return };
-        if let Some(film) = self.film.take() {
-            return self.close_film(film, ffmpeg).await;
-        }
         let Some(mut stdin) = self.stdin.lock().await.take() else { return };
         // Chrome can acknowledge a cast and then send nothing, and a short run, an attached one with no result card,
         // ends before the cast is restarted: the video is then one still of the tab rather than nothing at all.
@@ -429,12 +357,7 @@ impl Recording {
             .collect();
         let srt: Vec<String> = cues.iter().enumerate().map(|(n, cue)| format!("{}\n{cue}", n + 1)).collect();
         let _ = tokio::fs::write(&subtitles, srt.join("\n")).await;
-        // A filmed window already shows the agent cursor, so nothing is painted over it.
-        let marks = if self.filmed {
-            Vec::new()
-        } else {
-            self.pointer_marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
-        };
+        let marks = self.pointer_marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let cursor = self.scratch.join("cursor.ass");
         let cursor_present = if marks.is_empty() {
             false
@@ -660,26 +583,48 @@ fn filter_chain(captions: bool, cursor: bool, style: &str) -> String {
     if filters.is_empty() { "null".to_owned() } else { filters.join(",") }
 }
 
-/// The click ring as an ASS overlay: a ring that swells and fades on each press of the mouse. A recording that is
-/// filmed (see `Film`) has deskpilot's own agent cursor in the picture and takes no overlay at all; this is for a
-/// browser with no cursor of its own to film. Points are CSS pixels, scaled to the frame.
+/// The cursor as an ASS overlay: an arrow that glides into each action point in the 400 ms before the action, stays
+/// there until the next one, and a ring that swells and fades on each press of the mouse. Points are CSS pixels, scaled to the frame.
 fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32) -> String {
     let mut out = format!(
         "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,1,0,7,0,0,0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     );
+    // The marker is centered on the action point and stays upright as it travels.
+    let size = (f64::from(width) / 1280.0 * 140.0).round().max(100.0);
+    let seconds = |mark: &PointerMark| mark.at.saturating_duration_since(origin).as_secs_f64();
+    let point = |mark: &PointerMark| {
+        ((mark.x * f64::from(width) / mark.width).round(), (mark.y * f64::from(height) / mark.height).round())
+    };
     let until = until.saturating_duration_since(origin).as_secs_f64();
-    for mark in marks.iter().filter(|mark| mark.pressed) {
-        let at = mark.at.saturating_duration_since(origin).as_secs_f64();
-        if at >= until {
+    for (i, mark) in marks.iter().enumerate() {
+        if seconds(mark) >= until {
             continue;
         }
-        let (x, y) =
-            ((mark.x * f64::from(width) / mark.width).round(), (mark.y * f64::from(height) / mark.height).round());
+        let at = seconds(mark);
+        let (x, y) = point(mark);
+        let (start, placed) = match i.checked_sub(1).map(|previous| &marks[previous]) {
+            Some(previous) => {
+                let (px, py) = point(previous);
+                let start = (at - 0.4).max(seconds(previous));
+                let glide = ((at - start) * 1000.0).round();
+                (start, format!("\\move({px},{py},{x},{y},0,{glide})"))
+            }
+            None => (at, format!("\\pos({x},{y})")),
+        };
+        // The result card is no longer the page that supplied these coordinates.
+        let end = marks.get(i + 1).map_or(until, |next| (seconds(next) - 0.4).max(at)).min(until);
         out.push_str(&format!(
-            "Dialogue: 1,{},{},Default,,0,0,0,,{{\\pos({x},{y})\\an5\\p1\\bord3\\1a&HFF&\\3c&H3052C5&\\fscx100\\fscy100\\t(0,400,\\fscx400\\fscy400\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
-            ass_time(at),
-            ass_time((at + 0.4).min(until))
+            "Dialogue: 2,{},{},Default,,0,0,0,,{{{placed}\\an5\\fscx{size}\\fscy{size}\\p1\\bord1\\shad0\\1c&H3052C5&\\3c&HFFFFFF&}}m -11 -5 l -11 -11 -5 -11 -5 -9 -9 -9 -9 -5 m 5 -11 l 11 -11 11 -5 9 -5 9 -9 5 -9 m 11 5 l 11 11 5 11 5 9 9 9 9 5 m -5 11 l -11 11 -11 5 -9 5 -9 9 -5 9 m -1 -1 l 1 -1 1 1 -1 1{{\\p0}}\n",
+            ass_time(start),
+            ass_time(end)
         ));
+        if mark.pressed {
+            out.push_str(&format!(
+                "Dialogue: 1,{},{},Default,,0,0,0,,{{\\pos({x},{y})\\an5\\p1\\bord3\\1a&HFF&\\3c&H3052C5&\\fscx100\\fscy100\\t(0,400,\\fscx400\\fscy400\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
+                ass_time(at),
+                ass_time((at + 0.4).min(until))
+            ));
+        }
     }
     out
 }
@@ -748,27 +693,58 @@ mod tests {
     }
 
     #[test]
-    fn cursor_ass_rings_only_presses_scaled_to_the_frame() {
+    fn cursor_ass_scales_and_times_marks() {
         let origin = Instant::now();
-        let mark = |operation, pressed, secs, x| PointerMark {
+        let marks = [
+            PointerMark {
+                at: origin + std::time::Duration::from_secs(1),
+                x: 50.0,
+                y: 25.0,
+                operation: Operation::Click,
+                pressed: true,
+                width: 100.0,
+                height: 50.0,
+            },
+            PointerMark {
+                at: origin + std::time::Duration::from_secs(2),
+                x: 25.0,
+                y: 25.0,
+                operation: Operation::Hover,
+                pressed: false,
+                width: 50.0,
+                height: 50.0,
+            },
+        ];
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(3), 200, 100);
+        assert!(ass.contains("PlayResX: 200\nPlayResY: 100"));
+        assert!(ass.contains("\\pos(100,50)"));
+        assert!(ass.contains("\\move(100,50,100,50,0,400)"));
+        // The arrow stays where it clicked until the glide to the next point begins, and the last one stays put.
+        assert!(ass.contains("Dialogue: 2,0:00:01.00,0:00:01.60"));
+        assert!(ass.contains("Dialogue: 2,0:00:01.60,0:00:03.00"));
+        // Only a press rings.
+        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:01.40"));
+        assert_eq!(ass.matches("Dialogue: 1,").count(), 1);
+    }
+
+    #[test]
+    fn every_pressing_mark_rings_and_a_hover_does_not() {
+        let origin = Instant::now();
+        let mark = |operation, pressed, secs| PointerMark {
             at: origin + std::time::Duration::from_secs(secs),
-            x,
-            y: 25.0,
+            x: 10.0,
+            y: 10.0,
             operation,
             pressed,
-            width: 50.0,
-            height: 50.0,
+            width: 100.0,
+            height: 100.0,
         };
-        let marks = [
-            mark(Operation::Fill, true, 1, 25.0),
-            mark(Operation::Drag, true, 2, 10.0),
-            mark(Operation::Hover, false, 3, 5.0),
-        ];
+        let marks = [mark(Operation::Fill, true, 1), mark(Operation::Drag, true, 2), mark(Operation::Hover, false, 3)];
         let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(4), 100, 100);
-        assert!(ass.contains("PlayResX: 100\nPlayResY: 100"));
-        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:01.40,Default,,0,0,0,,{\\pos(50,50)"));
+        assert!(ass.contains("Dialogue: 1,0:00:01.00,"));
         assert!(ass.contains("Dialogue: 1,0:00:02.00,"));
-        assert_eq!(ass.matches("Dialogue:").count(), 2, "a hover rings nothing and no marker is painted");
+        assert!(!ass.contains("Dialogue: 1,0:00:03.00,"));
+        assert_eq!(ass.matches("Dialogue: 1,").count(), 2);
     }
 
     #[test]
