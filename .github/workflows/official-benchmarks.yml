@@ -296,7 +296,8 @@ jobs:
         run: |
           cd harness/evals
           # The upstream Online-Mind2Web judge asks the panel's first model, so the Opus refusal above covers it.
-          export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL="${PARALLAX_JUDGE_MODELS%%,*}"
+          judges="${PARALLAX_JUDGE_MODELS//[[:space:]]/}"
+          export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL="${judges%%,*}"
           read -ra ids <<< "$TASK_IDS"
           if [ "${#ids[@]}" -gt 0 ]; then
             selection=("source=$SUITE" "${ids[@]}")

@@ -294,11 +294,26 @@ def test_a_campaign_refuses_claude_opus_as_a_judge(workflow: str, models: str, p
     assert (subprocess.run(["bash", "-c", check], env=env, capture_output=True).returncode == 0) is passes
 
 
+@pytest.mark.parametrize("workflow", ["official-benchmarks", "paper-campaign"])
+def test_the_online_judge_identity_is_the_first_model_without_spaces(workflow: str) -> None:
+    text = Path(f".github/workflows/{workflow}.yml").read_text()
+    start = text.index('judges="')
+    export = text[start : text.index("\n", text.index("export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL", start))]
+    env = {**os.environ, "PARALLAX_JUDGE_MODELS": "deepseek/deepseek-v4.1-flash-1017 , openai/gpt-6.1-terra"}
+    out = subprocess.run(
+        ["bash", "-c", export + '; printf "%s" "$PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL"'],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert out.stdout == "deepseek/deepseek-v4.1-flash-1017"
+
+
 def test_the_official_online_judge_is_the_panels_first_model_not_a_second_setting() -> None:
     """The upstream judge reads its own variable, so a repository setting could name Opus past the panel check."""
     text = Path(".github/workflows/official-benchmarks.yml").read_text()
     assert "vars.PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL" not in text
-    assert 'export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL="${PARALLAX_JUDGE_MODELS%%,*}"' in text
+    assert 'export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL="${judges%%,*}"' in text
 
 
 @pytest.mark.parametrize("status", [0, 1])
