@@ -583,73 +583,191 @@ fn filter_chain(captions: bool, cursor: bool, style: &str) -> String {
     if filters.is_empty() { "null".to_owned() } else { filters.join(",") }
 }
 
-/// The cursor as an ASS overlay: an arrow that glides into each action point in the 400 ms before the action, stays
-/// there until the next one, and a ring that swells and fades on each press of the mouse. Points are CSS pixels, scaled to the frame.
-/// The brackets' animation on a press, in milliseconds and times their resting size: they close in over the last
-/// `LOCK_MS` of the glide from `LOCK_FROM`, squeeze to `PRESSED`, and settle back, as deskpilot's cursor does.
-const LOCK_MS: i64 = 160;
-const SQUEEZE_MS: i64 = 100;
-const SETTLE_MS: i64 = 100;
-const LOCK_FROM: f64 = 2.0;
-const PRESSED: f64 = 0.7;
+/// The agent cursor of deskpilot's Hyprland plugin (`drawOne`, `lock` and `glideTo` in
+/// src/deskpilot/plugin/deskpilot.cpp), in logical pixels at a 1280 px wide frame, with fastbrowse's own colour and
+/// centre dot. A change to the look is made there first and copied here.
+mod agent_cursor {
+    /// The arm of a bracket, and the width of its rounded stroke.
+    pub const BRACKET: f64 = 6.0;
+    pub const STROKE: f64 = 1.8;
+    /// The brackets' half-width in flight, closing to `LOCK_TO` over `LOCK` seconds after landing, cubic ease-out.
+    pub const LOCK_FROM: f64 = 30.0;
+    pub const LOCK_TO: f64 = 15.0;
+    pub const LOCK: f64 = 0.16;
+    /// The brackets' opacity is `0.35 + 0.65 * L`, `L` being how far they have closed.
+    pub const LOCK_ALPHA: f64 = 0.35;
+    /// A press: a filled disc at 0.3 opacity fading out, growing from 0.3 to 1 times `PULSE_SIZE` with a cubic ease-out
+    /// over `PULSE` seconds, staying where it was pressed. The centre is squeezed to `PRESSED` for `HOLD` seconds.
+    pub const PULSE: f64 = 0.38;
+    pub const PULSE_SIZE: f64 = 30.0;
+    pub const PRESSED: f64 = 0.85;
+    pub const HOLD: f64 = 0.12;
+    /// A glide takes 1.5 times its length over `PEAK_SPEED`, between `MIN_GLIDE` and `MAX_GLIDE` seconds, along an arc
+    /// bowed to one side by `ARC` of its length, eased in and out (cubic).
+    pub const PEAK_SPEED: f64 = 900.0;
+    pub const MIN_GLIDE: f64 = 0.12;
+    pub const MAX_GLIDE: f64 = 0.7;
+    pub const ARC: f64 = 0.2;
+    /// fastbrowse's own centre: a dot of this radius.
+    pub const DOT: f64 = 2.4;
+    /// The time between the cursor's drawn states: ASS cannot ease a position, so a glide is sampled this often and
+    /// each piece moves in a line, and the brackets close in as the same steps.
+    pub const STEP: f64 = 0.02;
+}
 
+fn ease_out(t: f64) -> f64 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+}
+
+fn ease_in_out(t: f64) -> f64 {
+    if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
+}
+
+/// An ASS `\alpha` value for an opacity.
+fn ass_alpha(opacity: f64) -> String {
+    format!("&H{:02X}&", ((1.0 - opacity.clamp(0.0, 1.0)) * 255.0).round() as u8)
+}
+
+/// The brackets and centre dot at `half` from the centre, `unit` frame pixels to a logical pixel. Each arm is a thin
+/// rectangle given the stroke's width as a round outline, so its ends are round as deskpilot's are.
+fn cursor_shape(half: f64, dot: f64, unit: f64) -> String {
+    use agent_cursor::{BRACKET, DOT, STROKE};
+    let round = STROKE / 2.0;
+    let mut path = String::new();
+    let mut line = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let (x0, y0, x1, y1) = (x0 * unit, y0 * unit, x1 * unit, y1 * unit);
+        let thin = 0.1;
+        path.push_str(&format!(
+            "m {x0:.2} {:.2} l {x1:.2} {:.2} {x1:.2} {:.2} {x0:.2} {:.2} ",
+            y0 - thin,
+            y1 - thin,
+            y1 + thin,
+            y0 + thin
+        ));
+    };
+    for sx in [-1.0, 1.0] {
+        for sy in [-1.0, 1.0] {
+            let (cx, cy) = (sx * half, sy * half);
+            let hx = if sx < 0.0 { cx - round } else { cx - BRACKET + round };
+            let vy = if sy < 0.0 { cy - round } else { cy - BRACKET + round };
+            line(hx + round, cy, hx + BRACKET - round, cy);
+            line(cx, vy + round, cx, vy + BRACKET - round);
+        }
+    }
+    // The dot's outline is the stroke's, so its drawn radius is the dot's less the outline.
+    let radius = ((DOT * dot - round) * unit).max(0.1);
+    path.push_str(&disc(radius));
+    path
+}
+
+/// A filled disc of `radius` frame pixels about the origin.
+fn disc(radius: f64) -> String {
+    let (r, k) = (radius, radius * 0.5523);
+    format!(
+        "m -{r:.2} 0 b -{r:.2} -{k:.2} -{k:.2} -{r:.2} 0 -{r:.2} b {k:.2} -{r:.2} {r:.2} -{k:.2} {r:.2} 0 b {r:.2} {k:.2} {k:.2} {r:.2} 0 {r:.2} b -{k:.2} {r:.2} -{r:.2} {k:.2} -{r:.2} 0 "
+    )
+}
+
+/// The cursor as an ASS overlay, drawn as deskpilot's agent cursor is (see `agent_cursor`): wide, faint brackets glide
+/// to each action point along an eased arc and close in on it as they land, whatever the action; a press squeezes the
+/// centre and leaves a disc that grows and fades where it was pressed. Points are CSS pixels, scaled to the frame.
 fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32) -> String {
+    use agent_cursor::*;
     let mut out = format!(
         "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,1,0,7,0,0,0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     );
-    // The marker is centered on the action point and stays upright as it travels.
-    let size = (f64::from(width) / 1280.0 * 140.0).round().max(100.0);
+    // fastbrowse's colour, #C55230, as ASS writes it.
+    const COLOUR: &str = "&H3052C5&";
+    let unit = f64::from(width) / 1280.0;
     let seconds = |mark: &PointerMark| mark.at.saturating_duration_since(origin).as_secs_f64();
-    let point = |mark: &PointerMark| {
-        ((mark.x * f64::from(width) / mark.width).round(), (mark.y * f64::from(height) / mark.height).round())
-    };
+    let point = |mark: &PointerMark| (mark.x * f64::from(width) / mark.width, mark.y * f64::from(height) / mark.height);
     let until = until.saturating_duration_since(origin).as_secs_f64();
+    // When each mark's glide begins: as long as deskpilot's for its length, but not before the mark before it landed.
+    let starts: Vec<f64> = marks
+        .iter()
+        .enumerate()
+        .map(|(i, mark)| match i.checked_sub(1).map(|previous| &marks[previous]) {
+            Some(previous) => {
+                let ((px, py), (x, y)) = (point(previous), point(mark));
+                let distance = (x - px).hypot(y - py) / unit;
+                let glide =
+                    if distance < 2.0 { 0.0 } else { (1.5 * distance / PEAK_SPEED).clamp(MIN_GLIDE, MAX_GLIDE) };
+                (seconds(mark) - glide).max(seconds(previous))
+            }
+            None => seconds(mark),
+        })
+        .collect();
+    let mut dialogue = |layer: u8, start: f64, end: f64, tags: String, shape: String| {
+        if end > start {
+            out.push_str(&format!(
+                "Dialogue: {layer},{},{},Default,,0,0,0,,{{{tags}\\an5\\p1}}{shape}{{\\p0}}\n",
+                ass_time(start),
+                ass_time(end)
+            ));
+        }
+    };
     for (i, mark) in marks.iter().enumerate() {
-        if seconds(mark) >= until {
+        let at = seconds(mark);
+        if at >= until {
             continue;
         }
-        let at = seconds(mark);
         let (x, y) = point(mark);
-        let (start, placed, glide) = match i.checked_sub(1).map(|previous| &marks[previous]) {
-            Some(previous) => {
-                let (px, py) = point(previous);
-                let start = (at - 0.4).max(seconds(previous));
-                let glide = ((at - start) * 1000.0).round();
-                (start, format!("\\move({px},{py},{x},{y},0,{glide})"), glide as i64)
+        let start = starts[i];
+        // The cursor stays where it landed until the next one starts to glide; the result card is no longer the page
+        // that supplied these coordinates.
+        let limit = starts.get(i + 1).copied().unwrap_or(until).min(until);
+        let style = |opacity: f64| {
+            format!("\\bord{:.2}\\shad0\\1c{COLOUR}\\3c{COLOUR}\\alpha{}", STROKE / 2.0 * unit, ass_alpha(opacity))
+        };
+        if let Some(previous) = i.checked_sub(1).map(|previous| &marks[previous]) {
+            // The glide: a quadratic arc bowed to the side, eased in and out, in short straight pieces.
+            let (px, py) = point(previous);
+            let (dx, dy) = (x - px, y - py);
+            let length = dx.hypot(dy);
+            if length >= 2.0 * unit && at > start {
+                let bend = ((px + x) / 2.0 - dy / length * length * ARC, (py + y) / 2.0 + dx / length * length * ARC);
+                let along = |t: f64| {
+                    let e = ease_in_out(t);
+                    let (a, b, c) = ((1.0 - e) * (1.0 - e), 2.0 * (1.0 - e) * e, e * e);
+                    (px * a + bend.0 * b + x * c, py * a + bend.1 * b + y * c)
+                };
+                let pieces = ((at - start) / STEP).ceil().max(1.0) as usize;
+                for k in 0..pieces {
+                    let (t0, t1) = (
+                        start + (at - start) * k as f64 / pieces as f64,
+                        start + (at - start) * (k + 1) as f64 / pieces as f64,
+                    );
+                    let ((ax, ay), (bx, by)) = (along(k as f64 / pieces as f64), along((k + 1) as f64 / pieces as f64));
+                    let tags = format!("\\move({ax:.1},{ay:.1},{bx:.1},{by:.1},0,{})", ((t1 - t0) * 1000.0).round());
+                    dialogue(2, t0, t1, format!("{tags}{}", style(LOCK_ALPHA)), cursor_shape(LOCK_FROM, 1.0, unit));
+                }
             }
-            None => (at, format!("\\pos({x},{y})"), 0),
-        };
-        // A pressing mark's brackets are wide in flight, close in as it lands, squeeze while the button is down and
-        // settle back, as deskpilot's agent cursor does; a hover only glides.
-        let animation = if mark.pressed {
-            let scale = |percent: f64| format!("\\fscx{0}\\fscy{0}", (size * percent).round());
-            // The first mark has no glide, so its brackets close in after it appears.
-            let arrive = glide.max(LOCK_MS);
-            let (land, settle) = (arrive - LOCK_MS, arrive + SQUEEZE_MS);
-            format!(
-                "{}\\t({land},{arrive},{})\\t({arrive},{settle},{})\\t({settle},{},{})",
-                scale(LOCK_FROM),
-                scale(1.0),
-                scale(PRESSED),
-                settle + SETTLE_MS,
-                scale(1.0)
-            )
-        } else {
-            format!("\\fscx{size}\\fscy{size}")
-        };
-        // The result card is no longer the page that supplied these coordinates.
-        let end = marks.get(i + 1).map_or(until, |next| (seconds(next) - 0.4).max(at)).min(until);
-        out.push_str(&format!(
-            "Dialogue: 2,{},{},Default,,0,0,0,,{{{placed}\\an5{animation}\\p1\\bord1\\shad0\\1c&H3052C5&\\3c&HFFFFFF&}}m -11 -5 l -11 -11 -5 -11 -5 -9 -9 -9 -9 -5 m 5 -11 l 11 -11 11 -5 9 -5 9 -9 5 -9 m 11 5 l 11 11 5 11 5 9 9 9 9 5 m -5 11 l -11 11 -11 5 -9 5 -9 9 -5 9 m -1 -1 l 1 -1 1 1 -1 1{{\\p0}}\n",
-            ass_time(start),
-            ass_time(end)
-        ));
+        }
+        // Landing: the brackets close in, and the centre is squeezed while a button is down.
+        let steps = (LOCK / STEP).round() as usize;
+        for k in 0..steps {
+            let (t0, t1) = (at + STEP * k as f64, (at + STEP * (k + 1) as f64).min(limit));
+            let closed = ease_out(STEP * k as f64 / LOCK);
+            let dot = if mark.pressed && STEP * k as f64 <= HOLD { PRESSED } else { 1.0 };
+            let half = LOCK_FROM + (LOCK_TO - LOCK_FROM) * closed;
+            dialogue(
+                2,
+                t0,
+                t1,
+                format!("\\pos({x:.1},{y:.1}){}", style(LOCK_ALPHA + (1.0 - LOCK_ALPHA) * closed)),
+                cursor_shape(half, dot, unit),
+            );
+        }
+        dialogue(2, at + LOCK, limit, format!("\\pos({x:.1},{y:.1}){}", style(1.0)), cursor_shape(LOCK_TO, 1.0, unit));
         if mark.pressed {
-            out.push_str(&format!(
-                "Dialogue: 1,{},{},Default,,0,0,0,,{{\\pos({x},{y})\\an5\\p1\\bord3\\1a&HFF&\\3c&H3052C5&\\fscx100\\fscy100\\t(0,400,\\fscx400\\fscy400\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
-                ass_time(at),
-                ass_time((at + 0.4).min(until))
-            ));
+            let pieces = (PULSE / STEP).round() as usize;
+            for k in 0..pieces {
+                let t = STEP * k as f64 / PULSE;
+                let radius = PULSE_SIZE * (0.3 + 0.7 * ease_out(t)) * unit;
+                let tags =
+                    format!("\\pos({x:.1},{y:.1})\\bord0\\shad0\\1c{COLOUR}\\alpha{}", ass_alpha(0.3 * (1.0 - t)));
+                dialogue(1, at + STEP * k as f64, (at + STEP * (k + 1) as f64).min(until), tags, disc(radius));
+            }
         }
     }
     out
@@ -718,97 +836,65 @@ mod tests {
         assert_eq!(srt_time(0.0), "00:00:00,000");
     }
 
-    #[test]
-    fn cursor_ass_scales_and_times_marks() {
-        let origin = Instant::now();
-        let marks = [
-            PointerMark {
-                at: origin + std::time::Duration::from_secs(1),
-                x: 50.0,
-                y: 25.0,
-                operation: Operation::Click,
-                pressed: true,
-                width: 100.0,
-                height: 50.0,
-            },
-            PointerMark {
-                at: origin + std::time::Duration::from_secs(2),
-                x: 25.0,
-                y: 25.0,
-                operation: Operation::Hover,
-                pressed: false,
-                width: 50.0,
-                height: 50.0,
-            },
-        ];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(3), 200, 100);
-        assert!(ass.contains("PlayResX: 200\nPlayResY: 100"));
-        assert!(ass.contains("\\pos(100,50)"));
-        assert!(ass.contains("\\move(100,50,100,50,0,400)"));
-        // The arrow stays where it clicked until the glide to the next point begins, and the last one stays put.
-        assert!(ass.contains("Dialogue: 2,0:00:01.00,0:00:01.60"));
-        assert!(ass.contains("Dialogue: 2,0:00:01.60,0:00:03.00"));
-        // Only a press rings.
-        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:01.40"));
-        assert_eq!(ass.matches("Dialogue: 1,").count(), 1);
-    }
-
-    #[test]
-    fn every_pressing_mark_rings_and_a_hover_does_not() {
-        let origin = Instant::now();
-        let mark = |operation, pressed, secs| PointerMark {
+    fn mark(origin: Instant, operation: Operation, pressed: bool, secs: u64, x: f64) -> PointerMark {
+        PointerMark {
             at: origin + std::time::Duration::from_secs(secs),
-            x: 10.0,
+            x,
             y: 10.0,
             operation,
             pressed,
-            width: 100.0,
-            height: 100.0,
-        };
-        let marks = [mark(Operation::Fill, true, 1), mark(Operation::Drag, true, 2), mark(Operation::Hover, false, 3)];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(4), 100, 100);
-        assert!(ass.contains("Dialogue: 1,0:00:01.00,"));
-        assert!(ass.contains("Dialogue: 1,0:00:02.00,"));
-        assert!(!ass.contains("Dialogue: 1,0:00:03.00,"));
-        assert_eq!(ass.matches("Dialogue: 1,").count(), 2);
+            width: 1280.0,
+            height: 720.0,
+        }
+    }
+
+    fn lines(ass: &str, layer: u8) -> Vec<&str> {
+        ass.lines().filter(|line| line.starts_with(&format!("Dialogue: {layer},"))).collect()
     }
 
     #[test]
-    fn a_press_closes_the_brackets_in_and_a_hover_only_glides() {
+    fn brackets_fly_wide_and_close_in_on_every_landing() {
         let origin = Instant::now();
-        let mark = |operation, pressed, secs| PointerMark {
-            at: origin + std::time::Duration::from_secs(secs),
-            x: 10.0,
-            y: 10.0,
-            operation,
-            pressed,
-            width: 100.0,
-            height: 100.0,
-        };
-        let marks = [mark(Operation::Click, true, 1), mark(Operation::Hover, false, 3)];
+        let marks = [mark(origin, Operation::Click, true, 1, 100.0), mark(origin, Operation::Hover, false, 3, 600.0)];
         let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
-        let lines: Vec<&str> = ass.lines().filter(|line| line.starts_with("Dialogue: 2,")).collect();
-        // 140 is the resting scale at this width: wide at the start, tight on landing, squeezed, then back.
-        assert!(lines[0].contains(
-            "\\fscx280\\fscy280\\t(0,160,\\fscx140\\fscy140)\\t(160,260,\\fscx98\\fscy98)\\t(260,360,\\fscx140\\fscy140)"
-        ));
-        assert!(lines[1].contains("\\fscx140\\fscy140\\p1") && !lines[1].contains("\\t("));
+        // A glide is straight pieces of an arc, wide and faint (opacity 0.35), ending at the landing.
+        let moves = ass.lines().filter(|line| line.contains("\\move(")).collect::<Vec<_>>();
+        assert!(moves.len() > 5);
+        assert!(moves.iter().all(|line| line.contains("\\alpha&HA6&")));
+        assert!(moves.last().unwrap().contains(",600.0,"));
+        // The brackets then close in over 160 ms to half-width 15 at full opacity, whether or not it pressed.
+        for landing in ["0:00:01.00", "0:00:03.00"] {
+            let closing = lines(&ass, 2)
+                .into_iter()
+                .filter(|line| line.contains("\\pos(") && line.starts_with(&format!("Dialogue: 2,{landing}")))
+                .count();
+            assert_eq!(closing, 1);
+        }
+        assert!(lines(&ass, 2).iter().any(|line| line.contains("\\alpha&H00&")));
     }
 
     #[test]
-    fn a_press_after_a_glide_closes_in_over_its_last_160_ms() {
+    fn a_press_leaves_a_fading_disc_where_it_was_pressed_and_a_hover_none() {
         let origin = Instant::now();
-        let mark = |secs| PointerMark {
-            at: origin + std::time::Duration::from_secs(secs),
-            x: 10.0,
-            y: 10.0,
-            operation: Operation::Click,
-            pressed: true,
-            width: 100.0,
-            height: 100.0,
-        };
-        let ass = cursor_ass(&[mark(1), mark(3)], origin, origin + std::time::Duration::from_secs(5), 1280, 720);
-        assert!(ass.contains("\\t(240,400,\\fscx140\\fscy140)\\t(400,500,\\fscx98\\fscy98)\\t(500,600,"));
+        let marks = [mark(origin, Operation::Fill, true, 1, 100.0), mark(origin, Operation::Hover, false, 3, 600.0)];
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
+        let discs = lines(&ass, 1);
+        // 380 ms in 20 ms steps, all at the press, from 0.3 opacity to none.
+        assert_eq!(discs.len(), 19);
+        assert!(discs.iter().all(|line| line.contains("\\pos(100.0,10.0)") && line.contains("\\bord0")));
+        assert!(discs[0].starts_with("Dialogue: 1,0:00:01.00,0:00:01.02") && discs[0].contains("\\alpha&HB3&"));
+        assert!(discs[18].contains("\\alpha&HFB&"));
+    }
+
+    #[test]
+    fn sizes_follow_the_frame_width() {
+        let origin = Instant::now();
+        let marks = [mark(origin, Operation::Click, true, 1, 100.0)];
+        let wide = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 2560, 1440);
+        let narrow = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 1280, 720);
+        // The resting brackets' corner is 15 logical pixels out: 15 frame pixels at 1280 wide, 30 at 2560.
+        assert!(narrow.contains("m -15.00 "));
+        assert!(wide.contains("-30.00"));
     }
 
     #[test]
