@@ -77,11 +77,14 @@ pub struct Window {
 const CLASS_KEPT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'.').remove(b'-').remove(b'_');
 
 impl Window {
-    /// `desktop://<app class>/`: the app is the origin, so a secret, an allowed origin and the irreversible-action
-    /// gate are scoped to one app as a website's are to one site. The title is the page's title, not its address:
-    /// it changes as the app's state does.
+    /// `desktop://<app class>/<window address>`: the app is the origin, so a secret, an allowed origin and the
+    /// irreversible-action gate are scoped to one app as a website's are to one site. The window is the path, so what
+    /// was read in one window is not retired by a read of another: with one address for every window of an app, a
+    /// read of a dialog marked the main window's facts superseded (#1343). The title is the page's title, not its
+    /// address: it changes as the app's state does.
     pub fn url(&self) -> String {
-        format!("desktop://{}/", utf8_percent_encode(&self.class.to_lowercase(), CLASS_KEPT))
+        let class = utf8_percent_encode(&self.class.to_lowercase(), CLASS_KEPT);
+        format!("desktop://{class}/{}", utf8_percent_encode(&self.address, CLASS_KEPT))
     }
 }
 
@@ -476,7 +479,7 @@ mod tests {
     fn a_window_reads_as_its_shown_enabled_controls_with_the_apps_own_states() {
         let (window, root) = form();
         let observation = observation(&window, &root);
-        assert_eq!(observation.url, "desktop://dptest-order/");
+        assert_eq!(observation.url, "desktop://dptest-order/0xabc");
         assert_eq!(observation.page_key, "abc-1");
         // The combo box's value is the item its selection reports, not its name, which is its label.
         let country = observation.controls.iter().find(|c| c.role == "combobox").unwrap();
