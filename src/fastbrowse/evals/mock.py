@@ -1516,12 +1516,10 @@ def _looks_like_postcode(value: str) -> bool:
 
 
 @contextmanager
-def mock_server(port: int = 0) -> Generator[tuple[str, Callable[[], Site]]]:
-    """Keep an address alive while sequential attempts each receive fresh fixture state.
-
-    `port` 0 takes a free one; the bench passes the cassette's port on replay and fill."""
+def mock_server() -> Generator[tuple[str, Callable[[], Site]]]:
+    """Keep an address, on a free port, alive while sequential attempts each receive fresh fixture state."""
     handler = type("Handler", (_Handler,), {"site": Site()})
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
 
     def fresh() -> Site:
         site = Site()
@@ -1537,7 +1535,7 @@ def mock_server(port: int = 0) -> Generator[tuple[str, Callable[[], Site]]]:
 
 
 @contextmanager
-def mock_site(port: int = 0) -> Generator[tuple[str, Site]]:
+def mock_site() -> Generator[tuple[str, Site]]:
     """Serve one fresh site and close its server after the attempt."""
-    with mock_server(port) as (base, fresh):
+    with mock_server() as (base, fresh):
         yield base, fresh()

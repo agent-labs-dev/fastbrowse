@@ -6,6 +6,7 @@ fill --only TASK`. Whether a task passes depends on timing and is a benchmark me
 below, which have no race, must also pass.
 """
 
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -63,9 +64,25 @@ def _misses(entry: dict[str, Any]) -> str:
 @pytest.mark.parametrize("task", recorded_tasks(), ids=lambda task: task.id)
 async def test_a_recorded_task_replays_without_a_miss(task: BenchTask, tmp_path: Path) -> None:
     entry = await replayed(task, tmp_path)
-    assert entry["fixture_port_fallback"] is None, "fixture port taken, environmental, rerun"
     assert entry["misses"] == [], _misses(entry)
     if task.id in PASSING:
         assert entry["result"]["grade"]["passed"], entry["result"]
     if task.id == "table-extract":
         assert entry["result"]["data"] == {"city": "Lyon", "population": 522250}
+
+
+@pytest.mark.timeout(300)
+async def test_a_replay_does_not_need_the_port_it_was_recorded_on(tmp_path: Path) -> None:
+    """A replay bound the cassette's recorded fixture port, an ephemeral one another socket on a CI runner sometimes
+    held, and failed the job (#675, #1285). Note ids are numbered in the request key and swapped back into the
+    response, so a task whose requests cite notes replays with that port taken."""
+    task = next(task for task in corpus() if task.id == "mock-long-description")
+    cassette = Cassette.load(CASSETTES / f"{task.id}.jsonl.gz")
+    origin = next(e.fixture_origin for e in reversed(cassette.exchanges) if e.fixture_origin)
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", int(origin.rsplit(":", 1)[1])))
+        held.listen()
+        entry = await replayed(task, tmp_path)
+    assert entry["fixture_origin"] != origin
+    assert entry["misses"] == [], _misses(entry)
+    assert entry["result"]["grade"]["passed"], entry["result"]
