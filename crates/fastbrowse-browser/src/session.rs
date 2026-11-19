@@ -69,7 +69,7 @@ impl SnapshotScript {
         Self {
             install: format!(
                 "((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= \
-                 (snapshot => {{ const own = {{ unread: {unread} }}; return (mode, base) => snapshot(mode, {origins}, own, base); }})({SNAPSHOT_JS}))"
+                 (snapshot => {{ const own = {{ unread: {unread}, key: {key} }}; return (mode, base) => snapshot(mode, {origins}, own, base); }})({SNAPSHOT_JS}))"
             ),
             function: format!(
                 "(globalThis.__fastbrowseScripts?.[{key}] ?? (() => {{ throw new Error({}); }})())",
@@ -316,6 +316,9 @@ pub(crate) struct State {
     pub(crate) request_bytes_due: HashMap<(String, String), i64>,
     /// (session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating.
     pub(crate) status_contexts: HashMap<(String, i64), String>,
+    /// Session -> context id -> unique id, for each page world of a document that session shows: its own and every
+    /// same-process frame's, each of which reads its own listeners (snapshot.js `reader`).
+    pub(crate) main_worlds: HashMap<String, HashMap<i64, String>>,
     pub(crate) active_target_id: String,
     /// Set while the page may show a secret: frames are still acked, so the cast keeps pace, but not delivered.
     pub(crate) frames_withheld: bool,
@@ -1029,6 +1032,18 @@ impl BrowserSession {
         self.0.state.lock().unwrap().status_contexts.remove(&(session_id.to_owned(), context_id))
     }
 
+    /// The unique ids of the page worlds Chrome reported on `session_id` and has not destroyed since.
+    pub fn main_worlds(&self, session_id: &str) -> Vec<String> {
+        self.0
+            .state
+            .lock()
+            .unwrap()
+            .main_worlds
+            .get(session_id)
+            .map(|w| w.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
     pub fn popups(&self) -> Vec<String> {
         self.0.state.lock().unwrap().popups.iter().map(|p| p.target_id.clone()).collect()
     }
@@ -1602,6 +1617,25 @@ impl Shared {
                     let unique = str_of(&context["uniqueId"]);
                     self.state.lock().unwrap().status_contexts.insert((session.to_owned(), id), unique);
                 }
+                if let Some(session) = session
+                    && context["auxData"]["isDefault"] == true
+                {
+                    let id = context["id"].as_i64().unwrap_or_default();
+                    let unique = str_of(&context["uniqueId"]);
+                    self.state.lock().unwrap().main_worlds.entry(session.to_owned()).or_default().insert(id, unique);
+                }
+            }
+            "Runtime.executionContextDestroyed" => {
+                if let Some(session) = session
+                    && let Some(worlds) = self.state.lock().unwrap().main_worlds.get_mut(session)
+                {
+                    worlds.remove(&params["executionContextId"].as_i64().unwrap_or_default());
+                }
+            }
+            "Runtime.executionContextsCleared" => {
+                if let Some(session) = session {
+                    self.state.lock().unwrap().main_worlds.remove(session);
+                }
             }
             "Page.windowOpen" => self.state.lock().unwrap().window_opens += 1,
             "Page.frameAttached" => {
@@ -1734,6 +1768,7 @@ impl Shared {
                 state.requests_open.retain(|(sid, _), _| *sid != child);
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
                 state.documents.remove(&child);
+                state.main_worlds.remove(&child);
                 state.navigating.retain(|(sid, _), _| *sid != child);
                 state.frames_loading.retain(|(sid, _), _| *sid != child);
                 state.clicked.remove(&child);

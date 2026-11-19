@@ -1805,13 +1805,25 @@ impl CdpPage {
         if out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD)) {
             // A look weighs pointer listeners through `getEventListeners`, which only an evaluate with the command
             // line API has. That API also lends the page `$` and the rest while it runs, so it gets an evaluate of its
-            // own, once per document, which keeps the function for every later look (snapshot.js `listeners`).
-            let mark = json!({
-                "expression": format!("{}('listeners')", self.page_js),
-                "includeCommandLineAPI": true,
-                "returnByValue": true,
-            });
-            self.session.send("Runtime.evaluate", mark, Some(session_id)).await?;
+            // own, once per document, which keeps the function for every later look (snapshot.js `listeners`). The
+            // function answers only for its own realm, so each same-process frame's page world reads its own too:
+            // read from the parent alone, a frame's listened span was no control (#1312).
+            let mark = |unique: Option<String>| {
+                let mut mark = json!({
+                    "expression": format!("({})('listeners')", self.session.snapshot().install),
+                    "includeCommandLineAPI": true,
+                    "returnByValue": true,
+                });
+                if let Some(unique) = unique {
+                    mark["uniqueContextId"] = unique.into();
+                }
+                mark
+            };
+            self.session.send("Runtime.evaluate", mark(None), Some(session_id)).await?;
+            for world in self.session.main_worlds(session_id) {
+                // A frame can go away between the event and this call, which leaves it nothing to read.
+                let _ = self.session.send("Runtime.evaluate", mark(Some(world)), Some(session_id)).await;
+            }
             out = self.session.send("Runtime.evaluate", params, Some(session_id)).await?;
         }
         if out.get("exceptionDetails").is_some() {
