@@ -464,8 +464,8 @@ impl Agent {
                     None => None,
                 };
             }
-            // Left holding the last address tried when it fails, so a run that moves to a browser for it opens that
-            // address instead of choosing its start page again.
+            // Left holding the address the run began with when none opens, so a run that moves to a browser opens it
+            // instead of choosing its start page again.
             if let Some(first) = opening.as_mut() {
                 self.open_start(first, chosen, task, ledger).await?;
             }

@@ -698,10 +698,11 @@ impl Agent {
         Ok(Some(opening))
     }
 
-    /// Opens the page the run begins on, leaving `opening` the address it opened, or the last one tried when none
-    /// opens. A start page the run chose itself that an HTTP read finds empty, because scripts build it, is replaced by
-    /// one proposed knowing that, until a page opens or none is known: a `--fetch` run has no other way past it, and
-    /// ended `blocked` before its first step (#1330).
+    /// Opens the page the run begins on. A start page the run chose itself that an HTTP read cannot use is replaced by
+    /// one proposed knowing why each address failed, until a page opens or none is known: a `--fetch` run has no other
+    /// way past it, and ended `blocked` before its first step (#1330). When none opens, `opening` is left the address
+    /// the run first chose, so a run that moves to a browser opens that page rather than a guess an HTTP read also
+    /// failed on, which may be an address the site does not serve.
     pub(super) async fn open_start(
         &self,
         opening: &mut String,
@@ -709,25 +710,27 @@ impl Agent {
         task: &str,
         ledger: &std::sync::Arc<fastbrowse_core::telemetry::Ledger>,
     ) -> Step {
-        let mut unreadable: Vec<String> = Vec::new();
+        let first = opening.clone();
+        let mut unreadable: Vec<(String, String)> = Vec::new();
+        let mut first_error = None;
         loop {
             let error = match self.trace.phase("open", self.page.navigate(opening, None)).await {
                 Ok(()) => return Ok(()),
                 Err(error) if chosen && error.needs_browser() && self.page.over_http() => error,
                 Err(error) => return Err(error.into()),
             };
-            unreadable.push(opening.clone());
+            self.event("start_page_unreadable", || {
+                Map::from_iter([("url".into(), opening.clone().into()), ("error".into(), error.to_string().into())])
+            });
+            unreadable.push((opening.clone(), error.to_string()));
+            let first_error = first_error.get_or_insert(error);
             let proposal = propose_readable_start(&*self.llm, task, &unreadable, Some(ledger)).await?;
             ledger.record([proposal.cost])?;
-            let Some(next) = accept_start(proposal.data.url.as_deref()).filter(|url| !unreadable.contains(url)) else {
-                return Err(error.into());
+            let tried = |url: &String| unreadable.iter().any(|(seen, _)| seen == url);
+            let Some(next) = accept_start(proposal.data.url.as_deref()).filter(|url| !tried(url)) else {
+                *opening = first;
+                return Err(first_error.clone().into());
             };
-            self.event("start_page_unreadable", || {
-                Map::from_iter([
-                    ("url".into(), unreadable.last().cloned().into()),
-                    ("error".into(), error.to_string().into()),
-                ])
-            });
             self.event("start_page", || Map::from_iter([("url".into(), next.clone().into())]));
             *opening = next;
         }
