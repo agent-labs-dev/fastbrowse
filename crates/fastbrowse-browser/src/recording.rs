@@ -619,14 +619,11 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
             ass_time(end)
         ));
         if mark.pressed {
-            // A white halo under a red ring that swells to a wide circle and stays solid before it fades.
-            for (layer, border, colour) in [(1, 9, "FFFFFF"), (2, 5, "3052C5")] {
-                out.push_str(&format!(
-                    "Dialogue: {layer},{},{},Default,,0,0,0,,{{\\pos({x},{y})\\an5\\p1\\bord{border}\\1a&HFF&\\3c&H{colour}&\\fscx100\\fscy100\\t(0,500,\\fscx800\\fscy800)\\t(350,600,\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
-                    ass_time(at),
-                    ass_time((at + 0.6).min(until))
-                ));
-            }
+            out.push_str(&format!(
+                "Dialogue: 1,{},{},Default,,0,0,0,,{{\\pos({x},{y})\\an5\\p1\\bord3\\1a&HFF&\\3c&H3052C5&\\fscx100\\fscy100\\t(0,400,\\fscx400\\fscy400\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
+                ass_time(at),
+                ass_time((at + 0.4).min(until))
+            ));
         }
     }
     out
@@ -725,9 +722,8 @@ mod tests {
         // The arrow stays where it clicked until the glide to the next point begins, and the last one stays put.
         assert!(ass.contains("Dialogue: 2,0:00:01.00,0:00:01.60"));
         assert!(ass.contains("Dialogue: 2,0:00:01.60,0:00:03.00"));
-        // Only a press rings, and the ring is a white halo under a red one.
-        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:01.60"));
-        assert!(ass.contains("Dialogue: 2,0:00:01.00,0:00:01.60"));
+        // Only a press rings.
+        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:01.40"));
         assert_eq!(ass.matches("Dialogue: 1,").count(), 1);
     }
 

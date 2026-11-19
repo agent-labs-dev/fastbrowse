@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- A `--record` clip draws the press ring for every action that presses the mouse: fills and drags as well as clicks. A fill clicks its field before typing, but only a click rang; a mark now rings only once its press is sent, so a step that stops before pressing draws none, so the field looked focused with no press. The ring is now a larger red circle with a white halo that stays solid for most of its half second, where it was a faint one that faded at once ([#1350](https://github.com/agent-labs-dev/fastbrowse/issues/1350)).
+- A `--record` clip draws the click ring for every action that presses the mouse: fills and drags as well as clicks. A step that stops before its press draws none ([#1350](https://github.com/agent-labs-dev/fastbrowse/issues/1350)).
 
 - A downloaded file read again from a later page is one note. Each read after a download stored the whole file as another note, so composing the answer sent every copy: one sec.gov task stored a 23 MB file ten times and spent $30.90 composing ([#1299](https://github.com/agent-labs-dev/fastbrowse/issues/1299)).
 
