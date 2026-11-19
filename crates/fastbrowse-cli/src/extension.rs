@@ -74,11 +74,12 @@ fn config_base() -> PathBuf {
 /// invoked path is made absolute but its links are kept: a package manager's `bin` link outlives the versioned
 /// folder it points into, which the next upgrade removes.
 fn host_commands(program: &str, search: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
-    let named = Path::new(program);
-    let mut name = named.file_name().map(std::ffi::OsString::from).unwrap_or_default();
-    if named.extension().is_none() {
-        name.push(std::env::consts::EXE_SUFFIX);
+    let mut program = std::ffi::OsString::from(program);
+    if Path::new(&program).extension().is_none() {
+        program.push(std::env::consts::EXE_SUFFIX);
     }
+    let named = Path::new(&program);
+    let name = named.file_name().map(std::ffi::OsString::from).unwrap_or_default();
     // A relative `PATH` entry names a folder only from the directory this ran in, not from the one Chrome starts in.
     let installed: Vec<PathBuf> = search
         .map(|search| {
@@ -129,7 +130,8 @@ fn write_launcher(dir: &Path, commands: &[PathBuf]) -> std::io::Result<PathBuf> 
         let launcher = dir.join("native-host.bat");
         let mut text = String::from("@echo off\r\n");
         for command in commands {
-            let command = command.display();
+            // In a batch file a `%` in a path would start a variable, so each is doubled.
+            let command = command.display().to_string().replace('%', "%%");
             text.push_str(&format!("if exist \"{command}\" (\r\n  \"{command}\" native-host %*\r\n  exit /b\r\n)\r\n"));
         }
         text.push_str("fastbrowse native-host %*\r\n");
