@@ -823,7 +823,8 @@ impl Agent {
     /// `irreversible` is None for an action the page's structure shows commits, which only the task's request lifts.
     /// `action` is what the agent is about to do, as [`control_action`] writes it for a control. `lasting` asks, in an
     /// authorized run, whether a reversible action still leaves something the site keeps: one the task did not ask for
-    /// is refused once, so the run can pick again rather than stop (#743). A commit the task asks for only in some state
+    /// is refused once, so the run can pick again rather than stop (#743), and so is any unrequested commit once the run has
+    /// made one it was asked for (#1317). A commit the task asks for only in some state
     /// of the page goes ahead only once the page is judged not to show the state the task rules it out in (#848), and so
     /// does every commit after the run's first: `requested` reads the task alone, and still judged a reply the task asks
     /// for once asked for after the run had posted it twice (#882).
@@ -924,6 +925,14 @@ impl Agent {
                 );
                 return Ok(());
             }
+        }
+        // Once the run has made a commit the task asked for, stopping for confirmation reports that work as not done,
+        // and a caller trusting the status sends it again: a run that had posted its replies stopped this way on one
+        // more Post click (#1317). The extra action is refused instead, so Jev sees it failed and can finish.
+        if state.commits > 0 {
+            self.trace_authorization(state, decision, GateReason::UnrequestedChange);
+            let why = "would commit what the task does not ask for, after this run made the commits it does ask for";
+            return self.refuse_once(state, observation, decision, label, why).await;
         }
         self.trace_authorization(state, decision, GateReason::ConfirmationRequired);
         let reason = format!("{} {} needs confirmation", decision.operation, text::repr(label));

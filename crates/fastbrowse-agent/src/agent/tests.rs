@@ -9436,6 +9436,78 @@ async fn test_a_run_unfinished_after_a_commit_names_the_commit() {
     assert!(!answer.contains(super::finishing::CHANGED), "{answer}");
 }
 
+/// The irreversible gate's `requested` answer is yes for the run's first commit and no for every click after it.
+struct FirstRequested(ScriptedJev, Mutex<bool>);
+
+impl DecisionClient for FirstRequested {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            if evaluation.answers.contains_key("requested") {
+                let first = std::mem::replace(&mut *self.1.lock().unwrap(), false);
+                for (key, probability) in [("irreversible", 0.9), ("requested", if first { 0.9 } else { 0.0 })] {
+                    if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut(key) {
+                        answer.probability = probability;
+                    }
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A run that had posted the replies its task asked for and then picked one more irreversible click stopped
+/// `needs_confirmation`, so a caller trusting the status would post them again (#1317). After a commit the click is
+/// refused once and the run goes on to finish.
+#[tokio::test]
+async fn test_an_unrequested_commit_after_a_commit_is_refused_and_the_run_finishes() {
+    let jev = FirstRequested(
+        ScriptedJev::new(crate::scripted::steps("click Notify followers; click One way").unwrap()),
+        Mutex::new(true),
+    );
+    let page = Arc::new(Picker::new());
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        authorization: Some(Authorization { irreversible_actions: true }),
+        ..Default::default()
+    };
+    let result = agent.run("Turn on Notify followers and tell me what the page says", options).await.unwrap();
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    let now = page.now.lock().unwrap();
+    let field = now.controls.iter().find(|c| c.id == "type").unwrap();
+    assert_eq!(field.value.as_deref(), Some("Round trip"), "the refused click ran");
+}
+
+/// Picked again after its refusal, the extra click is refused again and spends the stall budget, so the run ends stuck
+/// naming the commit it made, never stopping for a confirmation of what it already sent (#1317).
+#[tokio::test]
+async fn test_an_unrequested_commit_picked_again_after_a_commit_ends_stuck_naming_the_commit() {
+    let script = "click Notify followers; click One way; click One way; click One way; click One way";
+    let jev = FirstRequested(ScriptedJev::new(crate::scripted::steps(script).unwrap()), Mutex::new(true));
+    let page = Arc::new(Picker::new());
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        authorization: Some(Authorization { irreversible_actions: true }),
+        ..Default::default()
+    };
+    let result = agent.run("Turn on Notify followers and tell me what the page says", options).await.unwrap();
+    assert_eq!(result.status, Status::Stuck, "{:?}", result.error);
+    let answer = result.answer.expect("an answer");
+    assert!(answer.starts_with(super::finishing::COMMITTED), "{answer}");
+    let now = page.now.lock().unwrap();
+    assert_eq!(now.controls.iter().find(|c| c.id == "type").unwrap().value.as_deref(), Some("Round trip"));
+}
+
 /// A run whose budget ran out on the step after a commit ended before the next page showed the commit taken, and named
 /// the field it set as one that may still hold its value. The commit it sent is named as sent, unseen.
 #[tokio::test]
