@@ -166,7 +166,9 @@ impl DeskpilotPage {
         if self.film.is_none() || self.withheld.load(Ordering::SeqCst) {
             return None;
         }
-        let (_, png) = self.shoot().await.ok()?;
+        let (_, png, path) = self.shoot().await.ok()?;
+        // The frame is only film: its PNG must not outlive the bytes, whether the next observation films or drops it.
+        let _ = tokio::fs::remove_file(&path).await;
         // Withheld while the shot was taken: a secret fill may have just begun.
         (!self.withheld.load(Ordering::SeqCst)).then_some(png)
     }
@@ -178,8 +180,8 @@ impl DeskpilotPage {
         }
     }
 
-    /// A shot of the window, as deskpilot binds later points to it, and its PNG.
-    async fn shoot(&self) -> PageResult<(Shot, Vec<u8>)> {
+    /// A shot of the window, as deskpilot binds later points to it, its PNG and the file deskpilot wrote it to.
+    async fn shoot(&self) -> PageResult<(Shot, Vec<u8>, String)> {
         let window = self.address();
         let content = self
             .client
@@ -200,7 +202,7 @@ impl DeskpilotPage {
         let png = tokio::fs::read(&path)
             .await
             .map_err(|error| BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")))?;
-        Ok((Shot { id, width, height }, png))
+        Ok((Shot { id, width, height }, png, path))
     }
 
     fn address(&self) -> String {
@@ -581,7 +583,7 @@ impl Page for DeskpilotPage {
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         Box::pin(async move {
             // Only the model's shots bind its points: a film frame taken since does not move them to another shot.
-            let (shot, png) = self.shoot().await?;
+            let (shot, png, _) = self.shoot().await?;
             *self.shot.lock().unwrap() = Some(shot);
             Ok(png)
         })

@@ -318,3 +318,18 @@ async fn a_frame_after_an_action_that_reveals_a_secret_is_never_filmed() {
     page.withhold_frames(false);
     assert_eq!(*frames.frames.lock().unwrap(), [b"launched".to_vec()]);
 }
+
+#[tokio::test]
+async fn a_film_frame_leaves_no_png_in_deskpilots_cache() {
+    let program = filmed("frames-on-disk");
+    let (film, _) = frames();
+    let page =
+        DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
+    let before = page.observe().await.unwrap();
+    page.withhold_frames(false);
+    page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
+    // The frame after the action is held, and the agent then rejects it: neither frame's file may remain.
+    page.withhold_frames(true);
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("desktop").join("frames-on-disk-shots");
+    assert!(!dir.join("launched.png").exists() && !dir.join("waited.png").exists());
+}
