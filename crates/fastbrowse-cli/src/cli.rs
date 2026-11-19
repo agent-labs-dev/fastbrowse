@@ -146,7 +146,7 @@ pub fn parser(build: &Build) -> Parser {
             Opt::flag("--browser"),
             Opt::flag("--extension"),
             Opt::value("--extension-browser"),
-            Opt::value("--desktop"),
+            Opt::append("--desktop"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
             Opt::flag("--no-cursor"),
@@ -193,8 +193,9 @@ pub struct Args {
     pub extension: bool,
     /// Which browser the extension is connected in, by its label; implies `extension`.
     pub extension_browser: Option<String>,
-    /// The desktop app to start and drive through deskpilot instead of a browser, as a command line.
-    pub desktop: Option<String>,
+    /// The desktop apps to start and drive through deskpilot instead of a browser, each a command line, one per
+    /// `--desktop`.
+    pub desktop: Vec<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     /// `--cursor` or `--no-cursor`; neither draws the cursor wherever it can be placed.
@@ -262,7 +263,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         browser: parsed.flag("--browser"),
         extension: parsed.flag("--extension"),
         extension_browser: text("--extension-browser"),
-        desktop: text("--desktop"),
+        desktop: parsed.all("--desktop").to_vec(),
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
@@ -447,7 +448,7 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let explicit_extension = args.extension || args.extension_browser.is_some();
-    let extension = explicit_extension || (!args.cloud && !args.fetch && args.desktop.is_none());
+    let extension = explicit_extension || (!args.cloud && !args.fetch && args.desktop.is_empty());
     if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension) {
         return Err(ConfigurationError(
             "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
@@ -501,7 +502,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         browser: args.browser,
         extension,
         extension_browser: args.extension_browser.clone(),
-        desktop: args.desktop.clone(),
+        desktop: args.desktop.first().cloned(),
+        desktop_apps: args.desktop.iter().skip(1).cloned().collect(),
         ..RunTask::default()
     };
     fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;

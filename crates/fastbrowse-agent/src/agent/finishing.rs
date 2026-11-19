@@ -14,6 +14,8 @@ use super::helpers::unsent_fact;
 use super::recovery::{DONE, Idle};
 use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
+use std::collections::HashSet;
+
 use crate::memory::Notes;
 use crate::retrieval::{ComposedAnswer, Draft, compose_reviewed, draft_answer, draft_reviewed, noticed, page_quotes};
 use crate::support::generate;
@@ -121,8 +123,7 @@ impl Agent {
             && state.notes.facts().is_empty()
             && matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage)
         {
-            let reason = "Nothing read so far answers the task, so it is not done.";
-            self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
+            self.recover(state, observation, UNANSWERED, Status::Unverified, Some((Operation::Done, None))).await?;
             return Ok(None);
         }
         let Some(result) = Box::pin(self.conclude_attempt(state, observation, output_schema, true)).await? else {
@@ -385,6 +386,15 @@ impl Agent {
             self.recover(state, observation, &reason, Status::Unverified, None).await?;
             return Ok(None);
         }
+        // A task that wants to be told something is not done on facts none of which answers it: such a run ended
+        // `complete` with no answer (#1343).
+        let unanswered = output_schema.is_none()
+            && answered.is_none()
+            && matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage);
+        if unanswered && recover_rejection {
+            self.recover(state, observation, UNANSWERED, Status::Unverified, Some((Operation::Done, None))).await?;
+            return Ok(None);
+        }
         if answered.as_ref().is_some_and(|answer| answer.problem.is_none()) {
             state.composition_feedback = None;
             state.composition_partial = None;
@@ -423,6 +433,10 @@ impl Agent {
                 ),
             };
             error.get_or_insert_with(|| self.redact(&message));
+        }
+        if unanswered {
+            status = Status::Unverified;
+            error.get_or_insert_with(|| UNANSWERED.to_string());
         }
         if state.refused {
             status = Status::Unverified;
@@ -493,6 +507,8 @@ impl Agent {
         Ok(Stop { status: Status::Unavailable, error: Some(self.redact(&error)), evidence, wall: None })
     }
 }
+
+pub(super) const UNANSWERED: &str = "Nothing read so far answers the task, so it is not done.";
 
 const UNOBTAINABLE_ITEM: &str =
     "The item the task requires that the page says cannot be bought, named as the page names it.";
@@ -692,12 +708,29 @@ fn drafted(feedback: &str) -> Option<Vec<String>> {
 /// What a task carried out read once its last step that changes the site was taken: the outcome it reports. What was
 /// read before it was kept for those steps, such as a value read on one page and entered on another, and answering with
 /// it reported a write task's start page, "Save: disabled", the disabled Save button beside the field it was about to
-/// change (#939).
+/// change (#939). A fact drawn from other facts holds what they quote: it is kept when every quote it rests on was
+/// read after that step. A read that joined two spans of "hello" into one answering fact had no quote of its own, was
+/// dropped, and a desktop run asked to write "hello" and read it back ended `complete` with no answer (#1343).
 pub(super) fn outcome_notes(state: &RunState) -> Notes {
     let taken = state.history.iter().filter(|entry| entry.changed_site()).count();
-    let mut outcome = state.notes.clone();
-    outcome
-        .retain(|fact| fact.evidence.as_ref().is_some_and(|evidence| state.notes.steps_taken(evidence) == Some(taken)));
+    let notes = &state.notes;
+    let after = |evidence: &Evidence| notes.steps_taken(evidence) == Some(taken);
+    let sources = notes.evidence();
+    let keep: HashSet<String> = notes
+        .facts_by_id()
+        .iter()
+        .filter(|(key, fact)| match &fact.evidence {
+            Some(evidence) => after(evidence),
+            None => {
+                let quotes: Vec<&Evidence> =
+                    notes.expand_evidence_ids([key.as_str()]).iter().filter_map(|id| sources.get(id)).collect();
+                !quotes.is_empty() && quotes.into_iter().all(after)
+            }
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    let mut outcome = notes.clone();
+    outcome.retain(|key, _| keep.contains(key));
     outcome
 }
 

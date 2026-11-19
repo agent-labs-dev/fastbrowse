@@ -134,6 +134,7 @@ async def run_task(
     extension: bool = False,
     extension_browser: str | None = None,
     desktop: str | None = None,
+    desktop_apps: Sequence[str] = (),
     open_browser: Callable[[], Awaitable[str]] | None = None,
     page_ready: Callable[[], Awaitable[None]] | None = None,
     settings: Mapping[str, str] | None = None,
@@ -243,7 +244,9 @@ async def run_task(
     without moving the user's pointer or keyboard focus, and closes it when the run ends; a window that is already open
     is not driven. It opens no browser, so it cannot be combined with a start address or any browser option, and it
     records and replays no recipe. `record` films the window from deskpilot's shots, one when the app opens and one
-    after each action, with the cursor drawn where each action landed.
+    after each action, with the cursor drawn where each action landed. `desktop_apps` starts more apps in the same
+    run, each a command line as `desktop` is. Every window the apps open, dialogs included, is one of the run's tabs,
+    and the run moves between them as it moves between a browser's tabs.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. Jev sees it as `background`.

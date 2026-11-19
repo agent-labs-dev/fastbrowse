@@ -12,6 +12,8 @@ use tokio::sync::Mutex;
 /// How long one tool call may take. deskpilot bounds its own waits (a hover rests at most 5 seconds, a paste waits
 /// for the app to read it), so a call still unanswered after this has lost its server.
 const CALL_SECONDS: u64 = 60;
+/// How long a closing server has to end once its apps are stopped and its stdin is closed, before it is killed.
+const CLOSE_SECONDS: u64 = 10;
 
 /// Why a tool call failed.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,14 +33,16 @@ impl ToolError {
 }
 
 struct Pipe {
-    stdin: ChildStdin,
+    /// None once the client is closed: the server reads end of input and exits.
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
 }
 
 pub struct Deskpilot {
-    // Killed with the client: a run that ends or is cancelled leaves no server behind.
-    _child: Child,
+    // Killed with the client as a last resort: `close` is what lets deskpilot close the apps first, since a kill skips
+    // deskpilot's own cleanup and left a run's apps open after it (#1345).
+    child: Mutex<Option<Child>>,
     pipe: Mutex<Pipe>,
     /// Where the run's window is acted on, and so which flag every call carries.
     view: View,
@@ -71,7 +75,7 @@ impl View {
 
 impl Deskpilot {
     /// Starts `program mcp` as the deskpilot agent named `agent` and completes MCP's handshake with it. The server
-    /// owns the apps it launches for that agent, so they close when it is killed with the client.
+    /// owns the apps it launches for that agent, which `close` closes.
     pub async fn start(program: &str, agent: &str, view: View) -> Result<Deskpilot, ToolError> {
         let mut child = Command::new(program)
             .arg("mcp")
@@ -83,12 +87,17 @@ impl Deskpilot {
             .spawn()
             .map_err(|error| ToolError::Transport(format!("could not start {program} mcp: {error}")))?;
         let pipe = Pipe {
-            stdin: child.stdin.take().expect("stdin is piped"),
+            stdin: Some(child.stdin.take().expect("stdin is piped")),
             stdout: BufReader::new(child.stdout.take().expect("stdout is piped")),
             next_id: 0,
         };
-        let mut client =
-            Deskpilot { _child: child, pipe: Mutex::new(pipe), view, placing: HashSet::new(), tools: HashSet::new() };
+        let mut client = Deskpilot {
+            child: Mutex::new(Some(child)),
+            pipe: Mutex::new(pipe),
+            view,
+            placing: HashSet::new(),
+            tools: HashSet::new(),
+        };
         let version = env!("CARGO_PKG_VERSION");
         client
             .request(
@@ -118,6 +127,19 @@ impl Deskpilot {
         Ok(client)
     }
 
+    /// Closes every app this agent launched with deskpilot's `stop`, then ends the server by closing its input, and
+    /// kills it only if it has not exited in time. A second call does nothing. The error is `stop`'s, after the
+    /// server is ended anyway.
+    pub async fn close(&self) -> Result<(), ToolError> {
+        let Some(mut child) = self.child.lock().await.take() else { return Ok(()) };
+        let stopped = if self.offers("stop") { self.call("stop", json!({})).await.map(|_| ()) } else { Ok(()) };
+        self.pipe.lock().await.stdin = None;
+        if tokio::time::timeout(Duration::from_secs(CLOSE_SECONDS), child.wait()).await.is_err() {
+            let _ = child.kill().await;
+        }
+        stopped
+    }
+
     /// Whether the server offers `tool`.
     pub fn offers(&self, tool: &str) -> bool {
         self.tools.contains(tool)
@@ -130,14 +152,15 @@ impl Deskpilot {
 
     async fn notify(&self, method: &str) -> Result<(), ToolError> {
         let mut pipe = self.pipe.lock().await;
-        write_line(&mut pipe.stdin, &json!({"jsonrpc": "2.0", "method": method})).await
+        write_line(pipe.stdin.as_mut(), &json!({"jsonrpc": "2.0", "method": method})).await
     }
 
     async fn request(&self, method: &str, params: Value) -> Result<Value, ToolError> {
         let mut pipe = self.pipe.lock().await;
         pipe.next_id += 1;
         let id = pipe.next_id;
-        write_line(&mut pipe.stdin, &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})).await?;
+        let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        write_line(pipe.stdin.as_mut(), &request).await?;
         let read = async {
             let mut line = String::new();
             loop {
@@ -169,6 +192,27 @@ impl Deskpilot {
 
     /// Calls a tool, returning its content blocks, or its refusal with the code deskpilot gave it.
     pub async fn call(&self, tool: &str, arguments: Value) -> Result<Vec<Value>, ToolError> {
+        let result = self.result(tool, arguments).await?;
+        Ok(result.get("content").and_then(Value::as_array).cloned().unwrap_or_default())
+    }
+
+    /// Calls a tool whose result is a list. MCP carries a list as one text block per item, and as the list itself in
+    /// `structuredContent` where the server gives one.
+    pub async fn call_list(&self, tool: &str, arguments: Value) -> Result<Vec<Value>, ToolError> {
+        let result = self.result(tool, arguments).await?;
+        if let Some(items) = result.pointer("/structuredContent/result").and_then(Value::as_array) {
+            return Ok(items.clone());
+        }
+        let content = result.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
+        Ok(content
+            .iter()
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .filter_map(|text| serde_json::from_str(text).ok())
+            .collect())
+    }
+
+    /// A tool call's whole result, or its refusal with the code deskpilot gave it.
+    async fn result(&self, tool: &str, arguments: Value) -> Result<Value, ToolError> {
         let result = self.request("tools/call", json!({"name": tool, "arguments": arguments})).await?;
         let content = result.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
         if result.get("isError").and_then(Value::as_bool) == Some(true) {
@@ -183,7 +227,7 @@ impl Deskpilot {
                 None => ToolError::Transport(message),
             });
         }
-        Ok(content)
+        Ok(result)
     }
 
     /// Calls a tool whose result is one JSON value, which MCP carries as the text of its first content block.
@@ -219,7 +263,8 @@ pub fn json_block(content: &[Value]) -> Option<Value> {
         .find_map(|text| serde_json::from_str(text).ok())
 }
 
-async fn write_line(stdin: &mut ChildStdin, message: &Value) -> Result<(), ToolError> {
+async fn write_line(stdin: Option<&mut ChildStdin>, message: &Value) -> Result<(), ToolError> {
+    let stdin = stdin.ok_or_else(|| ToolError::Transport("deskpilot mcp is closed".into()))?;
     let mut line = message.to_string();
     line.push('\n');
     stdin
