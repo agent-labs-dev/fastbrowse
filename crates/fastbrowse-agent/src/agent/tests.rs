@@ -3218,6 +3218,23 @@ async fn test_a_read_is_told_how_the_run_reached_the_page() {
     assert_eq!(reads.last().unwrap()["page_reached_by"], "click 'Learn more' on https://example.com/");
 }
 
+/// A click that went stale dispatched nothing, so a page that arrived after it was not reached by it.
+#[tokio::test]
+async fn test_a_read_is_not_told_a_step_that_dispatched_nothing_reached_the_page() {
+    let jev = Arc::new(ReadsRecorded::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let help = at("https://www.iana.org/help/example-domains", &[]);
+    state.history.push(HistoryEntry {
+        outcome: StepOutcome::Stale,
+        ..executed(Some(Operation::Click), Some("Learn more"), true)
+    });
+    state.acted_from = Some(at("https://example.com/", &[]));
+    agent.note_effect(&mut state, &help);
+    agent.read(&mut state, capture(&[(BlockKind::Paragraph, "Example Domains")]), &help, true).await.unwrap();
+    assert_eq!(jev.0.lock().unwrap()[0].get("page_reached_by"), None);
+}
+
 #[tokio::test]
 async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
     let field = "Capacity: 12";

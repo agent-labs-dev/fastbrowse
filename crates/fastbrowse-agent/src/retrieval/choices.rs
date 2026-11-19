@@ -294,12 +294,16 @@ async fn focus<'a>(
             );
         }
     }
-    let state = json!({
+    let mut state = json!({
         "rules": focus_rules(),
         "task": task,
         "date": date,
         "page": {"url": capture.url, "title": capture.title},
     });
+    // A passage dropped here never reaches the read, so the passages are judged knowing what the read is told.
+    if let Some(reached_by) = reached_by {
+        state["page_reached_by"] = reached_by.into();
+    }
     let answered = evaluate_batches(JevPurpose::Read, jev, &state, &questions, tokens, ledger, true).await?;
     let lost = answered.as_ref().is_none_or(|answered| answered.answers.len() < questions.len());
     let (answers, cost) = match answered {
@@ -664,6 +668,49 @@ mod tests {
                 })
             })
         }
+    }
+
+    /// Records the state each request sends, and finds no passage relevant.
+    #[derive(Default)]
+    struct States(std::sync::Mutex<Vec<Value>>);
+
+    impl DecisionClient for States {
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile::jev()
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            self.0.lock().unwrap().push(state.clone());
+            let answers = questions
+                .keys()
+                .map(|key| (key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.1 })))
+                .collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+    }
+
+    /// A passage judged without knowing how the run reached the page is dropped before the read that is told it.
+    #[test]
+    fn focus_is_told_how_the_run_reached_the_page() {
+        let captured = capture(&[(BlockKind::Paragraph, "Example Domains")]);
+        let jev = States::default();
+        let reached_by = Some("click 'Learn more' on https://example.com/");
+        let trace = Trace::disabled();
+        block_on(focus(&jev, &Page::new(&captured), "Find", "", &TokenBudget::default(), None, &trace, reached_by))
+            .unwrap();
+        assert_eq!(jev.0.into_inner().unwrap()[0]["page_reached_by"], "click 'Learn more' on https://example.com/");
     }
 
     #[test]
