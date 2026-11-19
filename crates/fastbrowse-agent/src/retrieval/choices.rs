@@ -22,6 +22,7 @@ use crate::batches::evaluate_batches;
 use crate::error::Result;
 use crate::memory::{Fact, fact_id, unique};
 use crate::pyre::byte_offsets;
+use crate::support::compute;
 
 // Long passages crowd out other relevance questions, so score bounded windows of neighboring blocks.
 const FOCUS_WINDOW_CHARS: i64 = 1500;
@@ -255,38 +256,42 @@ async fn focus<'a>(
     trace: &Trace,
 ) -> Result<(Vec<&'a Block>, Vec<Candidate>, Vec<CostLine>, bool)> {
     let capture = page.capture;
-    let mut windows: Vec<Vec<&'a Block>> = Vec::new();
-    let mut window_chars = 0;
-    for block in &capture.blocks {
-        let size = block.end - block.start;
-        if windows.is_empty() || window_chars + 1 + size > FOCUS_WINDOW_CHARS {
-            windows.push(Vec::new());
-            window_chars = -1;
+    // Cutting a page of megabytes into questions is long work, kept off the runtime's other tasks (#1284).
+    let (windows, questions) = compute(|| {
+        let mut windows: Vec<Vec<&'a Block>> = Vec::new();
+        let mut window_chars = 0;
+        for block in &capture.blocks {
+            let size = block.end - block.start;
+            if windows.is_empty() || window_chars + 1 + size > FOCUS_WINDOW_CHARS {
+                windows.push(Vec::new());
+                window_chars = -1;
+            }
+            windows.last_mut().expect("a window was just opened").push(block);
+            window_chars += 1 + size;
         }
-        windows.last_mut().expect("a window was just opened").push(block);
-        window_chars += 1 + size;
-    }
-    let mut questions: IndexMap<String, Question> = IndexMap::new();
-    for (i, blocks) in windows.iter().enumerate() {
-        let joined = passage(page, blocks, "\n");
-        // A block longer than a window is asked about in pieces: a passage scored on its opening alone could hide the
-        // current version below an outdated one. The pieces are cut from one index of the passage, built once: indexing
-        // it again for each piece made a page of one long block quadratic, and a 23 MB block held the run's threads
-        // for fifteen minutes (#1252).
-        let bytes = byte_offsets(&joined);
-        let step = FOCUS_WINDOW_CHARS as usize;
-        for (j, piece) in (0..bytes.len() - 1).step_by(step).enumerate() {
-            questions.insert(
-                format!("w{i}.{j}"),
-                NoulQuestion::new(
-                    format!("Does this passage bear on the task? {}", slice(&joined, &bytes, piece, piece + step)),
-                    None,
-                    None,
-                )
-                .into(),
-            );
+        let mut questions: IndexMap<String, Question> = IndexMap::new();
+        for (i, blocks) in windows.iter().enumerate() {
+            let joined = passage(page, blocks, "\n");
+            // A block longer than a window is asked about in pieces: a passage scored on its opening alone could hide the
+            // current version below an outdated one. The pieces are cut from one index of the passage, built once: indexing
+            // it again for each piece made a page of one long block quadratic, and a 23 MB block held the run's threads
+            // for fifteen minutes (#1252).
+            let bytes = byte_offsets(&joined);
+            let step = FOCUS_WINDOW_CHARS as usize;
+            for (j, piece) in (0..bytes.len() - 1).step_by(step).enumerate() {
+                questions.insert(
+                    format!("w{i}.{j}"),
+                    NoulQuestion::new(
+                        format!("Does this passage bear on the task? {}", slice(&joined, &bytes, piece, piece + step)),
+                        None,
+                        None,
+                    )
+                    .into(),
+                );
+            }
         }
-    }
+        (windows, questions)
+    });
     let state = json!({
         "rules": focus_rules(),
         "task": task,
@@ -299,45 +304,50 @@ async fn focus<'a>(
         Some(answered) => (answered.answers, answered.cost),
         None => (IndexMap::new(), Vec::new()),
     };
-    // A window is as relevant as its most relevant piece.
-    let mut best: BTreeMap<usize, f64> = BTreeMap::new();
-    let mut scored = 0;
-    for (key, answer) in &answers {
-        let window = key[1..].split('.').next().and_then(|i| i.parse().ok());
-        if let (Some(window), Some(score)) = (window, answer.probability()) {
-            let entry = best.entry(window).or_insert(score);
-            *entry = entry.max(score);
-            scored += 1;
+    // Ranking and sizing the passages builds requests from them, as long as cutting them was.
+    let (scored, shown, kept, candidates) = compute(|| {
+        // A window is as relevant as its most relevant piece.
+        let mut best: BTreeMap<usize, f64> = BTreeMap::new();
+        let mut scored = 0;
+        for (key, answer) in &answers {
+            let window = key[1..].split('.').next().and_then(|i| i.parse().ok());
+            if let (Some(window), Some(score)) = (window, answer.probability()) {
+                let entry = best.entry(window).or_insert(score);
+                *entry = entry.max(score);
+                scored += 1;
+            }
         }
-    }
-    let mut ranked: Vec<usize> = best.keys().copied().collect();
-    ranked.sort_by(|a, b| best[b].total_cmp(&best[a]).then(a.cmp(b)));
-    let passages =
-        |shown: usize| -> Vec<&'a Block> { ranked[..shown].iter().flat_map(|i| windows[*i].iter().copied()).collect() };
-    let max_options = jev.profile().max_choice_options;
-    let fits = |shown: usize| {
-        let blocks = passages(shown);
-        // The request quotes these passages whole, and no question leaves more room than none, so passages longer than
-        // that cannot fit whatever candidates they hold. Building those candidates first copied a passage into each
-        // candidate's context: a 23 MB block took longer than a command's deadline to be found too large (#1252).
-        if text::len(&passage(page, &blocks, "\n...\n")) as i64 > tokens.input_chars(&[] as &[&str]) {
-            return false;
+        let mut ranked: Vec<usize> = best.keys().copied().collect();
+        ranked.sort_by(|a, b| best[b].total_cmp(&best[a]).then(a.cmp(b)));
+        let passages = |shown: usize| -> Vec<&'a Block> {
+            ranked[..shown].iter().flat_map(|i| windows[*i].iter().copied()).collect()
+        };
+        let max_options = jev.profile().max_choice_options;
+        let fits = |shown: usize| {
+            let blocks = passages(shown);
+            // The request quotes these passages whole, and no question leaves more room than none, so passages longer than
+            // that cannot fit whatever candidates they hold. Building those candidates first copied a passage into each
+            // candidate's context: a 23 MB block took longer than a command's deadline to be found too large (#1252).
+            if text::len(&passage(page, &blocks, "\n...\n")) as i64 > tokens.input_chars(&[] as &[&str]) {
+                return false;
+            }
+            let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
+            let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false);
+            candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
+        };
+        let (mut shown, mut high) = (0, ranked.len());
+        while shown < high {
+            let middle = (shown + high).div_ceil(2);
+            if fits(middle) {
+                shown = middle;
+            } else {
+                high = middle - 1;
+            }
         }
-        let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
-        let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false);
-        candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
-    };
-    let (mut shown, mut high) = (0, ranked.len());
-    while shown < high {
-        let middle = (shown + high).div_ceil(2);
-        if fits(middle) {
-            shown = middle;
-        } else {
-            high = middle - 1;
-        }
-    }
-    let kept = passages(shown);
-    let candidates = page_read_candidates(page, &kept, max_options);
+        let kept = passages(shown);
+        let candidates = page_read_candidates(page, &kept, max_options);
+        (scored, shown, kept, candidates)
+    });
     trace.event("read_focus", || {
         let mut fields = Map::new();
         fields.insert("windows".into(), windows.len().into());
@@ -408,23 +418,28 @@ pub(crate) async fn read_page(
 ) -> Result<PageRead> {
     let page = Page::new(capture);
     let blocks: Vec<&Block> = capture.blocks.iter().collect();
-    let mut candidates = page_read_candidates(&page, &blocks, jev.profile().max_choice_options);
     let date = crate::dates::dated(capture.captured_at, dates);
-    let (mut state, mut asked) = read_request(&page, task, &date, &candidates, None, shows);
+    // Reading every candidate off a page of megabytes is long work, kept off the runtime's other tasks (#1284).
+    let (mut candidates, mut state, mut asked, fits) = compute(|| {
+        let candidates = page_read_candidates(&page, &blocks, jev.profile().max_choice_options);
+        let (state, asked) = read_request(&page, task, &date, &candidates, None, shows);
+        let fits = read_fits(&state, &asked, tokens);
+        (candidates, state, asked, fits)
+    });
     // Passages Jev never judged are missing from those it chooses among, so an absent from them is not the page's.
     let mut lost = false;
-    if candidates.is_empty() || !read_fits(&state, &asked, tokens) {
+    if candidates.is_empty() || !fits {
         let (kept, narrowed, _, unjudged) = focus(jev, &page, task, &date, tokens, ledger, trace).await?;
         if narrowed.is_empty() {
             // Too many value options can hide a passage that still fits as an absent-or-synthesis question.
-            if !read_fits(&state, &asked, tokens) {
+            if !fits {
                 // Every passage judged and none fitting is the same on a second try; one unjudged may not be.
                 return Ok(if unjudged { PageRead::unfinished() } else { PageRead::absent() });
             }
         } else {
             lost = unjudged;
             candidates = narrowed;
-            (state, asked) = read_request(&page, task, &date, &candidates, Some(&kept), shows);
+            (state, asked) = compute(|| read_request(&page, task, &date, &candidates, Some(&kept), shows));
         }
     }
     if let Some(ledger) = ledger {

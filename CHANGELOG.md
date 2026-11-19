@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Runs sharing one Python process keep their deadlines while another run reads a large page. Reading a page of megabytes held one of the module's two async workers, and a task that run had just woken, such as another run's click, waited behind it unpolled, so its input deadline and liveness probe never armed. Page reads now hand their worker and that task to the runtime before the long work starts ([#1284](https://github.com/agent-labs-dev/fastbrowse/issues/1284)).
+
 - A run with a dollar limit goes on after its first call to a model is cancelled. That call's cost could be bounded only once the model's price listing had been read, and the listing was read after the call, so a cancelled first call was recorded with an unknown cost and the run stopped because the limit could not be enforced. The listing is now read before the first call to each model under a dollar limit ([#1291](https://github.com/agent-labs-dev/fastbrowse/issues/1291)).
 
 - A downloaded file read again from a later page is one note. Each read after a download stored the whole file as another note, so composing the answer sent every copy: one sec.gov task stored a 23 MB file ten times and spent $30.90 composing ([#1299](https://github.com/agent-labs-dev/fastbrowse/issues/1299)).
