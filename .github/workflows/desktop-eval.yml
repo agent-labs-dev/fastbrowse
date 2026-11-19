@@ -1,5 +1,5 @@
 # Runs files-desktop-report-cross-app (evals/tasks) in Parallax's headless Hyprland desktop box, one arm per dispatch:
-# the controls (`oracle`, `null`), `fastbrowse-desktop`, or its baseline `claude-code-deskpilot` (claude-code driving the
+# the controls (`oracle`, `null-claim`, `null-refuse`), `fastbrowse-desktop`, or its baseline `claude-code-deskpilot` (claude-code driving the
 # same apps through deskpilot's MCP server). A diagnostic run: it joins no benchmark candidate, so benchmark-campaign.yml
 # neither starts nor waits for it. Each trial's display is recorded and uploaded with the run.
 # Needs the vkms kernel module, which GitHub's own runners load and Firecracker runners (blacksmith) cannot.
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       harness:
-        description: oracle, null, fastbrowse-desktop or claude-code-deskpilot
+        description: oracle, null-claim, null-refuse, fastbrowse-desktop or claude-code-deskpilot
         required: true
         default: oracle
       model:
@@ -68,9 +68,9 @@ jobs:
           test "$HARNESS" != claude-code-deskpilot || MODEL="${MODEL:-anthropic/claude-haiku-5.5}"
           { echo "HARNESS=$HARNESS"; echo "MODEL=$MODEL"; } >> "$GITHUB_ENV"
           case "$HARNESS" in
-            oracle|null|fastbrowse-desktop) ;;
+            oracle|null-claim|null-refuse|fastbrowse-desktop) ;;
             claude-code-deskpilot) test -n "$MODEL" || { echo "::error::claude-code-deskpilot needs a model"; exit 1; } ;;
-            *) echo "::error::harness must be oracle, null, fastbrowse-desktop or claude-code-deskpilot, got '$HARNESS'"; exit 1 ;;
+            *) echo "::error::harness must be oracle, null-claim, null-refuse, fastbrowse-desktop or claude-code-deskpilot, got '$HARNESS'"; exit 1 ;;
           esac
       - name: Load vkms
         # The Hyprland box draws on the kernel's virtual display.
