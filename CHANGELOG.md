@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A heading read over HTTP stands under the headings above it, not under the sibling heading it ends. PyPI's sidebar "Key dates" heading read under "Project links", the sidebar heading before it, and a README's top heading under the page's own ([#1254](https://github.com/agent-labs-dev/fastbrowse/issues/1254)).
 - Text an inline element draws in its own shadow root is read in the sentence around it. It was left out of the sentence and read after it as a block of its own, so `Price: <span>` holding `19.99` in its shadow root read "Price: total" and then "19.99" ([#1275](https://github.com/agent-labs-dev/fastbrowse/issues/1275)).
 - A CSV inside a downloaded ZIP is read row by row, as a downloaded CSV is, under the name `archive.zip/member.csv`. The archive's members were joined into one text, so the CSV was one block and composing from it sent the whole file: a 23 MB sec.gov market data file went to composition whole ([#1311](https://github.com/agent-labs-dev/fastbrowse/issues/1311)).
 
