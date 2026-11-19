@@ -9096,36 +9096,46 @@ fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
 
 /// A run posted a reply under each of two comments, clicking Post after typing each, then stopped for confirmation on a
 /// later click; its answer said both replies may still be in their fields, so the caller read two posted replies as
-/// unsent (#1317). A field typed before a commit the run made is named with that commit, not as left on the page.
+/// unsent (#1317). A commit names what was entered in its own form; a field of another form, or one in no form the page
+/// reports, is not one it sent, and stays among the changed fields.
 #[test]
 fn test_a_run_that_ends_unfinished_names_its_commits_apart_from_unsent_fields() {
-    let filled = |target: &str, text: &str| HistoryEntry {
+    let filled = |target: &str, text: &str, form: Option<&str>| HistoryEntry {
         text: Some(text.into()),
+        form: form.map(str::to_string),
         ..HistoryEntry::new(Some(Operation::Fill), Some(target), StepOutcome::Executed, true)
     };
-    let posted = HistoryEntry {
-        committed: true,
+    let posted = |form: &str| HistoryEntry {
+        commit: Some(crate::policy::Commit::Taken),
+        form: Some(form.into()),
         ..HistoryEntry::new(Some(Operation::Click), Some("Post"), StepOutcome::Executed, true)
     };
     let history = vec![
-        filled("Reply (comment by ann)", "first reply"),
-        posted.clone(),
-        filled("Reply (comment by bob)", "second reply"),
-        posted,
+        filled("Reply (comment by ann)", "first reply", Some("ann")),
+        filled("Draft", "unsaved draft", Some("notes")),
+        filled("Search", "left behind", None),
+        posted("ann"),
+        filled("Reply (comment by bob)", "second reply", Some("bob")),
+        posted("bob"),
         HistoryEntry::new(Some(Operation::Click), Some("comment by bob"), StepOutcome::Failed, false),
-        filled("Search", "left behind"),
     ];
     let answer = super::finishing::changed_fields(&history).expect("the commits are reported");
-    let (committed, changed) = answer.split_once(super::finishing::CHANGED).expect("the unsent field is reported");
+    let (committed, changed) = answer.split_once(super::finishing::CHANGED).expect("the unsent fields are reported");
     assert!(committed.starts_with(super::finishing::COMMITTED), "{answer}");
-    assert!(committed.contains("- click 'Post', after entering Reply (comment by ann): 'first reply'\n"), "{answer}");
-    assert!(committed.contains("- click 'Post', after entering Reply (comment by bob): 'second reply'"), "{answer}");
-    assert_eq!(changed, "\n- Search: 'left behind'", "{answer}");
+    assert!(committed.contains("- click 'Post', with Reply (comment by ann): 'first reply'\n"), "{answer}");
+    assert!(committed.contains("- click 'Post', with Reply (comment by bob): 'second reply'"), "{answer}");
+    assert_eq!(changed, "\n- Draft: 'unsaved draft'\n- Search: 'left behind'", "{answer}");
 
-    let sent = &history[..4];
-    let answer = super::finishing::changed_fields(sent).expect("the commits are reported");
+    let sent = [&history[..1], &history[3..6]].concat();
+    let answer = super::finishing::changed_fields(&sent).expect("the commits are reported");
     assert!(answer.starts_with(super::finishing::COMMITTED), "{answer}");
     assert!(!answer.contains(super::finishing::CHANGED), "{answer}");
+
+    let mut unseen = sent;
+    unseen[3].commit = Some(crate::policy::Commit::Sent);
+    let answer = super::finishing::changed_fields(&unseen).expect("the commits are reported");
+    let line = format!("- click 'Post' ({}), with Reply (comment by bob): 'second reply'", super::finishing::UNSEEN);
+    assert!(answer.ends_with(&line), "{answer}");
 }
 
 /// A custom select: clicking an option sets the field's value and closes the menu, so the option is gone after.
@@ -9266,9 +9276,33 @@ async fn test_a_run_unfinished_after_a_commit_names_the_commit() {
     let result = agent.run("Turn on Notify followers and tell me what the page says", options).await.unwrap();
     assert_ne!(result.status, Status::Complete, "{:?}", result.error);
     let answer = result.answer.expect("an answer");
+    let expected =
+        format!("{}\n- click 'Notify followers', with Notify followers: checked", super::finishing::COMMITTED);
+    assert!(answer.starts_with(&expected), "{answer}");
+    assert!(!answer.contains(super::finishing::CHANGED), "{answer}");
+}
+
+/// A run whose budget ran out on the step after a commit ended before the next page showed the commit taken, and named
+/// the field it set as one that may still hold its value. The commit it sent is named as sent, unseen.
+#[tokio::test]
+async fn test_a_run_out_of_steps_after_a_commit_names_the_commit_as_sent() {
+    const COMMITS: &[(&str, f64)] =
+        &[("carried", 0.0), ("refused", 1.0), ("irreversible", 0.9), ("requested", 0.9), ("conditional", 0.0)];
+    let jev = Noul(ScriptedJev::new(crate::scripted::steps("click Notify followers").unwrap()), COMMITS);
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        authorization: Some(Authorization { irreversible_actions: true }),
+        limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+        ..Default::default()
+    };
+    let result = agent.run("Turn on Notify followers and tell me what the page says", options).await.unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+    let answer = result.answer.expect("an answer");
     let expected = format!(
-        "{}\n- click 'Notify followers', after entering Notify followers: checked",
-        super::finishing::COMMITTED
+        "{}\n- click 'Notify followers' ({}), with Notify followers: checked",
+        super::finishing::COMMITTED,
+        super::finishing::UNSEEN
     );
     assert!(answer.starts_with(&expected), "{answer}");
     assert!(!answer.contains(super::finishing::CHANGED), "{answer}");

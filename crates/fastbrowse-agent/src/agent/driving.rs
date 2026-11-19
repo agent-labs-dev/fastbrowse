@@ -26,7 +26,7 @@ use super::state::{
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
+use crate::policy::{Commit, Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -282,15 +282,17 @@ impl Agent {
             // Only a commit that was sent counts: one the page redrew, covered or replaced before it went is not one
             // the run has made. One that opened a dialog is not made yet: accepting the dialog makes it, through its
             // own gate.
-            if committed
+            let taken = committed
                 && !state.page_failed
                 && observation.dialog.is_none()
-                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
-            {
+                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed);
+            if taken {
                 state.commits += 1;
-                if let Some(entry) = state.history.last_mut() {
-                    entry.committed = true;
-                }
+            }
+            if committed
+                && let Some(entry) = state.history.last_mut().filter(|entry| entry.commit == Some(Commit::Sent))
+            {
+                entry.commit = taken.then_some(Commit::Taken);
             }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
@@ -1262,6 +1264,8 @@ impl Agent {
             setting: setting.then_some(true),
             set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
+            commit: (state.committing && act.outcome == StepOutcome::Executed).then_some(Commit::Sent),
+            form: decision.target.as_ref().and_then(|target| target.form_id.clone()),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {

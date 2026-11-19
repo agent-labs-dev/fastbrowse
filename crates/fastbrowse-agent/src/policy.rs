@@ -175,10 +175,23 @@ pub struct HistoryEntry {
     /// judged not to have made the text bold, and pressed Bold again.
     #[serde(skip)]
     pub look: Option<Look>,
-    /// The step made a commit the page took, as the run counts its commits. Kept out of what models are shown: it is
-    /// the run's own record, and a run that posted two replies and then stopped reported both as typed but unsent.
+    /// The commit the step sent, if it sent one: a run that posted two replies and then stopped reported both as typed
+    /// but unsent. Kept out of what models are shown: it is the run's own record.
     #[serde(skip)]
-    pub committed: bool,
+    pub commit: Option<Commit>,
+    /// The form or field group the step's target belongs to, as the page reports it: a commit sends the fields of its
+    /// own form, and no others.
+    #[serde(skip)]
+    pub form: Option<String>,
+}
+
+/// A commit a step sent, and whether the run saw the page take it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Commit {
+    /// Sent, and the run ended before the next page showed whether it was taken.
+    Sent,
+    /// The page took it, as the run counts its commits.
+    Taken,
 }
 
 /// What the place a step acted on looked like: the card the decision saw and, for a click placed in pixels, the same
@@ -215,7 +228,8 @@ impl HistoryEntry {
             set: Vec::new(),
             for_step: None,
             look: None,
-            committed: false,
+            commit: None,
+            form: None,
         }
     }
 
