@@ -123,7 +123,7 @@ impl Agent {
             && state.notes.facts().is_empty()
             && matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage)
         {
-            self.recover(state, observation, UNANSWERED, Status::Stuck, Some((Operation::Done, None))).await?;
+            self.recover(state, observation, UNANSWERED, Status::Unverified, Some((Operation::Done, None))).await?;
             return Ok(None);
         }
         let Some(result) = Box::pin(self.conclude_attempt(state, observation, output_schema, true)).await? else {
@@ -392,7 +392,7 @@ impl Agent {
             && answered.is_none()
             && matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage);
         if unanswered && recover_rejection {
-            self.recover(state, observation, UNANSWERED, Status::Stuck, Some((Operation::Done, None))).await?;
+            self.recover(state, observation, UNANSWERED, Status::Unverified, Some((Operation::Done, None))).await?;
             return Ok(None);
         }
         if answered.as_ref().is_some_and(|answer| answer.problem.is_none()) {
