@@ -695,7 +695,9 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
                 let distance = (x - px).hypot(y - py) / unit;
                 let glide =
                     if distance < 2.0 { 0.0 } else { (1.5 * distance / PEAK_SPEED).clamp(MIN_GLIDE, MAX_GLIDE) };
-                (seconds(mark) - glide).max(seconds(previous))
+                // A press before it keeps its whole squeeze: a glide that would cut it short is shortened instead.
+                let squeezing = if previous.pressed { SQUEEZE_IN + SQUEEZE_HOLD + SQUEEZE_OUT } else { 0.0 };
+                (seconds(mark) - glide).max(seconds(previous) + squeezing).min(seconds(mark))
             }
             None => seconds(mark),
         })
@@ -929,6 +931,29 @@ mod tests {
             }
             assert!((x.0 + x.1).abs() < 0.1 && (y.0 + y.1).abs() < 0.1, "{line}");
         }
+    }
+
+    #[test]
+    fn a_following_glide_leaves_the_previous_press_its_whole_squeeze() {
+        let origin = Instant::now();
+        let mark = |ms, x, operation, pressed| PointerMark {
+            at: origin + std::time::Duration::from_millis(ms),
+            x,
+            y: 100.0,
+            operation,
+            pressed,
+            width: 1280.0,
+            height: 720.0,
+        };
+        let marks = [mark(1000, 100.0, Operation::Fill, true), mark(1500, 600.0, Operation::Hover, false)];
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(3), 1280, 720);
+        let squeezed = ass
+            .lines()
+            .filter(|line| {
+                line.starts_with("Dialogue: 2,") && line.contains("\\pos(100.0,100.0)") && line.contains("m -7.00 ")
+            })
+            .count();
+        assert!(squeezed >= 5, "the squeeze was cut to {squeezed} events");
     }
 
     #[test]

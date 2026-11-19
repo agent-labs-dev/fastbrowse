@@ -1859,14 +1859,15 @@ impl CdpPage {
         self.input(self.session.send("Input.dispatchMouseEvent", params, Some(session_id))).await
     }
 
-    /// The running action is about to press the mouse at its marked point: the recording rings that mark.
-    fn note_press(&self) {
+    /// The running action is about to press the mouse at `(x, y)`: the recording rings that mark, from now and there,
+    /// not from where and when the action was first marked, before the target stabilized.
+    fn note_press(&self, x: f64, y: f64) {
         let Some(marks) = &self.pointer_marks else { return };
         let index = self.state.lock().unwrap().mark_index;
         if let Some(index) = index
             && let Some(mark) = marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(index)
         {
-            mark.pressed = true;
+            (mark.at, mark.x, mark.y, mark.pressed) = (std::time::Instant::now(), x, y, true);
         }
     }
 
@@ -1886,7 +1887,7 @@ impl CdpPage {
             let params = json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1});
             self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&target.0)))
         };
-        self.note_press();
+        self.note_press(x, y);
         tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"))?;
         self.session.choosers_pinned().await;
         Ok((StepOutcome::Executed, None, None))
@@ -2022,7 +2023,7 @@ impl CdpPage {
         };
         let session_id = target.0.as_str();
         let press = json!({"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1, "buttons": 1});
-        self.note_press();
+        self.note_press(start_x, start_y);
         self.input(self.session.send("Input.dispatchMouseEvent", press, Some(session_id))).await?;
         // A press with no travel is a click; the drag starts on the first move that clears Chrome's threshold.
         sleep(secs(DRAG_STEP_SECONDS)).await;
