@@ -502,6 +502,24 @@ async fn a_window_an_action_opens_becomes_the_active_tab() {
 }
 
 #[tokio::test]
+async fn a_wait_ends_when_a_window_opens_though_the_active_windows_tree_stays_as_it_was() {
+    let fake = two_apps("wait-opened");
+    let dialog = named("0x123", "org.gnome.TextEditor", "Save As");
+    fake.replies("wait_for@0x123", [ok(&dialog)]).replies("elements@0x123", [ok(&frame("s3"))]);
+    fake.replies("windows", [list(&[window(false), calculator()]), list(&[window(false), calculator(), dialog])]);
+    let page = open_both(&fake).await;
+    let before = page.observe().await.unwrap();
+    let wait = Action::new(Operation::Wait);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), page.wait(&wait, &before, f64::INFINITY))
+        .await
+        .expect("an opened window ends the wait")
+        .unwrap();
+    assert!(result.page_changed, "{result:?}");
+    let after = page.observe().await.unwrap();
+    assert_eq!(after.title, "Save As");
+}
+
+#[tokio::test]
 async fn when_the_active_window_closes_the_one_active_before_it_is_active_again() {
     let fake = two_apps("fallback");
     fake.replies("wait_for@0xdef", [refused("not_found", "no window 0xdef")]);

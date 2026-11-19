@@ -44,6 +44,7 @@ PUBLISHED_SHAPES = {
         {"recipe", "save_recipe", "desktop", "launch", "desktop_apps"},
         {"desktop", "launch", "desktop_apps"},
         {"launch", "desktop_apps"},
+        {"desktop_apps"},
     ],
     "CostLine": [
         {"images", "cache_read_tokens", "cache_write_tokens", "model"},

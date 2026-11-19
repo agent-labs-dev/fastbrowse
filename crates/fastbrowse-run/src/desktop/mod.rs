@@ -329,6 +329,15 @@ impl DeskpilotPage {
     /// replacing its snapshot. Ids are numbered by the tree's order, so a tree that changed shape renumbers them and
     /// counts as changed.
     async fn differs(&self, observation: &Observation, target_id: Option<&str>) -> PageResult<bool> {
+        // A window the app opened is a change even where the active window's tree stays as it was.
+        let opened = {
+            let windows = self.windows().await?;
+            let seen = self.seen.lock().unwrap();
+            windows.iter().any(|window| !seen.contains(&window.address))
+        };
+        if opened {
+            return Ok(true);
+        }
         let (window, root) = self.tree(true).await?;
         let now = tree::observation(&window, &root, &[]);
         Ok(match target_id {
@@ -745,7 +754,7 @@ impl Page for DeskpilotPage {
             });
             self.point(Operation::Click, (x * shot.width, y * shot.height, shot.width, shot.height));
             let sent = self.tool("click", point).await.map(|()| None);
-            let measured = self.measured(sent, &before, SETTLE_SECONDS).await;
+            let measured = self.followed(self.measured(sent, &before, SETTLE_SECONDS).await).await;
             self.hold_frame().await;
             measured
         })
