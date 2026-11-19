@@ -175,6 +175,10 @@ pub struct HistoryEntry {
     /// judged not to have made the text bold, and pressed Bold again.
     #[serde(skip)]
     pub look: Option<Look>,
+    /// The step made a commit the page took, as the run counts its commits. Kept out of what models are shown: it is
+    /// the run's own record, and a run that posted two replies and then stopped reported both as typed but unsent.
+    #[serde(skip)]
+    pub committed: bool,
 }
 
 /// What the place a step acted on looked like: the card the decision saw and, for a click placed in pixels, the same
@@ -211,6 +215,7 @@ impl HistoryEntry {
             set: Vec::new(),
             for_step: None,
             look: None,
+            committed: false,
         }
     }
 

@@ -288,6 +288,9 @@ impl Agent {
                 && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
             {
                 state.commits += 1;
+                if let Some(entry) = state.history.last_mut() {
+                    entry.committed = true;
+                }
             }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;

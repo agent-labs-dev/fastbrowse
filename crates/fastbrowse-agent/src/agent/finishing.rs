@@ -542,29 +542,54 @@ const UNOBTAINABLE_INSTRUCTIONS: &str = "# Unavailable item\nA browser agent's t
 pub(super) const CHANGED: &str =
     "This run ended without finishing after changing fields on the page, which may still hold what it entered:";
 
+/// Said before the commits a run that ended without finishing made, each with the fields it entered before it. A run
+/// that posted two replies and then stopped on a later click said both replies may still be in their fields (#1317).
+pub(super) const COMMITTED: &str =
+    "This run made these commits before it ended, each after entering what is listed with it:";
+
 /// What a clicked option, box or switch is said to have left when the page changed without any field reporting a
 /// new value, checked or selected state, as a select that shows its choice only in its label does.
 pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports what it now holds";
 
-/// What a run's executed steps left in each field they changed, the latest change to each, as [`CHANGED`] says it:
-/// text typed or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field
-/// it changed, as the page read it after the click. None when no step changed a field.
+/// What a run's executed steps did to the page: each commit it made, as [`COMMITTED`] says it, with the fields changed
+/// before it, then what the steps after the last commit left in each field they changed, the latest change to each, as
+/// [`CHANGED`] says it: text typed or an option chosen, quoted as recorded (a secret by its marker), and what a click
+/// left in each field it changed, as the page read it after the click. None when no step changed a field or committed.
 pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
     let mut changed: IndexMap<&str, String> = IndexMap::new();
-    let mut put = |field, left| {
-        changed.shift_remove(field);
-        changed.insert(field, left);
-    };
+    let mut committed = Vec::new();
     for entry in history.iter().filter(|entry| entry.outcome == StepOutcome::Executed) {
+        let mut put = |field, left| {
+            changed.shift_remove(field);
+            changed.insert(field, left);
+        };
         match (entry.operation, &entry.text, entry.target.as_deref()) {
             (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => put(target, text::repr(text)),
             _ => entry.set.iter().for_each(|(field, left)| put(field, left.clone())),
         }
+        if entry.committed {
+            let step = match (entry.operation, entry.target.as_deref()) {
+                (Some(operation), Some(target)) => format!("{operation} {}", text::repr(target)),
+                (Some(operation), None) => operation.to_string(),
+                (None, _) => "a step".to_string(),
+            };
+            let entered: Vec<String> = changed.drain(..).map(|(field, left)| format!("{field}: {left}")).collect();
+            committed.push(if entered.is_empty() {
+                format!("- {step}")
+            } else {
+                format!("- {step}, after entering {}", entered.join("; "))
+            });
+        }
     }
-    (!changed.is_empty()).then(|| {
+    let committed = (!committed.is_empty()).then(|| format!("{COMMITTED}\n{}", committed.join("\n")));
+    let changed = (!changed.is_empty()).then(|| {
         let lines: Vec<String> = changed.iter().map(|(field, left)| format!("- {field}: {left}")).collect();
         format!("{CHANGED}\n{}", lines.join("\n"))
-    })
+    });
+    match (committed, changed) {
+        (Some(committed), Some(changed)) => Some(format!("{committed}\n\n{changed}")),
+        (committed, changed) => committed.or(changed),
+    }
 }
 
 /// What the answer of a run that stopped with a step of its task undone says first: what it read can show what was
