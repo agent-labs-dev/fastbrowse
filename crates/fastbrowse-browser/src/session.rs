@@ -2441,17 +2441,20 @@ async fn capture_download(
     }
     let kind = response_mime(mime);
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
-    let readable = readable_text(mime, &name, &raw, shared.max_download_bytes).await;
+    let readable = readable_texts(mime, &name, &raw, shared.max_download_bytes).await;
     let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, &raw).await?;
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
     state.downloads_captured += 1;
     state.download_keys.push(Some((url.to_owned(), crate::page::sha256_bytes(&raw))));
     match readable {
-        Ok(Some(text)) => {
-            state.download_texts.push(DownloadText { mime: kind, name, url: url.to_owned(), text, complete })
-        }
-        Ok(None) => {}
+        Ok(texts) => state.download_texts.extend(texts.into_iter().map(|(name, text)| DownloadText {
+            mime: kind.clone(),
+            name,
+            url: url.to_owned(),
+            text,
+            complete,
+        })),
         Err(reason) => state.download_unread.push(DownloadUnread { name, url: url.to_owned(), reason }),
     }
     Ok(())
@@ -2632,14 +2635,18 @@ fn is_download(mime: &str, disposition: &str) -> bool {
     DOWNLOAD_MIME_TYPES.contains(&response_mime(mime).as_str())
 }
 
-/// The response's text when it is a text file or a PDF the run should be able to read, None for any other file, and
-/// why a PDF went unread.
-async fn readable_text(
+/// The texts a run can read in the response, each with the name it is shown under, and why a document went unread.
+/// A text file, PDF or office document is one text under the file's name. A ZIP is one text per member, named
+/// `archive.zip/member`, so a CSV member is read row by row as a downloaded CSV is. Any other file has none.
+async fn readable_texts(
     mime: &str,
     name: &str,
     raw: &[u8],
     max_bytes: usize,
-) -> Result<Option<String>, crate::PdfUnread> {
+) -> Result<Vec<(String, String)>, crate::PdfUnread> {
+    let whole = |text: Option<String>| -> Vec<(String, String)> {
+        text.map(|text| (name.to_owned(), text)).into_iter().collect()
+    };
     let kind = response_mime(mime);
     let declared = match kind.as_str() {
         "" | "application/octet-stream" | "binary/octet-stream" => {
@@ -2654,21 +2661,23 @@ async fn readable_text(
         _ => &kind,
     };
     let request = match declared {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some(crate::helper::XLSX_TEXT),
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some(crate::helper::DOCX_TEXT),
-        "application/zip" => Some(crate::helper::ZIP_TEXT),
-        _ => None,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => crate::helper::XLSX_TEXT,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => crate::helper::DOCX_TEXT,
+        "application/zip" => {
+            let members = crate::pdf::archive_members(raw.to_vec(), max_bytes).await?;
+            return Ok(members
+                .into_iter()
+                .filter(|(_, text)| !text.trim().is_empty())
+                .map(|(member, text)| (format!("{name}/{member}"), text))
+                .collect());
+        }
+        "application/pdf" => return crate::pdf::text(raw.to_vec()).await.map(whole),
+        _ if kind.starts_with("text/") || kind == "application/csv" || kind == "application/json" => {
+            return Ok(whole(Some(String::from_utf8_lossy(raw).into_owned())));
+        }
+        _ => return Ok(Vec::new()),
     };
-    if let Some(request) = request {
-        return crate::pdf::document_text(&format!("{request}:{max_bytes}"), raw.to_vec()).await;
-    }
-    if declared == "application/pdf" {
-        return crate::pdf::text(raw.to_vec()).await;
-    }
-    if !(kind.starts_with("text/") || kind == "application/csv" || kind == "application/json") {
-        return Ok(None);
-    }
-    Ok(Some(String::from_utf8_lossy(raw).into_owned()))
+    crate::pdf::document_text(&format!("{request}:{max_bytes}"), raw.to_vec()).await.map(whole)
 }
 
 pub fn str_of(value: &Value) -> String {
@@ -2875,22 +2884,40 @@ mod tests {
     async fn generic_mime_downloads_use_their_declared_filename() {
         for mime in ["", "application/octet-stream"] {
             for name in ["report.xlsx", "report.DOCX", "report.zip"] {
-                assert!(readable_text(mime, name, b"invalid document", 1024).await.is_err(), "{mime}: {name}");
+                assert!(readable_texts(mime, name, b"invalid document", 1024).await.is_err(), "{mime}: {name}");
             }
         }
-        assert!(readable_text("application/octet-stream", "data.bin", b"binary", 1024).await.unwrap().is_none());
+        assert!(readable_texts("application/octet-stream", "data.bin", b"binary", 1024).await.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn text_and_pdf_downloads_are_read_whole() {
         crate::helper::register(crate::testing::test_binary_helper("pdf::tests::helper_child"));
         let raw = vec![b'a'; 100_000];
-        assert_eq!(readable_text("text/csv", "data.csv", &raw, usize::MAX).await.unwrap().unwrap().len(), raw.len());
-        assert!(readable_text("application/zip", "data.zip", b"PK", usize::MAX).await.is_err());
+        assert_eq!(readable_texts("text/csv", "data.csv", &raw, usize::MAX).await.unwrap()[0].1.len(), raw.len());
+        assert!(readable_texts("application/zip", "data.zip", b"PK", usize::MAX).await.is_err());
         let pdf =
-            readable_text("application/pdf", "wind.pdf", include_bytes!("../tests/fixtures/wind.pdf"), usize::MAX)
+            readable_texts("application/pdf", "wind.pdf", include_bytes!("../tests/fixtures/wind.pdf"), usize::MAX)
                 .await;
-        assert_eq!(pdf, Ok(Some("Fairbanks Wind".to_owned())));
+        assert_eq!(pdf, Ok(vec![("wind.pdf".to_owned(), "Fairbanks Wind".to_owned())]));
+    }
+
+    /// A CSV inside a ZIP was joined to the archive's other members as one text, so its rows were read as one block
+    /// and the whole file reached composition (#1311). Each member is its own text, named for the CSV it is.
+    #[tokio::test]
+    async fn each_zip_member_is_its_own_text_under_its_name() {
+        use std::io::Write;
+        crate::helper::register(crate::testing::test_binary_helper("pdf::tests::helper_child"));
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, body) in [("report.csv", "Item,Amount\nKettle,34.50\nToaster,20\nLamp,12"), ("empty.txt", "")] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        let raw = zip.finish().unwrap().into_inner();
+        assert_eq!(
+            readable_texts("application/zip", "data.zip", &raw, usize::MAX).await,
+            Ok(vec![("data.zip/report.csv".to_owned(), "Item,Amount\nKettle,34.50\nToaster,20\nLamp,12".to_owned())])
+        );
     }
 
     #[test]

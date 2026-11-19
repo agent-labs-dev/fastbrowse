@@ -19,7 +19,9 @@ pub const MARKER: &str = "__fastbrowse-helper";
 pub(crate) const PDF_TEXT: &str = "pdf-text";
 pub(crate) const XLSX_TEXT: &str = "xlsx-text";
 pub(crate) const DOCX_TEXT: &str = "docx-text";
-pub(crate) const ZIP_TEXT: &str = "zip-text";
+/// A ZIP's members as a JSON list of `[path, text]` pairs. Named apart from the joined text an older helper replied
+/// to `zip-text` with, so a helper of that version answers [`Reply::Unsupported`] rather than one text.
+pub(crate) const ZIP_MEMBERS: &str = "zip-members";
 /// The version of the request and reply. A helper that does not understand it answers [`Reply::Unsupported`]
 /// instead of guessing at a request it does not know.
 pub(crate) const PROTOCOL: &str = "1";
@@ -101,7 +103,7 @@ pub fn serve(args: &[String]) -> Option<i32> {
     let (reply, body) = match &args[1..] {
         [request, protocol] if request == PDF_TEXT && protocol == PROTOCOL => pdf_text(),
         [request, protocol]
-            if [XLSX_TEXT, DOCX_TEXT, ZIP_TEXT].contains(&request.split(':').next().unwrap_or_default())
+            if [XLSX_TEXT, DOCX_TEXT, ZIP_MEMBERS].contains(&request.split(':').next().unwrap_or_default())
                 && protocol == PROTOCOL =>
         {
             let (request, limit) = request

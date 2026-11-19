@@ -2383,6 +2383,26 @@ async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
     }
 }
 
+/// A CSV inside a ZIP was read as one block, so composing from it sent the whole file (#1311). It is read as a
+/// downloaded CSV is: one block per record under its header, named for the member it is.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_csv_inside_a_zip_download_is_read_row_by_row() {
+    read_pdfs();
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    h.goto("/report.zip").await;
+    let capture = h.page.capture().await.expect("capture");
+    let rows: Vec<_> = capture.blocks.iter().filter(|b| b.source_id.starts_with("download/")).collect();
+    let texts: Vec<_> = rows.iter().map(|block| capture.block_text(block)).collect();
+    assert_eq!(texts, ["name,total\nReport,139.79", "name,total\nKettle,34.50", "name,total\nLamp,12"]);
+    for block in &rows {
+        assert_eq!(block.kind, BlockKind::Table);
+        assert_eq!(block.heading_path, ["Downloaded file: report.zip/orders.csv"]);
+    }
+    h.close().await;
+}
+
 /// A try restarts the load, so a page whose parse waits on a script slower than one try's wait was never ready on any.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_page_slower_than_one_try_is_waited_for() {

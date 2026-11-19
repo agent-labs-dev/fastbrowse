@@ -6,7 +6,7 @@ use calamine::{Reader as _, Xlsx};
 use quick_xml::{Reader, events::Event};
 use zip::ZipArchive;
 
-use crate::helper::{DOCX_TEXT, XLSX_TEXT, ZIP_TEXT};
+use crate::helper::{DOCX_TEXT, XLSX_TEXT, ZIP_MEMBERS};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -15,7 +15,7 @@ pub(crate) fn parse(request: &str, raw: &[u8], max_bytes: usize) -> Result<Strin
     match request {
         XLSX_TEXT => spreadsheet(raw, &mut budget),
         DOCX_TEXT => document(raw, &mut budget),
-        ZIP_TEXT => archive(raw, &mut budget),
+        ZIP_MEMBERS => Ok(serde_json::to_string(&archive(raw, &mut budget)?)?),
         _ => Err("unknown document format".into()),
     }
 }
@@ -132,8 +132,12 @@ fn document(raw: &[u8], budget: &mut Budget) -> Result<String> {
     Ok(out)
 }
 
-fn archive(raw: &[u8], budget: &mut Budget) -> Result<String> {
+/// Each member's path in the archive and its text, or a note that it was not read. Kept apart rather than joined
+/// into one text: a CSV member joined to the rest lost its name and type, so its rows were read as one block and a
+/// 23 MB file reached composition whole (#1311).
+fn archive(raw: &[u8], budget: &mut Budget) -> Result<Vec<(String, String)>> {
     let mut archive = budget.open(raw)?;
+    let mut members = Vec::new();
     let mut out = String::new();
     for index in 0..archive.len() {
         let raw_file = archive.by_index_raw(index)?;
@@ -142,7 +146,6 @@ fn archive(raw: &[u8], budget: &mut Budget) -> Result<String> {
         }
         let name = raw_file.name()?.into_owned();
         drop(raw_file);
-        budget.append(&mut out, &format!("[Archive member: {name}]\n"))?;
         let text = (|| -> Result<String> {
             let mut file = archive.by_index(index)?;
             let mut bytes = Vec::new();
@@ -159,14 +162,16 @@ fn archive(raw: &[u8], budget: &mut Budget) -> Result<String> {
                 _ => Err("unsupported member format".into()),
             }
         })();
-        match text {
-            Ok(text) => budget.append(&mut out, &text)?,
+        let text = match text {
+            Ok(text) => text,
             Err(error) if error.is::<LimitExceeded>() => return Err(error),
-            Err(_) => budget.append(&mut out, "[Member contents were not read: unsupported or invalid document.]")?,
-        }
-        budget.append(&mut out, "\n\n")?;
+            Err(_) => "[Member contents were not read: unsupported or invalid document.]".to_owned(),
+        };
+        // `out` only counts the members' text against the output limit, which bounds the archive as a whole.
+        budget.append(&mut out, &text)?;
+        members.push((name, text));
     }
-    Ok(out)
+    Ok(members)
 }
 
 #[cfg(test)]
@@ -195,7 +200,7 @@ mod tests {
         writer.write_all(&vec![b'x'; 1024 * 1024]).unwrap();
         let raw = writer.finish().unwrap().into_inner();
         assert!(raw.len() < 64 * 1024);
-        assert!(parse(ZIP_TEXT, &raw, 64 * 1024).unwrap_err().to_string().contains("max_download_bytes"));
+        assert!(parse(ZIP_MEMBERS, &raw, 64 * 1024).unwrap_err().to_string().contains("max_download_bytes"));
     }
 
     #[test]
@@ -203,9 +208,9 @@ mod tests {
         let mut raw = zip(&[("bad.txt", b"FAIL"), ("good.txt", b"Useful evidence")]);
         let offset = raw.windows(4).position(|bytes| bytes == b"FAIL").unwrap();
         raw[offset] = b'X';
-        let text = parse(ZIP_TEXT, &raw, usize::MAX).unwrap();
-        assert!(text.contains("[Archive member: bad.txt]\n[Member contents were not read"), "{text}");
-        assert!(text.contains("Useful evidence"), "{text}");
+        let members = archive(&raw, &mut Budget { remaining: usize::MAX, output: usize::MAX }).unwrap();
+        assert!(members[0].1.starts_with("[Member contents were not read"), "{members:?}");
+        assert_eq!(members[1], ("good.txt".to_owned(), "Useful evidence".to_owned()));
     }
 
     #[test]
@@ -223,10 +228,12 @@ mod tests {
     #[test]
     fn archive_members_keep_names_and_state_what_was_unread_without_writing_paths() {
         let raw = zip(&[("../report.csv", b"Item,Amount\nKettle,34.50"), ("image.bin", b"\0\xff")]);
-        let text = parse(ZIP_TEXT, &raw, usize::MAX).unwrap();
-        assert!(text.contains("[Archive member: ../report.csv]\nItem,Amount\nKettle,34.50"));
-        assert!(text.contains("[Archive member: image.bin]\n[Member contents were not read"));
-        assert!(parse(ZIP_TEXT, b"invalid", usize::MAX).is_err());
+        let members: Vec<(String, String)> =
+            serde_json::from_str(&parse(ZIP_MEMBERS, &raw, usize::MAX).unwrap()).unwrap();
+        assert_eq!(members[0], ("../report.csv".to_owned(), "Item,Amount\nKettle,34.50".to_owned()));
+        assert_eq!(members[1].0, "image.bin");
+        assert!(members[1].1.starts_with("[Member contents were not read"), "{members:?}");
+        assert!(parse(ZIP_MEMBERS, b"invalid", usize::MAX).is_err());
     }
 
     fn workbook(sheet: &[u8]) -> Vec<u8> {

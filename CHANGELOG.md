@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A CSV inside a downloaded ZIP is read row by row, as a downloaded CSV is, under the name `archive.zip/member.csv`. The archive's members were joined into one text, so the CSV was one block and composing from it sent the whole file: a 23 MB sec.gov market data file went to composition whole ([#1311](https://github.com/agent-labs-dev/fastbrowse/issues/1311)).
+
 - An element inside a same-origin frame that the frame's script listens on, such as a bare span with a click handler or a canvas a drawing library listens on, is offered as a control. Chrome reports such listeners only to the frame's own script context, and they were read from the top page's, so a frame's listened elements were never offered ([#1312](https://github.com/agent-labs-dev/fastbrowse/issues/1312)).
 
 - A downloaded file read again from a later page is one note. Each read after a download stored the whole file as another note, so composing the answer sent every copy: one sec.gov task stored a 23 MB file ten times and spent $30.90 composing ([#1299](https://github.com/agent-labs-dev/fastbrowse/issues/1299)).
