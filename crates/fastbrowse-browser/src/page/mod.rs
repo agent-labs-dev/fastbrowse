@@ -6,6 +6,7 @@
 
 pub(crate) mod act;
 mod delta;
+mod pointer;
 pub mod scripts;
 
 use std::collections::HashMap;
