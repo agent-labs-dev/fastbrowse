@@ -1015,6 +1015,9 @@ async fn test_a_chosen_start_page_scripts_build_is_proposed_again_knowing_it_was
     assert_eq!(result.status, Status::Blocked);
     assert_eq!(result.error.as_deref(), Some("the page renders its content with scripts"));
     assert_eq!(page.opened.lock().unwrap().len(), 1, "an address already found unreadable is not opened again");
+    // A run that moves to a browser opens the address it could not read, not a second choice of start page.
+    let resume = agent.resume().expect("a browser handoff");
+    assert_eq!(resume.state.started_url.as_deref(), Some("https://search.test/search?q=ruff"));
 }
 
 #[tokio::test]

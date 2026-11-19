@@ -698,24 +698,25 @@ impl Agent {
         Ok(Some(opening))
     }
 
-    /// Opens the page the run begins on and returns the address it opened. A start page the run chose itself that an
-    /// HTTP read finds empty, because scripts build it, is replaced by one proposed knowing that, until a page opens or
-    /// none is known: the run reading over HTTP has no other way past it (#1330).
+    /// Opens the page the run begins on, leaving `opening` the address it opened, or the last one tried when none
+    /// opens. A start page the run chose itself that an HTTP read finds empty, because scripts build it, is replaced by
+    /// one proposed knowing that, until a page opens or none is known: a `--fetch` run has no other way past it, and
+    /// ended `blocked` before its first step (#1330).
     pub(super) async fn open_start(
         &self,
-        mut opening: String,
+        opening: &mut String,
         chosen: bool,
         task: &str,
         ledger: &std::sync::Arc<fastbrowse_core::telemetry::Ledger>,
-    ) -> Step<String> {
+    ) -> Step {
         let mut unreadable: Vec<String> = Vec::new();
         loop {
-            let error = match self.trace.phase("open", self.page.navigate(&opening, None)).await {
-                Ok(()) => return Ok(opening),
+            let error = match self.trace.phase("open", self.page.navigate(opening, None)).await {
+                Ok(()) => return Ok(()),
                 Err(error) if chosen && error.needs_browser() && self.page.over_http() => error,
                 Err(error) => return Err(error.into()),
             };
-            unreadable.push(opening);
+            unreadable.push(opening.clone());
             let proposal = propose_readable_start(&*self.llm, task, &unreadable, Some(ledger)).await?;
             ledger.record([proposal.cost])?;
             let Some(next) = accept_start(proposal.data.url.as_deref()).filter(|url| !unreadable.contains(url)) else {
@@ -728,7 +729,7 @@ impl Agent {
                 ])
             });
             self.event("start_page", || Map::from_iter([("url".into(), next.clone().into())]));
-            opening = next;
+            *opening = next;
         }
     }
 

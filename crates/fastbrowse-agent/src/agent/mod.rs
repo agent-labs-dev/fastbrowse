@@ -464,8 +464,10 @@ impl Agent {
                     None => None,
                 };
             }
-            if let Some(first) = opening.take() {
-                opening = Some(self.open_start(first, chosen, task, ledger).await?);
+            // Left holding the last address tried when it fails, so a run that moves to a browser for it opens that
+            // address instead of choosing its start page again.
+            if let Some(first) = opening.as_mut() {
+                self.open_start(first, chosen, task, ledger).await?;
             }
             if let (None, Some(opening)) = (start, &opening) {
                 // The caller gave a goal and no page, so this address was worked out from the task.
