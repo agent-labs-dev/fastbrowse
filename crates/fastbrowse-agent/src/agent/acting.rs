@@ -904,7 +904,7 @@ impl Agent {
             if wanted
                 && (!reversible || keeps)
                 && conditional
-                && let Some(why) = self.condition_refusal(state, observation, action).await?
+                && let Some(why) = self.condition_refusal(state, observation, decision.target.as_ref(), action).await?
             {
                 self.trace_authorization(state, decision, GateReason::ConditionUnmet);
                 return self.refuse_once(state, observation, decision, label, why).await;
@@ -955,6 +955,7 @@ impl Agent {
         &self,
         state: &mut RunState,
         observation: &Observation,
+        target: Option<&Control>,
         action: &str,
     ) -> Step<Option<&'static str>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -973,7 +974,7 @@ impl Agent {
             "dialog": observation.dialog.as_ref().map(Dump::dump_exclude_none),
             "tabs": observation.tabs.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
             "notes": self.decision_notes(state),
-            "recent_actions": state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
+            "recent_actions": state.history.iter().map(|entry| entry.shown_beside(target)).collect::<Vec<_>>(),
         });
         self.mask_strings(&mut page);
         page["task"] = self.caller_task(state).into();

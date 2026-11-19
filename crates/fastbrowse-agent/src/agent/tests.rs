@@ -1617,6 +1617,49 @@ async fn test_the_condition_check_reads_the_masked_page_and_the_request_check_ne
     assert_eq!(second["task"], run_task());
 }
 
+/// A thread's Post after a top-level Post that changed nothing was refused as already done (#881): the earlier step
+/// read only "click Post". The condition check is told which form each earlier submission sent beside the one now
+/// asked about, and what it held.
+#[tokio::test]
+async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([("irreversible", 0.95), ("requested", 0.97), ("lasting", 0.95), ("conditional", 0.1)]),
+        chosen: IndexMap::from([("values", "first"), ("met", "asked")]),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Reply under the comment by Syrberus with 'Thanks for the log', then click Post once.".into();
+    state.authorization = Authorization { irreversible_actions: true };
+    state.commits = 1;
+    let in_form = |control: Control, form: &str| Control { form_id: Some(form.into()), ..control };
+    let comment = in_form(Control::new("c", "textbox", "Comment text area", [Operation::Fill]), "top");
+    let top = in_form(Control { id: "top-post".into(), ..button("Post") }, "top");
+    let mut text = in_form(Control::new("r", "textbox", "Comment text area", [Operation::Fill]), "reply");
+    text.value = Some("Thanks for the log".into());
+    let post = in_form(button("Post"), "reply");
+    let controls = [comment, top.clone(), text, post.clone()];
+    assert_eq!(crate::policy::Submitted::of(Operation::Fill, &controls[2], &controls), None, "a fill submits nothing");
+    for target in [&top, &post] {
+        state.history.push(HistoryEntry {
+            submitted: crate::policy::Submitted::of(Operation::Click, target, &controls),
+            ..executed(Some(Operation::Click), Some("Post"), false)
+        });
+    }
+    let decision = code_decision(Operation::Click, Some(post));
+    agent.gate_irreversible(&mut state, &observation(&controls), &decision).await.expect("the reply is asked for");
+    let asked = jev.asked.lock().unwrap();
+    let actions = &asked[1].0["recent_actions"];
+    assert_eq!(
+        actions[0]["form"],
+        "a different form from the one the action now asked about submits; every field in it was empty"
+    );
+    assert_eq!(
+        actions[1]["form"],
+        "the same form the action now asked about submits; in it, 'Comment text area' holds 'Thanks for the log'"
+    );
+}
+
 fn run_task() -> &'static str {
     "Open the newest review. If nobody has answered it yet, write 'Thank you' and post it."
 }

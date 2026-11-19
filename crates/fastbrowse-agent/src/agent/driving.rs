@@ -26,7 +26,7 @@ use super::state::{
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
+use crate::policy::{Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, Submitted, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -1259,6 +1259,10 @@ impl Agent {
             setting: setting.then_some(true),
             set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
+            submitted: decision
+                .target
+                .as_ref()
+                .and_then(|target| Submitted::of(decision.operation, target, &observation.controls)),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {

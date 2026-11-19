@@ -175,6 +175,41 @@ pub struct HistoryEntry {
     /// judged not to have made the text bold, and pressed Bold again.
     #[serde(skip)]
     pub look: Option<Look>,
+    /// The form the step submitted, kept out of what models are shown but for a question about another submission.
+    #[serde(skip)]
+    pub submitted: Option<Submitted>,
+}
+
+/// The form a step submitted, and what its other fields held as it went.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Submitted {
+    frame_id: Option<String>,
+    form_id: String,
+    held: Vec<String>,
+}
+
+impl Submitted {
+    /// The form `operation` on `target` submits, read from `controls`; None for a step that submits no form.
+    pub fn of(operation: Operation, target: &Control, controls: &[Control]) -> Option<Submitted> {
+        Some(Submitted {
+            frame_id: target.frame_id.clone(),
+            form_id: target.form_id.clone().filter(|_| fastbrowse_core::safety::submits(operation, target))?,
+            held: fastbrowse_core::safety::form_held(target, controls),
+        })
+    }
+
+    /// Which form this was beside the one `target` submits, and what it held.
+    fn told(&self, target: Option<&Control>) -> String {
+        let same = target.is_some_and(|t| (&t.frame_id, t.form_id.as_ref()) == (&self.frame_id, Some(&self.form_id)));
+        let which = match same {
+            true => "the same form the action now asked about submits",
+            false => "a different form from the one the action now asked about submits",
+        };
+        match self.held.is_empty() {
+            true => format!("{which}; every field in it was empty"),
+            false => format!("{which}; in it, {}", self.held.join("; ")),
+        }
+    }
 }
 
 /// What the place a step acted on looked like: the card the decision saw and, for a click placed in pixels, the same
@@ -211,6 +246,7 @@ impl HistoryEntry {
             set: Vec::new(),
             for_step: None,
             look: None,
+            submitted: None,
         }
     }
 
@@ -221,6 +257,18 @@ impl HistoryEntry {
         let mut shown = self.dump_exclude_none();
         if let (Some(step), Some(target)) = (&self.for_step, &self.target) {
             shown["target"] = format!("{target}, for the task step {step:?}").into();
+        }
+        shown
+    }
+
+    /// The entry as shown to a question about submitting `target`'s form: a submission says which form it sent and
+    /// what that held. Shown only "click Post" with the page unchanged after the run had pressed the empty top-level
+    /// Post, Jev judged a thread's reply already posted, 0.6 to 0.4, and refused it; told the Post sent another,
+    /// empty form, it judged the reply asked for (#881).
+    pub fn shown_beside(&self, target: Option<&Control>) -> Value {
+        let mut shown = self.shown();
+        if let Some(submitted) = &self.submitted {
+            shown["form"] = submitted.told(target).into();
         }
         shown
     }
