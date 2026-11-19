@@ -62,6 +62,17 @@ async def test_a_refusal_is_not_retried() -> None:
     assert len(sent) == 1
 
 
+async def test_a_key_at_its_limit_names_the_status_the_host_and_the_likely_cause() -> None:
+    sent: list[httpx.Request] = []
+    async with _http(httpx.Response(403), sent=sent) as http:
+        jev = Jev(http, api_key="k", base_url=judging.OPENROUTER_URL, model=judging.OPENROUTER_MODEL)
+        with pytest.raises(judging.ProviderError) as raised:
+            await judge(jev, task="t", answer="43.25", claims=CLAIMS)
+    assert (raised.value.status, raised.value.host) == (403, "openrouter.ai")
+    assert "limit or credit" in raised.value.hint
+    assert len(sent) == 1
+
+
 async def test_the_gateway_is_asked_a_boolean_and_answers_a_probability() -> None:
     sent: list[httpx.Request] = []
     async with _http(_answers("probability", 0.1), sent=sent) as http:
