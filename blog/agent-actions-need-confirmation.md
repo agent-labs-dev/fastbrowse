@@ -26,7 +26,7 @@ Only `complete` exits 0. The full table, including the statuses that stop before
 
 ## Opting in, one run at a time
 
-`--authorize` allows submit, pay, delete and send. It does not override a task that says to change nothing or not to download, so a task carrying its own constraint is still refused.
+`--authorize` allows submit, pay, delete and send. It does not override a task that says to change nothing, not to download, or not to take an action, such as "do not click Upload", so a task carrying its own constraint is still refused.
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
