@@ -382,7 +382,7 @@ impl Agent {
             // Filled from the claims that passed, so a stop before the rewrite keeps no value the answer did not give.
             let passed = answered.as_ref().filter(|answer| !answer.claims.is_empty());
             state.schema_partial = self.schema_fields(state, output_schema, passed).await?;
-            self.recover(state, observation, &reason, Status::Unverified, None).await?;
+            self.rewrite(state, observation, &reason).await?;
             return Ok(None);
         }
         if answered.as_ref().is_some_and(|answer| answer.problem.is_none()) {
