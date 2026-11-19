@@ -16,7 +16,7 @@ use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use std::collections::HashSet;
 
-use crate::memory::Notes;
+use crate::memory::{Fact, Notes};
 use crate::retrieval::{ComposedAnswer, Draft, compose_reviewed, draft_answer, draft_reviewed, noticed, page_quotes};
 use crate::support::generate;
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
@@ -265,7 +265,17 @@ impl Agent {
             !text.trim().is_empty() && (state.appearance || !state.notes.repeats_page_text(text, &observation.url))
         });
         if let Some(text) = reading_text {
-            state.notes.add_image_read(&self.mask(&text), &observation.url, observation.captured_at, &png);
+            let fact = Fact::read_from_image(&self.mask(&text), &observation.url, observation.captured_at, &png);
+            // An image read has no capture, so its trace event keeps the fact with its evidence: `Notes::add` rebuilds
+            // it, as `Notes::record` rebuilds a page read. Without it a trace lost every answer read off a screenshot.
+            self.event("image_read", || {
+                Map::from_iter([
+                    ("step".into(), state.steps.len().into()),
+                    ("url".into(), observation.url.clone().into()),
+                    ("facts".into(), serde_json::to_value([&fact]).unwrap_or_default()),
+                ])
+            });
+            state.notes.add(fact);
             state.compose = true;
         } else {
             state.unanswered_images.insert(image);

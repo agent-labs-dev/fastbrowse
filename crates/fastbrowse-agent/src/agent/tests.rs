@@ -3143,6 +3143,87 @@ async fn a_reads_trace_event_rebuilds_the_notes_it_made() {
     assert_eq!(rebuilt.render(100_000, false, true).unwrap(), state.notes.render(100_000, false, true).unwrap());
 }
 
+/// A page whose text is `Capture`, for a read that takes its capture the way a run does.
+struct Captured(Capture);
+
+impl Page for Captured {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        unreachable!("the read does not observe")
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        unreachable!("the read does not observe")
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("the read does not navigate")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        let capture = self.0.clone();
+        Box::pin(async move { Ok(capture) })
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("the read does not act")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        unreachable!("the read does not watch")
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        unreachable!("the read takes no screenshot")
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        unreachable!("the read does not ask the address")
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        unreachable!("the read does not ask the status")
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        unreachable!("the read does not wait on the page")
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        unreachable!("the read does not wait on the page")
+    }
+}
+
+#[tokio::test]
+async fn a_read_of_a_page_showing_a_secret_rebuilds_from_its_trace_event() {
+    // The trace replaces a secret with its longer name, which would move every block after it. A capture is masked
+    // at equal length before anything reads it, so the event's capture and offsets are those the notes came from.
+    let field = "Capacity: 12";
+    let trace = Trace::collecting();
+    let page = capture(&[(BlockKind::Paragraph, "Password: hunter2"), (BlockKind::Paragraph, field)]);
+    let agent = Agent::new(Arc::new(Captured(page)), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM))
+        .with_trace(trace.clone());
+    agent.redactor().register("password", "hunter2", None);
+    let mut state = run_state();
+    let masked = agent.capture().await.expect("capture");
+    assert!(!masked.text.contains("hunter2"));
+    assert!(agent.read(&mut state, masked.clone(), &observation(&[]), true).await.expect("new evidence"));
+
+    let events = trace.events();
+    let read = events.iter().find(|event| event["event"] == "read").expect("a read event");
+    let recorded: Capture = serde_json::from_value(read["capture"].clone()).expect("the typed capture");
+    assert_eq!(recorded, masked);
+    let facts: Vec<Fact> = serde_json::from_value(read["facts"].clone()).expect("the facts with their evidence");
+    let mut rebuilt = crate::memory::Notes::default();
+    rebuilt.record(&recorded, read["steps_taken"].as_u64().unwrap() as usize, facts);
+    assert_eq!(rebuilt.facts(), state.notes.facts());
+}
+
 #[tokio::test]
 async fn an_absent_revisit_does_not_use_old_context_as_fresh_evidence() {
     let mut agent = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "synthesis")])), Arc::new(ScriptedLLM));
@@ -6760,6 +6841,25 @@ async fn test_image_read_text_is_masked_before_becoming_evidence() {
     agent.read_drawn_page(&mut state, &page).await.expect("masked image reading");
     let notes = format!("{:?}", state.notes.facts());
     assert!(!notes.contains("3.459"), "image facts must withhold resolved secrets");
+}
+
+#[tokio::test]
+async fn an_image_read_trace_event_rebuilds_the_notes_it_made() {
+    // A drawn page answers only through a screenshot read, which made no trace event, so a trace lost the answer.
+    let jev =
+        Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None, zoomed: None });
+    let trace = Trace::collecting();
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ImageLLM)).with_trace(trace.clone());
+    let page = Observation { visual_content: true, ..observation(&[]) };
+    let mut state = run_state();
+    agent.read_drawn_page(&mut state, &page).await.expect("image read");
+    assert!(state.notes.answered());
+
+    let events = trace.events();
+    let read = events.iter().find(|event| event["event"] == "image_read").expect("an image read event");
+    let facts: Vec<Fact> = serde_json::from_value(read["facts"].clone()).expect("the facts with their evidence");
+    let rebuilt = Notes::new(facts);
+    assert_eq!(rebuilt.facts(), state.notes.facts());
 }
 
 #[tokio::test]
