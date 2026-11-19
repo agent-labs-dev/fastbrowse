@@ -28,7 +28,8 @@ declare the task complete. `plan_ahead=false` disables list reads and planned fi
 
 ## Authorization
 
-Jev judges every model-selected click, drag or key chord, including links, navigation to a caller-supplied address, every Enter press and acceptance of
+Jev judges every model-selected click, drag, key chord or file attached to an input (a page can upload a file the
+moment it is chosen), including links, navigation to a caller-supplied address, every Enter press and acceptance of
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
 for it; otherwise the run stops at `needs_confirmation`. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
@@ -62,8 +63,11 @@ option, or any control that reports a checked state) is refused, and from then o
 longer offered. Typing into a search box is exempt, since searching is how a read-only task finds things.
 When the task tells the agent not to take some action ("do not click Upload"), every action the gate asks about
 is also asked about in the same request, against the task and the action alone: one the task says not to take,
-whatever the page shows, is refused once. Whether the task forbids anything is judged first, so a task that forbids
-nothing adds no question to its gates. Authorization does not lift any of these rules: it lets a run commit what
+whatever the page shows, is refused once, and so is one the question goes unanswered for. When the task forbids it
+only in some state of the page ("do not click Upload while the preview shows confidential data"), a request of its
+own with the masked page asks whether the page shows that state, and the action goes ahead only on Jev's answer that
+it does not. Whether the task forbids anything is judged first, so a task that forbids nothing adds no question to
+its gates. Authorization does not lift any of these rules: it lets a run commit what
 the task asks for, never what the task forbids.
 
 Unmarked password fields leave the current-or-replacement role to Jev using the task and page context.

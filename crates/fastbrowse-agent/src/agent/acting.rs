@@ -12,10 +12,10 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    CredentialField, DONE, EDITS_ALLOWED, EDITS_NONE, EDITS_REQUESTED_ONLY, HAPPENED, LATER_VALUES, MET,
-    asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action, credential_field,
-    downloads_question, edits_question, forbidden_question, happened_question, irreversible_question, is_password,
-    lasting_question, may_be_irreversible, met_question, offers_passkey, origin_of, prohibits_question,
+    ALLOWED, CredentialField, DONE, EDITS_ALLOWED, EDITS_NONE, EDITS_REQUESTED_ONLY, HAPPENED, LATER_VALUES, MET,
+    allowed_question, asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action,
+    credential_field, downloads_question, edits_question, forbidden_question, happened_question, irreversible_question,
+    is_password, lasting_question, may_be_irreversible, met_question, offers_passkey, origin_of, prohibits_question,
     requested_question, resolve_secret, sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
@@ -405,7 +405,8 @@ impl Agent {
                 }
                 let chord = self.key(state, observation, decision, target).await?;
                 self.gate_key_edit(state, observation, decision, target, &chord).await?;
-                self.gate_irreversible_with_key(state, observation, decision, Some(&chord)).await?;
+                let fact = format!("\nThe exact key chord to press is {}.\n", text::repr(&chord));
+                self.gate_irreversible_with_fact(state, observation, decision, Some(&fact)).await?;
                 Ok(Action { target_id: Some(target.id.clone()), text: Some(chord), ..Action::new(Operation::Press) })
             }
             Operation::Drag => {
@@ -491,6 +492,8 @@ impl Agent {
                 if files.iter().map(|f| f.content.0.len() as i64).sum::<i64>() > self.config.max_upload_bytes {
                     return Err(Stop::new(Status::NeedsInput, format!("{name} exceeds the upload size limit")).into());
                 }
+                let fact = format!("\nThe file to attach is {}.\n", text::repr(&name));
+                self.gate_irreversible_with_fact(state, observation, decision, Some(&fact)).await?;
                 Ok(Action { target_id: Some(require(target)?.id.clone()), files, ..Action::new(Operation::Upload) })
             }
             Operation::Dialog => {
@@ -534,15 +537,17 @@ impl Agent {
         observation: &Observation,
         decision: &Decision,
     ) -> Step {
-        self.gate_irreversible_with_key(state, observation, decision, None).await
+        self.gate_irreversible_with_fact(state, observation, decision, None).await
     }
 
-    async fn gate_irreversible_with_key(
+    /// The irreversible gate, with `fact` added to every question about the action: what the operation's target alone
+    /// does not say, such as the key chord pressed or the file attached.
+    async fn gate_irreversible_with_fact(
         &self,
         state: &mut RunState,
         observation: &Observation,
         decision: &Decision,
-        key: Option<&str>,
+        fact: Option<&str>,
     ) -> Step {
         let Some(target) = decision.target.as_ref().filter(|_| may_be_irreversible(decision.operation)) else {
             return Ok(());
@@ -559,14 +564,14 @@ impl Agent {
             decision.destination.as_ref(),
             &observation.controls,
         );
-        // A tab's Delete and ArrowRight target the same control but can commit different changes.
-        if let Some(key) = key {
-            let fact = format!("\nThe exact key chord to press is {}.\n", text::repr(key));
+        // A tab's Delete and ArrowRight target the same control but can commit different changes, and one file input
+        // can be given a file the task allows or one it does not.
+        if let Some(fact) = fact {
             if let Some(question) = irreversible.as_mut() {
-                question.instructions.push_str(&fact);
+                question.instructions.push_str(fact);
             }
-            lasting.instructions.push_str(&fact);
-            action.push_str(&fact);
+            lasting.instructions.push_str(fact);
+            action.push_str(fact);
         }
         self.gate_question(state, observation, decision, &label, irreversible, &action, Some(lasting)).await
     }
@@ -857,15 +862,19 @@ impl Agent {
         if let Some(irreversible) = irreversible {
             questions.insert("irreversible".to_string(), Question::Noul(irreversible));
         }
-        if self.prohibits(state).await? {
+        let prohibiting = self.prohibits(state).await?;
+        if prohibiting {
             questions.insert("forbidden".to_string(), Question::Noul(forbidden_question(action)));
         }
         if authorized {
             questions.insert("requested".to_string(), Question::Noul(requested_question(action)));
+        }
+        // A task can forbid an action only in some state of the page, which `forbidden` leaves to this question.
+        if authorized || prohibiting {
             questions.insert("conditional".to_string(), Question::Noul(conditional_question(action)));
-            if let Some(lasting) = lasting {
-                questions.insert("lasting".to_string(), Question::Noul(lasting));
-            }
+        }
+        if authorized && let Some(lasting) = lasting {
+            questions.insert("lasting".to_string(), Question::Noul(lasting));
         }
         if !questions.is_empty() {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -907,8 +916,9 @@ impl Agent {
                 ])
             });
             // Authorization does not lift it, as it does not lift the download rule: it lets a run commit what the task
-            // asks for, never what the task forbids. Refused once, the run can pick another step.
-            if forbidden.is_some_and(|p| p > EVEN_ODDS) {
+            // asks for, never what the task forbids. Refused once, the run can pick another step. Asked unanswered, it
+            // refuses too, as an unanswered irreversible question does.
+            if prohibiting && forbidden.is_none_or(|p| p > EVEN_ODDS) {
                 self.trace_authorization(state, decision, GateReason::Forbidden);
                 return self.refuse_once(state, observation, decision, label, "is what the task says not to do").await;
             }
@@ -923,13 +933,24 @@ impl Agent {
             }
             // Asked unanswered, the condition is checked as if the task set one: the check costs a call, a missed
             // condition an irreversible commit.
-            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS) || state.commits > 0;
-            if wanted
-                && (!reversible || keeps)
-                && conditional
+            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS);
+            let commits = wanted && (!reversible || keeps);
+            if commits
+                && (conditional || state.commits > 0)
                 && let Some(why) = self.condition_refusal(state, observation, action).await?
             {
                 self.trace_authorization(state, decision, GateReason::ConditionUnmet);
+                return self.refuse_once(state, observation, decision, label, why).await;
+            }
+            // An action the task forbids only in some state of the page is checked against the page before it goes
+            // ahead, reversible or not; a commit checked above was already asked whether the page shows that state.
+            if prohibiting
+                && conditional
+                && (reversible || wanted)
+                && !commits
+                && let Some(why) = self.prohibition_refusal(state, observation, action).await?
+            {
+                self.trace_authorization(state, decision, GateReason::Forbidden);
                 return self.refuse_once(state, observation, decision, label, why).await;
             }
             if reversible || wanted {
@@ -981,26 +1002,7 @@ impl Agent {
         action: &str,
     ) -> Step<Option<&'static str>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let elements: Vec<_> =
-            observation.controls.iter().map(|c| JsonValue::Object(crate::policy::element(c))).collect();
-        let mut page = json!({
-            "page": {
-                "url": observation.url,
-                "title": observation.title,
-                "text": observation.viewport_text,
-                "offscreen_text": observation.offscreen_text,
-                "response_status": observation.response_status,
-                "media": observation.media,
-            },
-            "elements": elements,
-            "dialog": observation.dialog.as_ref().map(Dump::dump_exclude_none),
-            "tabs": observation.tabs.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
-            "notes": self.decision_notes(state),
-            "recent_actions": state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
-        });
-        self.mask_strings(&mut page);
-        page["task"] = self.caller_task(state).into();
-        page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
+        let page = self.condition_page(state, observation);
         let questions = IndexMap::from([
             ("met".to_string(), Question::Choice(met_question(action))),
             ("values".to_string(), Question::Choice(values_question(action))),
@@ -1043,6 +1045,61 @@ impl Agent {
         } else {
             None
         })
+    }
+
+    /// Why the page shows a state in which the task says not to take this action, or `None` when Jev judges it does not.
+    /// Asked once the task forbids the action only in some state of the page, in a request of its own with the page's
+    /// content, as [`Self::condition_refusal`] is: only [`ALLOWED`] lets the action go, so the page can take it away and
+    /// never give it.
+    async fn prohibition_refusal(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        action: &str,
+    ) -> Step<Option<&'static str>> {
+        const REFUSED: &str = "is what the task says not to do in some state, and the page does not show it allowed";
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let page = self.condition_page(state, observation);
+        let questions = IndexMap::from([("allowed".to_string(), Question::Choice(allowed_question(action)))]);
+        let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {
+            Ok(evaluation) => evaluation,
+            // A page too large to ask about cannot show the action allowed.
+            Err(DecisionError::InputTooLarge(_)) => return Ok(Some(REFUSED)),
+            Err(error) => return Err(error.into()),
+        };
+        state.ledger.record([evaluation.cost.clone()])?;
+        let allowed = match evaluation.answers.get("allowed") {
+            Some(Answer::Choice(answer)) => Some(answer.choice.clone()),
+            _ => None,
+        };
+        self.event("prohibition", || Map::from_iter([("allowed".into(), json!(allowed))]));
+        Ok((allowed.as_deref() != Some(ALLOWED)).then_some(REFUSED))
+    }
+
+    /// The masked page a condition is judged on: the observation the step decision reads, with the notes and recent
+    /// actions that say what the run has already read, and the task and date unmasked.
+    fn condition_page(&self, state: &RunState, observation: &Observation) -> JsonValue {
+        let elements: Vec<_> =
+            observation.controls.iter().map(|c| JsonValue::Object(crate::policy::element(c))).collect();
+        let mut page = json!({
+            "page": {
+                "url": observation.url,
+                "title": observation.title,
+                "text": observation.viewport_text,
+                "offscreen_text": observation.offscreen_text,
+                "response_status": observation.response_status,
+                "media": observation.media,
+            },
+            "elements": elements,
+            "dialog": observation.dialog.as_ref().map(Dump::dump_exclude_none),
+            "tabs": observation.tabs.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
+            "notes": self.decision_notes(state),
+            "recent_actions": state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
+        });
+        self.mask_strings(&mut page);
+        page["task"] = self.caller_task(state).into();
+        page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
+        page
     }
 
     /// Mask every string in `value`, however deeply it is nested.

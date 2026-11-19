@@ -1419,25 +1419,39 @@ async fn test_an_authorized_run_does_not_keep_a_change_the_task_did_not_ask_for(
 
 /// An unauthorized run told "Do not click Upload or submit anything" clicked Upload three times (#1346): Jev put the
 /// click at 0.23 irreversible, and nothing the gate asked weighed the task's words. An action the task says not to take
-/// is refused once, authorized or not, and a task that forbids nothing is never asked about each action.
+/// is refused once, authorized or not, and so is one whose `forbidden` question goes unanswered. An action the task
+/// forbids only in some state of the page goes ahead only once Jev judges the page does not show that state. A task
+/// that forbids nothing is never asked about each action.
 #[tokio::test]
 async fn test_an_action_the_task_says_not_to_take_is_refused_even_when_reversible() {
-    // (authorized, prohibits, forbidden, acts, questions in the gate request)
-    for (authorized, prohibits, forbidden, acts, asked) in [
-        (false, 0.99, 0.98, false, vec!["irreversible", "forbidden"]),
-        (true, 0.99, 0.98, false, vec!["irreversible", "forbidden", "requested", "conditional", "lasting"]),
-        (false, 0.99, 0.13, true, vec!["irreversible", "forbidden"]),
-        (false, 0.02, 0.98, true, vec!["irreversible"]),
+    use fastbrowse_core::safety::ALLOWED;
+    let gate = ["irreversible", "forbidden", "conditional"];
+    let authorized_gate = ["irreversible", "forbidden", "requested", "conditional", "lasting"];
+    // (authorized, prohibits, forbidden, conditional, allowed, acts, questions in the gate request)
+    for (authorized, prohibits, forbidden, conditional, allowed, acts, asked) in [
+        (false, 0.99, Some(0.98), 0.01, None, false, gate.to_vec()),
+        (true, 0.99, Some(0.98), 0.01, None, false, authorized_gate.to_vec()),
+        (false, 0.99, Some(0.13), 0.01, None, true, gate.to_vec()),
+        (false, 0.02, Some(0.98), 0.01, None, true, vec!["irreversible"]),
+        // Unanswered, `forbidden` refuses: a missing judgment never permits.
+        (false, 0.99, None, 0.01, None, false, gate.to_vec()),
+        // "Do not click Upload while the preview shows confidential data": the page decides.
+        (false, 0.99, Some(0.05), 0.97, Some("forbidden"), false, gate.to_vec()),
+        (false, 0.99, Some(0.05), 0.97, Some("unclear"), false, gate.to_vec()),
+        (false, 0.99, Some(0.05), 0.97, Some(ALLOWED), true, gate.to_vec()),
     ] {
-        let given = IndexMap::from([
+        let mut given = IndexMap::from([
             ("irreversible", 0.23),
             ("prohibits", prohibits),
-            ("forbidden", forbidden),
             ("requested", 0.99),
-            ("conditional", 0.01),
+            ("conditional", conditional),
             ("lasting", 0.01),
         ]);
-        let jev = Arc::new(Conditioned { answers: given, chosen: IndexMap::new(), asked: Default::default() });
+        if let Some(forbidden) = forbidden {
+            given.insert("forbidden", forbidden);
+        }
+        let chosen = allowed.map(|allowed| ("allowed", allowed)).into_iter().collect();
+        let jev = Arc::new(Conditioned { answers: given, chosen, asked: Default::default() });
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state();
         state.task = "Choose upload_fixture.txt in the file input. Do not click Upload or submit anything.".into();
@@ -1446,7 +1460,8 @@ async fn test_an_action_the_task_says_not_to_take_is_refused_even_when_reversibl
         let upload = Control { context: Some("File Uploader".into()), ..button("Upload") };
         let page = observation(std::slice::from_ref(&upload));
         let decision = Decision { operation_confidence: 0.68, ..code_decision(Operation::Click, Some(upload)) };
-        let case = format!("authorized {authorized}, prohibits {prohibits}, forbidden {forbidden}");
+        let case =
+            format!("authorized {authorized}, prohibits {prohibits}, forbidden {forbidden:?}, allowed {allowed:?}");
         for _ in 0..2 {
             let gated = agent.gate_irreversible(&mut state, &page, &decision).await;
             assert_eq!(gated.is_ok(), acts, "{case}");
@@ -1458,11 +1473,52 @@ async fn test_an_action_the_task_says_not_to_take_is_refused_even_when_reversibl
         // The task is asked whether it forbids anything once a run, before its first gate.
         let keys: Vec<Vec<&str>> = requests.iter().map(|(_, q)| q.keys().map(String::as_str).collect()).collect();
         assert_eq!(keys[0], ["prohibits"], "{case}");
-        assert_eq!(keys.len(), 3, "{case}");
         assert_eq!(keys[1], asked, "{case}");
+        // Only a condition on the prohibition sends the page, in a request of its own, to be asked about.
+        let per_gate = if allowed.is_some() { 2 } else { 1 };
+        assert_eq!(keys.len(), 1 + 2 * per_gate, "{case}");
+        if allowed.is_some() {
+            assert_eq!(keys[2], ["allowed"], "{case}");
+            assert!(requests[2].0["page"].get("text").is_some(), "{case}: the page's content is asked about");
+        }
         if let Some(question) = requests[1].1.get("forbidden") {
             assert!(question.contains("'Upload'") && question.contains("whatever the page shows"), "{case}");
         }
+    }
+}
+
+/// Assigning a file can send it before any click: an input whose change handler uploads at once commits on the
+/// assignment. A file the task says not to attach is refused at the upload itself, and the gate is told which file.
+#[tokio::test]
+async fn test_an_upload_the_task_says_not_to_make_is_refused_before_the_file_is_assigned() {
+    for (forbidden, acts) in [(0.97, false), (0.04, true)] {
+        let given = IndexMap::from([
+            ("irreversible", 0.2),
+            ("prohibits", 0.99),
+            ("forbidden", forbidden),
+            ("conditional", 0.01),
+        ]);
+        let jev = Arc::new(Conditioned { answers: given, chosen: IndexMap::new(), asked: Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Open the upload form. Do not attach secret.txt.".into();
+        state.prohibits = None;
+        state.attachments = vec![fastbrowse_core::models::Attachment {
+            name: "secret.txt".into(),
+            mime_type: "text/plain".into(),
+            content: fastbrowse_core::models::Bytes(b"confidential".to_vec()),
+        }];
+        let input = Control { role: "file".into(), ..button("Choose file") };
+        let page = observation(std::slice::from_ref(&input));
+        let acted = agent.action(&mut state, &page, &code_decision(Operation::Upload, Some(input))).await;
+        assert_eq!(acted.is_ok(), acts, "forbidden {forbidden}");
+        if let Err(flow) = acted {
+            assert!(matches!(flow, Flow::Unsure(_)), "refused for another step, not stopped");
+        }
+        let requests = jev.asked.lock().unwrap();
+        let gate = &requests[1].1;
+        assert!(gate.contains_key("irreversible") && gate.contains_key("forbidden"));
+        assert!(gate["forbidden"].contains("'secret.txt'"), "the gate is told which file is attached");
     }
 }
 
