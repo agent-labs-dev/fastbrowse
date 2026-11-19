@@ -10090,6 +10090,22 @@ fn a_carried_out_task_answers_with_a_fact_drawn_from_quotes_read_after_its_last_
     assert!(crate::retrieval::draft_answer(&super::finishing::outcome_notes(&state)).is_none());
 }
 
+/// #1343: a DONE with nothing read, turned back until recovery ran out, ends `unverified` with the unanswered error,
+/// as the documented status says, not `stuck`.
+#[tokio::test]
+async fn a_text_task_done_on_nothing_read_ends_unverified_once_recovery_runs_out() {
+    let page = Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false, false);
+    let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await;
+    assert!(
+        matches!(&result, Err(Flow::Stop(stop))
+            if stop.status == Status::Unverified && stop.error.as_deref() == Some(super::finishing::UNANSWERED)),
+        "{result:?}"
+    );
+}
+
 /// #1343: a task that wants to be told something and ends with nothing answering it is not `complete`.
 #[tokio::test]
 async fn a_text_task_concluded_with_no_answer_is_not_complete() {
