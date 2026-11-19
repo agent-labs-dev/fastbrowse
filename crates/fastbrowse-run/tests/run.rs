@@ -9,7 +9,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
-    Authorization, BrowserUsed, BrowserVia, CostBasis, CostComponent, CostLine, Event, LLMPurpose, Status,
+    Authorization, BrowserUsed, BrowserVia, CostBasis, CostComponent, CostLine, Event, LLMPurpose, SecretValue, Status,
 };
 use fastbrowse_core::protocol::CancellationReceipt;
 use fastbrowse_core::safety::ScopedSecrets;
@@ -438,7 +438,10 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
         (
             task(|o, h| {
                 o.fetch = true;
-                h.secrets = Some(Arc::new(ScopedSecrets::per_secret(Vec::new())));
+                h.secrets = Some(Arc::new(ScopedSecrets::per_secret([(
+                    "password".to_string(),
+                    (SecretValue::from("hunter2"), vec!["https://example.com".to_string()]),
+                )])));
             }),
             "fetch starts no browser, so it cannot be combined with secrets",
         ),
@@ -489,6 +492,20 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
         };
         assert!(error.contains(expected), "{error}");
     }
+}
+
+#[tokio::test]
+async fn a_fetch_run_given_a_resolver_that_declares_no_secret_is_not_refused_for_secrets() {
+    // Python's `ScopedSecrets.per_secret({})` installs a resolver with nothing in it, which `serve` sees as an empty
+    // list: counting the resolver itself refused that fetch run for secrets it was never given.
+    let error = run(task(|o, h| {
+        o.fetch = true;
+        o.inputs = Some([("name".to_string(), "Ada".to_string())].into_iter().collect());
+        h.secrets = Some(Arc::new(ScopedSecrets::per_secret(Vec::new())));
+    }))
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "fetch starts no browser, so it cannot be combined with inputs");
 }
 
 #[tokio::test]

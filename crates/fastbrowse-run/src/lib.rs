@@ -915,7 +915,10 @@ pub async fn run_task(task: RunTask, host: Host) -> Result<RunResult, RunError> 
 }
 
 async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
-    let Checked { schema, origins } = checked(&task, host.secrets.is_some())?;
+    // A resolver that declares no secret gives the run none to type, as an empty list to `serve` does; counting the
+    // resolver itself refused a fetch run for an empty `ScopedSecrets` that serve and the CLI accept.
+    let secrets = host.secrets.as_ref().is_some_and(|secrets| !secrets.available().is_empty());
+    let Checked { schema, origins } = checked(&task, secrets)?;
     if host.open_browser.is_some() && task.viewport.is_some() {
         return Err(RunError::Invalid("viewport cannot be applied to a browser handed through open_browser".into()));
     }
