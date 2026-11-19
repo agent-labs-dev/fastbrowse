@@ -4201,18 +4201,21 @@ async fn test_a_failed_image_read_can_be_retried_for_identical_pixels() {
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
-struct DateWriter;
+/// A value writer that writes 2026-11-04 and keeps the user message of each ask.
+#[derive(Default)]
+struct DateWriter(Mutex<Vec<String>>);
 
 impl LLMClient for DateWriter {
     fn generate_value<'a>(
         &'a self,
         purpose: LLMPurpose,
-        _: &'a [Message],
+        messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             assert_eq!(purpose, LLMPurpose::Fill);
+            self.0.lock().unwrap().extend(messages.last().map(|message| message.content.clone()));
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
@@ -4226,9 +4229,29 @@ impl LLMClient for DateWriter {
     }
 }
 
+// An unlabelled search box reads as 'textbox', and a writer told only that typed a research task's whole composed
+// answer into it, citations and all, in 3 of 3 replays; told the field sat in 'Advanced Search' and was named 'q', it
+// wrote a search query in 3 of 3 (#1339).
+#[tokio::test]
+async fn a_written_value_is_asked_for_the_field_as_the_page_describes_it() {
+    let writer = Arc::new(DateWriter::default());
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), writer.clone());
+    let mut state = run_state();
+    state.task = "Research with citations: who created Python?".into();
+    let mut target = Control::new("main:3", "textbox", "textbox", [Operation::Fill, Operation::Click]);
+    (target.context, target.input_name, target.max_length) =
+        (Some("Advanced Search".into()), Some("q".into()), Some(80));
+    let decision = code_decision(Operation::Fill, Some(target.clone()));
+    agent.text(&mut state, &observation(&[]), &decision, &target).await.unwrap();
+    let asked = writer.0.lock().unwrap();
+    let field =
+        "# Field\na textbox labelled 'textbox' in 'Advanced Search', named 'q', which holds at most 80 characters";
+    assert!(asked[0].contains(field), "{}", asked[0]);
+}
+
 #[tokio::test]
 async fn a_relative_date_written_by_the_llm_is_decided_live_when_a_recipe_is_reused() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter::default()));
     let mut state = run_state();
     state.task = "Book a table for tomorrow".into();
     let target = field("Date");
@@ -4244,7 +4267,7 @@ async fn a_relative_date_written_by_the_llm_is_decided_live_when_a_recipe_is_reu
 
 #[tokio::test]
 async fn a_value_written_as_the_task_gives_it_is_saved_for_a_recipe_to_type_again() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter::default()));
     let mut state = run_state();
     state.task = "Book a table for 2026-11-04".into();
     let target = field("Date");
@@ -4259,7 +4282,7 @@ async fn a_value_written_as_the_task_gives_it_is_saved_for_a_recipe_to_type_agai
 
 #[tokio::test]
 async fn a_value_typed_as_an_input_gave_it_is_saved_as_that_input() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter::default()));
     let inputs = IndexMap::from([("date".to_string(), "2026-11-04".to_string())]);
     let mut state = RunState::new(
         "Book a table for input date".into(),
