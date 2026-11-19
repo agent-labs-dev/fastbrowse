@@ -199,14 +199,12 @@ impl DeskpilotPage {
         ) else {
             return Err(BrowserError::ScreenshotsUnavailable("deskpilot described its shot without a file".into()));
         };
-        let png = match tokio::fs::read(&path).await {
-            Ok(png) => png,
-            Err(error) => {
-                // A shot that cannot be read may still be on disk: it is never left behind.
-                let _ = tokio::fs::remove_file(&path).await;
-                return Err(BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")));
-            }
-        };
+        // From here the file is ours to remove however this ends: a read that fails, or a run cancelled mid-read.
+        let mut cleanup = RemoveOnDrop(Some(path.clone()));
+        let png = tokio::fs::read(&path)
+            .await
+            .map_err(|error| BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")))?;
+        cleanup.0 = None;
         Ok((Shot { id, width, height }, png, path))
     }
 
@@ -649,5 +647,16 @@ impl Page for DeskpilotPage {
             tokio::task::yield_now().await;
             false
         })
+    }
+}
+
+/// Removes a shot's file when dropped, unless the caller took it over.
+struct RemoveOnDrop(Option<String>);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
