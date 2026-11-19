@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A click that starts a client-side navigation through a React scheduler is read after the navigation, not before it. The page's update ran in a task posted through a `MessageChannel`, which the settle after a click did not wait for, so the run read the page it was leaving beside a screenshot of the next one, and Jev took the mismatch for a site failure: a research run ended `unavailable` with "the site failed to deliver" on a page that had answered ([#1336](https://github.com/agent-labs-dev/fastbrowse/issues/1336)).
+
 - An answer cites the page a search reports on, not the search. A run that read a search results page and then the page it pointed to cited the results page and its generated summary beside the page it named as its source ([#1332](https://github.com/agent-labs-dev/fastbrowse/issues/1332)).
 
 - A run that reads pages over HTTP and chose its own start page opens another one when the first is built by scripts. `--fetch` with no `--start` began on a search results page whose markup holds no text and ended `blocked` before its first step, though the project page it needed was readable. The start page is now proposed again, told which address was unreadable, and the run ends `blocked` only when no readable page is known ([#1330](https://github.com/agent-labs-dev/fastbrowse/issues/1330)).

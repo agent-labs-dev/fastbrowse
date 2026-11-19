@@ -557,6 +557,54 @@ async fn test_a_settle_waits_for_work_the_click_scheduled_before_its_first_mutat
     h.close().await;
 }
 
+/// React's scheduler runs a click's update in a task posted through a MessageChannel. A logo click that began a
+/// client-side navigation that way settled as idle, the run read the page it was leaving beside a screenshot of the
+/// next one, and Jev judged the mismatch a site failure (#1336).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_settle_waits_for_work_the_click_posted_through_a_message_channel() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Scheduled</button>'; \
+         const channel = new MessageChannel(); \
+         channel.port1.onmessage = () => setTimeout(() => { \
+           document.querySelector('button').textContent = 'Rendered'; }, 150); \
+         document.querySelector('button').onclick = () => channel.port2.postMessage(null);",
+    )
+    .await;
+    let obs = h.observe().await;
+    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Scheduled").id), &obs).await.expect("act");
+    assert!(result.page_changed, "the click's posted work was still pending: {result:?}");
+    let after = h.observe().await;
+    assert!(after.controls.iter().any(|control| control.label == "Rendered"));
+    let pending = eval_active(&h.session, "window.__fastbrowse.pendingWork.size").await;
+    assert_eq!(pending, json!(0), "a delivered message releases its pending work");
+    h.close().await;
+}
+
+/// A port sent to a worker delivers there, so a message posted to it never holds a settle here.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_message_to_a_transferred_port_does_not_hold_a_settle() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Send</button>'; \
+         const channel = new MessageChannel(); \
+         window.postMessage(null, '*', [channel.port1]); \
+         document.querySelector('button').onclick = () => channel.port2.postMessage(null);",
+    )
+    .await;
+    let obs = h.observe().await;
+    h.page.act(&targeted(Operation::Click, &find(&obs, "Send").id), &obs).await.expect("act");
+    let pending = eval_active(&h.session, "window.__fastbrowse.pendingWork.size").await;
+    assert_eq!(pending, json!(0), "a transferred port's messages are not this document's work");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_settle_waits_for_nested_input_work_and_ignores_cancelled_timers() {
     let _turn = turn().await;

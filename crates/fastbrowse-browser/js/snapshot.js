@@ -191,6 +191,69 @@
       registry.nativeCancelAnimationFrame,
       false,
     );
+    // React's scheduler runs the update a click starts, and the client-side navigation a router begins with it, in
+    // a task it posts through a MessageChannel rather than a timer. A settle that held only timers and frames answered
+    // before such a navigation began, so the run read the page it was leaving beside a screenshot of the next one,
+    // and Jev took the mismatch for a site failure (#1336). A message posted in an action's turn is that action's work
+    // until the port it was posted to delivers it, and the delivery is a turn of the same action. A port sent to
+    // another context delivers there, never here, so a transferred port's messages stop holding a settle.
+    const NativeChannel = window.MessageChannel;
+    if (NativeChannel) {
+      const peers = new WeakMap();
+      const inboxes = new WeakMap();
+      const deliver = event => {
+        const work = inboxes.get(event.currentTarget)?.shift();
+        if (!work) return;
+        registry.pendingWork.delete(work);
+        registry.inputTurn(work.action);
+      };
+      const listen = EventTarget.prototype.addEventListener;
+      window.MessageChannel = class MessageChannel extends NativeChannel {
+        constructor() {
+          super();
+          peers.set(this.port1, this.port2);
+          peers.set(this.port2, this.port1);
+          for (const port of [this.port1, this.port2]) {
+            inboxes.set(port, []);
+            // Registered before the page can set its own handler, so the delivery's turn is open when it runs.
+            listen.call(port, 'message', deliver);
+          }
+        }
+      };
+      const away = transfer => {
+        const list = Array.isArray(transfer) ? transfer : transfer?.transfer;
+        if (!Array.isArray(list)) return;
+        for (const port of list) {
+          for (const work of inboxes.get(port) ?? []) registry.pendingWork.delete(work);
+          inboxes.delete(port);
+        }
+      };
+      const nativePost = MessagePort.prototype.postMessage;
+      MessagePort.prototype.postMessage = function (message, transfer) {
+        away(transfer);
+        const inbox = inboxes.get(peers.get(this));
+        if (registry.turn === null || !inbox) return Reflect.apply(nativePost, this, arguments);
+        const work = { action: registry.turn, due: performance.now(), nextFrame: false };
+        registry.pendingWork.add(work);
+        inbox.push(work);
+        try {
+          return Reflect.apply(nativePost, this, arguments);
+        } catch (error) {
+          registry.pendingWork.delete(work);
+          inbox.splice(inbox.indexOf(work), 1);
+          throw error;
+        }
+      };
+      for (const target of [window, window.Worker?.prototype, window.ServiceWorker?.prototype]) {
+        const post = target?.postMessage;
+        if (typeof post !== 'function') continue;
+        target.postMessage = function (message, ...rest) {
+          // window.postMessage(message, targetOrigin, transfer) takes the list third; the others take it second.
+          away(rest.length > 1 ? rest[1] : rest[0]);
+          return Reflect.apply(post, this, arguments);
+        };
+      }
+    }
   }
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
