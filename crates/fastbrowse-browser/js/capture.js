@@ -295,7 +295,9 @@
     if (node.nodeType !== 1 || SKIP.has(node.tagName)) return '';
     if (!visible(node) && getComputedStyle(node).display !== 'contents') return '';
     const assigned = node.localName === 'slot' ? node.assignedNodes({ flatten: true }) : [];
-    const composes = node.shadowRoot ? !shadowBlocks(node) : assigned.length || [...node.querySelectorAll('*')].some(e => e.shadowRoot && !shadowBlocks(e));
+    const composes = node.shadowRoot
+      ? !shadowBlocks(node)
+      : assigned.length || [...node.querySelectorAll('*')].some(e => e.shadowRoot && !shadowBlocks(e));
     if (!composes) return renderedOf(node);
     if (node.shadowRoot) composedHosts.add(node);
     const [before, after] = generatedOf(node);
