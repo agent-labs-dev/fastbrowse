@@ -4115,7 +4115,7 @@ async fn test_text_and_image_cannot_finish_without_text_evidence() {
     state.recoveries = agent.config.stall.max_recoveries;
     let result = agent.finish(&mut state, &observation(&[]), None, None).await;
     assert!(
-        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("Nothing read so far answers")))
+        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Unverified && stop.error.as_deref().is_some_and(|error| error.contains("Nothing read so far answers")))
     );
 }
 
