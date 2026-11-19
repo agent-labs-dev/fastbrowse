@@ -1,0 +1,35 @@
+# claude-code beside fastbrowse-desktop: the same box, the same apps and the same deskpilot tools, so the comparison is
+# the model and the agent loop. claude's own tools are turned off (`--tools ""`) because a shell would let it skip the
+# apps, which the fastbrowse arm cannot. Flags as in Parallax's claude-code manifest (claude 2.1.325).
+protocol = "cli"
+parser = "claude_stream_json"
+session = "preassigned"
+stdin = "prompt"
+argv_first = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", "{model_name}",
+  "--session-id", "{session}", "--mcp-config", "{home}/mcp.json", "--strict-mcp-config",
+  "--setting-sources", "project", "--permission-mode", "bypassPermissions", "--tools", "",
+  "--append-system-prompt", "You work in a Linux desktop through the deskpilot tools only. The apps the task names are not open yet: start each with the launch tool, as the command in the task's list below, then act on its windows with hidden set to true on every call. Apps: [\"env\", \"SAL_USE_VCLPLUGIN=gtk3\", \"GDK_BACKEND=wayland\", \"soffice\", \"--calc\", \"--norestore\", \"-env:UserInstallation=file:///tmp/lo-calc\", \"/workspace/sales.csv\"] is Calc on the data; [\"env\", \"SAL_USE_VCLPLUGIN=gtk3\", \"GDK_BACKEND=wayland\", \"soffice\", \"--writer\", \"--norestore\", \"-env:UserInstallation=file:///tmp/lo-writer\"] is Writer."]
+mcp_argv = ["--mcp-config", "{home}/mcp.json", "--strict-mcp-config"]
+
+[info]
+name = "claude-code-deskpilot"
+kind = "open"
+capabilities = ["mcp", "workspace", "desktop"]
+pins_model = true
+cost_source = "metered"
+install = "npm i -g @anthropic-ai/claude-code"
+version_cmd = ["claude", "--version"]
+web_disabled_by = "flag"
+source_url = "https://github.com/anthropics/claude-code"
+
+[env]
+# claude appends /v1/messages to the base URL.
+ANTHROPIC_BASE_URL = "{meter_anthropic}"
+ANTHROPIC_API_KEY = "{meter_key}"
+
+[[config]]
+path = "home:mcp.json"
+format = "json"
+content = {}
+# deskpilot's MCP server runs inside the box's session, as every box command does; the box's DESKPILOT_AGENT names it.
+desktop_content = { mcpServers = { deskpilot = { type = "stdio", command = "deskpilot", args = ["mcp"] } } }

@@ -1,0 +1,235 @@
+# The Writer chart and the sheet chart are read back from the saved ODF files: the bars must be the Revenue column
+# and the categories the regions. The PDF is read as text, so a report that was not exported, or has no chart
+# drawn into it, fails there. The verify image (environment/Dockerfile) holds python and poppler.
+checks:
+  - id: report-pdf
+    kind: command
+    mode: missing_action
+    run:
+      - python
+      - -c
+      - |
+        import re, sys, zipfile
+        import xml.etree.ElementTree as ET
+        from pathlib import Path
+
+        NS = {"office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0", "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+              "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0", "chart": "urn:oasis:names:tc:opendocument:xmlns:chart:1.0"}
+        REGIONS = ["North", "South", "East", "West", "Central"]
+        REVENUE = [18450.0, 14200.0, 21980.0, 11320.0, 9075.0]
+        def q(prefix, name): return "{%s}%s" % (NS[prefix], name)
+        def col_number(letters):
+            n = 0
+            for c in letters: n = n * 26 + ord(c) - 64
+            return n
+        def grid(table):
+            cells, row = {}, 0
+            for r in table.iter(q("table", "table-row")):
+                for _ in range(int(r.get(q("table", "number-rows-repeated"), "1")) if row < 50 else 1):
+                    row += 1
+                    col = 0
+                    for c in r:
+                        if c.tag not in (q("table", "table-cell"), q("table", "covered-table-cell")): continue
+                        repeat = int(c.get(q("table", "number-columns-repeated"), "1")) if col < 50 else 1
+                        raw = c.get(q("office", "value"))
+                        text = "".join("".join(p.itertext()) for p in c.findall(q("text", "p")))
+                        for _ in range(repeat):
+                            col += 1
+                            if raw is not None: cells[(col, row)] = float(raw)
+                            elif text: cells[(col, row)] = text
+            return cells
+        def span(address):
+            # "sales.C2:sales.C6", "local-table.$B$2:.$B$6", "$Sheet1.$C$2:$C$6"
+            m = re.fullmatch(r"\$?([^.:]*)\.\$?([A-Z]+)\$?(\d+)(?::\$?[^.:]*\.\$?([A-Z]+)\$?(\d+))?", address)
+            assert m, ("unreadable range", address)
+            sheet, c1, r1, c2, r2 = m.groups()
+            c2, r2 = c2 or c1, r2 or r1
+            assert c1 == c2, ("a range over several columns", address)
+            return sheet, col_number(c1), int(r1), int(r2)
+        def read(cells, address):
+            sheet, col, first, last = span(address)
+            return [cells.get((col, row)) for row in range(first, last + 1)]
+        def charts(path):
+            with zipfile.ZipFile(path) as z:
+                for name in z.namelist():
+                    if name.endswith("content.xml") and name != "content.xml":
+                        root = ET.fromstring(z.read(name))
+                        chart = root.find(".//" + q("chart", "chart"))
+                        if chart is not None: yield root, chart
+        def check_chart(root, chart, data, where):
+            assert chart.get(q("chart", "class")) == "chart:bar", (where, "not a bar chart", chart.get(q("chart", "class")))
+            series = list(chart.iter(q("chart", "series")))
+            assert len(series) == 1, (where, "expected one series", len(series))
+            values = read(data, series[0].get(q("chart", "values-cell-range-address")))
+            assert values == REVENUE, (where, "the bars are not the Revenue column", values)
+            categories = chart.find(".//" + q("chart", "categories"))
+            assert categories is not None, (where, "no category labels")
+            assert read(data, categories.get(q("table", "cell-range-address"))) == REGIONS, (where, "the categories are not the regions")
+
+        import subprocess
+        pdf = Path("out/report.pdf")
+        assert pdf.is_file(), "out/report.pdf was not exported"
+        text = subprocess.run(["pdftotext", "-layout", str(pdf), "-"], capture_output=True, text=True, check=True).stdout
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        assert lines and lines[0] == "Regional Sales Report", ("heading", lines[:1])
+        figures = {m.replace(",", "") for m in re.findall(r"(?<![\d.,])\d[\d,]*(?:\.\d+)?", text)}
+        assert "75025" in {f.removesuffix(".00") for f in figures}, ("the total is not in the report", sorted(figures)[:12])
+        missing = [r for r in REGIONS if r not in text]
+        assert not missing, ("the chart was not placed in the report: no labels for", missing)
+  - id: report-chart
+    kind: command
+    mode: missing_action
+    run:
+      - python
+      - -c
+      - |
+        import re, sys, zipfile
+        import xml.etree.ElementTree as ET
+        from pathlib import Path
+
+        NS = {"office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0", "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+              "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0", "chart": "urn:oasis:names:tc:opendocument:xmlns:chart:1.0"}
+        REGIONS = ["North", "South", "East", "West", "Central"]
+        REVENUE = [18450.0, 14200.0, 21980.0, 11320.0, 9075.0]
+        def q(prefix, name): return "{%s}%s" % (NS[prefix], name)
+        def col_number(letters):
+            n = 0
+            for c in letters: n = n * 26 + ord(c) - 64
+            return n
+        def grid(table):
+            cells, row = {}, 0
+            for r in table.iter(q("table", "table-row")):
+                for _ in range(int(r.get(q("table", "number-rows-repeated"), "1")) if row < 50 else 1):
+                    row += 1
+                    col = 0
+                    for c in r:
+                        if c.tag not in (q("table", "table-cell"), q("table", "covered-table-cell")): continue
+                        repeat = int(c.get(q("table", "number-columns-repeated"), "1")) if col < 50 else 1
+                        raw = c.get(q("office", "value"))
+                        text = "".join("".join(p.itertext()) for p in c.findall(q("text", "p")))
+                        for _ in range(repeat):
+                            col += 1
+                            if raw is not None: cells[(col, row)] = float(raw)
+                            elif text: cells[(col, row)] = text
+            return cells
+        def span(address):
+            # "sales.C2:sales.C6", "local-table.$B$2:.$B$6", "$Sheet1.$C$2:$C$6"
+            m = re.fullmatch(r"\$?([^.:]*)\.\$?([A-Z]+)\$?(\d+)(?::\$?[^.:]*\.\$?([A-Z]+)\$?(\d+))?", address)
+            assert m, ("unreadable range", address)
+            sheet, c1, r1, c2, r2 = m.groups()
+            c2, r2 = c2 or c1, r2 or r1
+            assert c1 == c2, ("a range over several columns", address)
+            return sheet, col_number(c1), int(r1), int(r2)
+        def read(cells, address):
+            sheet, col, first, last = span(address)
+            return [cells.get((col, row)) for row in range(first, last + 1)]
+        def charts(path):
+            with zipfile.ZipFile(path) as z:
+                for name in z.namelist():
+                    if name.endswith("content.xml") and name != "content.xml":
+                        root = ET.fromstring(z.read(name))
+                        chart = root.find(".//" + q("chart", "chart"))
+                        if chart is not None: yield root, chart
+        def check_chart(root, chart, data, where):
+            assert chart.get(q("chart", "class")) == "chart:bar", (where, "not a bar chart", chart.get(q("chart", "class")))
+            series = list(chart.iter(q("chart", "series")))
+            assert len(series) == 1, (where, "expected one series", len(series))
+            values = read(data, series[0].get(q("chart", "values-cell-range-address")))
+            assert values == REVENUE, (where, "the bars are not the Revenue column", values)
+            categories = chart.find(".//" + q("chart", "categories"))
+            assert categories is not None, (where, "no category labels")
+            assert read(data, categories.get(q("table", "cell-range-address"))) == REGIONS, (where, "the categories are not the regions")
+
+        odt = Path("out/report.odt")
+        assert odt.is_file(), "out/report.odt was not saved"
+        found = list(charts(odt))
+        assert found, "the Writer document holds no chart"
+        root, chart = found[0]
+        local = next(root.iter(q("table", "table")))
+        check_chart(root, chart, grid(local), "report.odt")
+  - id: sheet-chart
+    kind: command
+    mode: missing_action
+    run:
+      - python
+      - -c
+      - |
+        import re, sys, zipfile
+        import xml.etree.ElementTree as ET
+        from pathlib import Path
+
+        NS = {"office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0", "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+              "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0", "chart": "urn:oasis:names:tc:opendocument:xmlns:chart:1.0"}
+        REGIONS = ["North", "South", "East", "West", "Central"]
+        REVENUE = [18450.0, 14200.0, 21980.0, 11320.0, 9075.0]
+        def q(prefix, name): return "{%s}%s" % (NS[prefix], name)
+        def col_number(letters):
+            n = 0
+            for c in letters: n = n * 26 + ord(c) - 64
+            return n
+        def grid(table):
+            cells, row = {}, 0
+            for r in table.iter(q("table", "table-row")):
+                for _ in range(int(r.get(q("table", "number-rows-repeated"), "1")) if row < 50 else 1):
+                    row += 1
+                    col = 0
+                    for c in r:
+                        if c.tag not in (q("table", "table-cell"), q("table", "covered-table-cell")): continue
+                        repeat = int(c.get(q("table", "number-columns-repeated"), "1")) if col < 50 else 1
+                        raw = c.get(q("office", "value"))
+                        text = "".join("".join(p.itertext()) for p in c.findall(q("text", "p")))
+                        for _ in range(repeat):
+                            col += 1
+                            if raw is not None: cells[(col, row)] = float(raw)
+                            elif text: cells[(col, row)] = text
+            return cells
+        def span(address):
+            # "sales.C2:sales.C6", "local-table.$B$2:.$B$6", "$Sheet1.$C$2:$C$6"
+            m = re.fullmatch(r"\$?([^.:]*)\.\$?([A-Z]+)\$?(\d+)(?::\$?[^.:]*\.\$?([A-Z]+)\$?(\d+))?", address)
+            assert m, ("unreadable range", address)
+            sheet, c1, r1, c2, r2 = m.groups()
+            c2, r2 = c2 or c1, r2 or r1
+            assert c1 == c2, ("a range over several columns", address)
+            return sheet, col_number(c1), int(r1), int(r2)
+        def read(cells, address):
+            sheet, col, first, last = span(address)
+            return [cells.get((col, row)) for row in range(first, last + 1)]
+        def charts(path):
+            with zipfile.ZipFile(path) as z:
+                for name in z.namelist():
+                    if name.endswith("content.xml") and name != "content.xml":
+                        root = ET.fromstring(z.read(name))
+                        chart = root.find(".//" + q("chart", "chart"))
+                        if chart is not None: yield root, chart
+        def check_chart(root, chart, data, where):
+            assert chart.get(q("chart", "class")) == "chart:bar", (where, "not a bar chart", chart.get(q("chart", "class")))
+            series = list(chart.iter(q("chart", "series")))
+            assert len(series) == 1, (where, "expected one series", len(series))
+            values = read(data, series[0].get(q("chart", "values-cell-range-address")))
+            assert values == REVENUE, (where, "the bars are not the Revenue column", values)
+            categories = chart.find(".//" + q("chart", "categories"))
+            assert categories is not None, (where, "no category labels")
+            assert read(data, categories.get(q("table", "cell-range-address"))) == REGIONS, (where, "the categories are not the regions")
+
+        ods = Path("out/sales.ods")
+        assert ods.is_file(), "out/sales.ods was not saved"
+        with zipfile.ZipFile(ods) as z:
+            sheet = ET.fromstring(z.read("content.xml"))
+        data = grid(sheet.find(".//" + q("table", "table")))
+        assert data.get((3, 6)) == 9075.0, "the Revenue column of the sheet changed"
+        found = list(charts(ods))
+        assert found, "the spreadsheet holds no chart"
+        root, chart = found[0]
+        check_chart(root, chart, data, "sales.ods")
+  - id: sales-untouched
+    kind: file
+    mode: collateral_change
+    path: sales.csv
+    unchanged: true
+  - id: world-untouched
+    kind: state
+    mode: collateral_change
+    table: '*'
+    unchanged: true
+    except_tables:
+      - user.interactions

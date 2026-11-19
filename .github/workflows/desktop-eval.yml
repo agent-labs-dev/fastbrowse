@@ -1,0 +1,111 @@
+# Runs files-desktop-report-cross-app (evals/tasks) in Parallax's headless Hyprland desktop box, one arm per dispatch:
+# the controls (`oracle`, `null`), `fastbrowse-desktop`, or its baseline `claude-code-deskpilot` (claude-code driving the
+# same apps through deskpilot's MCP server). A diagnostic run: it joins no benchmark candidate, so benchmark-campaign.yml
+# neither starts nor waits for it. Each trial's display is recorded and uploaded with the run.
+# Needs the vkms kernel module, which GitHub's own runners load and Firecracker runners (blacksmith) cannot.
+# Secrets: OPENROUTER_BENCHMARKS_API_KEY (the arm's models, and claude-code's wire through the meter),
+# OPENROUTER_JUDGE_API_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY.
+name: Desktop eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      harness:
+        description: oracle, null, fastbrowse-desktop or claude-code-deskpilot
+        required: true
+        default: oracle
+      model:
+        description: Model, blank for the arm's default (claude-code-deskpilot needs one, e.g. anthropic/claude-haiku-5.5)
+        required: false
+        default: ""
+      repeats:
+        description: Repeats per task
+        required: true
+        default: "1"
+      budget:
+        description: Campaign spend limit in USD
+        required: true
+        default: "5"
+      reserve:
+        description: What each trial reserves of the budget before it starts, in USD
+        required: true
+        default: "1"
+
+permissions: {}
+
+concurrency:
+  group: desktop-eval-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: ${{ inputs.harness }}
+    runs-on: ubuntu-24.04
+    permissions: {contents: read}
+    timeout-minutes: 120
+    env:
+      HARNESS: ${{ inputs.harness }}
+      MODEL: ${{ inputs.model }}
+      UV_PYTHON: "3.13"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - name: Check the arm
+        run: |
+          case "$HARNESS" in
+            oracle|null|fastbrowse-desktop) ;;
+            claude-code-deskpilot) test -n "$MODEL" || { echo "::error::claude-code-deskpilot needs a model"; exit 1; } ;;
+            *) echo "::error::harness must be oracle, null, fastbrowse-desktop or claude-code-deskpilot, got '$HARNESS'"; exit 1 ;;
+          esac
+      - name: Load vkms
+        # The Hyprland box draws on the kernel's virtual display.
+        run: sudo modprobe vkms || { sudo apt-get update -q && sudo apt-get install -yq "linux-modules-extra-$(uname -r)" && sudo modprobe vkms; }
+      - name: Install the harness
+        run: |
+          cd evals
+          # The arms need the plugin and Parallax; the Rust fastbrowse binary is installed in the box from the release.
+          uv sync --locked --no-install-package fastbrowse
+          uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE@$(git rev-parse HEAD)"
+          uv run --no-sync python -c "import fastbrowse_evals.desktop.harness"
+      - name: Run the task
+        env:
+          FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          PARALLAX_UPSTREAM_ANTHROPIC: https://openrouter.ai/api/v1
+          PARALLAX_UPSTREAM_ANTHROPIC_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+          PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+          REPEATS: ${{ inputs.repeats }}
+          BUDGET: ${{ inputs.budget }}
+          RESERVE: ${{ inputs.reserve }}
+        run: |
+          cd evals
+          args=(--harness "$HARNESS" --repeats "$REPEATS" --isolation docker --budget "$BUDGET" --reserve "$RESERVE"
+            --tasks tasks --out "$GITHUB_WORKSPACE/runs" --videos "$GITHUB_WORKSPACE/videos"
+            --note "desktop $HARNESS ${GITHUB_SHA::8}")
+          test -z "$MODEL" || args+=(--model "$MODEL")
+          uv run --no-sync parallax run files-desktop-report-cross-app "${args[@]}"
+      - name: Report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          cd evals
+          run_id="$(basename "$(find "$GITHUB_WORKSPACE/runs" -mindepth 1 -maxdepth 1 -type d | head -n 1)")"
+          uv run --no-sync parallax report "$run_id" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: desktop-${{ inputs.harness }}-${{ github.run_id }}
+          path: |
+            videos/
+            runs/
+          include-hidden-files: true
+          if-no-files-found: ignore

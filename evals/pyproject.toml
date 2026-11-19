@@ -25,6 +25,8 @@ fastbrowse = "fastbrowse_evals.backend:FastbrowseHarness"
 fastbrowse-llm-picker = "fastbrowse_evals.backend:FastbrowseLlmPickerHarness"
 fastbrowse-pool = "fastbrowse_evals.live:FastbrowsePoolHarness"
 fastbrowse-hosted = "fastbrowse_evals.hosted_api:FastbrowseHostedHarness"
+fastbrowse-desktop = "fastbrowse_evals.desktop.harness:FastbrowseDesktopHarness"
+claude-code-deskpilot = "fastbrowse_evals.desktop.harness:claude_code_deskpilot"
 
 [project.entry-points."parallax.provenance"]
 fastbrowse = "fastbrowse_evals.provenance:fields"
