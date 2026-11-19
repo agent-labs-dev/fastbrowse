@@ -370,6 +370,8 @@ pub fn browse_result(result: &RunResult, live_url: Option<&str>, config: &Server
         "steps": result.steps.len(),
         "dollars": fastbrowse_core::py::round(result.cost.known_dollars(), 6),
         "cost_complete": !result.cost.has_unknown(),
+        // Which browser and profile ran, as `--json` reports it, so a caller can check it ran where it asked (#1342).
+        "browser": result.browser.as_ref().map(Dump::dump),
         "downloads": downloads,
         "screenshot": screenshot,
     })

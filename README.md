@@ -456,7 +456,8 @@ harness, with Bitwarden or 1Password logins scoped to authorized websites.
 
 `fastbrowse-mcp` serves one `browse` tool over [MCP](https://modelcontextprotocol.io) to Claude Code, Claude
 Desktop, Cursor or any MCP client. It returns the answer with numbered citation links, typed `fields` if asked
-for, the quotes behind them, the status and what to do next, and reports progress every step.
+for, the quotes behind them, the status and what to do next, its cost and the browser it ran in, and reports
+progress every step.
 
 ```sh
 claude mcp add fastbrowse -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \

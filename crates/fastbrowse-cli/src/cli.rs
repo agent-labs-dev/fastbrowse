@@ -530,13 +530,20 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         Err(RunError::AfterSpending { error, receipt }) => options::cancelled_result(error.to_string(), receipt),
         Err(error) => return Err(ConfigurationError(error.to_string())),
     };
-    if let Some(sink) = recipe_sink
+    // Replay accounting only for a run that replayed: a run that only saved one printed "0 actions reused" (#1342).
+    if args.recipe.is_some()
+        && let Some(sink) = recipe_sink
         && let Some(outcome) = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
     {
         context.streams.eprint(&format!(
             "  recipe: {} actions reused, {} unmatched observations",
             outcome.replayed, outcome.fell_back
         ));
+    }
+    if let Some(path) = &args.save_recipe
+        && result.status != Status::Complete
+    {
+        context.streams.eprint(&format!("  recipe not saved to {}: only a complete run is saved", path.display()));
     }
     if result.status == Status::NeedsLogin {
         result.error = Some(format!(
@@ -548,7 +555,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     }
     let streams = &context.streams;
     if args.json {
-        streams.print(&json::write(&with_build(result.dump(), &context.build), Style::PYDANTIC.indented(2)));
+        streams.print(&json::write(&json_result(&result, &context.build), Style::PYDANTIC.indented(2)));
     } else {
         // A local LLM endpoint reports no price, and printing only the priced calls would read as the whole bill.
         let mut spend = format!("${:.4}", result.cost.known_dollars());
@@ -610,7 +617,7 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
         Err(error) => {
             if args.json {
                 context.streams.print(&json::write(
-                    &with_build(options::error_result(&error.0).dump(), &context.build),
+                    &json_result(&options::error_result(&error.0), &context.build),
                     Style::PYDANTIC.indented(2),
                 ));
             }
@@ -620,10 +627,20 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
     }
 }
 
-/// The result `--json` prints, with the build that produced it, so a result file names its commit.
-fn with_build(mut result: serde_json::Value, build: &Build) -> serde_json::Value {
-    if let serde_json::Value::Object(fields) = &mut result {
-        fields.insert("build".into(), build.fields().into());
+/// The result `--json` prints: its total cost beside its status, as the plain output and the MCP result give it, since
+/// a caller otherwise summed the cost lines itself (#1342), and the build that produced it, so a result file names
+/// its commit.
+fn json_result(result: &fastbrowse_core::models::RunResult, build: &Build) -> serde_json::Value {
+    let mut fields = serde_json::Map::new();
+    let serde_json::Value::Object(dumped) = result.dump() else { return result.dump() };
+    for (name, value) in dumped {
+        let status = name == "status";
+        fields.insert(name, value);
+        if status {
+            fields.insert("dollars".into(), fastbrowse_core::py::round(result.cost.known_dollars(), 6).into());
+            fields.insert("cost_complete".into(), (!result.cost.has_unknown()).into());
+        }
     }
-    result
+    fields.insert("build".into(), build.fields().into());
+    fields.into()
 }

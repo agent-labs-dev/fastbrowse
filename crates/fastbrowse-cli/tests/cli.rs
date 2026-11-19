@@ -7,10 +7,13 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use common::{Call, Recorder, isolated_binary, model_settings, result};
+use common::{Call, Recorder, isolated_binary, model_settings, result, runner};
+use fastbrowse_agent::agent::RecipeOutcome;
 use fastbrowse_cli::cli::{self, Build, Context, Streams};
+use fastbrowse_cli::runner::Runner;
 use fastbrowse_clients::environment::{Secret, Settings};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
+use fastbrowse_core::recipe::{RECIPE_VERSION, Recipe};
 use serde_json::Value;
 
 #[derive(Clone, Default)]
@@ -60,9 +63,21 @@ async fn cli_built(
     build: Build,
 ) -> Ran {
     let recorder = Recorder { result: Some(answer), ..Recorder::default() };
+    let ran = cli_run_by(argv, settings, environ, recorder.runner(), build).await;
+    Ran { call: recorder.calls().pop(), ..ran }
+}
+
+/// One invocation run by `runner`, which records no call.
+async fn cli_run_by(
+    argv: &[&str],
+    settings: Settings,
+    environ: &[(&str, &str)],
+    runner: Arc<dyn Runner>,
+    build: Build,
+) -> Ran {
     let (out, err) = (Buffer::default(), Buffer::default());
     let context = Context {
-        runner: recorder.runner(),
+        runner,
         settings: Arc::new(move || Ok(settings.clone())),
         environ: environ.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
         streams: Streams { out: Arc::new(Mutex::new(out.clone())), err: Arc::new(Mutex::new(err.clone())) },
@@ -70,8 +85,7 @@ async fn cli_built(
     };
     let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
     let code = cli::main(&argv, &context).await;
-    let call = recorder.calls().pop();
-    Ran { out: out.text(), err: err.text(), code, call }
+    Ran { out: out.text(), err: err.text(), code, call: None }
 }
 
 async fn cli(argv: &[&str]) -> Ran {
@@ -371,6 +385,47 @@ async fn test_the_summary_line_says_when_some_calls_reported_no_cost() {
         let ran = cli_with(&["task", "--local"], model_settings(), &[], answer).await;
         assert!(ran.out.contains(expected), "{}", ran.out);
     }
+}
+
+#[tokio::test]
+async fn test_the_json_result_gives_the_total_cost_beside_the_status() {
+    // The plain line and the MCP result gave a total, and a `--json` caller had to sum the cost lines itself (#1342).
+    for (basis, complete) in [(CostBasis::Metered, true), (CostBasis::Unknown, false)] {
+        let lines = vec![
+            CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.002)),
+            CostLine::new(CostComponent::Llm, basis, if basis == CostBasis::Unknown { None } else { Some(0.0001) }),
+        ];
+        let answer = RunResult { cost: CostBreakdown { lines }, ..result(Status::Complete) };
+        let ran = cli_with(&["task", "--local", "--json"], model_settings(), &[], answer).await;
+        let json = ran.json();
+        assert_eq!(json["dollars"], if complete { 0.0021 } else { 0.002 });
+        assert_eq!(json["cost_complete"], complete);
+        let names: Vec<&String> = json.as_object().unwrap().keys().collect();
+        let status = names.iter().position(|name| *name == "status").unwrap();
+        assert_eq!(names[status + 1..status + 3], ["dollars", "cost_complete"]);
+    }
+}
+
+#[tokio::test]
+async fn test_replay_accounting_is_printed_only_for_a_replayed_run() {
+    // A run that only saved a recipe printed "0 actions reused, 0 unmatched observations" (#1342).
+    let filled = |status: Status| {
+        runner(move |call: Call| async move {
+            let sink = call.host.recipe_sink.clone().unwrap();
+            let recipe = Recipe { version: RECIPE_VERSION, task: "t".into(), start: None, steps: Vec::new() };
+            *sink.lock().unwrap() = Some(RecipeOutcome { recipe, replayed: 2, fell_back: 1 });
+            Ok(result(status))
+        })
+    };
+    let run = |argv: &'static [&'static str], status: Status| {
+        cli_run_by(argv, model_settings(), &[], filled(status), Build::default())
+    };
+    let saved = run(&["t", "--local", "--save-recipe", "/nonexistent/r.json"], Status::Complete).await;
+    assert!(!saved.err.contains("recipe"), "{}", saved.err);
+    let replayed = run(&["t", "--local", "--recipe", "/nonexistent/r.json"], Status::Complete).await;
+    assert!(replayed.err.contains("recipe: 2 actions reused, 1 unmatched observations"), "{}", replayed.err);
+    let stopped = run(&["t", "--local", "--save-recipe", "/nonexistent/r.json"], Status::Stuck).await;
+    assert!(stopped.err.contains("recipe not saved to /nonexistent/r.json"), "{}", stopped.err);
 }
 
 #[tokio::test]

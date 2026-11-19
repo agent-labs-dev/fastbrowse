@@ -10,7 +10,8 @@ A task must contain non-whitespace text. Empty tasks are refused before model or
 ## Flags
 
 Steps go to stderr; the status, cost, step count, why a run stopped short, and the answer go to stdout. `--json`
-prints the full result: every step, the quotes behind the answer, and cost by component.
+prints the full result: every step, the quotes behind the answer, and cost by component, with the total in `dollars`
+beside `status` and `cost_complete` false when a call reported no cost.
 
 | Flag | Effect |
 |:--|:--|
@@ -36,11 +37,11 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
 | `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
-| `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
+| `--record FILE` | save a captioned MP4 of the run, and the same video without captions beside it with `.plain` before the extension (`run.mp4` and `run.plain.mp4`); needs `ffmpeg`. It shows what the pages showed, so watch it before sharing |
 | `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
 | `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
-| `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |
+| `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`, and say on stderr when it was not saved; naming the `--recipe` file repairs it after steps the agent had to decide |
 | `--no-cursor` | don't draw the agent's cursor. By default it is drawn over a Chrome window that shows the run (`--foreground`, or an attached front tab) with fastbrowse's focus marker through [Cua Driver](https://github.com/trycua/cua) 0.45.4 or later on X11, or with [deskpilot](https://github.com/cjber/deskpilot) on Hyprland, and skipped anywhere else |
 | `--cursor` | also bring the window to the front, including with `--extension`, so the live cursor can be drawn |
 

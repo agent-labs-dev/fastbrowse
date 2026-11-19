@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `--json` gives the run's total cost as `dollars`, with `cost_complete` false when a call reported no cost, beside `status`, as the plain output and the MCP result already did; a caller had to sum the cost lines. The MCP `browse` result names the `browser` that ran, as `--json` does. `--help` and the [flags reference](docs/cli.md#flags) say that `--record` also writes an uncaptioned copy, `run.plain.mp4` beside `run.mp4`. A `--save-recipe` run no longer prints replay accounting it never did, and says when the run did not complete and so saved no recipe ([#1342](https://github.com/agent-labs-dev/fastbrowse/issues/1342)).
+
 - `fastbrowse --help` and the [flags reference](docs/cli.md#flags) list which flags are refused together. `--fetch` also refuses `--secret`, `--input`, `--file` and `--authorize`, and `--cloud` refuses `--desktop`: a fetched page can only follow links and a desktop run starts no browser, so each was accepted and then never used ([#1337](https://github.com/agent-labs-dev/fastbrowse/issues/1337)).
 
 - A run in your own Chrome opens a link's new tab behind your current tab. Chrome raised and activated its window for a tab the page opened, so on a desktop that gives focus to an activated window, such as Hyprland with `misc:focus_on_activate = true`, each link the run followed to a new tab took your keyboard focus. A tab a page script opens still activates the window; [Your own Chrome](docs/cli.md#your-own-chrome) names those cases and the desktop setting ([#1348](https://github.com/agent-labs-dev/fastbrowse/issues/1348)).
