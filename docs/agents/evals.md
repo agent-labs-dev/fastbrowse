@@ -96,6 +96,7 @@ The mapping preserves these public arm names:
 - `browser-use-cloud` with model `bu-ultrafast` to `browser-use-ultrafast`;
 - other `browser-use-cloud` results to `browser-use`;
 - `browser-harness` to `browser-harness`;
+- `agent-browser` on its pinned model to `agent-browser`, a campaign arm that no publication group carries yet;
 - `browser-use-oss` to `browser-use-oss`.
 
 `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` remain diagnostic. Candidate schema 7,
