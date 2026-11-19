@@ -97,6 +97,19 @@ options:
                         drawn over a visible Chrome with the Cua Driver on
                         Linux X11, and skipped where unsupported)
 
+Refused together: --fetch starts no browser, so it refuses --browser, --cloud,
+--local, --extension, --extension-browser, --headed, --profile,
+--cloud-profile, --cdp-url, --cdp-port, --attach, --target-match,
+--foreground, --proxy-country, --viewport, --record, --recipe, --save-recipe,
+--downloads, --cursor, --secret, --input, --file and --authorize. --cloud
+refuses --headed, --profile, --cdp-url, --cdp-port, --extension,
+--extension-browser, --attach, --target-match and --desktop. --desktop drives
+an app, not a browser, so it refuses --start, --fetch, --browser, --local,
+--extension, --extension-browser, --headed, --profile, --cloud-profile,
+--cdp-url, --cdp-port, --attach, --target-match, --foreground,
+--proxy-country, --viewport, --record, --recipe, --save-recipe, --downloads
+and --cursor.
+
 Update: fastbrowse self-update names how this copy was installed and the
 command that upgrades it.
 

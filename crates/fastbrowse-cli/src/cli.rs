@@ -448,9 +448,13 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let explicit_extension = args.extension || args.extension_browser.is_some();
     let extension = explicit_extension || (!args.cloud && !args.fetch && args.desktop.is_none());
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension) {
+    // A desktop run starts no browser, so a cloud one asked for beside it was silently never started (#1337).
+    let desktop = args.desktop.is_some();
+    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension || desktop) {
         return Err(ConfigurationError(
-            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
+            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch, --extension or \
+             --desktop"
+                .into(),
         ));
     }
     let cdp_port = args

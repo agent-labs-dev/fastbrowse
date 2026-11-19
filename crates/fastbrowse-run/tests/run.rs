@@ -8,8 +8,11 @@ use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
-use fastbrowse_core::models::{BrowserUsed, BrowserVia, CostBasis, CostComponent, CostLine, Event, LLMPurpose, Status};
+use fastbrowse_core::models::{
+    Authorization, BrowserUsed, BrowserVia, CostBasis, CostComponent, CostLine, Event, LLMPurpose, Status,
+};
 use fastbrowse_core::protocol::CancellationReceipt;
+use fastbrowse_core::safety::ScopedSecrets;
 use fastbrowse_core::telemetry::Ledger;
 use fastbrowse_run::{Cancel, Host, RunError, RunTask, on_cloud, run_task};
 use indexmap::IndexMap;
@@ -423,6 +426,21 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
                 o.allowed_origins = Some(vec!["https://example.com".into()]);
             }),
             "allowed_origins cannot be combined with extension",
+        ),
+        (
+            task(|o, _| {
+                o.fetch = true;
+                o.inputs = Some([("name".to_string(), "Ada".to_string())].into_iter().collect());
+                o.authorization = Some(Authorization { irreversible_actions: true });
+            }),
+            "fetch starts no browser, so it cannot be combined with inputs, authorization",
+        ),
+        (
+            task(|o, h| {
+                o.fetch = true;
+                h.secrets = Some(Arc::new(ScopedSecrets::per_secret(Vec::new())));
+            }),
+            "fetch starts no browser, so it cannot be combined with secrets",
         ),
         (
             task(|o, h| {

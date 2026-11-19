@@ -44,6 +44,15 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--no-cursor` | don't draw the agent's cursor. By default it is drawn over a Chrome window that shows the run (`--foreground`, or an attached front tab) with fastbrowse's focus marker through [Cua Driver](https://github.com/trycua/cua) 0.45.4 or later on X11, or with [deskpilot](https://github.com/cjber/deskpilot) on Hyprland, and skipped anywhere else |
 | `--cursor` | also bring the window to the front, including with `--extension`, so the live cursor can be drawn |
 
+Some flags are refused together, with exit status 1 before the run starts. `--fetch` starts no browser and its pages
+can only follow links, so it refuses every browser flag (`--browser`, `--cloud`, `--local`, `--extension`,
+`--extension-browser`, `--headed`, `--profile`, `--cloud-profile`, `--cdp-url`, `--cdp-port`, `--attach`,
+`--target-match`, `--foreground`, `--proxy-country`, `--viewport`, `--record`, `--recipe`, `--save-recipe`,
+`--downloads`, `--cursor`) and every flag that types, attaches or submits (`--secret`, `--input`, `--file`,
+`--authorize`). `--cloud` refuses `--headed`, `--profile`, `--cdp-url`, `--cdp-port`, `--extension`,
+`--extension-browser`, `--attach`, `--target-match` and `--desktop`. `--desktop` refuses `--start`, `--fetch` and the
+browser flags. `fastbrowse --help` ends with the same list.
+
 Trace events also record code state: `decision_context` and `list_continuation` describe read scope,
 known page ordinals and unread pages; `authorization_gate` records the authorization flag, thresholds and
 branch outcome; `run_finished` records the final status after spend and screenshot checks. Page ordinals

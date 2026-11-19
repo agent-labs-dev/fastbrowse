@@ -272,6 +272,11 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("cursor", task.cursor == Some(true)),
             ("downloads", task.downloads.is_some()),
             ("extension", extension),
+            // A fetched page can only follow links (`FetchedPage::act`), so nothing is typed, attached or submitted:
+            // accepting these reported a run that could use them when none could (#1337).
+            ("inputs", task.inputs.as_ref().is_some_and(|inputs| !inputs.is_empty())),
+            ("attachments", !task.attachments.is_empty()),
+            ("authorization", task.authorization.as_ref().is_some_and(|given| given.irreversible_actions)),
         ]);
         if !browser.is_empty() {
             return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
@@ -925,6 +930,10 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     let recipe_sink = host.recipe_sink.clone().or_else(|| task.save_recipe.is_some().then(RecipeSink::default));
     if task.fetch && host.browser_api_key.is_some() {
         return Err(RunError::Invalid("fetch starts no browser, so it cannot be combined with browser_api_key".into()));
+    }
+    if task.fetch && host.secrets.is_some() {
+        // Secrets are typed into fields, and a fetched page has none to type into (#1337).
+        return Err(RunError::Invalid("fetch starts no browser, so it cannot be combined with secrets".into()));
     }
     let settings = match host.settings.take() {
         Some(settings) => settings,

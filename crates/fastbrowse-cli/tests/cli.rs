@@ -176,6 +176,10 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
         (&["--cdp-port", "9222"], "cdp_port"),
         (&["--cursor"], "cursor"),
         (&["--downloads", "/tmp/d"], "downloads"),
+        // A fetched page can only follow links, so nothing it is given is ever typed, attached or submitted (#1337).
+        (&["--input", "name=Ada"], "inputs"),
+        (&["--file", "Cargo.toml"], "attachments"),
+        (&["--authorize"], "authorization"),
     ] {
         let mut argv = vec!["t", "--start", "https://example.com", "--fetch"];
         argv.extend_from_slice(flag);
@@ -183,6 +187,13 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
         assert!(ran.call.is_none());
         assert_eq!(ran.err, format!("fastbrowse: fetch starts no browser, so it cannot be combined with {field}\n"));
     }
+}
+
+#[tokio::test]
+async fn cloud_refuses_a_desktop_run_that_starts_no_browser() {
+    let ran = cli(&["t", "--cloud", "--desktop", "app"]).await;
+    assert!(ran.call.is_none());
+    assert!(ran.err.contains("--cloud cannot be combined with") && ran.err.contains("--desktop"), "{}", ran.err);
 }
 
 #[tokio::test]
