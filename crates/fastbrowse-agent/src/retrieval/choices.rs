@@ -387,16 +387,19 @@ impl PageRead {
 /// "London" had lost whose office it was, and a table of twelve came back as seven. Every block, not the passages that
 /// narrowed a question: a count from those misses the records in the passages left out.
 pub(crate) fn whole_page_facts(capture: &Capture) -> Vec<Fact> {
-    let page = Page::new(capture);
-    capture
-        .blocks
-        .iter()
-        .filter(|block| !text::strip(page.slice(block.start, block.end)).is_empty())
-        .map(|block| {
-            let quote = evidence(&page, block, block.start, block.end);
-            Fact::read(text::strip(&quote.quote), quote.clone(), FactReader::JevChoice)
-        })
-        .collect()
+    // Each block's evidence looks at every other block, so a page of many blocks is long work (#1284).
+    compute(|| {
+        let page = Page::new(capture);
+        capture
+            .blocks
+            .iter()
+            .filter(|block| !text::strip(page.slice(block.start, block.end)).is_empty())
+            .map(|block| {
+                let quote = evidence(&page, block, block.start, block.end);
+                Fact::read(text::strip(&quote.quote), quote.clone(), FactReader::JevChoice)
+            })
+            .collect()
+    })
 }
 
 /// `read_page`: the facts Jev picks from this page, none when it says the page holds nothing for `task`. An answer it
