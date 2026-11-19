@@ -1819,11 +1819,18 @@ impl CdpPage {
                 }
                 mark
             };
-            self.session.send("Runtime.evaluate", mark(None), Some(session_id)).await?;
-            for world in self.session.main_worlds(session_id) {
-                // A frame can go away between the event and this call, which leaves it nothing to read.
-                let _ = self.session.send("Runtime.evaluate", mark(Some(world)), Some(session_id)).await;
+            let worlds = self.session.main_worlds(session_id);
+            if worlds.is_empty() {
+                self.session.send("Runtime.evaluate", mark(None), Some(session_id)).await?;
             }
+            // Sent together, so a page of many frames waits one round trip, not one per frame. A frame can go away
+            // between the event and its call, which leaves it nothing to read.
+            futures_util::future::join_all(
+                worlds
+                    .into_iter()
+                    .map(|world| self.session.send("Runtime.evaluate", mark(Some(world)), Some(session_id))),
+            )
+            .await;
             out = self.session.send("Runtime.evaluate", params, Some(session_id)).await?;
         }
         if out.get("exceptionDetails").is_some() {
