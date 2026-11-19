@@ -132,8 +132,10 @@ The extension has to match the fastbrowse you install: the Store's **0.1.0** wor
    ```
 
 A run that reaches the page confirms the connection. If it ends `unavailable` with no browser connected,
-[follow the setup checks](docs/troubleshooting.md#the-extension-is-not-connected). Chrome shows a debugging bar
-while fastbrowse works.
+[follow the setup checks](docs/troubleshooting.md#the-extension-is-not-connected). From inside an agent's sandbox,
+the run must be able to read the extension's host directory and connect to its sockets; when the sandbox refuses
+them, the run ends `unavailable` with `no browser's fastbrowse extension can be reached from this process` and names
+the refusal. Chrome shows a debugging bar while fastbrowse works.
 The [setup and usage guide](docs/cli.md#your-own-chrome) covers signed-in tasks, browser selection,
 permissions and stopping a run.
 
