@@ -383,6 +383,9 @@ pub(crate) struct RunState {
     pub read_tries: HashMap<(String, String), u8>,
     /// Screenshots that a successful image read found held no answer for this run's task.
     pub unanswered_images: HashSet<String>,
+    /// The captures, by digest, a read kept for the steps: they hold a fact a step needs, such as a code to enter, and
+    /// nothing that answers the task.
+    pub step_pages: HashSet<String>,
     /// The page the last action changed, until the next observation shows it is still the page in view.
     pub changed_page: Option<(String, String)>,
     /// Jev's latest word is that this page reports the site failed, so nothing on it is read as evidence.
@@ -839,6 +842,7 @@ impl RunState {
             read_documents: HashMap::new(),
             read_tries: HashMap::new(),
             unanswered_images: HashSet::new(),
+            step_pages: HashSet::new(),
             changed_page: None,
             page_failed: false,
             compose: false,

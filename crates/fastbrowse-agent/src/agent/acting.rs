@@ -1523,8 +1523,19 @@ impl Agent {
         // holds, and offering one that cannot be typed here ended a sign-in at needs_input, naming a secret the
         // page was never going to get, where needs_login says what the caller can fix.
         let secrets = self.secret_names(&self.target_origin(target));
-        // A value can come from a page, such as a code a site sent.
-        let read: Vec<&str> = state.notes.facts().iter().filter(|f| f.answers).map(|f| f.text.as_str()).collect();
+        // A value can come from a page, such as a code a site sent: a fact that answers, or one a read kept for the steps.
+        // Offered only answers, a sign-in code on a Phone page read as one the steps need was nowhere to type from.
+        let for_steps = |key: &str, fact: &crate::memory::Fact| {
+            !state.notes.superseded(key)
+                && fact.evidence.as_ref().is_some_and(|evidence| state.step_pages.contains(&evidence.capture_sha256))
+        };
+        let read: Vec<&str> = state
+            .notes
+            .facts_by_id()
+            .iter()
+            .filter(|(key, fact)| fact.answers || for_steps(key, fact))
+            .map(|(_, fact)| fact.text.as_str())
+            .collect();
         let read = read.join("\n");
         let task = state.task.clone();
         let group = words(&task, target.max_length);

@@ -101,8 +101,11 @@ impl Agent {
         known: std::collections::BTreeSet<(String, Option<String>, String)>,
         read: PageRead,
     ) -> bool {
-        let PageRead { facts, compose, finished } = read;
+        let PageRead { facts, compose, finished, for_steps } = read;
         state.end_read(observation, finished, tries);
+        if for_steps {
+            state.step_pages.insert(capture.sha256.clone());
+        }
         let added = facts.len();
         // Jev's latest word on a read stands: one fact that alone answers the task needs nothing written around it.
         if added > 0 {

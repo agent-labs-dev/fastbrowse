@@ -3345,6 +3345,9 @@ async fn a_page_holding_only_a_fact_for_the_steps_is_read_as_no_answer() {
     assert!(!state.compose, "nothing is written from a page that answers nothing");
     assert!(state.notes.facts().iter().any(|fact| fact.text == "Learn more"), "the steps still see the link");
     assert_eq!(state.read_note(), "Read this content. The notes hold nothing that answers the task.");
+    // A fill can type what such a page holds, as a sign-in code shown on a Phone page.
+    let read = agent.value(&state, &field("Code")).sources.get(super::acting::IN_READ).map(ToString::to_string);
+    assert!(read.is_some_and(|read| read.contains("Learn more")));
 }
 
 #[tokio::test]
