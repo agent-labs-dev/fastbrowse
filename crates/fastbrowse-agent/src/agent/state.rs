@@ -701,14 +701,24 @@ impl RunState {
         self.unread_list_pages().find(|page| !self.pager_followed.contains(page.as_str()))
     }
 
-    /// Mark each link that leads to a page already read. A mark on the link itself tells apart links that share a
-    /// label, as every quote's "(about)" does, where a list of labels could not.
-    pub fn mark_read_links(&self, observation: &mut Observation) {
+    /// Mark each link that leads to a page already read, and each that leads to another site than the one the browser
+    /// opened for the task. A mark on the link itself tells apart links that share a label, as every quote's "(about)"
+    /// does, where a list of labels could not. Shown only hrefs, a run checking a page followed its store button off
+    /// the site and ended at that store's security check (#1137).
+    pub fn mark_links(&self, observation: &mut Observation) {
         let here = url::Url::parse(&observation.url).ok();
+        let start = self.start_landing_url.as_deref().or(self.caller_start.as_deref());
+        let home = start.and_then(fastbrowse_core::origins::site_of);
         for control in &mut observation.controls {
-            let leads_to = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok());
-            if leads_to.is_some_and(|url| self.read_urls.contains(url.as_str())) {
+            let Some(leads_to) = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok()) else {
+                continue;
+            };
+            if self.read_urls.contains(leads_to.as_str()) {
                 control.already_read = Some(true);
+            }
+            let site = fastbrowse_core::origins::site_of(leads_to.as_str());
+            if home.is_some() && site.is_some() && site != home {
+                control.other_site = Some(true);
             }
         }
     }

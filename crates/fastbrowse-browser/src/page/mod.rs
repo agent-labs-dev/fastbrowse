@@ -499,6 +499,7 @@ fn control_from_raw(
         drawn: c.drawn,
         pictured: c.pictured,
         already_read: None,
+        other_site: None,
         shown_by: None,
     }
 }

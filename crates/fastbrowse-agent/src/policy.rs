@@ -69,6 +69,19 @@ fn untrusted(rules: &str) -> String {
     format!("{UNTRUSTED}\n{rules}")
 }
 
+/// What `other_site` on an element means, told only on a page where a link carries it: a run checking one page on a
+/// Pages preview followed its store button to another site and ended at that site's security check, with nothing
+/// saying the button left the site the task was about (#1137).
+pub const OTHER_SITE: &str = "An element marked other_site is a link to a different site: following it leaves the site the browser opened for this task. Follow one only when the task asks for that link or for what that other site holds.";
+
+/// `rules` with `OTHER_SITE` added when one of `controls` carries the mark.
+fn told_sites(rules: &str, controls: &[Control]) -> String {
+    match controls.iter().any(|control| control.other_site == Some(true)) {
+        true => format!("{rules}\n{OTHER_SITE}"),
+        false => rules.to_string(),
+    }
+}
+
 pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTION_RULES));
 pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
 pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
@@ -900,7 +913,7 @@ async fn shortlist(
     let protected_set: HashSet<usize> = (0..controls.len()).filter(|i| protected(&controls[*i])).collect();
     let candidates: Vec<usize> = (0..controls.len()).filter(|i| !protected_set.contains(i)).collect();
     let state = json!({
-        "rules": *RELEVANCE,
+        "rules": told_sites(&RELEVANCE, controls),
         "task": context.task,
         "subgoal": context.subgoal,
         // Scrolling changes visibility, not completed task steps. Other actions can make an unchanged control
@@ -1107,11 +1120,12 @@ pub fn build_request(
         offered_operations(observation, &indexed, context, &urls)
     };
     let mut questions: IndexMap<String, Question> = IndexMap::new();
-    let target_rules = TARGET.as_str();
+    let target_rules = told_sites(&TARGET, controls);
+    let target_rules = target_rules.as_str();
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            HistoryEntry::told(&NEXT_ACTION, &context.history),
+            told_sites(&HistoryEntry::told(&NEXT_ACTION, &context.history), controls),
             offered.iter().map(|op| {
                 // The operation is chosen apart from its target, and a choice of one address is answered without Jev
                 // at all, so the operation names where navigate goes: told only "another address", Jev searched the
@@ -1662,6 +1676,9 @@ fn relevance_element(control: &Control) -> Map<String, Value> {
     if control.already_read == Some(true) {
         element.insert("already_read".into(), true.into());
     }
+    if control.other_site == Some(true) {
+        element.insert("other_site".into(), true.into());
+    }
     if control.offscreen {
         element.insert("offscreen".into(), true.into());
     }
@@ -1694,6 +1711,7 @@ pub fn element(control: &Control) -> Map<String, Value> {
         ("href", control.href.clone().map(Value::from)),
         ("next_page", pager_link(control).then_some(true.into())),
         ("already_read", control.already_read.filter(|read| *read).map(Value::from)),
+        ("other_site", control.other_site.filter(|other| *other).map(Value::from)),
         ("drawn", control.drawn.filter(|drawn| *drawn).map(Value::from)),
         ("checked", control.checked.map(Value::from)),
         ("selected", control.selected.map(Value::from)),
@@ -2323,6 +2341,26 @@ mod tests {
         assert_eq!(inner.criteria.keys().collect::<Vec<_>>(), ["b8", "b9", "b10", "b11"]);
         assert_eq!(decision.cost.len(), 2);
         assert!((decision.confidence() - 0.81).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_rules_tell_jev_what_other_site_means_only_when_a_link_carries_it() {
+        let mut page = observation((0..3).map(button).collect());
+        page.controls[1].role = "link".into();
+        page.controls[1].href = Some("https://store.test/item".into());
+        let context = StepContext::new("check that the page's sections open");
+        let plain = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        page.controls[1].other_site = Some(true);
+        let marked = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let instructions = |request: &Request, key: &str| match &request.questions[key] {
+            Question::Choice(question) => question.instructions.clone(),
+            _ => unreachable!("{key} is a choice"),
+        };
+        assert!(!instructions(&plain, keys::OPERATION).contains(OTHER_SITE));
+        assert!(instructions(&marked, keys::OPERATION).contains(OTHER_SITE));
+        assert!(instructions(&marked, &keys::target(Operation::Click)).contains(OTHER_SITE));
+        assert_eq!(marked.state["elements"][1]["other_site"], json!(true));
+        assert!(OTHER_SITE.contains("leaves the site the browser opened for this task"));
     }
 
     #[test]
