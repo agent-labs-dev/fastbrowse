@@ -222,7 +222,11 @@ async fn a_filmed_desktop_run_frames_its_window_on_launch_and_after_each_action(
     let (film, frames) = frames();
     let page =
         DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
+    // An app can open on a secret it shows, so even the launch frame waits for an observation to clear it.
+    assert!(frames.frames.lock().unwrap().is_empty());
     let before = page.observe().await.unwrap();
+    // The agent's reading of that observation: no secret shows, so the frame held from launch is filmed.
+    page.withhold_frames(false);
     page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
     // The frame after an action waits for the next observation, as the agent reads it, to show no secret.
     assert_eq!(*frames.frames.lock().unwrap(), [b"launched".to_vec()]);
@@ -243,6 +247,8 @@ async fn a_filmed_desktop_run_takes_no_frame_while_frames_are_withheld() {
     let page =
         DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
     let before = page.observe().await.unwrap();
+    // The agent's reading of that observation: no secret shows, so the frame held from launch is filmed.
+    page.withhold_frames(false);
     // As the agent does before typing a secret: the window may show it next, and a frame cannot be masked.
     page.withhold_frames(true);
     page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
@@ -283,6 +289,8 @@ async fn a_filmed_click_marks_its_element_centre_for_the_recording_cursor() {
     let page =
         DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
     let before = page.observe().await.unwrap();
+    // The agent's reading of that observation: no secret shows, so the frame held from launch is filmed.
+    page.withhold_frames(false);
     let mut click = Action::new(Operation::Click);
     click.target_id = Some("e2".into());
     let result = page.act(&click, &before).await.unwrap();
@@ -301,6 +309,8 @@ async fn a_frame_after_an_action_that_reveals_a_secret_is_never_filmed() {
     let page =
         DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
     let before = page.observe().await.unwrap();
+    // The agent's reading of that observation: no secret shows, so the frame held from launch is filmed.
+    page.withhold_frames(false);
     page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
     // The next observation shows a resolved secret the action put on screen: the shot taken after it is dropped,
     // and a later clean reading does not bring it back.

@@ -81,8 +81,8 @@ pub struct DeskpilotPage {
     observed: Mutex<Option<Element>>,
     /// Set while the window may show a resolved secret, which a frame cannot mask: no frame is filmed then.
     withheld: AtomicBool,
-    /// The shot taken after the latest action, held until the next observation shows no secret: the action may be
-    /// what put one on screen, and only that reading can tell.
+    /// The latest frame, taken when the app opens or after an action, held until the next observation shows no
+    /// secret: the action may be what put one on screen, and only that reading can tell.
     pending: Mutex<Option<Vec<u8>>>,
 }
 
@@ -149,17 +149,13 @@ impl DeskpilotPage {
     /// Films the window to `film` from now on, starting with the window as the app opened it.
     pub async fn filmed(mut self, film: Arc<dyn Film>) -> Self {
         self.film = Some(film);
-        // No secret has been typed before the app opens, so its first frame is filmed at once.
-        if let Some(png) = self.frame().await
-            && let Some(film) = &self.film
-        {
-            film.frame(png);
-        }
+        // An app can open on a secret it already shows, so its first frame waits for the first observation too.
+        self.hold_frame().await;
         self
     }
 
-    /// Takes a frame after an action, for the next observation to film or drop.
-    async fn frame_after_action(&self) {
+    /// Takes a frame of the window as it is now, for the next observation to film or drop.
+    async fn hold_frame(&self) {
         let png = self.frame().await;
         *self.pending.lock().unwrap() = png;
     }
@@ -512,7 +508,7 @@ impl DeskpilotPage {
         }
         let sent = self.dispatch(action, observation).await;
         let measured = self.measured(sent, observation, seconds).await;
-        self.frame_after_action().await;
+        self.hold_frame().await;
         measured
     }
 }
@@ -613,7 +609,7 @@ impl Page for DeskpilotPage {
             self.point(Operation::Click, (x * shot.width, y * shot.height, shot.width, shot.height));
             let sent = self.tool("click", point).await.map(|()| None);
             let measured = self.measured(sent, &before, SETTLE_SECONDS).await;
-            self.frame_after_action().await;
+            self.hold_frame().await;
             measured
         })
     }

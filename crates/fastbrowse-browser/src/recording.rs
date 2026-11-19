@@ -203,7 +203,10 @@ impl Recording {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| RecordingError(format!("could not start ffmpeg: {}", e.kind())))?;
+            .map_err(|e| {
+                let _ = std::fs::remove_dir_all(&scratch);
+                RecordingError(format!("could not start ffmpeg: {}", e.kind()))
+            })?;
         let stdin = Arc::new(tokio::sync::Mutex::new(ffmpeg.stdin.take()));
         let frames = Arc::new(Mutex::new(Frames::default()));
         let started = Instant::now();
