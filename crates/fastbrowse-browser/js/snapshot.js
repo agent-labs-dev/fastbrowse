@@ -1491,8 +1491,9 @@
     // A line that is another control of the same kind names that control, not the section: a calendar's day cells were
     // named "31" and "7" after their neighbours in the same week row, so a picker showing November was offered with
     // contexts that pointed at other days. A card's title keeps its line, since the control it names there is another
-    // kind (a link inside a checkbox's label names the item). Past a repeated control's label, a datepicker's first
-    // line is the month it shows. The label is cut out as whole words, since a day labelled "2" cut out of
+    // kind (a link inside a checkbox's label names the item), even when it repeats: a comment author's name is a link,
+    // and cutting it because the author wrote twice named every Reply by the comment's age (#881). Past its peers'
+    // labels, a datepicker's first line is the month it shows. The label is cut out as whole words, since a day labelled "2" cut out of
     // "October 2026" left "October 0 6".
     const mine = controlByElement.get(element);
     const counts = labelsByRole.get(mine?.role);
@@ -1501,7 +1502,7 @@
     // control's and its peers' labels names nothing but them.
     const onlyPeers = line => line.split(' ').every(word => word === label || peer(word));
     const lines = renderedLines(scope)
-      .filter(line => !repeated.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
+      .filter(line => !peer(line) && !onlyPeers(line) && !own?.has(line));
     return lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line).trim()).filter(Boolean);
   };
   const scopeOf = (element, holding) => {

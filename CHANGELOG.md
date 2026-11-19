@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A Reply or Post button under a comment is named by the comment's author when the author's name is a link and the author wrote more than one comment. The name was cut because the same link appeared twice, so every Reply and the open thread's Post were named by the comment's age, such as "29 days ago", and a reply could go under another commenter's thread ([#881](https://github.com/agent-labs-dev/fastbrowse/issues/881)).
 - A heading read over HTTP stands under the headings above it, not under the sibling heading it ends. PyPI's sidebar "Key dates" heading read under "Project links", the sidebar heading before it, and a README's top heading under the page's own ([#1254](https://github.com/agent-labs-dev/fastbrowse/issues/1254)).
 - Text an inline element draws in its own shadow root is read in the sentence around it. It was left out of the sentence and read after it as a block of its own, so `Price: <span>` holding `19.99` in its shadow root read "Price: total" and then "19.99" ([#1275](https://github.com/agent-labs-dev/fastbrowse/issues/1275)).
 - A CSV inside a downloaded ZIP is read row by row, as a downloaded CSV is, under the name `archive.zip/member.csv`. The archive's members were joined into one text, so the CSV was one block and composing from it sent the whole file: a 23 MB sec.gov market data file went to composition whole ([#1311](https://github.com/agent-labs-dev/fastbrowse/issues/1311)).

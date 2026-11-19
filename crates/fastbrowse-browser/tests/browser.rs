@@ -1869,6 +1869,50 @@ async fn test_reply_buttons_under_one_authors_comments_are_told_apart_by_their_t
     h.close().await;
 }
 
+/// A CurseForge comment links its author's name, so an author with two comments made that link a twin, and a twin's
+/// label was cut from every card's lines: both Reply buttons and the thread's Post were named by the comment's age,
+/// "29 days ago", and a reply went under another commenter's thread (#881).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reply_and_post_are_named_by_the_comment_author_a_link_names() {
+    let _turn = turn().await;
+    let comment = |user: &str, date: &str, text: &str, thread: &str| {
+        format!(
+            "<li><div class=\"comment\"><div class=\"comment-body\"><div class=\"user-meta\">\
+             <a class=\"user\" href=\"#{user}\">{user}</a><div class=\"date\">{date}</div></div>\
+             <p>{text}</p><button>Reply</button><button>Quote</button></div></div>{thread}</li>"
+        )
+    };
+    let reply = format!("<ul>{}</ul>", comment("cjber", "28 days ago", "Fixed in 1.2", ""));
+    let form = "<form><textarea aria-label=\"Comment text area\"></textarea><button>Post</button></form>";
+    let page = |thread_form: &str| {
+        format!(
+            "<ul>{}{}{}</ul>{form}",
+            comment("Syrberus", "30 days ago", "Is 75 enough?", &reply),
+            comment("Syrberus", "29 days ago", "Works on 100%", thread_form),
+            comment("Belth", "29 days ago", "Thanks", ""),
+        )
+    };
+    let contexts = |obs: &Observation, label: &str| -> Vec<String> {
+        obs.controls.iter().filter(|c| c.label == label).map(|c| c.context.clone().unwrap_or_default()).collect()
+    };
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(&h, &format!("document.body.innerHTML = {}", serde_json::to_string(&page("")).unwrap())).await;
+    let obs = observe_until(&h.page, "Reply").await;
+    let replies = contexts(&obs, "Reply");
+    assert_eq!(replies.len(), 4, "{replies:?}");
+    assert!(replies[0].contains("Syrberus") && replies[2].contains("Syrberus"), "{replies:?}");
+    assert_ne!(replies[0], replies[2], "{replies:?}");
+    assert!(replies[3].contains("Belth"), "{replies:?}");
+    // Reply opened the second comment's thread form: its Post belongs to Syrberus' thread, not to an age.
+    eval_active(&h, &format!("document.body.innerHTML = {}", serde_json::to_string(&page(form)).unwrap())).await;
+    let obs = observe_until(&h.page, "Post").await;
+    let posts = contexts(&obs, "Post");
+    assert_eq!(posts.len(), 2, "{posts:?}");
+    assert!(posts[0].contains("Syrberus"), "{posts:?}");
+    h.close().await;
+}
+
 /// Options that are direct children of one list share every ancestor, and an aria-label hides the text inside
 /// them, so two "Springfield" options read as "1 of 2" and "2 of 2" and the run picked one blind.
 #[tokio::test(flavor = "multi_thread")]
