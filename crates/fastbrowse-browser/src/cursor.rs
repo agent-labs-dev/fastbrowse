@@ -23,18 +23,22 @@ pub const CURSOR_JS: &str = include_str!("../js/cursor.js");
 /// The isolated world the cursor runs in, so page scripts can neither see nor call it.
 pub const CURSOR_WORLD: &str = "fastbrowse-cursor";
 
-// The glide is paced to a travel speed rather than one duration, so a sweep across the page and a hop between
-// neighbouring controls cross at the same pace a hand would: as long as the distance needs at `GLIDE_PX_PER_S`, no
-// shorter than a floor that keeps a short hop visible, and capped so one step is not held up behind a long sweep.
-const GLIDE_MS: f64 = 550.0;
-const GLIDE_MAX_MS: f64 = 2200.0;
-const GLIDE_PX_PER_S: f64 = 500.0;
+// The glide is paced as deskpilot's agent cursor paces it (`glideTo` in src/deskpilot/plugin/deskpilot.cpp), so a
+// recording matches the desktop's: 1.5 times its length over `GLIDE_PEAK_PX_PER_S`, between `GLIDE_MIN_MS` and
+// `GLIDE_MAX_MS`, and no glide under `GLIDE_STILL_PX`.
+const GLIDE_MIN_MS: f64 = 120.0;
+const GLIDE_MAX_MS: f64 = 700.0;
+const GLIDE_PEAK_PX_PER_S: f64 = 900.0;
+const GLIDE_STILL_PX: f64 = 2.0;
 /// How long a command to the page may take beyond its own animation before the drawing is given up on.
 const CALL_SLACK: Duration = Duration::from_secs(1);
 
 /// The glide to a point `distance` CSS pixels away.
 fn glide_ms(distance: f64) -> f64 {
-    (distance.max(0.0) / GLIDE_PX_PER_S * 1000.0).clamp(GLIDE_MS, GLIDE_MAX_MS)
+    if distance < GLIDE_STILL_PX {
+        return 0.0;
+    }
+    (1.5 * distance / GLIDE_PEAK_PX_PER_S * 1000.0).clamp(GLIDE_MIN_MS, GLIDE_MAX_MS)
 }
 
 /// The run's cursor in the tab it drives.
@@ -53,13 +57,14 @@ impl PageCursor {
     pub async fn glide(&self, x: f64, y: f64) {
         let from = self.last.lock().unwrap().replace((x, y));
         // An unchanged point is still sent, with no travel: a navigation since may have taken the cursor out of the page.
-        let ms = from.filter(|&at| at != (x, y)).map_or(0.0, |(fx, fy)| glide_ms((x - fx).hypot(y - fy)));
+        let ms = from.map_or(0.0, |(fx, fy)| glide_ms((x - fx).hypot(y - fy)));
         let from = from.map_or(Value::Null, |(fx, fy)| json!([fx, fy]));
         let wait = Duration::from_secs_f64(ms / 1000.0) + CALL_SLACK;
         self.call(&format!("glide({x}, {y}, {ms}, {from})"), true, wait).await;
     }
 
-    /// Show a press at the point the input is about to be sent to.
+    /// Show a press at the point the input's press is about to be sent to: the brackets move in towards the dot and back,
+    /// and a disc swells there.
     pub async fn press(&self, x: f64, y: f64) {
         *self.last.lock().unwrap() = Some((x, y));
         self.call(&format!("press({x}, {y})"), false, CALL_SLACK).await;
@@ -134,9 +139,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn glides_at_a_steady_pace_between_floor_and_ceiling() {
-        assert_eq!(glide_ms(0.0), GLIDE_MS);
-        assert_eq!(glide_ms(500.0), 1000.0);
+    fn glides_at_deskpilots_pace_between_floor_and_ceiling() {
+        assert_eq!(glide_ms(1.0), 0.0);
+        assert_eq!(glide_ms(10.0), GLIDE_MIN_MS);
+        assert_eq!(glide_ms(300.0), 500.0);
         assert_eq!(glide_ms(10_000.0), GLIDE_MAX_MS);
     }
 }

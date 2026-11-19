@@ -1,6 +1,8 @@
-// The agent cursor fastbrowse draws inside the page: ember focus brackets around a dot, with a fastbrowse tag. It glides
-// along a shallow arc to each action point, the brackets close in as it lands, and each press sends out a ring. A drag
-// carries it along the drag's own path.
+// The agent cursor fastbrowse draws inside the page: ember focus brackets around a dot. It glides along a shallow arc
+// to each action point with the brackets at their resting size; every press (a click, a fill's click, a drag's press)
+// moves the brackets in towards the dot and back, and leaves a faint disc swelling and fading where it was pressed. A
+// drag carries it along the drag's own path. The look and timing are deskpilot's agent cursor (`drawOne` and
+// `glideTo` in src/deskpilot/plugin/deskpilot.cpp), in CSS pixels, with fastbrowse's colour and centre dot.
 //
 // It runs in an isolated world, so page scripts cannot read its state or call it, and draws into a closed shadow root
 // on one host element, so page code that walks the DOM finds only an empty element. The host takes no input
@@ -14,13 +16,21 @@
 
   const HOST_ATTRIBUTE = 'data-fastbrowse-cursor';
   const EMBER = '#c55230';
-  const INK = '#17150f';
-  const LOCK_MS = 160; // the brackets closing in as the cursor lands
-  const PULSE_MS = 400; // a press's ring swelling and fading
-  const PRESSED_MS = 130; // how long the marker stays shrunk after a press
-  const OPEN = 34; // the brackets' half-width as the cursor lands
-  const CLOSED = 18; // and at rest
-  const ARM = 8; // the length of a bracket's arm
+  const ARM = 6; // a bracket's arm, end to end, and its rounded stroke
+  const STROKE = 1.8;
+  const REST = 15; // the brackets' half-width at rest and while gliding
+  const PRESS = 7; // and at the deepest point of a press
+  // A press: the brackets move in over SQUEEZE_IN ms (cubic ease-out), stay for SQUEEZE_HOLD and go back over
+  // SQUEEZE_OUT (cubic ease-in-out), while the dot shrinks to PRESSED of its size.
+  const SQUEEZE_IN = 50;
+  const SQUEEZE_HOLD = 70;
+  const SQUEEZE_OUT = 100;
+  const SQUEEZE = SQUEEZE_IN + SQUEEZE_HOLD + SQUEEZE_OUT;
+  const PRESSED = 0.85;
+  // A press's disc: filled at 0.3 opacity fading out, growing from 0.3 to 1 times PULSE_SIZE (cubic ease-out).
+  const PULSE_MS = 380;
+  const PULSE_SIZE = 30;
+  const DOT = 2.4; // fastbrowse's own centre: a dot of this radius
   const ARC = 0.2; // how far a glide bows to one side, as a fraction of its length
   const SVG = 'http://www.w3.org/2000/svg';
 
@@ -43,16 +53,16 @@
 
   const state = {
     at: null, // [x, y] in viewport CSS pixels, null until the first move
-    glide: null, // {from, bend, to, start, ms}
+    glide: null, // {from, bend, to, start, ms}; `start` may be ahead, after the last press's squeeze
     trace: null, // {points, start, ms}: a drag's path
-    landed: -Infinity,
-    pressedUntil: -Infinity,
+    pressed: -Infinity, // when the last press was sent
     pulses: [], // [{at, start}]
     hidden: false,
     frame: 0,
   };
 
-  const ease = (u) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
+  const easeInOut = (u) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
+  const easeOut = (u) => 1 - (1 - u) ** 3;
   const clamp = (u) => Math.max(0, Math.min(1, u));
   const node = (tag, attributes, parent) => {
     const element = document.createElementNS(SVG, tag);
@@ -81,12 +91,11 @@
       return [[ax + (bx - ax) * f, ay + (by - ay) * f], true];
     }
     if (glide) {
-      const u = ease(clamp((now - glide.start) / glide.ms));
+      const u = easeInOut(clamp((now - glide.start) / glide.ms));
       const { from: [ax, ay], bend: [cx, cy], to: [bx, by] } = glide;
       if (u >= 1) {
         state.glide = null;
         state.at = glide.to;
-        state.landed = glide.start + glide.ms;
         return [state.at, false];
       }
       const v = 1 - u;
@@ -95,26 +104,25 @@
     return [state.at, false];
   }
 
+  // How far in the brackets are `elapsed` ms after a press: 0 at rest, 1 at PRESS.
+  function inward(elapsed) {
+    if (elapsed < 0 || elapsed >= SQUEEZE) return 0;
+    if (elapsed < SQUEEZE_IN) return easeOut(elapsed / SQUEEZE_IN);
+    return 1 - easeInOut(Math.max(0, elapsed - SQUEEZE_IN - SQUEEZE_HOLD) / SQUEEZE_OUT);
+  }
+
+  // Four corners `half` from the centre, each arm running inwards from its corner. The arm's path is its length less
+  // the stroke, so with round caps it spans ARM from the corner's outer edge.
   function brackets(group, half) {
+    const reach = ARM - STROKE;
     for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
       const x = sx * half;
       const y = sy * half;
-      const d = `M ${x} ${y - sy * ARM} L ${x} ${y} L ${x - sx * ARM} ${y}`;
-      const line = { d, fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
-      node('path', { ...line, stroke: '#fff', 'stroke-width': 5.5 }, group);
-      node('path', { ...line, stroke: EMBER, 'stroke-width': 2.6 }, group);
+      node('path', {
+        d: `M ${x} ${y - sy * reach} L ${x} ${y} L ${x - sx * reach} ${y}`,
+        fill: 'none', stroke: EMBER, 'stroke-width': STROKE, 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+      }, group);
     }
-  }
-
-  function tag(group) {
-    const pill = node('g', { transform: 'translate(26 12)' }, group);
-    node('rect', { width: 92, height: 22, rx: 11, fill: INK }, pill);
-    node('circle', { cx: 12, cy: 11, r: 4, fill: EMBER }, pill);
-    const label = node('text', {
-      x: 21, y: 15.5, fill: '#fff', 'font-size': 11.5, 'font-weight': 600,
-      'font-family': 'Inter, "Helvetica Neue", Arial, sans-serif',
-    }, pill);
-    label.textContent = 'fastbrowse';
   }
 
   function draw(now) {
@@ -125,25 +133,17 @@
       const u = (now - pulse.start) / PULSE_MS;
       if (u < 0 || u >= 1) continue;
       node('circle', {
-        cx: pulse.at[0], cy: pulse.at[1], r: 8 + 30 * ease(u), fill: 'none', stroke: EMBER, 'stroke-width': 2.5,
-        opacity: 0.8 * (1 - u),
+        cx: pulse.at[0], cy: pulse.at[1], r: PULSE_SIZE * (0.3 + 0.7 * easeOut(u)), fill: EMBER, opacity: 0.3 * (1 - u),
       }, svg);
     }
     state.pulses = state.pulses.filter((pulse) => now - pulse.start < PULSE_MS);
+    const squeezing = now - state.pressed < SQUEEZE;
     if (at) {
       const group = node('g', { transform: `translate(${at[0]} ${at[1]})` }, svg);
-      const sinceLanding = now - state.landed;
-      const half = moving || sinceLanding >= LOCK_MS ? CLOSED : OPEN - (OPEN - CLOSED) * ease(clamp(sinceLanding / LOCK_MS));
-      brackets(group, half);
-      const pressed = state.trace || now < state.pressedUntil;
-      const marker = node('g', { transform: `scale(${pressed ? 0.85 : 1})` }, group);
-      node('circle', { r: 7.5, cy: 1.5, fill: 'rgba(0,0,0,.25)' }, marker);
-      node('circle', { r: 7, fill: '#fff' }, marker);
-      node('circle', { r: 4.6, fill: EMBER }, marker);
-      tag(group);
+      brackets(group, REST + (PRESS - REST) * inward(now - state.pressed));
+      node('circle', { r: DOT * (squeezing ? PRESSED : 1), fill: EMBER }, group);
     }
-    const animating = moving || now - state.landed < LOCK_MS || now < state.pressedUntil || state.pulses.length;
-    if (animating) schedule();
+    if (moving || squeezing || state.pulses.length) schedule();
   }
 
   function schedule() {
@@ -167,14 +167,21 @@
   }).observe(document, { childList: true, subtree: true });
   document.addEventListener('fullscreenchange', raise, true);
 
-  // Resolves once the cursor has landed and the brackets have closed. Timed by the clock rather than by drawn frames,
-  // so a tab that is not painting never holds up the action.
+  // Resolves once the cursor has landed. Timed by the clock rather than by drawn frames, so a tab that is not painting
+  // never holds up the action.
   const after = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // A press at `at`: the brackets move in and back and a disc swells there.
+  function pressAt(at, now) {
+    state.pressed = now;
+    state.pulses.push({ at, start: now });
+  }
 
   // Each drawing call clears `hidden` itself, so a hide never followed by its show (a run cancelled mid-capture) does
   // not keep the cursor out of the page for the rest of the document.
   const api = {
-    // Glide to (x, y) over `ms`, starting from `from` when this document has not drawn the cursor yet.
+    // Glide to (x, y) over `ms`, starting from `from` when this document has not drawn the cursor yet. A press still
+    // squeezing keeps its whole squeeze: the glide starts once it is over.
     glide(x, y, ms, from) {
       state.hidden = false;
       raise();
@@ -183,29 +190,32 @@
       const origin = start || from || null;
       const to = [x, y];
       state.trace = null;
+      let wait = 0;
       if (!origin || ms <= 0) {
         state.glide = null;
         state.at = to;
-        state.landed = now;
       } else {
         const [ax, ay] = origin;
         const dx = x - ax;
         const dy = y - ay;
         const bend = [(ax + x) / 2 - dy * ARC, (ay + y) / 2 + dx * ARC];
-        state.glide = { from: origin, bend, to, start: now, ms };
+        const begin = Math.max(now, state.pressed + SQUEEZE);
+        state.at = origin;
+        state.glide = { from: origin, bend, to, start: begin, ms };
+        wait = begin - now + ms;
       }
       schedule();
-      return after((state.glide ? ms : 0) + LOCK_MS);
+      return after(wait);
     },
-    // A press at the cursor's point: a ring goes out and the marker shrinks for a moment.
+    // A press at (x, y), sent as the input's press is.
     press(x, y) {
       state.hidden = false;
       raise();
       const now = performance.now();
       state.glide = null;
+      state.trace = null;
       state.at = [x, y];
-      state.pulses.push({ at: [x, y], start: now });
-      state.pressedUntil = now + PRESSED_MS;
+      pressAt([x, y], now);
       schedule();
     },
     // Follow a drag: press at the first point, travel the rest over `ms`, release at the last.
@@ -216,7 +226,7 @@
       const now = performance.now();
       state.glide = null;
       state.at = points[0];
-      state.pulses.push({ at: points[0], start: now });
+      pressAt(points[0], now);
       state.trace = { points, start: now, ms: Math.max(ms, 1) };
       schedule();
     },

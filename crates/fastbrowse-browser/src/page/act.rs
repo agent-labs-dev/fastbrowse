@@ -582,9 +582,6 @@ impl CdpPage {
             }
             (before_fingerprint, _, point, announced, opens, address, _) = fresh;
             drawn = false;
-            if action.operation == Operation::Click {
-                cursor.press(x, y).await;
-            }
         }
         let popups = self.session.popups();
         // A dialog blocks the page, and an observation taken under it reads no document, so the mark taken before the
@@ -1817,6 +1814,13 @@ impl CdpPage {
         let ((outcome, detail, failure), (x, y)) = self.stable_point(target, point, prepare_fill, true, drawn).await?;
         if outcome != StepOutcome::Executed {
             return Ok((outcome, detail, failure));
+        }
+        // Every press is shown where and when it is sent, a click's and a fill's alike, at the point the target settled
+        // on; an action that stops before pressing shows none. The cursor draws in the active page's viewport only.
+        if let Some(cursor) = &self.cursor
+            && self.session.active_session_id().is_ok_and(|active| active == target.0)
+        {
+            cursor.press(x, y).await;
         }
         // Sent together and in order: Chrome runs them in turn, and a round trip between them buys nothing.
         let mouse = |kind| {
