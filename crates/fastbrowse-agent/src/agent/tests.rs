@@ -9058,7 +9058,42 @@ fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
     assert!(answer.contains("Game version: 'Retail'"), "{answer}");
     assert!(answer.contains("Notify followers: checked"), "{answer}");
     assert!(!answer.contains("first draft") && !answer.contains("never typed"), "{answer}");
+    assert!(!answer.contains(super::finishing::COMMITTED), "{answer}");
     assert!(!answer.contains("Markdown"), "{answer}");
+}
+
+/// A run posted a reply under each of two comments, clicking Post after typing each, then stopped for confirmation on a
+/// later click; its answer said both replies may still be in their fields, so the caller read two posted replies as
+/// unsent (#1317). A field typed before a commit the run made is named with that commit, not as left on the page.
+#[test]
+fn test_a_run_that_ends_unfinished_names_its_commits_apart_from_unsent_fields() {
+    let filled = |target: &str, text: &str| HistoryEntry {
+        text: Some(text.into()),
+        ..HistoryEntry::new(Some(Operation::Fill), Some(target), StepOutcome::Executed, true)
+    };
+    let posted = HistoryEntry {
+        committed: true,
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post"), StepOutcome::Executed, true)
+    };
+    let history = vec![
+        filled("Reply (comment by ann)", "first reply"),
+        posted.clone(),
+        filled("Reply (comment by bob)", "second reply"),
+        posted,
+        HistoryEntry::new(Some(Operation::Click), Some("comment by bob"), StepOutcome::Failed, false),
+        filled("Search", "left behind"),
+    ];
+    let answer = super::finishing::changed_fields(&history).expect("the commits are reported");
+    let (committed, changed) = answer.split_once(super::finishing::CHANGED).expect("the unsent field is reported");
+    assert!(committed.starts_with(super::finishing::COMMITTED), "{answer}");
+    assert!(committed.contains("- click 'Post', after entering Reply (comment by ann): 'first reply'\n"), "{answer}");
+    assert!(committed.contains("- click 'Post', after entering Reply (comment by bob): 'second reply'"), "{answer}");
+    assert_eq!(changed, "\n- Search: 'left behind'", "{answer}");
+
+    let sent = &history[..4];
+    let answer = super::finishing::changed_fields(sent).expect("the commits are reported");
+    assert!(answer.starts_with(super::finishing::COMMITTED), "{answer}");
+    assert!(!answer.contains(super::finishing::CHANGED), "{answer}");
 }
 
 /// A custom select: clicking an option sets the field's value and closes the menu, so the option is gone after.
@@ -9181,6 +9216,30 @@ async fn test_a_run_unverified_at_done_names_the_fields_it_changed() {
     assert!(answer.starts_with(super::finishing::CHANGED), "{answer}");
     assert!(answer.contains("- Notify followers: checked\n"), "{answer}");
     assert!(answer.contains("Choose a ticket"), "{answer}");
+}
+
+/// A run whose commit the page took and that then ended unfinished named the field it changed as one that may still
+/// hold its value, as if nothing had been sent (#1317). The step that committed names what it sent.
+#[tokio::test]
+async fn test_a_run_unfinished_after_a_commit_names_the_commit() {
+    const COMMITS: &[(&str, f64)] =
+        &[("carried", 0.0), ("refused", 1.0), ("irreversible", 0.9), ("requested", 0.9), ("conditional", 0.0)];
+    let jev = Noul(ScriptedJev::new(crate::scripted::steps("click Notify followers").unwrap()), COMMITS);
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        authorization: Some(Authorization { irreversible_actions: true }),
+        ..Default::default()
+    };
+    let result = agent.run("Turn on Notify followers and tell me what the page says", options).await.unwrap();
+    assert_ne!(result.status, Status::Complete, "{:?}", result.error);
+    let answer = result.answer.expect("an answer");
+    let expected = format!(
+        "{}\n- click 'Notify followers', after entering Notify followers: checked",
+        super::finishing::COMMITTED
+    );
+    assert!(answer.starts_with(&expected), "{answer}");
+    assert!(!answer.contains(super::finishing::CHANGED), "{answer}");
 }
 
 /// A custom select is set by clicking an option, which has no checked state and is gone once the menu closes: the
