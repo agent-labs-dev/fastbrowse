@@ -30,11 +30,7 @@ PASSING = (
 )
 # Cassettes the agent's requests have moved past, each waiting on a paid `bench fill --only TASK` a maintainer starts.
 # Strict, so the replay job lists them on every run and fails once the fill lands until the entry is removed.
-STALE: dict[str, str] = {
-    "mock-canvas-map": "drawn surfaces now offer drag; refill once the Jev workspace budget resets",
-    "mock-canvas-toggle": "drawn surfaces now offer drag; refill once the Jev workspace budget resets",
-    "mock-drag-card": "the drop target question moved; refill once the Jev workspace budget resets",
-}
+STALE: dict[str, str] = {}
 
 
 def recorded_tasks() -> list[Any]:
