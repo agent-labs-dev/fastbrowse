@@ -61,7 +61,7 @@ pub(crate) mod keys {
 }
 
 const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after that action is among the recent actions; what the page already showed before it is not the\nanswer, however close it looks.";
-const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task names one, choose\nby context; a link in one record's context opens it and shows no more of the list.";
+const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nEach option is the element in state.elements with its id, whose `context` is the card, row or section it belongs\nto. When the task names one, choose by context; a link in one record's context opens it and shows no more of the\nlist.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could carrying out any part of the task or current subgoal that is still needed, or reading what it needs, act on or rely on the element in each question?\nUse recent actions to judge which task steps are already complete.\nJudge by its label, role, context and href. An already_read link leads to a page this run has read;\nconsider whether visiting it again would help the task. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
 
@@ -1722,13 +1722,21 @@ fn context_of(control: &Control) -> Option<String> {
 
 /// A control as the step's state lists it.
 pub fn element(control: &Control) -> Map<String, Value> {
+    described(control, true)
+}
+
+/// A control's description; `shared` adds the context and operations every question reads from the step's state, which
+/// a target option refers to by id rather than repeating.
+fn described(control: &Control, shared: bool) -> Map<String, Value> {
     let mut element = Map::new();
     element.insert("id".into(), control.id.clone().into());
     element.insert("label".into(), control.label.clone().into());
     element.insert("role".into(), control.role.clone().into());
-    element.insert("operations".into(), sorted_operations(control));
+    if shared {
+        element.insert("operations".into(), sorted_operations(control));
+    }
     let optional = [
-        ("context", context_of(control).map(Value::from)),
+        ("context", context_of(control).filter(|_| shared).map(Value::from)),
         ("value", control.value.clone().map(Value::from)),
         // An unfocused control offers nothing an unknown one does not, and every control but one is unfocused.
         ("focused", control.focused.filter(|focused| *focused).map(Value::from)),
@@ -1814,10 +1822,9 @@ fn target_question(
     rules: &str,
     looks: &IndexMap<String, Vec<u8>>,
 ) -> ChoiceQuestion {
-    // Sending only the label and pointing Jev at the shared state for the rest is two thirds smaller on a dense page,
-    // and it was tried. It bought no measured latency, because the request was never the slow part, and a criterion
-    // the model has to go and look up is a worse criterion: the choice is what this whole design rests on, so it gets
-    // the attributes in front of it.
+    // An option keeps what tells it apart as a target (label, role, href, value, state), and refers by id to the
+    // context and operations the shared state carries for the operation question. Repeated in every option, they
+    // added 45% to a step request's bytes and 18% to its cost (#1286).
     let shown = candidates.iter().any(|c| looks.contains_key(&c.id));
     let rules = if shown { json!([rules, LOOKS_LIKE]) } else { json!(rules) };
     choice(
@@ -1835,7 +1842,7 @@ fn target_question(
 /// Ported from browser-use/jev-ultrafast (MIT), snapshot.js: name opening a field separately from typing in it so a
 /// picker is a useful click target even when its value is already filled.
 fn target_element(control: &Control, operation: Operation) -> Map<String, Value> {
-    let mut element = element(control);
+    let mut element = described(control, false);
     if operation == Operation::Press && !role_keys(&control.role).is_empty() {
         let label = element["label"].as_str().unwrap_or_default().to_string();
         let given = if control.operations.contains(&Operation::Fill) { ", or a task-supplied key," } else { "" };
@@ -2074,7 +2081,7 @@ mod tests {
     }
 
     #[test]
-    fn test_operation_and_target_choices_both_receive_control_context_and_actions() {
+    fn test_control_context_and_actions_are_sent_once_in_shared_state() {
         let carded = |i| Control {
             context: Some(format!("Card {i}")),
             shown_by: Some("clicking Booking date".into()),
@@ -2085,9 +2092,13 @@ mod tests {
         let context = StepContext::new("t");
         let targeted = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let criteria: Value = serde_json::from_str(&targeted.questions["click_target"].dump_json()).unwrap();
-        assert_eq!(criteria["criteria"]["b1"]["context"], "shown by clicking Booking date; Card 1");
+        // A target option names its element by id; its context and operations are read from the shared state, which
+        // the operation question needs them in too (#1286).
+        assert_eq!(criteria["criteria"]["b1"], json!({"id": "b1", "label": "Button 1", "role": "button"}));
+        assert_eq!(criteria["criteria"]["away"]["href"], "/away");
+        assert!(criteria["instructions"].as_str().unwrap().contains("state.elements"));
         let shown = &targeted.state["elements"][0];
-        assert_eq!(shown["context"], criteria["criteria"]["b1"]["context"]);
+        assert_eq!(shown["context"], "shown by clicking Booking date; Card 1");
         assert_eq!(shown["operations"], json!(["click"]));
         assert_eq!(targeted.state["elements"][3]["href"], "/away");
         // Grouped targets retain the same facts in shared state.

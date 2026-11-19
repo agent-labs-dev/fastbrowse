@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A step request sends each control's context and operations once, in the state every question reads. A target option names its element by id and keeps what tells it apart as a target: its label, role, address and state. Repeated in each target option as well, they made step requests 45% larger and 18% dearer ([#1286](https://github.com/agent-labs-dev/fastbrowse/issues/1286)).
+
 - A run that began on a site is told which links lead to a different site, and that it follows one only when the task asks for that link or for what that site holds. Shown only each link's address, a run checking a page on a Pages preview followed its store button to the store and ended at the store's security check ([#1137](https://github.com/agent-labs-dev/fastbrowse/issues/1137)).
 
 - A rejected answer draft is written again even after the run recovered from a stall on its way to the notes. Rewrites shared the one stall recovery, so a Books run whose draft swapped two prices, with the check naming both corrections, ended unverified without writing the answer again. Rewrites now have a budget of their own the size of `max_recoveries` ([#1176](https://github.com/agent-labs-dev/fastbrowse/issues/1176)).
