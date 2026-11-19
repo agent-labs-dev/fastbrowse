@@ -250,6 +250,7 @@ pub(super) fn read_fits(state: &Value, questions: &IndexMap<String, Question>, t
 /// `_focus`: the passages Jev should choose from, best scored first and as many as a choice can hold, or none when a
 /// window went unjudged or no candidate fits, and whether any passage went unjudged: a batch that failed, or a
 /// question too large to send.
+#[allow(clippy::too_many_arguments)]
 async fn focus<'a>(
     jev: &dyn DecisionClient,
     page: &Page<'a>,
@@ -258,6 +259,7 @@ async fn focus<'a>(
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
     trace: &Trace,
+    reached_by: Option<&str>,
 ) -> Result<(Vec<&'a Block>, Vec<Candidate>, Vec<CostLine>, bool)> {
     let capture = page.capture;
     let mut windows: Vec<Vec<&'a Block>> = Vec::new();
@@ -329,7 +331,7 @@ async fn focus<'a>(
             return false;
         }
         let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
-        let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false, None);
+        let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false, reached_by);
         candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
     };
     let (mut shown, mut high) = (0, ranked.len());
@@ -425,7 +427,7 @@ pub(crate) async fn read_page(
     // Passages Jev never judged are missing from those it chooses among, so an absent from them is not the page's.
     let mut lost = false;
     if candidates.is_empty() || !read_fits(&state, &asked, tokens) {
-        let (kept, narrowed, _, unjudged) = focus(jev, &page, task, &date, tokens, ledger, trace).await?;
+        let (kept, narrowed, _, unjudged) = focus(jev, &page, task, &date, tokens, ledger, trace, reached_by).await?;
         if narrowed.is_empty() {
             // Too many value options can hide a passage that still fits as an absent-or-synthesis question.
             if !read_fits(&state, &asked, tokens) {
@@ -620,7 +622,7 @@ mod tests {
     fn focused(captured: &Capture, tokens: &TokenBudget) -> Vec<String> {
         let page = Page::new(captured);
         let (kept, _, _, _) =
-            block_on(focus(&Scorer, &page, "Find the version", "", tokens, None, &Trace::disabled())).unwrap();
+            block_on(focus(&Scorer, &page, "Find the version", "", tokens, None, &Trace::disabled(), None)).unwrap();
         kept.iter().map(|block| block.source_id.clone()).collect()
     }
 
@@ -669,8 +671,17 @@ mod tests {
         let block = "é".repeat(FOCUS_WINDOW_CHARS as usize * 2 + 7);
         let captured = capture(&[(BlockKind::Paragraph, block.as_str())]);
         let jev = Recorder::default();
-        block_on(focus(&jev, &Page::new(&captured), "Find", "", &TokenBudget::default(), None, &Trace::disabled()))
-            .unwrap();
+        block_on(focus(
+            &jev,
+            &Page::new(&captured),
+            "Find",
+            "",
+            &TokenBudget::default(),
+            None,
+            &Trace::disabled(),
+            None,
+        ))
+        .unwrap();
         let mut asked = jev.0.into_inner().unwrap();
         asked.sort_by_key(|piece| std::cmp::Reverse(piece.chars().count()));
         let lengths: Vec<usize> = asked.iter().map(|piece| piece.chars().count()).collect();
@@ -693,6 +704,7 @@ mod tests {
             &TokenBudget::default(),
             None,
             &Trace::disabled(),
+            None,
         ))
         .unwrap();
         assert!(kept.is_empty() && candidates.is_empty() && !lost);

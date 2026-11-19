@@ -1639,15 +1639,18 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     text.value = Some("Thanks for the log".into());
     let post = in_form(button("Post"), "reply");
     let controls = [comment, top.clone(), text, post.clone()];
-    assert_eq!(crate::policy::Submitted::of(Operation::Fill, &controls[2], &controls), None, "a fill submits nothing");
-    for target in [&top, &post] {
+    let page = observation(&controls);
+    assert_eq!(crate::policy::Submitted::of(Operation::Fill, &controls[2], &page), None, "a fill submits nothing");
+    // Form ids are numbered per document: the same id on another page is another form.
+    let elsewhere = Observation { url: "https://example.test/other".into(), ..page.clone() };
+    for (target, seen) in [(&top, &page), (&post, &page), (&post, &elsewhere)] {
         state.history.push(HistoryEntry {
-            submitted: crate::policy::Submitted::of(Operation::Click, target, &controls),
+            submitted: crate::policy::Submitted::of(Operation::Click, target, seen),
             ..executed(Some(Operation::Click), Some("Post"), false)
         });
     }
     let decision = code_decision(Operation::Click, Some(post));
-    agent.gate_irreversible(&mut state, &observation(&controls), &decision).await.expect("the reply is asked for");
+    agent.gate_irreversible(&mut state, &page, &decision).await.expect("the reply is asked for");
     let asked = jev.asked.lock().unwrap();
     let actions = &asked[1].0["recent_actions"];
     assert_eq!(
@@ -1658,6 +1661,7 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
         actions[1]["form"],
         "the same form the action now asked about submits; in it, 'Comment text area' holds 'Thanks for the log'"
     );
+    assert!(actions[2]["form"].as_str().is_some_and(|form| form.starts_with("a different form")), "{actions}");
 }
 
 fn run_task() -> &'static str {

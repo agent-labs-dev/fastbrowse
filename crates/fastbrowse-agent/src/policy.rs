@@ -183,24 +183,36 @@ pub struct HistoryEntry {
 /// The form a step submitted, and what its other fields held as it went.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Submitted {
+    /// The document the form was in: form ids are numbered per document, so the same id on another page is another form.
+    document: (String, String),
     frame_id: Option<String>,
     form_id: String,
     held: Vec<String>,
 }
 
 impl Submitted {
-    /// The form `operation` on `target` submits, read from `controls`; None for a step that submits no form.
-    pub fn of(operation: Operation, target: &Control, controls: &[Control]) -> Option<Submitted> {
+    /// The form `operation` on `target` submits in `observation`; None for a step that submits no form. A field
+    /// Enter submits from is among what the form held.
+    pub fn of(operation: Operation, target: &Control, observation: &Observation) -> Option<Submitted> {
+        let form_id = target.form_id.clone().filter(|_| fastbrowse_core::safety::submits(operation, target))?;
+        let own = target
+            .value
+            .as_deref()
+            .filter(|value| !value.is_empty() && !target.sensitive && target.role != "button")
+            .map(|value| format!("{} holds {}", text::repr(&target.label), text::repr(value)));
+        let held = own.into_iter().chain(fastbrowse_core::safety::form_held(target, &observation.controls)).collect();
         Some(Submitted {
+            document: (observation.url.clone(), observation.document_key.clone()),
             frame_id: target.frame_id.clone(),
-            form_id: target.form_id.clone().filter(|_| fastbrowse_core::safety::submits(operation, target))?,
-            held: fastbrowse_core::safety::form_held(target, controls),
+            form_id,
+            held,
         })
     }
 
     /// Which form this was beside the one `target` submits, and what it held.
-    fn told(&self, target: Option<&Control>) -> String {
-        let same = target.is_some_and(|t| (&t.frame_id, t.form_id.as_ref()) == (&self.frame_id, Some(&self.form_id)));
+    fn told(&self, target: Option<&Control>, observation: &Observation) -> String {
+        let same = (&observation.url, &observation.document_key) == (&self.document.0, &self.document.1)
+            && target.is_some_and(|t| (&t.frame_id, t.form_id.as_ref()) == (&self.frame_id, Some(&self.form_id)));
         let which = match same {
             true => "the same form the action now asked about submits",
             false => "a different form from the one the action now asked about submits",
@@ -265,10 +277,10 @@ impl HistoryEntry {
     /// what that held. Shown only "click Post" with the page unchanged after the run had pressed the empty top-level
     /// Post, Jev judged a thread's reply already posted, 0.6 to 0.4, and refused it; told the Post sent another,
     /// empty form, it judged the reply asked for (#881).
-    pub fn shown_beside(&self, target: Option<&Control>) -> Value {
+    pub fn shown_beside(&self, target: Option<&Control>, observation: &Observation) -> Value {
         let mut shown = self.shown();
         if let Some(submitted) = &self.submitted {
-            shown["form"] = submitted.told(target).into();
+            shown["form"] = submitted.told(target, observation).into();
         }
         shown
     }

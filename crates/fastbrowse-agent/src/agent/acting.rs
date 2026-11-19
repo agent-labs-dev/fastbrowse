@@ -974,7 +974,7 @@ impl Agent {
             "dialog": observation.dialog.as_ref().map(Dump::dump_exclude_none),
             "tabs": observation.tabs.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
             "notes": self.decision_notes(state),
-            "recent_actions": state.history.iter().map(|entry| entry.shown_beside(target)).collect::<Vec<_>>(),
+            "recent_actions": state.history.iter().map(|entry| entry.shown_beside(target, observation)).collect::<Vec<_>>(),
         });
         self.mask_strings(&mut page);
         page["task"] = self.caller_task(state).into();

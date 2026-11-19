@@ -1259,10 +1259,12 @@ impl Agent {
             setting: setting.then_some(true),
             set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
+            // A step that dispatched nothing submitted nothing.
             submitted: decision
                 .target
                 .as_ref()
-                .and_then(|target| Submitted::of(decision.operation, target, &observation.controls)),
+                .filter(|_| act.outcome == StepOutcome::Executed)
+                .and_then(|target| Submitted::of(decision.operation, target, observation)),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {
