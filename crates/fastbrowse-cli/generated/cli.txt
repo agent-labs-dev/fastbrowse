@@ -71,7 +71,8 @@ options:
                         alone where its page and control match
   --save-recipe FILE    save the steps of a completed run as recipe JSON
   --record FILE         save a video of the run, ending on its answer (needs
-                        ffmpeg)
+                        ffmpeg); a --desktop run is filmed from its window,
+                        and --fetch, which starts no browser, cannot record
   --fetch               never start a browser: a step that needs one ends the
                         run blocked
   --browser             start a browser from the first step, rather than reading

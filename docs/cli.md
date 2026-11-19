@@ -36,7 +36,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
 | `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
-| `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
+| `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing. A `--desktop` run is filmed from its window; `--fetch` starts no browser, so it cannot be combined with `--record` |
 | `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
 | `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
@@ -240,10 +240,15 @@ that app class. `--authorize` and the step and spend ceilings work as for a brow
 popup menu's entries are controls like any other, and the run clicks the item it wants. Choosing a combo box's option
 by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. The run stays in the one
 window: a dialog the app opens as a window of its own is out of its reach. Recipes, `--start` and every browser
-option are refused. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`. Set `FASTBROWSE_DESKTOP_SHOWN=1` to act on the window
-in view instead, where deskpilot draws the run's agent cursor at each action: for recording a run on a desktop of its
-own, such as deskpilot's nested Hyprland (`scripts/nested.py` there), since it takes the view and keyboard focus of
-whatever desktop it runs on.
+option are refused. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`.
+
+`--record FILE` films the window from deskpilot's shots, which it takes of the hidden window without bringing it on
+screen: one when the app opens and one after each action settles, held until the next, so the video keeps the run's
+real timing. It captions each step, draws the cursor gliding to each click, fill, hover and choice, and ends on the
+run's answer. No frame is filmed while the window may show a resolved secret, and the video keeps its last clean
+frame. Set `FASTBROWSE_DESKTOP_SHOWN=1` to act on the window in view instead, where deskpilot draws its own agent
+cursor at each action on screen: for watching a run on a desktop of its own, such as deskpilot's nested Hyprland
+(`scripts/nested.py` there), since it takes the view and keyboard focus of whatever desktop it runs on.
 
 ## Models
 
