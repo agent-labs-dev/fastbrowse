@@ -545,17 +545,6 @@ impl CursorFeedback {
         tasks.pending = Some((abort, done.shared()));
     }
 
-    /// Squeeze and ring (or let go of) deskpilot's agent cursor where it is, called exactly where a CDP mouse press (or
-    /// release) is sent. Visual only: deskpilot sends no input. Waits for the glide to land first, and a failure
-    /// is dropped, since feedback never changes what the action does.
-    pub async fn press(&self, down: bool) {
-        if !self.inner.deskpilot || self.inner.disabled.load(Ordering::SeqCst) {
-            return;
-        }
-        self.settled().await;
-        let _ = self.inner.driver.tool("cursor_press", json!({"down": down})).await;
-    }
-
     /// End the session and stop the driver. It runs on its own task, so it completes even when the caller's
     /// future is dropped (Python shields it); it must be polled once for that task to start.
     pub async fn close(&self) {
@@ -1096,7 +1085,7 @@ import json, os, sys
 log = open(LOG, "a")
 open(LOG + ".agent", "w").write(json.dumps(os.environ.get("DESKPILOT_AGENT")))
 windows = json.loads(WINDOWS)
-tools = ["windows", "move", "cursor_press", "focus", "shot", "click"]
+tools = ["windows", "move", "focus", "shot", "click"]
 if mode == "old":
     tools.remove("move")
 for line in sys.stdin:
@@ -1490,21 +1479,6 @@ log.flush()
         assert_eq!(moves, [json!({"window": "0xa", "x": 10.0, "y": 107.0})]);
         let names: Vec<_> = entries.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(names, ["windows", "move", "stdin_closed"]);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_press_is_shown_after_the_glide_lands_and_sends_no_input() {
-        let fake = Fake::deskpilot("ok", vec![raw_hypr(&hypr("0xa", 5, 1481.0, 900.0, true))]);
-        let feedback = fake.open().await.unwrap();
-        feedback.follow(fixed(Some(WAYLAND)), (10.0, 20.0));
-        feedback.press(true).await;
-        feedback.press(false).await;
-        feedback.close().await;
-        let names: Vec<_> = fake.calls();
-        assert_eq!(names, ["windows", "move", "cursor_press", "cursor_press", "stdin_closed"]);
-        let downs: Vec<_> =
-            fake.entries().into_iter().filter(|(name, _)| name == "cursor_press").map(|(_, a)| a).collect();
-        assert_eq!(downs, [json!({"down": true}), json!({"down": false})]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
