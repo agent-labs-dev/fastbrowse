@@ -157,7 +157,8 @@ jobs:
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           # Claude Opus never judges: it costs many times our chosen judge, so a run that needs a comparison judges
           # every arm, ours and other products', with the panel in PARALLAX_JUDGE_MODELS instead.
-          case ",$PARALLAX_JUDGE_MODELS," in
+          # Parallax trims each model of the panel, so spaces around a comma must not hide one.
+          case ",${PARALLAX_JUDGE_MODELS//[[:space:]]/}," in
             *,anthropic/claude-opus*) echo "::error::Claude Opus is not allowed as a judge: $PARALLAX_JUDGE_MODELS"; exit 1 ;;
           esac
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"

@@ -282,11 +282,13 @@ def test_campaign_checks_raw_payload_concurrency_before_defaulting(value: Any, p
         ("openai/gpt-6.1-terra,deepseek/deepseek-v4.1-flash-1017", True),
         ("anthropic/claude-opus-5.5", False),
         ("deepseek/deepseek-v4.1-flash-1017,anthropic/claude-opus-5.5", False),
+        ("deepseek/deepseek-v4.1-flash-1017, anthropic/claude-opus-5.5", False),
+        ("deepseek/deepseek-v4.1-flash-1017 , openai/gpt-6.1-terra", True),
     ],
 )
 def test_a_campaign_refuses_claude_opus_as_a_judge(workflow: str, models: str, passes: bool) -> None:
     text = Path(f".github/workflows/{workflow}.yml").read_text()
-    start = text.index('case ",$PARALLAX_JUDGE_MODELS," in')
+    start = text.index('case ",${PARALLAX_JUDGE_MODELS//[[:space:]]/}," in')
     check = text[start : text.index("esac\n", start) + 5]
     env = {**os.environ, "PARALLAX_JUDGE_MODELS": models}
     assert (subprocess.run(["bash", "-c", check], env=env, capture_output=True).returncode == 0) is passes
