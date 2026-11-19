@@ -700,10 +700,12 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
             None => seconds(mark),
         })
         .collect();
+    // `\an7` puts a drawing's own origin at the position; `\an5` would put the middle of the extent from the origin
+    // there, which moves a shape drawn about its origin by half its size.
     let mut dialogue = |layer: u8, start: f64, end: f64, tags: String, shape: String| {
         if end > start {
             out.push_str(&format!(
-                "Dialogue: {layer},{},{},Default,,0,0,0,,{{{tags}\\an5\\p1}}{shape}{{\\p0}}\n",
+                "Dialogue: {layer},{},{},Default,,0,0,0,,{{{tags}\\an7\\p1}}{shape}{{\\p0}}\n",
                 ass_time(start),
                 ass_time(end)
             ));
@@ -905,6 +907,28 @@ mod tests {
         assert!(discs.iter().all(|line| line.contains("\\pos(100.0,10.0)") && line.contains("\\bord0")));
         assert!(discs[0].starts_with("Dialogue: 1,0:00:01.00,0:00:01.02") && discs[0].contains("\\alpha&HB3&"));
         assert!(discs[18].contains("\\alpha&HFB&"));
+    }
+
+    #[test]
+    fn shapes_are_drawn_about_the_press_point() {
+        let origin = Instant::now();
+        let marks = [mark(origin, Operation::Fill, true, 1, 100.0)];
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
+        // Every event anchors its drawing's origin at the position, and the disc and the brackets are symmetric about it.
+        for line in ass.lines().filter(|line| line.starts_with("Dialogue")) {
+            assert!(line.contains("\\an7\\p1}"), "{line}");
+        }
+        for line in lines(&ass, 1).into_iter().chain(lines(&ass, 2)) {
+            let shape = line.split("\\p1}").nth(1).unwrap().split("{\\p0}").next().unwrap();
+            let numbers = shape.split_whitespace().filter_map(|word| word.parse::<f64>().ok());
+            let (mut x, mut y, mut index) = ((f64::MAX, f64::MIN), (f64::MAX, f64::MIN), 0);
+            for value in numbers {
+                let axis = if index % 2 == 0 { &mut x } else { &mut y };
+                *axis = (axis.0.min(value), axis.1.max(value));
+                index += 1;
+            }
+            assert!((x.0 + x.1).abs() < 0.1 && (y.0 + y.1).abs() < 0.1, "{line}");
+        }
     }
 
     #[test]
