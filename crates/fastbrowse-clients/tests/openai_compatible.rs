@@ -421,7 +421,7 @@ async fn test_missing_field_cost_recovers_matching_provider_receipt() {
     let llm = client(http, OPENROUTER, LLMPurpose::Start, "writer");
     let result = generate(&llm, LLMPurpose::Start, &[], Some(&ledger)).await.unwrap();
     ledger.record([result.cost.clone()]).unwrap();
-    assert_eq!(seen.lock().unwrap()[1], "https://openrouter.ai/api/v1/generation?id=generation-1");
+    assert_eq!(seen.lock().unwrap().last().unwrap(), "https://openrouter.ai/api/v1/generation?id=generation-1");
     assert_eq!((result.cost.dollars, result.cost.basis), (Some(0.001), CostBasis::Metered));
     assert_eq!(result.cost.input_tokens, 7);
 }
@@ -446,15 +446,43 @@ async fn test_untrusted_or_missing_receipt_keeps_spend_guard() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_cancelled_receipt_lookup_retains_unknown_generation_charge() {
-    let script = Script::new([reply(200, without_cost("generation-1")), Step::Cancel]);
-    let ledger = capped(Some(0.25));
-    let llm = client(script.http(), OPENROUTER, LLMPurpose::Start, "writer");
-    assert!(cancelled(generate(&llm, LLMPurpose::Start, &[], Some(&ledger)), &script.cancel).await);
-    let lines = ledger.state().lines.clone();
-    assert_eq!(lines.len(), 1);
-    assert_eq!((lines[0].basis, lines[0].input_tokens), (CostBasis::Unknown, 7));
-    assert!(ledger.check(0.0).unwrap_err().to_string().contains("cannot be enforced"));
+async fn test_cancelled_receipt_lookup_bounds_the_generation_charge_from_the_listing_read_before_it() {
+    // A capped call reads its model's listing before it sends, so a receipt lookup dropped after the answer is bounded;
+    // with no ceiling listed the charge stays unknown and the cap refuses to go on.
+    for (listing, basis) in
+        [(endpoints(), CostBasis::Bounded), (json!({"data": {"endpoints": []}}), CostBasis::Unknown)]
+    {
+        let script = Script::new([reply(200, listing), reply(200, without_cost("generation-1")), Step::Cancel]);
+        let ledger = capped(Some(0.25));
+        let llm = client(script.http(), OPENROUTER, LLMPurpose::Start, "writer");
+        assert!(cancelled(generate(&llm, LLMPurpose::Start, &[], Some(&ledger)), &script.cancel).await);
+        assert!(script.requests()[0].url.ends_with("/models/writer/endpoints"));
+        let lines = ledger.state().lines.clone();
+        assert_eq!(lines.len(), 1);
+        assert_eq!((lines[0].basis, lines[0].input_tokens), (basis, 7));
+        assert_eq!(ledger.check(0.0).is_err(), basis == CostBasis::Unknown);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_capped_first_call_dropped_in_flight_is_bounded_so_the_run_can_go_on() {
+    // A capped run's first call to a model, dropped before any listing had been read, was charged as unknown and the
+    // run stopped with "cannot be enforced" (#1291). An uncapped call reads no listing before it sends.
+    let (listing, sent) = (format!("{OPENROUTER}/models/writer/endpoints"), format!("{OPENROUTER}/chat/completions"));
+    for (max_dollars, steps, urls, basis) in [
+        (Some(28.0), vec![reply(200, endpoints()), Step::Cancel], vec![listing, sent.clone()], CostBasis::Bounded),
+        (None, vec![Step::Cancel], vec![sent], CostBasis::Unknown),
+    ] {
+        let script = Script::new(steps);
+        let ledger = capped(max_dollars);
+        let llm = client(script.http(), OPENROUTER, LLMPurpose::Start, "writer");
+        assert!(cancelled(generate(&llm, LLMPurpose::Start, &[], Some(&ledger)), &script.cancel).await);
+        assert_eq!(script.requests().iter().map(|request| request.url.clone()).collect::<Vec<_>>(), urls);
+        let lines = ledger.state().lines.clone();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].basis, basis);
+        ledger.check(0.0).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -767,8 +795,9 @@ async fn test_a_price_with_no_ceiling_keeps_the_spend_guard() {
         let error = generate(&llm, LLMPurpose::Start, &[], Some(&ledger)).await.unwrap_err();
         assert!(matches!(error, LLMError::Budget(_)) && error.to_string().contains("cannot be enforced"), "{error}");
         assert!(ledger.breakdown().has_unknown());
-        // No ceiling is cached from a price that cannot hold one, so each unanswered request asks again.
-        assert_eq!(lookups.load(Ordering::SeqCst), 6);
+        // No ceiling is cached from a price that cannot hold one, so the capped call's read before it sends and each
+        // unanswered request ask again.
+        assert_eq!(lookups.load(Ordering::SeqCst), 7);
     }
 }
 

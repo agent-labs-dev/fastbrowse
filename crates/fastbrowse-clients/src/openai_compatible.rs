@@ -516,14 +516,15 @@ impl Drop for Billing<'_> {
             return;
         }
         if let Some(usage) = self.in_flight.take() {
-            let offset = self.charge_unanswered(&usage);
-            // Drop cannot wait on a price lookup, so only a ceiling already read bounds what was dropped.
-            let cached = self.llm.cached_ceiling(&self.model);
-            if let Some(ceiling) = cached {
-                for line in &mut self.costs[offset..] {
-                    if line.dollars.is_none() {
-                        *line = bound(line.clone(), ceiling, self.sent.as_ref().unwrap_or(&Map::new()));
-                    }
+            self.charge_unanswered(&usage);
+        }
+        // Drop cannot wait on a price lookup, so only a ceiling already read bounds what was dropped: a capped call reads
+        // it before it sends. Every unpriced line is bounded, the answered one whose receipt lookup was dropped too. The
+        // body last sent holds every earlier attempt's prompt, so it bounds theirs as well.
+        if let Some(ceiling) = self.llm.cached_ceiling(&self.model) {
+            for line in &mut self.costs {
+                if line.dollars.is_none() {
+                    *line = bound(line.clone(), ceiling, self.sent.as_ref().unwrap_or(&Map::new()));
                 }
             }
         }
@@ -831,6 +832,12 @@ impl OpenAICompatibleLLM {
         ledger: Option<&Ledger>,
         model: &str,
     ) -> Result<Generation<Value>, LLMError> {
+        if ledger.is_some_and(|ledger| ledger.limits.max_dollars.is_some()) {
+            // A call dropped in flight is bounded only by a ceiling already read, since Drop cannot wait on a lookup.
+            // Unbounded, it stopped a capped run whose first call to a model was cancelled before any listing was read
+            // (#1291). The listing is read once per model, before anything is sent.
+            self.listed_ceiling(model).await;
+        }
         let mut billing = Billing {
             llm: self,
             ledger,
