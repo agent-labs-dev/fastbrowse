@@ -1288,6 +1288,7 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
                     "requested" => self.requested,
                     "lasting" => self.lasting,
                     "conditional" => 0.0,
+                    // A drafted answer states what the task asks, so a run that reads one can finish.
                     "coverage" | "exact" => 1.0,
                     "edits" => {
                         self.edits_asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -3325,6 +3326,27 @@ async fn an_absent_read_marks_the_page_at_once() {
     assert_eq!(Agent::reads_before_leaving(&state, &seen, &code_decision(Operation::Click, None)), None);
 }
 
+/// On example.com, asked for the title of the page "Learn more" opens, the step judged the start page to show a fact the
+/// task needs, the link to follow, so its read was not offered absent and, made to pick, took "Learn more" as the title
+/// (#1174). The read says instead that the page holds a fact for the steps and nothing that answers the task: the page
+/// is read and its text kept in the notes the steps see, answering nothing.
+#[tokio::test]
+async fn a_page_holding_only_a_fact_for_the_steps_is_read_as_no_answer() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "steps")])), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let start = read_document();
+    let page = capture(&[
+        (BlockKind::Paragraph, "This domain is for use in documentation examples."),
+        (BlockKind::Paragraph, "Learn more"),
+    ]);
+    assert!(agent.read(&mut state, page, &start, true).await.unwrap(), "the page's text is new evidence");
+    assert!(Agent::page_read(&state, &start), "the read finished");
+    assert!(!state.notes.answered());
+    assert!(!state.compose, "nothing is written from a page that answers nothing");
+    assert!(state.notes.facts().iter().any(|fact| fact.text == "Learn more"), "the steps still see the link");
+    assert_eq!(state.read_note(), "Read this content. The notes hold nothing that answers the task.");
+}
+
 #[tokio::test]
 async fn a_finished_read_resets_the_retry() {
     let mut agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
@@ -4248,6 +4270,23 @@ async fn test_text_and_image_cannot_finish_without_text_evidence() {
     assert!(
         matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Unverified && stop.error.as_deref().is_some_and(|error| error.contains("Nothing read so far answers")))
     );
+}
+
+/// A read that kept only a fact for the steps leaves notes that answer nothing, so DONE there is a step short of the
+/// answer, as DONE on nothing read is: a run ended complete with no answer on the page it was told to leave (#1174).
+#[tokio::test]
+async fn test_done_on_notes_that_answer_nothing_is_not_finished() {
+    let page = Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false, false);
+    let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let seen = observation(&[]);
+    let reader = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "steps")])), Arc::new(ScriptedLLM));
+    let start = capture(&[(BlockKind::Paragraph, "Learn more")]);
+    reader.read(&mut state, start, &seen, true).await.unwrap();
+    assert!(!state.notes.facts().is_empty() && !state.notes.answered());
+    let result = agent.finish(&mut state, &seen, None, None).await;
+    assert!(matches!(result, Ok(None)), "the run goes on: {result:?}");
 }
 
 /// A hover only shows what is under the pointer, as a scroll shows what is below: a gallery run that hovered an image

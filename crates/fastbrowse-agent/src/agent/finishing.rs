@@ -118,9 +118,12 @@ impl Agent {
         {
             return self.open_unread_page(state, observation, next).await;
         }
-        // DONE on nothing read, when the task wants to be told something, is a step short of the answer.
+        // DONE on nothing that answers, when the task wants to be told something, is a step short of the answer. Notes
+        // can hold facts that answer nothing, such as the link a page offered the steps, and no answer is drafted from
+        // them: DONE there ended a run complete with no answer (#1174).
         if output_schema.is_none()
-            && state.notes.facts().is_empty()
+            && !state.notes.answered()
+            && !state.compose
             && matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage)
         {
             self.recover(state, observation, UNANSWERED, Status::Unverified, Some((Operation::Done, None))).await?;
