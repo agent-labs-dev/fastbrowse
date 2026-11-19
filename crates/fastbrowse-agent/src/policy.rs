@@ -13,7 +13,7 @@ use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
     Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images,
-    JEV_REQUEST_BYTES, NoulQuestion, Question, asset_bytes, referenced,
+    JEV_REQUEST_BYTES, NoulQuestion, Question, asset_bytes, jev_image_tokens, referenced,
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::keys::role_keys;
@@ -670,6 +670,13 @@ pub async fn decide(
             continue;
         }
         if fits(&request, config) {
+            // Jev counts every picture's tokens, for each place it is used, on top of the text: a step whose text fits
+            // but whose pictures do not was sent anyway and refused with `max_tokens_exceeded` (#1303). The oldest
+            // card goes first, as for the body limit, until the first request sent fits.
+            if !pictures_fit(&request, config) {
+                drop_a_picture(context.to_mut());
+                continue;
+            }
             match evaluate(jev, &request, &controls, reduction, ledger).await {
                 Ok(mut decision) => {
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
@@ -1363,9 +1370,26 @@ pub fn build_request(
 /// slower and less accurate. An image puts a request there too. Questions asked ahead save a round trip only below it.
 const LONG_CONTEXT_BYTES: usize = 32_000;
 
+/// Whether the request's text fits Jev's input limit; its pictures are counted by `pictures_fit`.
 pub fn fits(request: &Request, config: &Config) -> bool {
+    room(request, config) >= 0
+}
+
+/// Whether the request fits Jev's input limit with the tokens of every picture it refers to, once for each use.
+fn pictures_fit(request: &Request, config: &Config) -> bool {
+    let written = format!("{}{}", request.state, serde_json::to_string(&request.questions).unwrap_or_default());
+    let tokens: i64 = request
+        .images
+        .iter()
+        .map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png))
+        .sum();
+    room(request, config) >= config.tokens.decision_chars_of(tokens)
+}
+
+/// The characters of Jev's input limit the request's state leaves unused beside its questions.
+fn room(request: &Request, config: &Config) -> i64 {
     let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-    text::len(&dumps(&request.state)) as i64 <= config.tokens.input_chars(&written)
+    config.tokens.input_chars(&written) - text::len(&dumps(&request.state)) as i64
 }
 
 /// The bytes the request's body takes as the Jev client sends it: its state and questions as JSON, and each picture
@@ -2633,6 +2657,81 @@ mod tests {
         let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!(*jev.pictures.lock().unwrap(), vec![4, 1]);
         assert_eq!(decision.reduction, Reduction::None, "no text or control was cut for the pictures");
+    }
+
+    /// Refuses as too large a request past Jev's 32,000 tokens for its state and largest question as Jev counts them:
+    /// its text at 1.5 characters a token and each picture at its measured count for every place it is used.
+    struct Counting {
+        inner: Fake,
+        refused: Mutex<usize>,
+    }
+
+    impl DecisionClient for Counting {
+        fn profile(&self) -> DecisionProfile {
+            self.inner.profile()
+        }
+
+        fn evaluate_images<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+            images: &'a Images,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            let written = format!("{state}{}", serde_json::to_string(questions).unwrap());
+            let pictures: i64 = images
+                .iter()
+                .map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png))
+                .sum();
+            let largest = questions.values().map(|question| text::len(&question.dump_json())).max().unwrap_or(0);
+            let text = (text::len(&dumps(state)) + largest) as f64 / fastbrowse_core::config::JSON_CHARS_PER_TOKEN;
+            if text as i64 + pictures > 32_000 {
+                *self.refused.lock().unwrap() += 1;
+                return Box::pin(async { Err(DecisionError::InputTooLarge("max_tokens_exceeded".into())) });
+            }
+            self.inner.evaluate(state, questions)
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            self.inner.evaluate(state, questions)
+        }
+    }
+
+    /// Eight viewport-sized cards are about 29,000 tokens as Jev counts them, under the body limit in bytes but past
+    /// its input limit beside a page's text: the oldest are left out before the first request is sent, so Jev is never
+    /// sent one it refuses (#1303).
+    #[test]
+    fn test_a_step_whose_cards_overrun_jevs_input_limit_leaves_out_the_oldest_before_asking() {
+        let jev = Counting { inner: fake(&[("operation", "click")], ""), refused: Mutex::new(0) };
+        let mut context = StepContext::new("press button 1");
+        context.history = (0..8u8)
+            .map(|i| {
+                let mut card = Vec::new();
+                image::RgbaImage::from_pixel(1568, 882, image::Rgba([i, 0, 0, 255]))
+                    .write_to(&mut std::io::Cursor::new(&mut card), image::ImageFormat::Png)
+                    .unwrap();
+                let mut entry = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, false);
+                entry.look = Some(Look { before: card, after: None });
+                entry
+            })
+            .collect();
+        let mut page = observation((0..3).map(button).collect());
+        page.viewport_text = "Plain page text. ".repeat(1200);
+        block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
+        assert_eq!(*jev.refused.lock().unwrap(), 0, "a request Jev counts past its limit was sent");
+        let states = jev.inner.states.lock().unwrap();
+        let carded: Vec<bool> = states[0]["recent_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.get("looks_like").is_some())
+            .collect();
+        let kept = carded.iter().filter(|carded| **carded).count();
+        assert!((1..8).contains(&kept), "{carded:?}");
+        assert!(carded[8 - kept..].iter().all(|carded| *carded), "the newest cards are kept: {carded:?}");
     }
 
     /// A request no larger than Jev's documented limit in tokens, at 1.5 characters a token.
