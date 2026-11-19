@@ -375,6 +375,9 @@ pub(crate) struct PageState {
     /// `<shape>|<slot>|<frame>` -> the read last kept for that frame. A frame answers "unchanged" only about the
     /// read it kept, so this is what such an answer is served from.
     pub(crate) kept: HashMap<String, Arc<KeptRead>>,
+    /// The frame session whose new-tab link a background run's click held when a dialog the click opened blocked
+    /// reading it back. The dialog step reads it once the dialog is answered.
+    pub(crate) held_link: Option<String>,
 }
 
 pub struct CdpPage {

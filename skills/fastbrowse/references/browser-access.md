@@ -44,6 +44,11 @@ switching to another browser. With the extension in more than one browser, the e
 the one the user chooses with `--extension-browser LABEL`. A run the user stops in the browser ends `cancelled`:
 report that it was stopped and do not retry it.
 
+A run works behind the window's current tab and opens a link's new tab there too. A tab the page opens by
+script, from a `javascript:` link or into a form's submission makes Chrome activate its window, as do `--foreground`
+and `--cursor`. If the user reports Chrome taking their keyboard focus on Hyprland, point them to
+`misc:focus_on_activate = false`; do not change their desktop settings for them.
+
 `--attach` drives a window the user has open instead of a tab of its own; `--target-match TEXT` selects a window
 by title or URL and implies attach. The window stays open after the run, but actions can change it. Treat
 cookies and other browser state as belonging to the user.
