@@ -150,8 +150,9 @@ pub fn frames_for_extension(message: &str, chunk_id: u64) -> Vec<String> {
 struct HostScan {
     /// Every browser whose extension is connected to a running host, by label.
     connected: Vec<(PathBuf, HostRecord)>,
-    /// Why a record or the directory could not be read or reached from this process, other than its host being gone.
-    unreachable: Vec<String>,
+    /// Why the directory, or a record's host, could not be read or reached from this process, other than its host
+    /// being gone. A record's entry keeps it, so a run that names that browser is told why it cannot use it.
+    unreachable: Vec<(Option<HostRecord>, String)>,
 }
 
 /// Every browser whose extension is connected to a running host, read from the records in `dir`.
@@ -161,7 +162,7 @@ fn connected_hosts(dir: &Path) -> HostScan {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return scan,
         Err(error) => {
-            scan.unreachable.push(format!("cannot read {}: {error}", dir.display()));
+            scan.unreachable.push((None, format!("cannot read {}: {error}", dir.display())));
             return scan;
         }
     };
@@ -178,7 +179,10 @@ fn connected_hosts(dir: &Path) -> HostScan {
         match host_listening(&record) {
             Ok(true) => scan.connected.push((path, record)),
             Ok(false) => {}
-            Err(error) => scan.unreachable.push(format!("cannot connect to {}: {error}", record.socket.display())),
+            Err(error) => {
+                let why = format!("cannot connect to {}: {error}", record.socket.display());
+                scan.unreachable.push((Some(record), why));
+            }
         }
     }
     scan.connected.sort_by(|a, b| a.1.label.cmp(&b.1.label));
@@ -216,14 +220,20 @@ pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecor
     let names = |hosts: &[(PathBuf, HostRecord)]| {
         hosts.iter().map(|(_, r)| format!("{} ({} {})", r.label, r.browser, r.version)).collect::<Vec<_>>().join(", ")
     };
-    if hosts.is_empty() && !unreachable.is_empty() {
-        // A sandbox that hides the directory or refuses the socket is not fixed by reinstalling the extension.
-        return Err(BrowserError::Unavailable(format!(
+    let matches = |r: &HostRecord, wanted: &str| {
+        [&r.label, &r.browser_id, &r.browser].iter().any(|name| name.eq_ignore_ascii_case(wanted))
+    };
+    // A sandbox that hides the directory or refuses the socket is not fixed by reinstalling the extension.
+    let refused = |reasons: Vec<&str>| {
+        BrowserError::Unavailable(format!(
             "no browser's fastbrowse extension can be reached from this process ({}). A sandbox around this \
              process must let it read {} and connect to the sockets in it, or the run needs that sandbox off",
-            unreachable.join("; "),
+            reasons.join("; "),
             dir.display()
-        )));
+        ))
+    };
+    if hosts.is_empty() && !unreachable.is_empty() {
+        return Err(refused(unreachable.iter().map(|(_, why)| why.as_str()).collect()));
     }
     if hosts.is_empty() {
         // Naming the directory shows a run and a host that disagree on it, which a reinstall does not fix.
@@ -235,12 +245,16 @@ pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecor
     }
     match wanted {
         Some(wanted) => {
-            let matches = |r: &HostRecord| {
-                [&r.label, &r.browser_id, &r.browser].iter().any(|name| name.eq_ignore_ascii_case(wanted))
-            };
-            let mut found: Vec<_> = hosts.iter().filter(|(_, r)| matches(r)).cloned().collect();
+            let mut found: Vec<_> = hosts.iter().filter(|(_, r)| matches(r, wanted)).cloned().collect();
+            let blocked: Vec<&str> = unreachable
+                .iter()
+                .filter(|(record, _)| record.as_ref().is_some_and(|r| matches(r, wanted)))
+                .map(|(_, why)| why.as_str())
+                .collect();
             match found.len() {
                 1 => Ok(found.remove(0)),
+                // The named browser is connected but this process may not reach it, while another browser it can.
+                0 if !blocked.is_empty() => Err(refused(blocked)),
                 0 => Err(BrowserError::Failed(format!(
                     "no connected browser is named {wanted:?}; connected: {}",
                     names(&hosts)
@@ -401,6 +415,26 @@ mod tests {
         let _chromium = write_record(&dir, "Chromium", u32::MAX - 1, true);
         assert_eq!(pick_host(&dir, Some("Chromium")).unwrap().1.label, "Chromium");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A named browser whose socket this process may not open is reported as refused, even while another browser
+    /// is reachable: a socket without write permission refuses the connection as a sandbox does.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_browser_this_process_cannot_reach_is_reported_as_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("fbx-refused-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _home = write_record(&dir, "Home", std::process::id(), true);
+        let _work = write_record(&dir, "Work", std::process::id(), true);
+        let socket = dir.join("idWork.sock");
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let error = pick_host(&dir, Some("Work")).unwrap_err();
+        assert_eq!(pick_host(&dir, None).unwrap().1.label, "Home");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(error.is_unavailable(), "{error}");
+        let error = error.to_string();
+        assert!(error.contains(&format!("cannot connect to {}", socket.display())), "{error}");
     }
 
     /// A directory this process may not read is named with why, not reported as a browser with no extension.
