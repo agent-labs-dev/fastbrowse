@@ -309,6 +309,20 @@ impl Notes {
         notes
     }
 
+    /// Record one read: its capture, taken once `steps_taken` of the run's steps that could change the site were taken,
+    /// and the facts read from it. A trace's `read` events carry all three, so a run's notes rebuild from its trace.
+    pub fn record(&mut self, capture: &Capture, steps_taken: usize, facts: Vec<Fact>) {
+        let added = !facts.is_empty();
+        self.remember_capture(capture, steps_taken);
+        for fact in facts {
+            self.add(fact);
+        }
+        // An absent read must not mistake a stored quote from a revisited capture for fresh evidence.
+        if added {
+            self.supersede(&capture.url, &capture.sha256, &capture.text);
+        }
+    }
+
     /// Remember a capture read once `steps_taken` of the run's steps that could change the site were taken.
     #[doc(hidden)]
     pub fn remember_capture(&mut self, capture: &Capture, steps_taken: usize) {

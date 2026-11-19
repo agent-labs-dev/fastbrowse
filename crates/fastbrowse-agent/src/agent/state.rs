@@ -517,13 +517,11 @@ impl RunState {
 
     /// What one read leaves in the notes: its facts, the page kept whole when one fact was picked from it, and the
     /// earlier reads of that address it supersedes.
-    pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) {
+    /// Record a read in the notes, returning the steps that could change the site taken before it.
+    pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) -> usize {
         let added = facts.len();
         let steps_taken = self.history.iter().filter(|entry| entry.changed_site()).count();
-        self.notes.remember_capture(capture, steps_taken);
-        for fact in facts {
-            self.notes.add(fact);
-        }
+        self.notes.record(capture, steps_taken, facts);
         // A fragment names a view of the same page: an earlier view kept whole would come back as current notes when
         // composing, beside the read that superseded it.
         let page = address(&capture.url);
@@ -531,10 +529,7 @@ impl RunState {
         if !compose && added > 0 {
             self.read_whole.push(capture.clone());
         }
-        // An absent read must not mistake a stored quote from a revisited capture for fresh evidence.
-        if added > 0 {
-            self.notes.supersede(&capture.url, &capture.sha256, &capture.text);
-        }
+        steps_taken
     }
 
     /// The notes with the pages read for one fact whole. A task over some pages of a list leaves out what was read on

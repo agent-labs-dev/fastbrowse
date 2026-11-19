@@ -3122,6 +3122,28 @@ async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_st
 }
 
 #[tokio::test]
+async fn a_reads_trace_event_rebuilds_the_notes_it_made() {
+    let field = "Capacity: 12";
+    let trace = Trace::collecting();
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM))
+        .with_trace(trace.clone());
+    let mut state = run_state();
+    let page = capture(&[(BlockKind::Heading, "Venue"), (BlockKind::Paragraph, field)]);
+    assert!(agent.read(&mut state, page.clone(), &observation(&[]), true).await.expect("new evidence"));
+
+    let events = trace.events();
+    let read = events.iter().find(|event| event["event"] == "read").expect("a read event");
+    let recorded: Capture = serde_json::from_value(read["capture"].clone()).expect("the typed capture");
+    assert_eq!(recorded, page);
+    let facts: Vec<Fact> = serde_json::from_value(read["facts"].clone()).expect("the facts with their evidence");
+    assert!(!facts.is_empty());
+    let mut rebuilt = crate::memory::Notes::default();
+    rebuilt.record(&recorded, read["steps_taken"].as_u64().unwrap() as usize, facts);
+    assert_eq!(rebuilt.facts(), state.notes.facts());
+    assert_eq!(rebuilt.render(100_000, false, true).unwrap(), state.notes.render(100_000, false, true).unwrap());
+}
+
+#[tokio::test]
 async fn an_absent_revisit_does_not_use_old_context_as_fresh_evidence() {
     let mut agent = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "synthesis")])), Arc::new(ScriptedLLM));
     let mut state = run_state();

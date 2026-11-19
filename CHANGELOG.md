@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A trace's `read` event carries the typed capture it read, with its blocks and their sources, and each fact read from it with its evidence, so a run's notes rebuild from its trace. It held only the page text, so a composition could not be replayed faithfully from a trajectory: identical text in two tables could not say which block a fact came from ([#1273](https://github.com/agent-labs-dev/fastbrowse/issues/1273)).
+
 - A step request sends each control's context and operations once, in the state every question reads. A target option names its element by id and keeps what tells it apart as a target: its label, role, address and state. Repeated in each target option as well, they made step requests 45% larger and 18% dearer ([#1286](https://github.com/agent-labs-dev/fastbrowse/issues/1286)).
 
 - A run that began on a site is told which links lead to a different site, and that it follows one only when the task asks for that link or for what that site holds. Shown only each link's address, a run checking a page on a Pages preview followed its store button to the store and ended at the store's security check ([#1137](https://github.com/agent-labs-dev/fastbrowse/issues/1137)).
