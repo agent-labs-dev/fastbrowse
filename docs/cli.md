@@ -21,7 +21,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--extension-browser LABEL` | with the extension connected in more than one browser, use the one its popup labels `LABEL` |
 | `--cloud` | run in a Browser Use Cloud browser instead, which needs `BROWSER_USE_API_KEY` |
 | `--cloud-profile ID` | with `--cloud`, run on a signed-in Browser Use Cloud profile |
-| `--fetch` | read pages over HTTP with no browser, for a task that only reads |
+| `--fetch` | read pages over HTTP with no browser, for a task that only reads; without `--start`, a first page it cannot read, such as one scripts build, is replaced by another page proposed knowing why, and the run ends `blocked` only when no readable page is known |
 | `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); repeat it for each app to start in one run; see [Desktop apps](#desktop-apps) |
 | `--browser` | start a cloud browser from the first step, rather than reading over HTTP until the task needs one; extension runs already start in Chrome |
 | `--viewport WIDTHxHEIGHT` | with `--cloud`, the screen size requested from the cloud Chrome; does not emulate mobile, touch, device scale or user agent. Refused without `--cloud` |
