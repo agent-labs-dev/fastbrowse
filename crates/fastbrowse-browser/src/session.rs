@@ -319,6 +319,9 @@ pub(crate) struct State {
     pub(crate) active_target_id: String,
     /// Set while the page may show a secret: frames are still acked, so the cast keeps pace, but not delivered.
     pub(crate) frames_withheld: bool,
+    /// Set once a secret has been typed, and never cleared: a page can echo it as pixels no reading of its text
+    /// shows, and between one reading and the next frames arrive that nothing has checked.
+    pub(crate) frames_sealed: bool,
     pub(crate) screencast_session_id: Option<String>,
     pub(crate) pending_frame: Option<Frame>,
     pub(crate) frame_scheduled: bool,
@@ -670,11 +673,17 @@ impl BrowserSession {
 
     /// Always true in a scoped run, which delivers and records no frames at all.
     pub fn frames_withheld(&self) -> bool {
-        self.0.state.lock().unwrap().frames_withheld || self.0.grant.is_some()
+        let state = self.0.state.lock().unwrap();
+        state.frames_withheld || state.frames_sealed || self.0.grant.is_some()
     }
 
     pub fn set_frames_withheld(&self, withheld: bool) {
         self.0.state.lock().unwrap().frames_withheld = withheld;
+    }
+
+    /// Withhold every later frame of this session: a secret is being typed.
+    pub fn seal_frames(&self) {
+        self.0.state.lock().unwrap().frames_sealed = true;
     }
 
     pub fn grant(&self) -> Option<&OriginGrant> {
@@ -2302,7 +2311,7 @@ pub(crate) async fn deliver_frames(shared: &Arc<Shared>) {
             }
             let Some(frame) = state.pending_frame.take() else { break };
             let active = state.active_session_id().ok();
-            let withheld = state.frames_withheld || shared.grant.is_some();
+            let withheld = state.frames_withheld || state.frames_sealed || shared.grant.is_some();
             let deliver = shared.on_frame.is_some() && !withheld && active.is_some() && frame.session_id == active;
             (frame, deliver)
         };

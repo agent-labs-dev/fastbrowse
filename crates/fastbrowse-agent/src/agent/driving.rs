@@ -1017,6 +1017,7 @@ impl Agent {
             if action.secret {
                 // Held from the keystrokes on: a page may mirror the value, and only the next reading shows it.
                 self.page.withhold_frames(true);
+                self.seen().secret_typed = true;
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
             // Judged once per document, on its first step, for every click on its surface after it: a map's second pin
@@ -1827,11 +1828,15 @@ impl Agent {
         self.record_step(state, step, true, None).await
     }
 
-    /// A PNG of the page as it is now, or None while a resolved secret is showing on it.
+    /// A PNG of the page as it is now, or None once a secret has been typed or while one is showing on it.
     ///
     /// The check is made against a fresh reading of the page rather than the last observation, which was taken before
     /// the action ran, and the action may be the one that put the secret there.
     pub(super) async fn frame(&self) -> Step<Option<Vec<u8>>> {
+        // A reading cannot show what a frame will: the page may echo the secret as pixels after it.
+        if self.seen().secret_typed {
+            return Ok(None);
+        }
         let now = self.trace.phase("frame", self.page.glance()).await?;
         if self.reveals(&now) {
             return Ok(None);
