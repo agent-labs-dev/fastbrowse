@@ -268,30 +268,39 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
     })
 }
 
-/// The files `--file` names, read now, each under its own file name. A task can only name a path, and a run had no way
-/// to put that file in a page's file input, so an upload it was asked for stopped `stuck` (#878).
+/// The files `--file` names, each under its own file name, with their bytes read by `read_attachments`. A task can only
+/// name a path, and a run had no way to put that file in a page's file input, so an upload it was asked for stopped
+/// `stuck` (#878).
 fn attachments(paths: &[PathBuf]) -> Result<Vec<RunAttachment>, ConfigurationError> {
-    let attachments = paths
+    paths
         .iter()
         .map(|path| {
             let name = path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .ok_or_else(|| ConfigurationError(format!("--file {} names no file", path.display())))?;
-            let content = std::fs::read(path)
-                .map_err(|error| ConfigurationError(format!("--file cannot read {}: {error}", path.display())))?;
             // The type a browser's own file picker would give: by extension, and none for one it does not know.
             let mime_type = mime_guess::from_path(path).first_raw().unwrap_or_default().to_owned();
-            Ok(RunAttachment { name, mime_type, content: Base64Bytes(content) })
+            Ok(RunAttachment { name, mime_type, content: Base64Bytes(Vec::new()) })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect()
+}
+
+/// Read the bytes of the files `paths` names into `attachments`, once the run is known to take them: read first, a
+/// `--fetch` run named a missing file instead of the conflict, and a named pipe blocked it before any check.
+fn read_attachments(attachments: &mut [RunAttachment], paths: &[PathBuf]) -> Result<(), ConfigurationError> {
+    for (attachment, path) in attachments.iter_mut().zip(paths) {
+        let content = std::fs::read(path)
+            .map_err(|error| ConfigurationError(format!("--file cannot read {}: {error}", path.display())))?;
+        attachment.content = Base64Bytes(content);
+    }
     // Every upload past the limit fails, so a run given more would only end stuck after spending its steps.
     let total: usize = attachments.iter().map(|attachment| attachment.content.0.len()).sum();
     let limit = Config::default().max_upload_bytes;
     if total as i64 > limit {
         return Err(ConfigurationError(format!("--file totals {total} bytes, over the {limit} byte upload limit")));
     }
-    Ok(attachments)
+    Ok(())
 }
 
 /// `NAME=VALUE`, the value taken as given, `=` and all.
@@ -476,7 +485,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
             profile: args.profile.clone(),
         })
     };
-    let task = RunTask {
+    let mut task = RunTask {
         task: args.task.clone(),
         start: args.start.clone(),
         context: args.context.clone(),
@@ -508,6 +517,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     };
     let secrets_given = !args.secret.is_empty() || args.bitwarden.is_some();
     fastbrowse_run::check(&task, secrets_given).map_err(|error| ConfigurationError(error.to_string()))?;
+    read_attachments(&mut task.attachments, &args.file)?;
     // Check secrets before browser setup so a missing credential names what the operator needs to supply.
     let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let extension = task.wants_extension();

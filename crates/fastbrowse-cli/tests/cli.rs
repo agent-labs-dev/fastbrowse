@@ -192,7 +192,8 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
         (&["--downloads", "/tmp/d"], "downloads"),
         // A fetched page can only follow links, so nothing it is given is ever typed, attached or submitted (#1337).
         (&["--input", "name=Ada"], "inputs"),
-        (&["--file", "Cargo.toml"], "attachments"),
+        // A file that does not exist: read before the check, its read error was reported in place of the conflict.
+        (&["--file", "/nonexistent/upload.pdf"], "attachments"),
         (&["--authorize"], "authorization"),
         // Refused before either is resolved: an unset variable or a vault lookup was reported in its place.
         (&["--secret", "p=NOT_SET"], "secrets"),
