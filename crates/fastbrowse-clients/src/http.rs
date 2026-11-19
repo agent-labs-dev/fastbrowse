@@ -4,7 +4,8 @@
 //! is hyper over rustls; tests hand in a closure, as Python's tests hand httpx a `MockTransport`. [`Http`] is the
 //! handle a run shares between its clients: the transport, and the trace its retries and spans are written to.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -15,6 +16,8 @@ use http_body_util::{BodyExt, Full};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::connect::proxy::Tunnel;
+use hyper_util::client::proxy::matcher::Matcher;
 use hyper_util::rt::TokioExecutor;
 use serde_json::{Map, Value};
 
@@ -173,9 +176,64 @@ impl HttpEvent<'_> {
 
 #[cfg(test)]
 mod tests {
+    use hyper_util::client::proxy::matcher::Matcher;
     use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
-    use super::traced;
+    use super::{HyperTransport, Method, Request, Transport, TransportError, traced};
+
+    /// A proxy that answers the first request it reads with a refusal and returns that request's first line.
+    async fn refusing_proxy() -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut head = vec![0; 4096];
+            let read = stream.read(&mut head).await.unwrap();
+            stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+            String::from_utf8_lossy(&head[..read]).lines().next().unwrap_or_default().to_string()
+        });
+        (url, seen)
+    }
+
+    fn get(url: &str) -> Request {
+        Request {
+            method: Method::Get,
+            url: url.into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+            timeout: std::time::Duration::from_secs(5),
+            max_bytes: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_https_request_is_tunnelled_through_the_proxy_the_environment_names() {
+        let (proxy, seen) = refusing_proxy().await;
+        let transport = HyperTransport::with_proxy(Matcher::builder().https(proxy).build());
+        let error = transport.send(get("https://openrouter.ai/api/v1/chat/completions")).await.unwrap_err();
+        assert_eq!(seen.await.unwrap(), "CONNECT openrouter.ai:443 HTTP/1.1");
+        assert!(matches!(error, TransportError::Transient("ConnectError")), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn a_host_no_proxy_exempts_is_reached_directly() {
+        let (proxy, seen) = refusing_proxy().await;
+        let transport = HyperTransport::with_proxy(Matcher::builder().https(proxy).no("127.0.0.1").build());
+        let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", origin.local_addr().unwrap());
+        let served = tokio::spawn(async move {
+            let (mut stream, _) = origin.accept().await.unwrap();
+            let mut head = vec![0; 4096];
+            let _ = stream.read(&mut head).await.unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi").await.unwrap();
+        });
+        let response = transport.send(get(&url)).await.unwrap();
+        served.await.unwrap();
+        seen.abort();
+        assert_eq!((response.status, response.body.as_slice()), (200, b"hi".as_slice()));
+    }
 
     #[test]
     fn an_image_sent_to_jev_is_kept_by_name_and_not_by_its_bytes() {
@@ -346,10 +404,16 @@ impl Http {
 }
 
 type HyperClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
+type TunnelClient = Client<HttpsConnector<Tunnel<HttpConnector>>, Full<Bytes>>;
 
-/// The production transport: HTTP/1.1 with a keep-alive pool, TLS through rustls.
+/// The production transport: HTTP/1.1 with a keep-alive pool, TLS through rustls. A destination the environment's
+/// `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` covers (and `NO_PROXY` does not exempt) goes through that proxy with an
+/// HTTP CONNECT tunnel, as httpx does by default; TLS runs inside the tunnel, so the proxy sees only the host.
 pub struct HyperTransport {
     client: HyperClient,
+    proxy: Matcher,
+    /// One keep-alive pool per proxy, built when a request first needs it.
+    tunnels: Mutex<HashMap<String, TunnelClient>>,
 }
 
 impl Default for HyperTransport {
@@ -360,15 +424,43 @@ impl Default for HyperTransport {
 
 impl HyperTransport {
     pub fn new() -> HyperTransport {
+        HyperTransport::with_proxy(Matcher::from_env())
+    }
+
+    pub fn with_proxy(proxy: Matcher) -> HyperTransport {
         let connector =
             hyper_rustls::HttpsConnectorBuilder::new().with_webpki_roots().https_or_http().enable_http1().build();
-        HyperTransport { client: Client::builder(TokioExecutor::new()).build(connector) }
+        HyperTransport {
+            client: Client::builder(TokioExecutor::new()).build(connector),
+            proxy,
+            tunnels: Mutex::default(),
+        }
+    }
+
+    fn tunnel_client(&self, proxy: &hyper::Uri) -> TunnelClient {
+        let mut tunnels = self.tunnels.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        tunnels
+            .entry(proxy.to_string())
+            .or_insert_with(|| {
+                let tunnel = Tunnel::new(proxy.clone(), HttpConnector::new());
+                let connector = hyper_rustls::HttpsConnectorBuilder::new()
+                    .with_webpki_roots()
+                    .https_or_http()
+                    .enable_http1()
+                    .wrap_connector(tunnel);
+                Client::builder(TokioExecutor::new()).build(connector)
+            })
+            .clone()
     }
 }
 
 impl Transport for HyperTransport {
     fn send(&self, request: Request) -> BoxFuture<'static, Result<Response, TransportError>> {
         let client = self.client.clone();
+        let tunnel = self
+            .proxy
+            .intercept(&hyper::Uri::from_maybe_shared(request.url.clone()).unwrap_or_default())
+            .map(|proxy| self.tunnel_client(proxy.uri()));
         Box::pin(async move {
             let uri: hyper::Uri = request.url.parse().map_err(|_| TransportError::Fatal("InvalidURL"))?;
             if !matches!(uri.scheme_str(), Some("http" | "https")) {
@@ -386,14 +478,19 @@ impl Transport for HyperTransport {
             }
             let outgoing =
                 builder.body(Full::new(Bytes::from(request.body))).map_err(|_| TransportError::Fatal("InvalidURL"))?;
-            let response =
-                tokio::time::timeout(silence, client.request(outgoing)).await.map_err(stalled)?.map_err(|error| {
-                    if error.is_connect() {
-                        TransportError::Transient("ConnectError")
-                    } else {
-                        TransportError::Transient("RemoteProtocolError")
-                    }
-                })?;
+            let sent = async {
+                match &tunnel {
+                    Some(tunnel) => tunnel.request(outgoing).await,
+                    None => client.request(outgoing).await,
+                }
+            };
+            let response = tokio::time::timeout(silence, sent).await.map_err(stalled)?.map_err(|error| {
+                if error.is_connect() {
+                    TransportError::Transient("ConnectError")
+                } else {
+                    TransportError::Transient("RemoteProtocolError")
+                }
+            })?;
             let status = response.status().as_u16();
             let headers = response
                 .headers()

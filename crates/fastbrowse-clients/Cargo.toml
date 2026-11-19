@@ -17,7 +17,7 @@ log = "0.4.35"
 tokio = { version = "1.54.1", features = ["rt", "time", "macros"] }
 # HTTP/1.1 only: Python builds its httpx client without `http2=True`, so it never negotiates h2 either.
 hyper = { version = "1.12.0", features = ["client", "http1"] }
-hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
+hyper-util = { version = "0.1.21", features = ["client-legacy", "client-proxy", "http1", "tokio"] }
 # ring rather than aws-lc-rs, which compiles C; the webpki roots are the Mozilla bundle, as certifi is for httpx.
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "tls12", "ring", "webpki-tokio"] }
 http-body-util = "0.1.5"
