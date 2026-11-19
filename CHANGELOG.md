@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- fastbrowse now sends its model calls through the proxy `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` names, skipping hosts `NO_PROXY` lists. It ignored them and failed with `ConnectError` on a network whose only way out is a proxy, such as a Parallax desktop box. Closes #1358.
+- fastbrowse now sends its model calls over HTTPS through the proxy `HTTPS_PROXY` or `ALL_PROXY` names (with its login, if the URL has one), skipping hosts `NO_PROXY` lists. It ignored them and failed with `ConnectError` on a network whose only way out is a proxy, such as a Parallax desktop box. Closes #1358.
 - A `--record` clip (and live frames) now stop at the last clean frame once a secret is typed and stay stopped for the rest of the run. A page that echoed the secret on the next page, such as a form's result, was recorded in clear: a reading of the page text that came back clean released the hold, and frames arrived before the next reading. Closes #1347.
 - A run in your own Chrome opens a link's new tab behind your current tab. Chrome raised and activated its window for a tab the page opened, so on a desktop that gives focus to an activated window, such as Hyprland with `misc:focus_on_activate = true`, each link the run followed to a new tab took your keyboard focus. A tab a page script opens still activates the window; [Your own Chrome](docs/cli.md#your-own-chrome) names those cases and the desktop setting ([#1348](https://github.com/agent-labs-dev/fastbrowse/issues/1348)).
 
