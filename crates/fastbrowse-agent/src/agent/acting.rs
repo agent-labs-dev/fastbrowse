@@ -1525,15 +1525,15 @@ impl Agent {
         let secrets = self.secret_names(&self.target_origin(target));
         // A value can come from a page, such as a code a site sent: a fact that answers, or one a read kept for the steps.
         // Offered only answers, a sign-in code on a Phone page read as one the steps need was nowhere to type from.
-        let for_steps = |key: &str, fact: &crate::memory::Fact| {
-            !state.notes.superseded(key)
-                && fact.evidence.as_ref().is_some_and(|evidence| state.step_pages.contains(&evidence.capture_sha256))
+        // A fact a later read replaced, such as a code the page has since changed, is no value to type.
+        let for_steps = |fact: &crate::memory::Fact| {
+            fact.evidence.as_ref().is_some_and(|evidence| state.step_pages.contains(&evidence.capture_sha256))
         };
         let read: Vec<&str> = state
             .notes
             .facts_by_id()
             .iter()
-            .filter(|(key, fact)| fact.answers || for_steps(key, fact))
+            .filter(|(key, fact)| !state.notes.superseded(key) && (fact.answers || for_steps(fact)))
             .map(|(_, fact)| fact.text.as_str())
             .collect();
         let read = read.join("\n");
@@ -1560,9 +1560,9 @@ impl Agent {
             WRITTEN.into(),
             "The task asks for text it does not state word for word, such as a search query for what it looks for, or text it asks to be written or composed, including items it names set out as the lines, sentences or list it asks for, so it is written from the task.".into(),
         );
+        let said = |read: &str| JsonValue::from(format!("The task does not state it, and what was read does: {read}"));
         if !read.is_empty() {
-            sources
-                .insert(IN_READ.into(), format!("The task does not state it, and what was read does: {read}").into());
+            sources.insert(IN_READ.into(), said(&read));
         }
         sources.insert(NO_VALUE.into(), NO_VALUE_SAID.into());
         sources.insert(LEAVE.into(), LEAVE_SAID.into());
@@ -1572,9 +1572,17 @@ impl Agent {
         }
         // Amazon labels its sign-in field "Enter mobile number or email", and Jev, seeing only a secret named
         // `username`, chose the task. Only for signing in: a checkout's contact email is the task's value.
-        let source_question = format!(
+        let mut source_question = format!(
             "What should be typed into {label}? Stored secrets are this site's sign-in credentials, named by role, and are only for signing in to the account: when this field is a sign-in field, the username is also the account's email address or phone number. Any other field takes a value the task gives, and a search field takes what the task is looking for."
         );
+        // A page kept for the steps is kept whole, so what was read is offered by its ends when the question with it
+        // whole does not fit one decision request; the value itself is then found in it part by part.
+        let model_task = self.model_task(state);
+        let whole = page_question(&model_task, &source_question, sources.clone()).dump_json();
+        if !read.is_empty() && self.config.tokens.input_chars(&[whole]) == 0 {
+            sources.insert(IN_READ.into(), said(&value_ends(&read)));
+            source_question.push_str(ELIDED);
+        }
         Value { task, read, label, group, source_question, sources }
     }
 

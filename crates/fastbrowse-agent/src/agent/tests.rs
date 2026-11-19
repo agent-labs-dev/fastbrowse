@@ -3350,6 +3350,31 @@ async fn a_page_holding_only_a_fact_for_the_steps_is_read_as_no_answer() {
     assert!(read.is_some_and(|read| read.contains("Learn more")));
 }
 
+/// A page kept for the steps is kept whole, so what a fill could type from it may be longer than one decision request
+/// holds; it is then offered by its ends, and a fact a later read replaced is not offered at all.
+#[tokio::test]
+async fn a_fill_offers_a_long_read_by_its_ends_and_never_a_replaced_fact() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "steps")])), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let long = "word ".repeat(400_000);
+    let page = capture(&[(BlockKind::Paragraph, "Your code is 4821"), (BlockKind::Paragraph, long.trim())]);
+    state.step_pages.insert(page.sha256.clone());
+    for fact in crate::retrieval::whole_page_facts(&page) {
+        state.notes.add(fact);
+    }
+    let offered = |state: &RunState| agent.value(state, &field("Code")).sources[super::acting::IN_READ].to_string();
+    let read = offered(&state);
+    assert!(read.contains("Your code is 4821") && read.contains("words ...]"));
+    assert!(read.chars().count() < 1000, "offered by its ends, not whole");
+    // The page read again holds a new code, which replaces the one it showed before.
+    agent
+        .read(&mut state, capture(&[(BlockKind::Paragraph, "Your code is 7310")]), &read_document(), true)
+        .await
+        .unwrap();
+    let read = offered(&state);
+    assert!(read.contains("7310") && !read.contains("4821"), "{read}");
+}
+
 #[tokio::test]
 async fn a_finished_read_resets_the_retry() {
     let mut agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
