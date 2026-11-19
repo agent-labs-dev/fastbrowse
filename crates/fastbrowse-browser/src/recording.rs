@@ -583,25 +583,28 @@ fn filter_chain(captions: bool, cursor: bool, style: &str) -> String {
     if filters.is_empty() { "null".to_owned() } else { filters.join(",") }
 }
 
-/// The agent cursor of deskpilot's Hyprland plugin (`drawOne`, `lock` and `glideTo` in
-/// src/deskpilot/plugin/deskpilot.cpp), in logical pixels at a 1280 px wide frame, with fastbrowse's own colour and
-/// centre dot. A change to the look is made there first and copied here.
+/// The agent cursor of deskpilot's Hyprland plugin (`drawOne` and `glideTo` in src/deskpilot/plugin/deskpilot.cpp), in
+/// logical pixels at a 1280 px wide frame, with fastbrowse's own colour and centre dot. A change to the look is made
+/// there first and copied here.
 mod agent_cursor {
     /// The arm of a bracket, and the width of its rounded stroke.
     pub const BRACKET: f64 = 6.0;
     pub const STROKE: f64 = 1.8;
-    /// The brackets' half-width in flight, closing to `LOCK_TO` over `LOCK` seconds after landing, cubic ease-out.
-    pub const LOCK_FROM: f64 = 30.0;
-    pub const LOCK_TO: f64 = 15.0;
-    pub const LOCK: f64 = 0.16;
-    /// The brackets' opacity is `0.35 + 0.65 * L`, `L` being how far they have closed.
-    pub const LOCK_ALPHA: f64 = 0.35;
-    /// A press: a filled disc at 0.3 opacity fading out, growing from 0.3 to 1 times `PULSE_SIZE` with a cubic ease-out
-    /// over `PULSE` seconds, staying where it was pressed. The centre is squeezed to `PRESSED` for `HOLD` seconds.
+    /// The brackets' half-width at rest and while gliding, and how far in they move on a press.
+    pub const REST: f64 = 15.0;
+    pub const PRESS: f64 = 7.0;
+    /// A press: the brackets move in to `PRESS` over `SQUEEZE_IN` seconds (cubic ease-out), stay there for
+    /// `SQUEEZE_HOLD` and go back to `REST` over `SQUEEZE_OUT` (cubic ease-in-out), computed for each `SQUEEZE_STEP`,
+    /// the finest time ASS has.
+    pub const SQUEEZE_IN: f64 = 0.05;
+    pub const SQUEEZE_HOLD: f64 = 0.07;
+    pub const SQUEEZE_OUT: f64 = 0.10;
+    pub const SQUEEZE_STEP: f64 = 0.01;
+    /// A press also leaves a filled disc at 0.3 opacity fading out, growing from 0.3 to 1 times `PULSE_SIZE` with a
+    /// cubic ease-out over `PULSE` seconds, staying where it was pressed, and the centre is squeezed to `PRESSED`.
     pub const PULSE: f64 = 0.38;
     pub const PULSE_SIZE: f64 = 30.0;
     pub const PRESSED: f64 = 0.85;
-    pub const HOLD: f64 = 0.12;
     /// A glide takes 1.5 times its length over `PEAK_SPEED`, between `MIN_GLIDE` and `MAX_GLIDE` seconds, along an arc
     /// bowed to one side by `ARC` of its length, eased in and out (cubic).
     pub const PEAK_SPEED: f64 = 900.0;
@@ -610,8 +613,8 @@ mod agent_cursor {
     pub const ARC: f64 = 0.2;
     /// fastbrowse's own centre: a dot of this radius.
     pub const DOT: f64 = 2.4;
-    /// The time between the cursor's drawn states: ASS cannot ease a position, so a glide is sampled this often and
-    /// each piece moves in a line, and the brackets close in as the same steps.
+    /// The time between a glide's drawn states: ASS cannot ease a position, so a glide is sampled this often and each
+    /// piece moves in a line.
     pub const STEP: f64 = 0.02;
 }
 
@@ -668,9 +671,9 @@ fn disc(radius: f64) -> String {
     )
 }
 
-/// The cursor as an ASS overlay, drawn as deskpilot's agent cursor is (see `agent_cursor`): wide, faint brackets glide
-/// to each action point along an eased arc and close in on it as they land, whatever the action; a press squeezes the
-/// centre and leaves a disc that grows and fades where it was pressed. Points are CSS pixels, scaled to the frame.
+/// The cursor as an ASS overlay, drawn as deskpilot's agent cursor is (see `agent_cursor`): brackets at one size glide
+/// to each action point along an eased arc; a press moves them in towards the centre dot and back, and leaves a disc
+/// that grows and fades where it was pressed. Points are CSS pixels, scaled to the frame.
 fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32) -> String {
     use agent_cursor::*;
     let mut out = format!(
@@ -716,11 +719,10 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
         // The cursor stays where it landed until the next one starts to glide; the result card is no longer the page
         // that supplied these coordinates.
         let limit = starts.get(i + 1).copied().unwrap_or(until).min(until);
-        let style = |opacity: f64| {
-            format!("\\bord{:.2}\\shad0\\1c{COLOUR}\\3c{COLOUR}\\alpha{}", STROKE / 2.0 * unit, ass_alpha(opacity))
-        };
+        let tags = format!("\\bord{:.2}\\shad0\\1c{COLOUR}\\3c{COLOUR}\\alpha&H00&", STROKE / 2.0 * unit);
         if let Some(previous) = i.checked_sub(1).map(|previous| &marks[previous]) {
-            // The glide: a quadratic arc bowed to the side, eased in and out, in short straight pieces.
+            // The glide: a quadratic arc bowed to the side, eased in and out, in short straight pieces, the brackets
+            // at rest size throughout.
             let (px, py) = point(previous);
             let (dx, dy) = (x - px, y - py);
             let length = dx.hypot(dy);
@@ -738,27 +740,27 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
                         start + (at - start) * (k + 1) as f64 / pieces as f64,
                     );
                     let ((ax, ay), (bx, by)) = (along(k as f64 / pieces as f64), along((k + 1) as f64 / pieces as f64));
-                    let tags = format!("\\move({ax:.1},{ay:.1},{bx:.1},{by:.1},0,{})", ((t1 - t0) * 1000.0).round());
-                    dialogue(2, t0, t1, format!("{tags}{}", style(LOCK_ALPHA)), cursor_shape(LOCK_FROM, 1.0, unit));
+                    let mv = format!("\\move({ax:.1},{ay:.1},{bx:.1},{by:.1},0,{})", ((t1 - t0) * 1000.0).round());
+                    dialogue(2, t0, t1, format!("{mv}{tags}"), cursor_shape(REST, 1.0, unit));
                 }
             }
         }
-        // Landing: the brackets close in, and the centre is squeezed while a button is down.
-        let steps = (LOCK / STEP).round() as usize;
+        // At rest where it landed, until a press moves the brackets in: the half-width at each step from the press.
+        let pos = format!("\\pos({x:.1},{y:.1}){tags}");
+        let squeeze = if mark.pressed { SQUEEZE_IN + SQUEEZE_HOLD + SQUEEZE_OUT } else { 0.0 };
+        let steps = (squeeze / SQUEEZE_STEP).round() as usize;
         for k in 0..steps {
-            let (t0, t1) = (at + STEP * k as f64, (at + STEP * (k + 1) as f64).min(limit));
-            let closed = ease_out(STEP * k as f64 / LOCK);
-            let dot = if mark.pressed && STEP * k as f64 <= HOLD { PRESSED } else { 1.0 };
-            let half = LOCK_FROM + (LOCK_TO - LOCK_FROM) * closed;
-            dialogue(
-                2,
-                t0,
-                t1,
-                format!("\\pos({x:.1},{y:.1}){}", style(LOCK_ALPHA + (1.0 - LOCK_ALPHA) * closed)),
-                cursor_shape(half, dot, unit),
-            );
+            let elapsed = SQUEEZE_STEP * k as f64;
+            let inward = if elapsed < SQUEEZE_IN {
+                ease_out(elapsed / SQUEEZE_IN)
+            } else {
+                1.0 - ease_in_out((elapsed - SQUEEZE_IN - SQUEEZE_HOLD).max(0.0) / SQUEEZE_OUT)
+            };
+            let half = REST + (PRESS - REST) * inward;
+            let (t0, t1) = (at + elapsed, (at + elapsed + SQUEEZE_STEP).min(limit));
+            dialogue(2, t0, t1, pos.clone(), cursor_shape(half, PRESSED, unit));
         }
-        dialogue(2, at + LOCK, limit, format!("\\pos({x:.1},{y:.1}){}", style(1.0)), cursor_shape(LOCK_TO, 1.0, unit));
+        dialogue(2, at + squeeze, limit, pos.clone(), cursor_shape(REST, 1.0, unit));
         if mark.pressed {
             let pieces = (PULSE / STEP).round() as usize;
             for k in 0..pieces {
@@ -852,25 +854,44 @@ mod tests {
         ass.lines().filter(|line| line.starts_with(&format!("Dialogue: {layer},"))).collect()
     }
 
+    /// The half-width of the first bracket corner in a cursor shape: its path starts at the corner's horizontal arm.
+    fn half_of(line: &str) -> f64 {
+        let shape = line.split("\\p1}").nth(1).unwrap();
+        shape.split_whitespace().nth(1).unwrap().parse::<f64>().unwrap().abs()
+    }
+
     #[test]
-    fn brackets_fly_wide_and_close_in_on_every_landing() {
+    fn brackets_stay_at_rest_size_while_gliding_and_move_in_on_a_press_only() {
         let origin = Instant::now();
         let marks = [mark(origin, Operation::Click, true, 1, 100.0), mark(origin, Operation::Hover, false, 3, 600.0)];
         let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
-        // A glide is straight pieces of an arc, wide and faint (opacity 0.35), ending at the landing.
-        let moves = ass.lines().filter(|line| line.contains("\\move(")).collect::<Vec<_>>();
+        let layer = lines(&ass, 2);
+        // A glide is straight pieces of an arc ending at the landing, at the resting size and full opacity.
+        let moves = layer.iter().filter(|line| line.contains("\\move(")).collect::<Vec<_>>();
         assert!(moves.len() > 5);
-        assert!(moves.iter().all(|line| line.contains("\\alpha&HA6&")));
         assert!(moves.last().unwrap().contains(",600.0,"));
-        // The brackets then close in over 160 ms to half-width 15 at full opacity, whether or not it pressed.
-        for landing in ["0:00:01.00", "0:00:03.00"] {
-            let closing = lines(&ass, 2)
-                .into_iter()
-                .filter(|line| line.contains("\\pos(") && line.starts_with(&format!("Dialogue: 2,{landing}")))
-                .count();
-            assert_eq!(closing, 1);
-        }
-        assert!(lines(&ass, 2).iter().any(|line| line.contains("\\alpha&H00&")));
+        assert!(layer.iter().all(|line| line.contains("\\alpha&H00&") && line.contains("\\3c&H3052C5&")));
+        assert!(moves.iter().all(|line| (half_of(line) - 12.0).abs() < 4.0));
+        // No bracket is ever wider than at rest.
+        let rest = layer.iter().map(|line| half_of(line)).fold(0.0, f64::max);
+        assert!(layer.iter().all(|line| half_of(line) <= rest + 1e-9));
+        // The press moves them in to 7 and back to 15 in 10 ms steps from the press; the hover does not.
+        let press = layer
+            .iter()
+            .filter(|line| line.starts_with("Dialogue: 2,0:00:01.") && line.contains("\\pos("))
+            .collect::<Vec<_>>();
+        let halves = press.iter().map(|line| half_of(line)).collect::<Vec<_>>();
+        assert_eq!(halves.len(), 23);
+        assert!(
+            (halves[0] - 15.0).abs() < 0.01
+                && halves[5..12].iter().all(|half| (half - 7.0).abs() < 0.01)
+                && (halves[22] - 15.0).abs() < 0.5
+        );
+        assert!(halves[..5].windows(2).all(|pair| pair[1] < pair[0]));
+        assert_eq!(
+            layer.iter().filter(|line| line.starts_with("Dialogue: 2,0:00:03.") && line.contains("\\pos(")).count(),
+            1
+        );
     }
 
     #[test]
