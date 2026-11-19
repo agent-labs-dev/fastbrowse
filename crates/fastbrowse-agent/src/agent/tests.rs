@@ -6703,6 +6703,16 @@ async fn test_the_llm_image_reader_withholds_a_screenshot_while_a_secret_shows()
 }
 
 #[tokio::test]
+async fn test_no_step_frame_is_taken_after_a_secret_is_typed_whatever_a_reading_shows() {
+    let jev =
+        Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None, zoomed: None });
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(EmptyImageLLM::default()));
+    assert!(agent.frame().await.expect("frame").is_some());
+    agent.seen().secret_typed = true;
+    assert!(agent.frame().await.expect("frame").is_none());
+}
+
+#[tokio::test]
 async fn test_the_llm_image_reader_checks_for_a_secret_with_a_fresh_glance() {
     let llm = Arc::new(EmptyImageLLM::default());
     let jev =

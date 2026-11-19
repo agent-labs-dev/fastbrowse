@@ -550,6 +550,10 @@ impl CdpPage {
             (before_fingerprint, _, point, announced, opens, address, _) = fresh;
             drawn = false;
         }
+        // Before any keystroke of the action, whatever its operation.
+        if action.secret {
+            self.session.seal_frames();
+        }
         self.state.lock().unwrap().mark_index = None;
         if !action.secret
             && let (Some(marks), Point::At(x, y)) = (&self.pointer_marks, point)
@@ -834,9 +838,6 @@ impl CdpPage {
             }
             Operation::Fill => {
                 let secret_origin = action.secret_origin.as_deref();
-                if action.secret {
-                    self.session.seal_frames();
-                }
                 let filled =
                     self.until_dialog(self.fill(target, text, point, action.secret, secret_origin, drawn)).await;
                 match filled {
