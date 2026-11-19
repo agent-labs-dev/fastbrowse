@@ -6,16 +6,22 @@
 //! window wherever it is, without moving the user's pointer or keyboard focus. Each observation is one deskpilot
 //! snapshot, whose element ids deskpilot itself refuses once a newer snapshot replaces it or the element changed, so
 //! `act` needs no guard of its own beyond naming the snapshot it was offered.
+//!
+//! A filmed page shoots its window with deskpilot's `shot` when the app opens and after each action settles, and
+//! hands each frame to the run's recording: deskpilot casts no live frames, and a shot is the one picture of a hidden
+//! window it can take without bringing the window on screen. deskpilot's own agent cursor is never in a window shot,
+//! so the page also tells the recording where each click, fill and hover landed, for it to draw the cursor there.
 
 mod mcp;
 pub mod tree;
 
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use fastbrowse_browser::pointer::PointerMark;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Observation, Page, PageResult};
@@ -38,6 +44,24 @@ struct Shot {
     height: f64,
 }
 
+/// Where a filmed page sends what its recording shows.
+pub trait Film: Send + Sync {
+    /// A PNG of the window, in the order taken.
+    fn frame(&self, png: Vec<u8>);
+    /// Where an action is about to land, in the pixels of a window `mark.width` by `mark.height`.
+    fn point(&self, mark: PointerMark);
+}
+
+impl Film for fastbrowse_browser::recording::FrameFeed {
+    fn frame(&self, png: Vec<u8>) {
+        self.show(png);
+    }
+
+    fn point(&self, mark: PointerMark) {
+        self.mark(mark);
+    }
+}
+
 /// Why a desktop page could not be opened: an app the caller has to fix, or a deskpilot that cannot run.
 #[derive(Debug)]
 pub enum OpenError {
@@ -52,6 +76,11 @@ pub struct DeskpilotPage {
     latest: Mutex<Option<String>>,
     shot: Mutex<Option<Shot>>,
     generation: AtomicU64,
+    film: Option<Arc<dyn Film>>,
+    /// The tree the latest observation read, where its ids' elements are.
+    observed: Mutex<Option<Element>>,
+    /// Set while the window may show a resolved secret, which a frame cannot mask: no frame is filmed then.
+    withheld: AtomicBool,
 }
 
 fn unavailable(error: ToolError) -> BrowserError {
@@ -107,7 +136,64 @@ impl DeskpilotPage {
             latest: Mutex::new(None),
             shot: Mutex::new(None),
             generation: AtomicU64::new(0),
+            film: None,
+            observed: Mutex::new(None),
+            withheld: AtomicBool::new(false),
         })
+    }
+
+    /// Films the window to `film` from now on, starting with the window as the app opened it.
+    pub async fn filmed(mut self, film: Arc<dyn Film>) -> Self {
+        self.film = Some(film);
+        self.frame().await;
+        self
+    }
+
+    /// One frame of the window for the film, unless frames are withheld. A shot that fails costs the video a frame,
+    /// never the run a step.
+    async fn frame(&self) {
+        let Some(film) = &self.film else { return };
+        if self.withheld.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Ok((_, png)) = self.shoot().await
+            // Withheld while the shot was taken: the action that put a secret there may have just finished.
+            && !self.withheld.load(Ordering::SeqCst)
+        {
+            film.frame(png);
+        }
+    }
+
+    /// Tells the film where `operation` lands: window pixels in a window `width` by `height`.
+    fn point(&self, operation: Operation, (x, y, width, height): (f64, f64, f64, f64)) {
+        if let Some(film) = &self.film {
+            film.point(PointerMark { at: Instant::now(), x, y, operation, width, height });
+        }
+    }
+
+    /// A shot of the window, as deskpilot binds later points to it, and its PNG.
+    async fn shoot(&self) -> PageResult<(Shot, Vec<u8>)> {
+        let window = self.address();
+        let content = self
+            .client
+            .call("shot", self.client.placed("shot", json!({"window": window})))
+            .await
+            .map_err(|error| BrowserError::ScreenshotsUnavailable(error.message().to_string()))?;
+        let taken = mcp::json_block(&content)
+            .ok_or_else(|| BrowserError::ScreenshotsUnavailable("deskpilot described no shot".into()))?;
+        let field = |name: &str| taken.get(name).cloned().unwrap_or(Value::Null);
+        let (Some(id), Some(path), Some(width), Some(height)) = (
+            field("shot").as_str().map(str::to_string),
+            field("path").as_str().map(str::to_string),
+            field("width").as_f64(),
+            field("height").as_f64(),
+        ) else {
+            return Err(BrowserError::ScreenshotsUnavailable("deskpilot described its shot without a file".into()));
+        };
+        let png = tokio::fs::read(&path)
+            .await
+            .map_err(|error| BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")))?;
+        Ok((Shot { id, width, height }, png))
     }
 
     fn address(&self) -> String {
@@ -205,6 +291,14 @@ impl DeskpilotPage {
 
     async fn dispatch(&self, action: &Action, observation: &Observation) -> Result<Option<String>, ToolError> {
         let window = self.address();
+        // The pointer actions a browser recording marks; a secret field stays unmarked, as it does there.
+        if matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover | Operation::Select)
+            && !action.secret
+            && let Some(id) = action.target_id.as_deref()
+            && let Some(aim) = self.observed.lock().unwrap().as_ref().and_then(|root| tree::aim(root, id))
+        {
+            self.point(action.operation, aim);
+        }
         // The id as the observation's snapshot numbered it: deskpilot refuses it if that snapshot was replaced or the
         // element changed since.
         let bound = action.target_id.as_deref().map(|id| format!("{}:{id}", observation.page_key));
@@ -406,7 +500,9 @@ impl DeskpilotPage {
             });
         }
         let sent = self.dispatch(action, observation).await;
-        self.measured(sent, observation, seconds).await
+        let measured = self.measured(sent, observation, seconds).await;
+        self.frame().await;
+        measured
     }
 }
 
@@ -420,7 +516,9 @@ impl Page for DeskpilotPage {
         Box::pin(async move {
             let (window, root) = self.tree(false).await?;
             *self.latest.lock().unwrap() = root.snapshot.clone();
-            Ok(tree::observation(&window, &root))
+            let observation = tree::observation(&window, &root);
+            *self.observed.lock().unwrap() = Some(root);
+            Ok(observation)
         })
     }
 
@@ -475,27 +573,9 @@ impl Page for DeskpilotPage {
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         Box::pin(async move {
-            let window = self.address();
-            let content = self
-                .client
-                .call("shot", self.client.placed("shot", json!({"window": window})))
-                .await
-                .map_err(|error| BrowserError::ScreenshotsUnavailable(error.message().to_string()))?;
-            let taken = mcp::json_block(&content)
-                .ok_or_else(|| BrowserError::ScreenshotsUnavailable("deskpilot described no shot".into()))?;
-            let field = |name: &str| taken.get(name).cloned().unwrap_or(Value::Null);
-            let (Some(id), Some(path), Some(width), Some(height)) = (
-                field("shot").as_str().map(str::to_string),
-                field("path").as_str().map(str::to_string),
-                field("width").as_f64(),
-                field("height").as_f64(),
-            ) else {
-                return Err(BrowserError::ScreenshotsUnavailable("deskpilot described its shot without a file".into()));
-            };
-            let png = tokio::fs::read(&path)
-                .await
-                .map_err(|error| BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")))?;
-            *self.shot.lock().unwrap() = Some(Shot { id, width, height });
+            // Only the model's shots bind its points: a film frame taken since does not move them to another shot.
+            let (shot, png) = self.shoot().await?;
+            *self.shot.lock().unwrap() = Some(shot);
             Ok(png)
         })
     }
@@ -519,13 +599,18 @@ impl Page for DeskpilotPage {
             let point = json!({
                 "window": self.address(), "x": x * shot.width, "y": y * shot.height, "shot": shot.id,
             });
+            self.point(Operation::Click, (x * shot.width, y * shot.height, shot.width, shot.height));
             let sent = self.tool("click", point).await.map(|()| None);
-            self.measured(sent, &before, SETTLE_SECONDS).await
+            let measured = self.measured(sent, &before, SETTLE_SECONDS).await;
+            self.frame().await;
+            measured
         })
     }
 
-    /// deskpilot films nothing, so there are no frames to hold back.
-    fn withhold_frames(&self, _withheld: bool) {}
+    /// Holds back the film's frames while the window may show a secret; the recording keeps its last clean frame.
+    fn withhold_frames(&self, withheld: bool) {
+        self.withheld.store(withheld, Ordering::SeqCst);
+    }
 
     fn address(&self) -> BoxFuture<'_, PageResult<String>> {
         Box::pin(async move { Ok(self.refresh().await?.url()) })

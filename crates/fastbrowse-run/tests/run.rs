@@ -566,6 +566,10 @@ fn a_desktop_run_refuses_browser_options_and_recipes() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("drop start, recipe"), "{error}");
+    // A desktop run is recorded from its window's own frames.
+    assert!(
+        fastbrowse_run::check(&RunTask { record: Some("clip.mp4".into()), ..desktop("gnome-text-editor") }).is_ok()
+    );
 }
 
 #[tokio::test]

@@ -190,7 +190,8 @@ async def run_task(
     raises a `BrowserError`; either error names only the exception's type, and its text is not kept.
 
     Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
-    an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
+    an MP4 of the tab, or of a `desktop` run's window, ending on the answer; it needs ffmpeg, and shows whatever the
+    pages showed.
     `recipe` reuses saved values when Jev selects a matching action on the same page, through the same
     authorization and secret gates. The task must match the recorded task. `save_recipe`
     writes the run's steps as a recipe when it ends `complete`; it may name the `recipe` file, to repair it.
@@ -241,7 +242,8 @@ async def run_task(
     split as a POSIX shell splits words. The run starts the app on deskpilot's hidden workspace with `launch`, drives it
     without moving the user's pointer or keyboard focus, and closes it when the run ends; a window that is already open
     is not driven. It opens no browser, so it cannot be combined with a start address or any browser option, and it
-    records and replays no recipe.
+    records and replays no recipe. `record` films the window from deskpilot's shots, one when the app opens and one
+    after each action, with the cursor drawn where each action landed.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. Jev sees it as `background`.

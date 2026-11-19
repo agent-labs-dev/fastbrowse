@@ -2,11 +2,13 @@
 //! sent, so the requests fastbrowse makes and the environment it starts deskpilot with can be read back.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+use fastbrowse_browser::pointer::PointerMark;
 use fastbrowse_core::models::{Operation, StepOutcome};
 use fastbrowse_core::page::Action;
 use fastbrowse_core::page::Page;
-use fastbrowse_run::desktop::{DeskpilotPage, OpenError, View};
+use fastbrowse_run::desktop::{DeskpilotPage, Film, OpenError, View};
 use serde_json::{Value, json};
 
 const SCRIPT: &str = r#"#!/bin/sh
@@ -164,4 +166,125 @@ async fn a_desktop_wait_ends_after_a_change_even_when_the_window_keeps_updating(
         .expect("settling a changed window must not consume the remaining run")
         .unwrap();
     assert!(result.page_changed, "{result:?}");
+}
+
+/// A `shot` reply naming a PNG the fake wrote beside itself, holding `bytes`.
+fn shot(id: u64, dir: &Path, name: &str, bytes: &[u8]) -> Value {
+    let path = dir.join(format!("{name}.png"));
+    std::fs::write(&path, bytes).unwrap();
+    ok(id, &json!({"shot": name, "path": path, "width": 640, "height": 480}))
+}
+
+/// A filmed page: the launch, its first frame, one observation, then a wait that changes nothing and the frame after
+/// it.
+fn filmed(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("desktop").join(format!("{name}-shots"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"]});
+    let replies = [
+        ok(3, &window(false)),
+        shot(4, &dir, "launched", b"launched"),
+        ok(5, &window(false)),
+        ok(6, &root),
+        ok(7, &window(false)),
+        ok(8, &root),
+        shot(9, &dir, "waited", b"waited"),
+    ];
+    let shot_tool = json!({"name": "shot", "inputSchema": {"type": "object", "properties": {"hidden": {}}}});
+    fake(name, &[launch_tool(), shot_tool], &replies)
+}
+
+/// The frames and cursor points a filmed page sent.
+#[derive(Default)]
+struct Kept {
+    frames: Mutex<Vec<Vec<u8>>>,
+    points: Mutex<Vec<PointerMark>>,
+}
+
+impl Film for Kept {
+    fn frame(&self, png: Vec<u8>) {
+        self.frames.lock().unwrap().push(png);
+    }
+
+    fn point(&self, mark: PointerMark) {
+        self.points.lock().unwrap().push(mark);
+    }
+}
+
+fn frames() -> (Arc<Kept>, Arc<Kept>) {
+    let kept = Arc::new(Kept::default());
+    (kept.clone(), kept)
+}
+
+#[tokio::test]
+async fn a_filmed_desktop_run_frames_its_window_on_launch_and_after_each_action() {
+    let program = filmed("filmed");
+    let (film, frames) = frames();
+    let page =
+        DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
+    let before = page.observe().await.unwrap();
+    page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
+    assert_eq!(*frames.frames.lock().unwrap(), [b"launched".to_vec(), b"waited".to_vec()]);
+    let shots: Vec<Value> = requests(&program)
+        .into_iter()
+        .filter(|request| request.pointer("/params/name") == Some(&json!("shot")))
+        .collect();
+    // Shot in the run's own view: a hidden window is framed where it is, never brought on screen.
+    assert!(shots.iter().all(|shot| shot.pointer("/params/arguments/hidden") == Some(&json!(true))), "{shots:?}");
+}
+
+#[tokio::test]
+async fn a_filmed_desktop_run_takes_no_frame_while_frames_are_withheld() {
+    let program = filmed("withheld");
+    let (film, frames) = frames();
+    let page =
+        DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
+    let before = page.observe().await.unwrap();
+    // As the agent does before typing a secret: the window may show it next, and a frame cannot be masked.
+    page.withhold_frames(true);
+    page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
+    assert_eq!(*frames.frames.lock().unwrap(), [b"launched".to_vec()]);
+    let shots = requests(&program).iter().filter(|r| r.pointer("/params/name") == Some(&json!("shot"))).count();
+    assert_eq!(shots, 1);
+}
+
+#[tokio::test]
+async fn a_filmed_click_marks_its_element_centre_for_the_recording_cursor() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("desktop").join("pointed-shots");
+    std::fs::create_dir_all(&dir).unwrap();
+    let button = json!({"id":"e2", "role":"push button", "name":"Save", "states":["showing", "enabled"],
+        "x": 100, "y": 40, "width": 80, "height": 20});
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "width": 800, "height": 600,
+        "children": [button]});
+    // The button's own label changes, which the observation shows.
+    let mut saved = root.clone();
+    saved["children"][0]["name"] = json!("Saved");
+    let replies = [
+        ok(3, &window(false)),
+        shot(4, &dir, "launched", b"launched"),
+        ok(5, &window(false)),
+        ok(6, &root),
+        ok(7, &json!({"x": 140, "y": 50})),
+        ok(8, &window(false)),
+        ok(9, &saved),
+        ok(10, &window(false)),
+        ok(11, &saved),
+        ok(12, &window(false)),
+        ok(13, &saved),
+        shot(14, &dir, "clicked", b"clicked"),
+    ];
+    let shot_tool = json!({"name": "shot", "inputSchema": {"type": "object", "properties": {"hidden": {}}}});
+    let program = fake("pointed", &[launch_tool(), shot_tool], &replies);
+    let (film, kept) = frames();
+    let page =
+        DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
+    let before = page.observe().await.unwrap();
+    let mut click = Action::new(Operation::Click);
+    click.target_id = Some("e2".into());
+    let result = page.act(&click, &before).await.unwrap();
+    assert!(result.page_changed, "{result:?}");
+    let points = kept.points.lock().unwrap();
+    let points: Vec<_> = points.iter().map(|m| (m.operation, m.x, m.y, m.width, m.height)).collect();
+    assert_eq!(points, [(Operation::Click, 140.0, 50.0, 800.0, 600.0)]);
+    assert_eq!(*kept.frames.lock().unwrap(), [b"launched".to_vec(), b"clicked".to_vec()]);
 }

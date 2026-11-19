@@ -28,6 +28,10 @@ pub struct Element {
     #[serde(default)]
     pub y: i64,
     #[serde(default)]
+    pub width: i64,
+    #[serde(default)]
+    pub height: i64,
+    #[serde(default)]
     pub children: Vec<Element>,
     /// On the root only: the snapshot its ids belong to. A peek, which binds nothing, has none.
     #[serde(default)]
@@ -178,6 +182,18 @@ pub fn list_open(element: &Element) -> bool {
 }
 
 /// The element with `id`, anywhere in the tree.
+/// Where an action on element `id` lands, as the centre deskpilot aims at, with the size of the window `root` is:
+/// window pixels, for a recording to draw its cursor there. None for an element with no size, which deskpilot cannot
+/// place, or a root that does not say how big the window is.
+pub fn aim(root: &Element, id: &str) -> Option<(f64, f64, f64, f64)> {
+    let element = find(root, id)?;
+    if element.width <= 0 || element.height <= 0 || root.width <= 0 || root.height <= 0 {
+        return None;
+    }
+    let centre = |at: i64, size: i64| at as f64 + size as f64 / 2.0;
+    Some((centre(element.x, element.width), centre(element.y, element.height), root.width as f64, root.height as f64))
+}
+
 pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
     if element.id == id {
         return Some(element);
@@ -404,6 +420,8 @@ mod tests {
             text: text.map(str::to_string),
             x: 0,
             y: 0,
+            width: 0,
+            height: 0,
             children,
             snapshot: None,
         }
@@ -599,5 +617,16 @@ mod tests {
         });
         let root: Element = serde_json::from_value(sent).unwrap();
         assert_eq!(root.snapshot.as_deref(), Some("s-1"));
+    }
+
+    #[test]
+    fn an_action_aims_at_its_element_centre_in_the_window() {
+        let button =
+            Element { x: 100, y: 40, width: 80, height: 20, ..node("e2", "push button", "Save", &[], None, vec![]) };
+        let empty = node("e3", "label", "", &[], None, vec![]);
+        let root = Element { width: 800, height: 600, ..node("e1", "frame", "", &[], None, vec![button, empty]) };
+        assert_eq!(aim(&root, "e2"), Some((140.0, 50.0, 800.0, 600.0)));
+        assert_eq!(aim(&root, "e3"), None);
+        assert_eq!(aim(&root, "e9"), None);
     }
 }
