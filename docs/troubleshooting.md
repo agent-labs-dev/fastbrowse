@@ -14,7 +14,7 @@ what to do next. The full table is in [Results](cli.md#results).
 | [budget_exceeded](#budget_exceeded-exit-7) | 7 | a limit you set was reached |
 | [unavailable](#unavailable-exit-8) | 8 | a model or browser provider stayed down |
 | [stuck](#stuck-exit-9) | 9 | Jev found no way forward |
-| [unverified](#unverified-exit-10) | 10 | the requested data could not be filled from the page, or the site refused a requested step |
+| [unverified](#unverified-exit-10) | 10 | the requested data could not be filled from the page, nothing read answers a question the task asks, or the site refused a requested step |
 | [observation_limit](#observation_limit-exit-11) | 11 | the page does not fit the prompt budget |
 | [cancelled](#cancelled-exit-12) | 12 | you stopped an `--extension` run in your browser |
 
@@ -339,12 +339,15 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
 
 ## unverified (exit 10)
 
-**What it means.** Jev finished, but the data the run was asked for could not be filled from the page, or a step the
-task asks for was not carried out because the site does not allow it. Treat the result as unconfirmed.
+**What it means.** Jev finished, but the data the run was asked for could not be filled from the page, nothing read
+answers what the task asks, or a step the task asks for was not carried out because the site does not allow it. Treat the result as unconfirmed.
 
 **Common causes.**
 
 - A field of the requested data was not backed by the page.
+- The task asks to be told something and nothing the run read answers it. Jev's DONE is refused first, so the run
+  goes back to read; when it still finds no answer it ends here, and the error says nothing read so far answers the
+  task.
 - The output schema has a field the run cannot fill. A run fills a flat object of required string, number,
   integer and boolean fields; with any other field it ends `unverified` with no data.
 - The site refused a requested step, for example an option it marks unavailable or a control it shows disabled. The
