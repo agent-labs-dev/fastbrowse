@@ -7,7 +7,11 @@
 # OPENROUTER_JUDGE_API_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY.
 name: Desktop eval
 
+# A pull request runs one arm when it is given the label `desktop-eval:ARM` (e.g. `desktop-eval:oracle`), so a change to
+# an arm or the task is measured before it is on the default branch, where a dispatch needs the workflow to live.
 on:
+  pull_request:
+    types: [labeled]
   workflow_dispatch:
     inputs:
       harness:
@@ -39,13 +43,15 @@ concurrency:
 
 jobs:
   run:
-    name: ${{ inputs.harness }}
+    name: ${{ inputs.harness || github.event.label.name }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.label.name, 'desktop-eval:') }}
     runs-on: ubuntu-24.04
     permissions: {contents: read}
     timeout-minutes: 120
     env:
-      HARNESS: ${{ inputs.harness }}
-      MODEL: ${{ inputs.model }}
+      INPUT_HARNESS: ${{ inputs.harness }}
+      INPUT_MODEL: ${{ inputs.model }}
+      LABEL: ${{ github.event.label.name }}
       UV_PYTHON: "3.13"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,6 +62,11 @@ jobs:
         with: {python-version: "3.13"}
       - name: Check the arm
         run: |
+          # A dispatch names the arm; a pull request names it in its label, `desktop-eval:ARM`.
+          HARNESS="${INPUT_HARNESS:-${LABEL#desktop-eval:}}"
+          MODEL="$INPUT_MODEL"
+          test "$HARNESS" != claude-code-deskpilot || MODEL="${MODEL:-anthropic/claude-haiku-5.5}"
+          { echo "HARNESS=$HARNESS"; echo "MODEL=$MODEL"; } >> "$GITHUB_ENV"
           case "$HARNESS" in
             oracle|null|fastbrowse-desktop) ;;
             claude-code-deskpilot) test -n "$MODEL" || { echo "::error::claude-code-deskpilot needs a model"; exit 1; } ;;
@@ -83,9 +94,9 @@ jobs:
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
           PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
-          REPEATS: ${{ inputs.repeats }}
-          BUDGET: ${{ inputs.budget }}
-          RESERVE: ${{ inputs.reserve }}
+          REPEATS: ${{ inputs.repeats || '2' }}
+          BUDGET: ${{ inputs.budget || '5' }}
+          RESERVE: ${{ inputs.reserve || '1' }}
         run: |
           cd evals
           args=(--harness "$HARNESS" --repeats "$REPEATS" --isolation docker --budget "$BUDGET" --reserve "$RESERVE"
@@ -103,7 +114,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
-          name: desktop-${{ inputs.harness }}-${{ github.run_id }}
+          name: desktop-arm-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             videos/
             runs/
