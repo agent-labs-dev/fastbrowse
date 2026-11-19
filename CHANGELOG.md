@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- With `--extension`, a run that cannot get a tab says why Chrome refused it, such as `Target.createTarget failed (CDP -32000): Cannot attach to this target`. The extension's reason was dropped, so runs failed with the bare error code. A tab Chrome refuses to group or attach is now closed at once, or handed back ungrouped when it is the user's own, instead of staying with the run until it ended ([#1314](https://github.com/agent-labs-dev/fastbrowse/issues/1314)).
+
 - With `--extension`, a run that loses its tab to another extension's frame links to that extension's page only when the frame's address is an extension id. Password managers such as Bitwarden load their frames from an address that changes each session, and the `chrome://extensions/?id=` link built from it opened nothing; the error and the extension's popup now point at `chrome://extensions` instead ([#1313](https://github.com/agent-labs-dev/fastbrowse/issues/1313)).
 
 - A downloaded file read again from a later page is one note. Each read after a download stored the whole file as another note, so composing the answer sent every copy: one sec.gov task stored a 23 MB file ten times and spent $30.90 composing ([#1299](https://github.com/agent-labs-dev/fastbrowse/issues/1299)).

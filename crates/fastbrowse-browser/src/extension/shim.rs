@@ -237,6 +237,13 @@ impl Relay {
                 if native && native_navigation_denial(&method, &message) {
                     error["fastbrowseFailure"] = json!(crate::cdp::ProtocolFailure::NavigationDenied);
                 }
+                // The shim or the extension wrote this text, such as Chrome refusing chrome.tabs.create or the
+                // debugger attach, and it quotes no page, so the run can say why the call failed (#1314). A tab's
+                // own error can quote page text or evaluated source and stays out, as does a child session's detach,
+                // which the browser route relays to the tab.
+                if !native && method != "Target.detachFromTarget" {
+                    error["fastbrowseReason"] = message.into();
+                }
                 json!({"id": id, "error": error})
             }
         }
@@ -854,6 +861,30 @@ mod tests {
             .unwrap();
         let response = commanding.await.unwrap();
         assert_eq!(response["error"]["fastbrowseFailure"], "navigation_denied");
+    }
+
+    /// Answer the one operation `method` sends to the extension with `error`, and return the CDP reply.
+    async fn failed_reply(session: Option<&str>, method: &str, error: &str) -> Value {
+        let (out, mut to_extension) = mpsc::unbounded_channel();
+        let relay = Arc::new(relay_to(out));
+        let mut message = json!({"id": 42, "method": method, "params": {"url": "https://example.test/"}});
+        if let Some(session) = session {
+            message["sessionId"] = session.into();
+        }
+        let commanding = tokio::spawn(relay.clone().command(message));
+        let sent: Value = serde_json::from_str(&to_extension.recv().await.unwrap()).unwrap();
+        let waiter = relay.pending.lock().unwrap().remove(&sent["id"].as_u64().unwrap()).unwrap();
+        waiter.send(Err(error.into())).unwrap();
+        commanding.await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn why_chrome_refused_a_tab_reaches_the_run_and_page_text_does_not() {
+        // #1314: Chrome's reason for refusing a new tab was dropped, so the run said only that createTarget failed.
+        let refused = failed_reply(None, "Target.createTarget", "Cannot attach to this target").await;
+        assert_eq!(refused["error"]["fastbrowseReason"], "Cannot attach to this target");
+        let native = failed_reply(Some(&top_session(7)), "Runtime.evaluate", "private page text").await;
+        assert!(native["error"].get("fastbrowseReason").is_none(), "{native}");
     }
 
     #[tokio::test]

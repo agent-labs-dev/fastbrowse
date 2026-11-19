@@ -84,6 +84,15 @@ async function adoptTab(conn, run, tabId) {
   try {
     await addToGroup(run, tabId);
     await chrome.debugger.attach({ tabId }, '1.3');
+  } catch (error) {
+    // A refused group or attach left the tab owned by the run until it ended (#1314): a tab it opened stayed open and
+    // a tab of the user's stayed grouped. Undo it now, so the failure leaves nothing behind.
+    if (!run.released) {
+      run.tabs.delete(tabId);
+      await releaseTab(run, tabId);
+      run.adopted.delete(tabId);
+    }
+    throw error;
   } finally {
     // Stopped meanwhile: the release may have passed this tab before the attach landed, so undo it here.
     if (run.released) await releaseTab(run, tabId);
