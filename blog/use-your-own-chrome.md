@@ -4,7 +4,7 @@ description: "Install the fastbrowse extension, check it is connected, run a rea
 topic: Browsers and logins
 published: 2026-11-12
 updated: 2026-11-19
-verifiedAgainst: v0.11.0
+verifiedAgainst: v0.11.2
 verifiedOn: 2026-11-19
 ---
 
