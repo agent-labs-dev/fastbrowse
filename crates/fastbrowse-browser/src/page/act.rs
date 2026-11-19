@@ -43,6 +43,32 @@ const SUGGESTION_SECONDS: f64 = 1.2;
 /// A lazily built menu or dialog arrived 0.15-0.7s after the click on the pages this was measured on. Paid only by a
 /// control that advertised a popup and had not opened one yet.
 const POPUP_SECONDS: f64 = 1.2;
+/// Hold back the new tab a click on `id`'s link would open, when it is a plain http(s) link to a new browsing context.
+/// The listener sits on the window, after the page's own handlers: a handler that cancels the click keeps it
+/// cancelled, and only a click the page left to the browser is held. `releaseNewTab` removes it and answers the
+/// address held, if any.
+const HOLD_NEW_TAB_JS: &str = "(id => { \
+    const r = window.__fastbrowse; \
+    const e = r?.nodes.get(id); \
+    const link = e?.closest('a[href],area[href]'); \
+    if (!link) return false; \
+    const name = (link.hasAttribute('target') ? link.getAttribute('target') \
+        : e.ownerDocument.querySelector('base[target]')?.getAttribute('target')) ?? ''; \
+    if (name.trim().toLowerCase() !== '_blank' || !['http:', 'https:'].includes(link.protocol)) return false; \
+    r.releaseNewTab?.(); \
+    const view = e.ownerDocument.defaultView; \
+    let url = null; \
+    const listener = event => { \
+        if (url !== null || !event.isTrusted || event.button !== 0 || event.defaultPrevented \
+            || !event.composedPath().includes(link)) return; \
+        event.preventDefault(); \
+        url = link.href; \
+    }; \
+    view.addEventListener('click', listener); \
+    r.releaseNewTab = () => { view.removeEventListener('click', listener); delete r.releaseNewTab; return url; }; \
+    return true; \
+})";
+const RELEASE_NEW_TAB_JS: &str = "window.__fastbrowse?.releaseNewTab?.() ?? null";
 /// A download's bytes are taken off the paused response in a task of its own, which normally finishes before the
 /// click's settle does. Paid only by a click whose own input began a navigation and left the page unchanged.
 const DOWNLOAD_SETTLE_SECONDS: f64 = 1.5;
@@ -539,13 +565,54 @@ impl CdpPage {
         let requests = self.session.requests_mark();
         let downloads_before = self.session.downloads_settled();
         let mut waited = None;
-        let (outcome, mut detail, failure) = if action.operation == Operation::Wait {
+        // Chrome raises and focuses the window of any tab a page opens, so a background run opens a link's new tab
+        // itself, behind the window's current tab.
+        let holding = match &target {
+            Some(target) if action.operation == Operation::Click && opens && !self.session.connection().foreground => {
+                truthy(&self.evaluate(&target.0, &format!("({HOLD_NEW_TAB_JS})({})", target.2)).await?)
+            }
+            _ => false,
+        };
+        let dispatched = if action.operation == Operation::Wait {
             let seen = self.await_change(wait_seconds).await?;
             waited = Some(seen);
-            (StepOutcome::Executed, (!seen.semantic && !seen.clock).then(|| UNCHANGED.into()), None)
+            Ok((StepOutcome::Executed, (!seen.semantic && !seen.clock).then(|| UNCHANGED.into()), None))
         } else {
-            self.dispatch(action, target.as_ref(), point, drawn).await?
+            self.dispatch(action, target.as_ref(), point, drawn).await
         };
+        let held = match (&target, holding) {
+            (Some(target), true) => {
+                self.evaluate(&target.0, RELEASE_NEW_TAB_JS).await.ok().and_then(|url| url.as_str().map(str::to_owned))
+            }
+            _ => None,
+        };
+        let (outcome, mut detail, failure) = dispatched?;
+        if outcome == StepOutcome::Executed
+            && let Some(url) = held
+        {
+            self.session.open_owned_tab("about:blank").await?;
+            match self.navigate(&url, None).await {
+                Err(error @ (BrowserError::OriginNotAllowed | BrowserError::PageUnresponsive(_))) => return Err(error),
+                Err(error) if error.is_unavailable() => return Err(error),
+                Err(error) => {
+                    return Ok(ActResult {
+                        outcome: StepOutcome::Failed,
+                        failure: Some(StepFailure::NavigationFailed),
+                        page_changed: true,
+                        detail: Some(format!("opened a new tab, now active, whose page failed to load: {error}")),
+                        moved: true,
+                    });
+                }
+                Ok(()) => {}
+            }
+            return Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: true,
+                detail: Some("opened a new tab, now active".into()),
+                moved: true,
+            });
+        }
         if outcome != StepOutcome::Executed {
             return Ok(ActResult {
                 outcome,

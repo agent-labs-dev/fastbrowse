@@ -143,6 +143,22 @@ organization;
 For extension development, `fastbrowse extension path` writes an unpacked copy. Open `chrome://extensions`,
 turn on Developer mode, choose **Load unpacked** and select that folder. Use the store version for ordinary runs.
 
+**A tab the page opens can take keyboard focus.** A run works behind the window's current tab, and opens a link's
+new tab there too, behind your tab. Chrome raises and activates its window for any other tab a page opens: one a
+script opens with `window.open`, one from a `javascript:` link or a link whose own handler opens it, and one a form
+submits into. `--foreground` and `--cursor` bring the window forward on purpose. A desktop that hands keyboard focus
+to a window that asks to be activated then moves your typing into Chrome. On Hyprland that is
+`misc:focus_on_activate = true`; turn it off and Hyprland marks the window urgent instead:
+
+```ini
+misc {
+    focus_on_activate = false
+}
+```
+
+With a Lua config, set `misc = { focus_on_activate = false }`. Other window managers have a similar setting, often
+called focus stealing prevention.
+
 **Other extensions can take the run's tab away.** Chrome lets no extension debug a tab while the page holds a frame
 from another extension, and some extensions add one to every page: screen recorders, password managers and writing
 assistants are common ones. When that happens the run ends `unavailable` and names the extension. Open

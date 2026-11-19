@@ -2100,6 +2100,43 @@ async fn test_a_background_run_drives_its_tab_without_bringing_it_forward() {
     assert_eq!(created, vec![&json!({"url": "about:blank", "background": true})]);
 }
 
+/// Chrome raises and focuses the window of a tab its page opens, so a background run opens a link's new tab itself,
+/// behind the window's current tab. A link whose own handler cancels the click is left to the page.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_background_run_opens_a_new_tab_link_behind_the_current_tab() {
+    let _turn = turn().await;
+    let Some(chrome_connection) = chrome().cloned() else { return };
+    let sent = Arc::new(Mutex::new(vec![]));
+    let background = BrowserConnection { foreground: false, ..chrome_connection };
+    let Some(h) = proxied(background, recording(sent.clone())).await else { return };
+    h.goto("/").await;
+    eval_active(
+        &h,
+        "document.body.insertAdjacentHTML('beforeend', '<a href=\"/popup.html\" target=\"_blank\">New tab link</a><a \
+         href=\"/popup.html\" target=\"_blank\" onclick=\"event.preventDefault(); document.title = \\'Handled\\'\">Handled \
+         link</a>')",
+    )
+    .await;
+    let opener = active(&h);
+    let obs = h.observe().await;
+    let handled = act(&h.page, click(find(&obs, "Handled link")), &obs).await;
+    assert_eq!(handled.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.title").await, json!("Handled"));
+    let result = act(&h.page, click(find(&obs, "New tab link")), &obs).await;
+    assert!(
+        result.outcome == StepOutcome::Executed && result.detail.as_deref() == Some("opened a new tab, now active"),
+        "{result:?}"
+    );
+    assert_ne!(active(&h), opener);
+    find(&h.observe().await, "Popup button");
+    assert!(h.session.popups().is_empty(), "the page opened a tab of its own");
+    h.close().await;
+    let sent = sent.lock().unwrap();
+    assert!(!sent.iter().any(|(m, _)| m == "Target.activateTarget" || m == "Page.bringToFront"));
+    let created: Vec<&Value> = sent.iter().filter(|(m, _)| m == "Target.createTarget").map(|(_, p)| p).collect();
+    assert_eq!(created, vec![&json!({"url": "about:blank", "background": true}); 2]);
+}
+
 /// A native dialog holds its renderer, so setup sent to a page behind one, focus emulation included, waits
 /// for the answer. The run must still be able to answer it, and setup must then finish rather than hang.
 #[tokio::test(flavor = "multi_thread")]
