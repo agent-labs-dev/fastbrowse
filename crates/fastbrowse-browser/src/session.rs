@@ -1274,6 +1274,11 @@ impl BrowserSession {
     }
 
     pub(crate) async fn open_owned_tab(&self, url: &str) -> Result<(), BrowserError> {
+        self.open_owned_tab_from(url, None).await
+    }
+
+    /// `open_owned_tab` for a tab the run opens in place of one a page would have, named as that page's tab's.
+    pub(crate) async fn open_owned_tab_from(&self, url: &str, opener_id: Option<String>) -> Result<(), BrowserError> {
         // A tab that is neither in front nor focus-emulated does not render: animation frames never fire, so menus
         // that animate open never become visible, screenshots hang and clicks read as covered. A foreground run
         // activates its tab. A background run opens it behind the window's current tab, because Chrome focuses the
@@ -1295,7 +1300,7 @@ impl BrowserSession {
             session_id,
             url: url.to_owned(),
             title: String::new(),
-            opener_id: None,
+            opener_id,
         });
         Shared::set_active_target(&self.0, &target_id);
         Ok(())

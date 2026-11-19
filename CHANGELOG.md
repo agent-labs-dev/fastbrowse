@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- A `--record` clip draws the click ring for every action that presses the mouse: fills and drags as well as clicks. The clip's cursor is deskpilot's: four rounded corner brackets at one size that move in towards the centre dot and back on every press, and a faint disc that swells and fades where it was pressed; a hover only glides. A step that stops before its press draws none ([#1350](https://github.com/agent-labs-dev/fastbrowse/issues/1350)).
+- A run in your own Chrome opens a link's new tab behind your current tab. Chrome raised and activated its window for a tab the page opened, so on a desktop that gives focus to an activated window, such as Hyprland with `misc:focus_on_activate = true`, each link the run followed to a new tab took your keyboard focus. A tab a page script opens still activates the window; [Your own Chrome](docs/cli.md#your-own-chrome) names those cases and the desktop setting ([#1348](https://github.com/agent-labs-dev/fastbrowse/issues/1348)).
 
 - A downloaded file read again from a later page is one note. Each read after a download stored the whole file as another note, so composing the answer sent every copy: one sec.gov task stored a 23 MB file ten times and spent $30.90 composing ([#1299](https://github.com/agent-labs-dev/fastbrowse/issues/1299)).
 
