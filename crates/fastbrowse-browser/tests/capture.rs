@@ -63,6 +63,18 @@ async fn inline_shadow_text_stays_in_its_sentence() {
             "root.innerHTML = 'pre <input aria-label=Quantity>'",
             "Price: pre total",
         ),
+        (
+            "link",
+            "<p><a href=https://example.test/target>Before <span id=host></span></a></p>",
+            "root.textContent = 'Label'",
+            "Before Label",
+        ),
+        (
+            "cell",
+            "<table><tr><td>Price: <span id=host></span> total</td></tr></table>",
+            "root.textContent = 'pre'",
+            "| Price: pre total |",
+        ),
     ];
     for (name, body, shadow, expected) in cases {
         set_body(&h.session, body).await;
@@ -75,6 +87,10 @@ async fn inline_shadow_text_stays_in_its_sentence() {
         let read: Vec<_> =
             capture.blocks.iter().filter(|b| b.kind != BlockKind::Observation).map(|b| text_of(&capture, b)).collect();
         assert_eq!(read, [*expected], "{name}");
+        if *name == "link" {
+            let link = capture.blocks.iter().find(|b| b.kind != BlockKind::Observation).unwrap();
+            assert_eq!(link.href.as_deref(), Some("https://example.test/target"));
+        }
         if *name == "control" {
             assert!(texts(&capture).contains(&"Quantity: [empty]".to_owned()), "{:?}", texts(&capture));
         }
