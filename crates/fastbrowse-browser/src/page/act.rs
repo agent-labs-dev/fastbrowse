@@ -1777,6 +1777,16 @@ impl CdpPage {
         }
     }
 
+    /// The mouse button goes down (or up) over CDP: the agent cursor squeezes and rings (or lets go) to match, for show.
+    async fn press_feedback(&self, down: bool) {
+        #[cfg(feature = "cursor")]
+        if let Some(cursor) = &self.cursor {
+            cursor.press(down).await;
+        }
+        #[cfg(not(feature = "cursor"))]
+        let _ = down;
+    }
+
     async fn click_point(
         &self,
         target: &Target,
@@ -1794,7 +1804,10 @@ impl CdpPage {
             self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&target.0)))
         };
         self.note_press();
-        tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"))?;
+        self.press_feedback(true).await;
+        let sent = tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"));
+        self.press_feedback(false).await;
+        sent?;
         self.session.choosers_pinned().await;
         Ok((StepOutcome::Executed, None, None))
     }
@@ -1930,6 +1943,7 @@ impl CdpPage {
         let session_id = target.0.as_str();
         let press = json!({"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1, "buttons": 1});
         self.note_press();
+        self.press_feedback(true).await;
         self.input(self.session.send("Input.dispatchMouseEvent", press, Some(session_id))).await?;
         // A press with no travel is a click; the drag starts on the first move that clears Chrome's threshold.
         sleep(secs(DRAG_STEP_SECONDS)).await;
@@ -1991,7 +2005,9 @@ impl CdpPage {
 
     async fn release(&self, session_id: &str, x: f64, y: f64) -> Result<(), BrowserError> {
         let params = json!({"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1, "buttons": 0});
-        self.input(self.session.send("Input.dispatchMouseEvent", params, Some(session_id))).await
+        let sent = self.input(self.session.send("Input.dispatchMouseEvent", params, Some(session_id))).await;
+        self.press_feedback(false).await;
+        sent
     }
 
     /// Dispatch an input event without waiting on a handler that a JavaScript dialog is blocking.
