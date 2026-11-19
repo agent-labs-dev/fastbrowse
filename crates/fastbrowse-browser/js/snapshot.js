@@ -1347,8 +1347,9 @@
     // its own element and takes its own click, so it is pictured, not drawn: Leaflet's circle marked drawn had the run
     // asked whether the task needed a click inside it, and stop when it judged so. An image the page itself gives a
     // widget role is that one control: Leaflet's marker, role button, marked drawn drew the step to it as the surface
-    // that held the red circle beside it.
-    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role'))) base.drawn = true;
+    // that held the red circle beside it. An element that names itself draggable is a drag source for the page's own
+    // drag and drop, dragged onto a drop zone: drawn on, a drag would stay inside it and no zone would be reached.
+    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && e.getAttribute('draggable') !== 'true') base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
