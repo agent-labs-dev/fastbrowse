@@ -97,10 +97,9 @@ impl Fake {
     /// `replies` to `key`'s requests in order after any set before, the last repeated.
     fn replies(&self, key: &str, replies: impl IntoIterator<Item = Value>) -> &Fake {
         let dir = self.program.parent().unwrap();
-        let mut n = (1..).find(|n| !dir.join(format!("{key}.{n}")).exists()).unwrap();
-        for reply in replies {
+        let first = (1..).find(|n| !dir.join(format!("{key}.{n}")).exists()).unwrap();
+        for (n, reply) in (first..).zip(replies) {
             std::fs::write(dir.join(format!("{key}.{n}")), format!("{reply}\n")).unwrap();
-            n += 1;
         }
         self
     }
