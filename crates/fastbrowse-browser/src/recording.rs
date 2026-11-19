@@ -585,6 +585,14 @@ fn filter_chain(captions: bool, cursor: bool, style: &str) -> String {
 
 /// The cursor as an ASS overlay: an arrow that glides into each action point in the 400 ms before the action, stays
 /// there until the next one, and a ring that swells and fades on each press of the mouse. Points are CSS pixels, scaled to the frame.
+/// The brackets' animation on a press, in milliseconds and times their resting size: they close in over the last
+/// `LOCK_MS` of the glide from `LOCK_FROM`, squeeze to `PRESSED`, and settle back, as deskpilot's cursor does.
+const LOCK_MS: i64 = 160;
+const SQUEEZE_MS: i64 = 100;
+const SETTLE_MS: i64 = 100;
+const LOCK_FROM: f64 = 2.0;
+const PRESSED: f64 = 0.7;
+
 fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32) -> String {
     let mut out = format!(
         "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,1,0,7,0,0,0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -602,19 +610,35 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
         }
         let at = seconds(mark);
         let (x, y) = point(mark);
-        let (start, placed) = match i.checked_sub(1).map(|previous| &marks[previous]) {
+        let (start, placed, glide) = match i.checked_sub(1).map(|previous| &marks[previous]) {
             Some(previous) => {
                 let (px, py) = point(previous);
                 let start = (at - 0.4).max(seconds(previous));
                 let glide = ((at - start) * 1000.0).round();
-                (start, format!("\\move({px},{py},{x},{y},0,{glide})"))
+                (start, format!("\\move({px},{py},{x},{y},0,{glide})"), glide as i64)
             }
-            None => (at, format!("\\pos({x},{y})")),
+            None => (at, format!("\\pos({x},{y})"), 0),
+        };
+        // A pressing mark's brackets are wide in flight, close in as it lands, squeeze while the button is down and
+        // settle back, as deskpilot's agent cursor does; a hover only glides.
+        let animation = if mark.pressed {
+            let scale = |percent: f64| format!("\\fscx{0}\\fscy{0}", (size * percent).round());
+            let (land, settle) = ((glide - LOCK_MS).max(0), glide + SQUEEZE_MS);
+            format!(
+                "{}\\t({land},{glide},{})\\t({glide},{settle},{})\\t({settle},{},{})",
+                scale(LOCK_FROM),
+                scale(1.0),
+                scale(PRESSED),
+                settle + SETTLE_MS,
+                scale(1.0)
+            )
+        } else {
+            format!("\\fscx{size}\\fscy{size}")
         };
         // The result card is no longer the page that supplied these coordinates.
         let end = marks.get(i + 1).map_or(until, |next| (seconds(next) - 0.4).max(at)).min(until);
         out.push_str(&format!(
-            "Dialogue: 2,{},{},Default,,0,0,0,,{{{placed}\\an5\\fscx{size}\\fscy{size}\\p1\\bord1\\shad0\\1c&H3052C5&\\3c&HFFFFFF&}}m -11 -5 l -11 -11 -5 -11 -5 -9 -9 -9 -9 -5 m 5 -11 l 11 -11 11 -5 9 -5 9 -9 5 -9 m 11 5 l 11 11 5 11 5 9 9 9 9 5 m -5 11 l -11 11 -11 5 -9 5 -9 9 -5 9 m -1 -1 l 1 -1 1 1 -1 1{{\\p0}}\n",
+            "Dialogue: 2,{},{},Default,,0,0,0,,{{{placed}\\an5{animation}\\p1\\bord1\\shad0\\1c&H3052C5&\\3c&HFFFFFF&}}m -11 -5 l -11 -11 -5 -11 -5 -9 -9 -9 -9 -5 m 5 -11 l 11 -11 11 -5 9 -5 9 -9 5 -9 m 11 5 l 11 11 5 11 5 9 9 9 9 5 m -5 11 l -11 11 -11 5 -9 5 -9 9 -5 9 m -1 -1 l 1 -1 1 1 -1 1{{\\p0}}\n",
             ass_time(start),
             ass_time(end)
         ));
@@ -745,6 +769,44 @@ mod tests {
         assert!(ass.contains("Dialogue: 1,0:00:02.00,"));
         assert!(!ass.contains("Dialogue: 1,0:00:03.00,"));
         assert_eq!(ass.matches("Dialogue: 1,").count(), 2);
+    }
+
+    #[test]
+    fn a_press_closes_the_brackets_in_and_a_hover_only_glides() {
+        let origin = Instant::now();
+        let mark = |operation, pressed, secs| PointerMark {
+            at: origin + std::time::Duration::from_secs(secs),
+            x: 10.0,
+            y: 10.0,
+            operation,
+            pressed,
+            width: 100.0,
+            height: 100.0,
+        };
+        let marks = [mark(Operation::Click, true, 1), mark(Operation::Hover, false, 3)];
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
+        let lines: Vec<&str> = ass.lines().filter(|line| line.starts_with("Dialogue: 2,")).collect();
+        // 140 is the resting scale at this width: wide at the start, tight on landing, squeezed, then back.
+        assert!(lines[0].contains(
+            "\\fscx280\\fscy280\\t(0,0,\\fscx140\\fscy140)\\t(0,100,\\fscx98\\fscy98)\\t(100,200,\\fscx140\\fscy140)"
+        ));
+        assert!(lines[1].contains("\\fscx140\\fscy140\\p1") && !lines[1].contains("\\t("));
+    }
+
+    #[test]
+    fn a_press_after_a_glide_closes_in_over_its_last_160_ms() {
+        let origin = Instant::now();
+        let mark = |secs| PointerMark {
+            at: origin + std::time::Duration::from_secs(secs),
+            x: 10.0,
+            y: 10.0,
+            operation: Operation::Click,
+            pressed: true,
+            width: 100.0,
+            height: 100.0,
+        };
+        let ass = cursor_ass(&[mark(1), mark(3)], origin, origin + std::time::Duration::from_secs(5), 1280, 720);
+        assert!(ass.contains("\\t(240,400,\\fscx140\\fscy140)\\t(400,500,\\fscx98\\fscy98)\\t(500,600,"));
     }
 
     #[test]
