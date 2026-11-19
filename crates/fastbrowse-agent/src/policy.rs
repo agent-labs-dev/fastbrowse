@@ -1372,24 +1372,38 @@ const LONG_CONTEXT_BYTES: usize = 32_000;
 
 /// Whether the request's text fits Jev's input limit; its pictures are counted by `pictures_fit`.
 pub fn fits(request: &Request, config: &Config) -> bool {
-    room(request, config) >= 0
+    room(&request.state, &request.questions, config) >= 0
 }
 
-/// Whether the request fits Jev's input limit with the tokens of every picture it refers to, once for each use.
+/// Whether the request, and each target question asked after a group is chosen, fits Jev's input limit with the tokens
+/// of every picture it refers to, once for each use. A group's question shows its members' cards, which the first
+/// request does not.
 fn pictures_fit(request: &Request, config: &Config) -> bool {
-    let written = format!("{}{}", request.state, serde_json::to_string(&request.questions).unwrap_or_default());
-    let tokens: i64 = request
-        .images
-        .iter()
-        .map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png))
-        .sum();
-    room(request, config) >= config.tokens.decision_chars_of(tokens)
+    let asked = |questions: &IndexMap<String, Question>| {
+        let written = format!("{}{}", request.state, serde_json::to_string(questions).unwrap_or_default());
+        let tokens: i64 = request
+            .images
+            .iter()
+            .map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png))
+            .sum();
+        room(&request.state, questions, config) >= config.tokens.decision_chars_of(tokens)
+    };
+    asked(&request.questions)
+        && request.groups.iter().all(|(&operation, groups)| {
+            groups.iter().all(|group| asked(&group_target_question(request, operation, group)))
+        })
 }
 
-/// The characters of Jev's input limit the request's state leaves unused beside its questions.
-fn room(request: &Request, config: &Config) -> i64 {
-    let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-    config.tokens.input_chars(&written) - text::len(&dumps(&request.state)) as i64
+/// The characters of Jev's input limit `state` leaves unused beside `questions`.
+fn room(state: &Value, questions: &IndexMap<String, Question>, config: &Config) -> i64 {
+    let written: Vec<String> = questions.values().map(Dump::dump_json).collect();
+    config.tokens.input_chars(&written) - text::len(&dumps(state)) as i64
+}
+
+/// The question that picks a target from `group` once Jev has chosen it for `operation`.
+fn group_target_question(request: &Request, operation: Operation, group: &[Control]) -> IndexMap<String, Question> {
+    let question = target_question(operation, group, &request.target_rules, &request.looks);
+    IndexMap::from([(keys::target(operation), question.into())])
 }
 
 /// The bytes the request's body takes as the Jev client sends it: its state and questions as JSON, and each picture
@@ -1477,11 +1491,7 @@ async fn evaluate(
         let group_answer = choice_answer(&evaluation, &keys::group(operation))?;
         let group = &groups[group_index(&group_answer.choice, groups.len())?];
         let key = keys::target(operation);
-        let questions = IndexMap::from([(
-            key.clone(),
-            target_question(operation, group, &request.target_rules, &request.looks).into(),
-        )]);
-        let inner = ask(&questions).await?;
+        let inner = ask(&group_target_question(request, operation, group)).await?;
         let target_answer = choice_answer(&inner, &key)?;
         target = Some(find_control(group, &target_answer.choice)?);
         // The element was only ever chosen from inside the group, so a doubtful group is a doubtful target.
@@ -2743,6 +2753,37 @@ mod tests {
         let kept = carded.iter().filter(|carded| **carded).count();
         assert!((1..8).contains(&kept), "{carded:?}");
         assert!(carded[8 - kept..].iter().all(|carded| *carded), "the newest cards are kept: {carded:?}");
+    }
+
+    /// A group's follow-up shows its members' cards, which the request that chose the group did not: with the run's
+    /// cards filling most of Jev's input limit, the follow-up is fitted before the first request is sent, rather than
+    /// sent and refused.
+    #[test]
+    fn test_a_group_follow_up_whose_cards_overrun_jevs_input_limit_is_fitted_before_asking() {
+        let card = |shade: u8| {
+            let mut png = Vec::new();
+            image::RgbaImage::from_pixel(1568, 882, image::Rgba([shade, 0, 0, 255]))
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            png
+        };
+        let inner =
+            Fake { options: 10, ..fake(&[("operation", "click"), ("click_group", "2"), ("click_target", "b9")], "") };
+        let jev = Counting { inner, refused: Mutex::new(0) };
+        let mut context = StepContext::new("add the red kettle");
+        context.history = (0..7u8)
+            .map(|i| {
+                let mut entry = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, false);
+                entry.look = Some(Look { before: card(i), after: None });
+                entry
+            })
+            .collect();
+        context.looks = (8..11).map(|i| (format!("b{i}"), card(200 + i as u8))).collect();
+        let mut page = observation((0..12).map(button).collect());
+        page.viewport_text = "Plain page text. ".repeat(300);
+        let decision = block_on(decide(&jev, &page, &context, &grouped(), None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.target.as_ref().unwrap().id, "b9");
+        assert_eq!(*jev.refused.lock().unwrap(), 0, "a follow-up Jev counts past its limit was sent");
     }
 
     /// A request no larger than Jev's documented limit in tokens, at 1.5 characters a token.
