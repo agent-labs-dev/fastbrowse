@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A comparison between records the task names, such as which of httpx and requests has the newer release, ranges over only those records on the first answer. The answer writer was told the records' kind once with the task's scope and once without it, and wrote the kind alone in most first drafts, so the answer was rejected as comparing every package and written again ([#1270](https://github.com/agent-labs-dev/fastbrowse/issues/1270)).
+
 - An answer rejected for copying more than the task asks is rewritten knowing which page text it copied. Told only that the check failed, the rewrite copied "katherine@example.com." with the sentence's period again and the run ended unverified ([#1283](https://github.com/agent-labs-dev/fastbrowse/issues/1283)).
 
 - Comparison answers include the calculated value when asked for it alongside the winning record. The answer could name the winner while leaving the value in its formatting data ([#1304](https://github.com/agent-labs-dev/fastbrowse/issues/1304)).

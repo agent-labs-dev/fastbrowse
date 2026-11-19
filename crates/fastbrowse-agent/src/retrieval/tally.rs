@@ -54,6 +54,12 @@ pub enum Op {
 pub struct Tally {
     pub op: Op,
     pub of: String,
+    /// Which records of that kind the task lets count, such as "by Albert Einstein" or "httpx or requests". Written into
+    /// `of`, the restriction shared one string with the kind, and the composer, also told `of` is the record kind a
+    /// nested selection ranges over, wrote "package" for a task comparing httpx and requests in 10 of 10 replays, so the
+    /// task's own check rejected a comparison over every package. Given its own slot it named both in 10 of 10 (#1270).
+    #[serde(default)]
+    pub scope: Option<String>,
     pub field: Option<String>,
     /// The second cheapest is the minimum at rank 2: with no rank a ranking had no tally, so its claim cited one record
     /// for a place among all of them and was rejected. None is the extreme itself.
@@ -85,6 +91,14 @@ impl Tally {
         self.rank.unwrap_or(1)
     }
 
+    /// The records a tally ranges over, as a question about them names them: their kind with the task's scope.
+    pub fn records(&self) -> String {
+        match self.scope.as_deref().map(str::trim) {
+            Some(scope) if !scope.is_empty() => format!("{} {scope}", self.of),
+            _ => self.of.clone(),
+        }
+    }
+
     /// The group a count per group counts, with the field that groups the records.
     pub fn grouped(&self) -> Option<(&str, &str)> {
         self.by.as_deref().zip(self.group.as_deref())
@@ -101,6 +115,7 @@ impl Schema for Tally {
                 vec![
                     Field::required("op", Ty::literals(ops)),
                     Field::required("of", Ty::Str),
+                    Field::default("scope", Ty::optional(Ty::Str), serde_json::Value::Null),
                     field,
                     Field::default("rank", Ty::optional(Ty::Int), serde_json::Value::Null),
                     Field::default("by", Ty::optional(Ty::Str), serde_json::Value::Null),
@@ -221,7 +236,7 @@ fn unvalued_questions(
     fields: &HashMap<(usize, usize), FieldAnswer>,
     most: usize,
 ) -> IndexMap<String, Question> {
-    let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
+    let (of, field) = (text::repr(&tally.records()), text::repr(tally.field.as_deref().unwrap_or("value")));
     let mut questions = IndexMap::new();
     for &note in records {
         if !matches!(fields.get(&(index, note)), Some(FieldAnswer::NoValue)) {
@@ -536,7 +551,7 @@ fn example(notes: &Notes, cited: &[String]) -> Option<serde_json::Value> {
 
 /// Whether a count includes this whole record, rather than a mention or part of it.
 fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&serde_json::Value>) -> Question {
-    let of = text::repr(&tally.of);
+    let of = text::repr(&tally.records());
     // Asked about a biography that quotes its author, with only `of` ("quote by J.K. Rowling across the whole site")
     // to go on, Jev said it was one such quote in 3 replays of 10, and the count was one too many. Shown a record the
     // claim cites, it said no 10 times of 10, and still said yes to every quote record.
@@ -570,7 +585,7 @@ const NO_RECORD: &str = "no_record";
 /// Qualification and the field are one decision: independent questions can admit an unrelated date, then reject it.
 /// A draft can name a broader kind than the task asks for, so membership also applies the task's own scope.
 fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], grouped: bool) -> Question {
-    let of = text::repr(&tally.of);
+    let of = text::repr(&tally.records());
     let field = text::repr(tally.field.as_deref().unwrap_or("value"));
     let mut criteria: IndexMap<String, serde_json::Value> = offers
         .iter()
@@ -769,7 +784,7 @@ fn per_group(
     groups: &Groups,
     found: &[Candidate],
 ) -> std::result::Result<Worked, Unworked> {
-    let (of, by_repr) = (text::repr(&tally.of), text::repr(by));
+    let (of, by_repr) = (text::repr(&tally.records()), text::repr(by));
     let mut order: Vec<(usize, &String)> = groups.values().map(|(name, members)| (members.len(), name)).collect();
     order.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
     let listed = order.iter().map(|(n, name)| format!("{} {n}", text::repr(name))).collect::<Vec<_>>().join(", ");
@@ -1192,7 +1207,11 @@ async fn select_records(
         .filter(|note| seen.insert((groups[note].clone(), text::squash(&found[*note].quote), found[*note].occurrence)))
         .collect();
     let missing = |note: usize| Unworked::Notes {
-        reason: format!("This note is one {} but states no {}.", text::repr(&tally.of), text::repr(&within.field)),
+        reason: format!(
+            "This note is one {} but states no {}.",
+            text::repr(&tally.records()),
+            text::repr(&within.field)
+        ),
         notes: vec![found[note].id.clone()],
     };
     let inner = Tally { field: Some(within.field.clone()), ..tally.clone() };
@@ -1390,7 +1409,7 @@ pub(super) async fn work_selected_with_slots(
         // The counts of one kind of record per group are worked out together: each record is judged and its group
         // read once.
         if let Some((by, _)) = tally.grouped() {
-            let leader = *leaders.entry((tally.of.clone(), by.to_string())).or_insert(*index);
+            let leader = *leaders.entry((tally.records(), by.to_string())).or_insert(*index);
             led.insert(*index, leader);
             if leader != *index {
                 continue;
@@ -1498,7 +1517,7 @@ pub(super) async fn work_selected_with_slots(
         if let Some((by, _)) = tally.grouped() {
             let leader = led[index];
             if leader == *index {
-                grouping.insert(*index, read_groups(llm, by, &tally.of, &records, &found, ledger).await?);
+                grouping.insert(*index, read_groups(llm, by, &tally.records(), &records, &found, ledger).await?);
             }
             continue;
         }
@@ -1516,7 +1535,7 @@ pub(super) async fn work_selected_with_slots(
             continue;
         }
         if records.is_empty() {
-            let reason = format!("No note read is one {}.", text::repr(&tally.of));
+            let reason = format!("No note read is one {}.", text::repr(&tally.records()));
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
@@ -1563,7 +1582,7 @@ pub(super) async fn work_selected_with_slots(
             // A record whose field is not in its note is counted as having none, and so leaves no value to state.
             let Some(amount) = chosen.and_then(amount) else {
                 let field = text::repr(tally.field.as_deref().unwrap_or("value"));
-                let reason = format!("This note is one {} but states no {field}.", text::repr(&tally.of));
+                let reason = format!("This note is one {} but states no {field}.", text::repr(&tally.records()));
                 worked.insert(index, Err(Unworked::Notes { reason, notes: vec![found[note].id.clone()] }));
                 break;
             };
@@ -1616,7 +1635,7 @@ pub(super) async fn work_selected_with_slots(
                          different values.",
                         tally.place(),
                         text::repr(tally.field.as_deref().unwrap_or("value")),
-                        text::repr(&tally.of),
+                        text::repr(&tally.records()),
                         values.len()
                     );
                     worked.insert(index, Err(Unworked::Draft(reason)));
@@ -1738,7 +1757,8 @@ pub(super) async fn winner_fields(
     let candidates = candidates_from(notes, false);
     let ids = worked.winner_ids.as_ref().unwrap_or(&worked.evidence_ids);
     let Some(records) =
-        distinct_winners(jev, task, &tally.of, worked.winner_records.clone(), &candidates, tokens, ledger).await?
+        distinct_winners(jev, task, &tally.records(), worked.winner_records.clone(), &candidates, tokens, ledger)
+            .await?
     else {
         return Ok(Err(Unworked::Unjudged));
     };
@@ -1771,8 +1791,11 @@ pub(super) async fn winner_fields(
     let records: Vec<usize> = (0..found.len()).collect();
     let mut result = HashMap::new();
     for field in fields {
-        let Some(groups) = read_groups(llm, field, &tally.of, &records, &found, ledger).await? else {
-            return Ok(Err(Unworked::Notes { reason: unread_field(field, &tally.of, &found), notes: ids.clone() }));
+        let Some(groups) = read_groups(llm, field, &tally.records(), &records, &found, ledger).await? else {
+            return Ok(Err(Unworked::Notes {
+                reason: unread_field(field, &tally.records(), &found),
+                notes: ids.clone(),
+            }));
         };
         // A record's name alone need not answer the whole task. This checks its requested field;
         // review_claims checks the assembled claim against the task with asks_check and coverage_question (#1268).
@@ -1780,7 +1803,7 @@ pub(super) async fn winner_fields(
         for (group, (written, members)) in groups.values().enumerate() {
             for record in members {
                 questions.insert(format!("field{group}/r{record}"), Question::Noul(NoulQuestion::new(
-                    format!("{UNTRUSTED} Code selected this record by comparing {} across {}. Judge only whether the copied text states this record's requested field; whether that field alone answers task is checked separately. Does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? The record includes its captured headings as well as its quotes. A heading that names the record can state its requested field even when the quote states only a different field. Copied text: {}. Record: {}", text::repr(tally.field.as_deref().expect("a worked numeric extreme has a field")), text::repr(&tally.of), text::repr(field), text::repr(written), dumps(&found[*record].note)),
+                    format!("{UNTRUSTED} Code selected this record by comparing {} across {}. Judge only whether the copied text states this record's requested field; whether that field alone answers task is checked separately. Does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? The record includes its captured headings as well as its quotes. A heading that names the record can state its requested field even when the quote states only a different field. Copied text: {}. Record: {}", text::repr(tally.field.as_deref().expect("a worked numeric extreme has a field")), text::repr(&tally.records()), text::repr(field), text::repr(written), dumps(&found[*record].note)),
                     Some("The copied text is exactly this record's requested field."),
                     Some("It is missing, ambiguous, incomplete, another field, or another record's value."),
                 )));
@@ -1788,7 +1811,7 @@ pub(super) async fn winner_fields(
         }
         let Some(answers) = ask(
             jev,
-            &json!({"task":task,"field":field,"record_kind":tally.of,"compared_field":tally.field}),
+            &json!({"task":task,"field":field,"record_kind":tally.records(),"compared_field":tally.field}),
             &questions,
             tokens,
             ledger,
@@ -1802,7 +1825,7 @@ pub(super) async fn winner_fields(
                 Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) && value.probability > 0.5 => {}
                 Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) => {
                     return Ok(Err(Unworked::Notes {
-                        reason: incomplete_field(field, &tally.of, written_of(&groups, key), &found, key),
+                        reason: incomplete_field(field, &tally.records(), written_of(&groups, key), &found, key),
                         notes: ids.clone(),
                     }));
                 }
@@ -1931,6 +1954,7 @@ mod tests {
         let tally = Tally {
             op: Op::Sum,
             of: "product".into(),
+            scope: None,
             field: Some("price".into()),
             rank: None,
             by: None,
@@ -1952,6 +1976,7 @@ mod tests {
         let tally = Tally {
             op: Op::Sum,
             of: "row in the second table".into(),
+            scope: None,
             field: Some("Due".into()),
             rank: None,
             by: None,
@@ -1974,6 +1999,7 @@ mod tests {
         let tally = Tally {
             op: Op::Max,
             of: "PyPI package".into(),
+            scope: None,
             field: Some("latest release date".into()),
             rank: None,
             by: None,
@@ -1995,6 +2021,7 @@ mod tests {
         let tally = Tally {
             op: Op::Max,
             of: "package release".into(),
+            scope: None,
             field: Some("release date".into()),
             rank: None,
             by: None,
@@ -2019,6 +2046,7 @@ mod tests {
         let tally = Tally {
             op: Op::Min,
             of: "shop".into(),
+            scope: None,
             field: Some("price".into()),
             rank: None,
             by: None,
@@ -2193,6 +2221,7 @@ mod tests {
         let tally = Tally {
             op: Op::Count,
             of: "release file".into(),
+            scope: None,
             field: None,
             rank: None,
             by: None,
@@ -2277,6 +2306,7 @@ mod tests {
         let tally = Tally {
             op: Op::Count,
             of: "quote".into(),
+            scope: None,
             field: None,
             rank: None,
             by: None,
@@ -2584,6 +2614,7 @@ mod tests {
             let tally = Tally {
                 op: Op::Max,
                 of: "record".into(),
+                scope: None,
                 field: Some("price".into()),
                 rank: None,
                 by: None,
@@ -2644,6 +2675,7 @@ mod tests {
         let tally = Tally {
             op: Op::Max,
             of: "record".into(),
+            scope: None,
             field: Some("price".into()),
             rank: None,
             by: None,
@@ -2761,6 +2793,7 @@ mod tests {
         let tally = Tally {
             op: Op::Min,
             of: "supplier of the valve".into(),
+            scope: None,
             field: Some("price".into()),
             rank: None,
             by: None,
@@ -3025,6 +3058,7 @@ mod tests {
         let tally = Tally {
             op: Op::Max,
             of: "PyPI package (httpx or requests)".into(),
+            scope: None,
             field: Some("latest release date".into()),
             rank: None,
             by: None,
@@ -3082,6 +3116,7 @@ mod tests {
         let tally = Tally {
             op,
             of: "record".into(),
+            scope: None,
             field: Some("amount".into()),
             rank: None,
             by: None,
@@ -3196,6 +3231,7 @@ mod tests {
             let tally = Tally {
                 op: Op::Min,
                 of: "record".into(),
+                scope: None,
                 field: Some("amount".into()),
                 rank: None,
                 by: None,
@@ -3243,6 +3279,7 @@ mod tests {
         let tally = Tally {
             op: Op::Min,
             of: "release".into(),
+            scope: None,
             field: Some("release date".into()),
             rank: None,
             by: None,
@@ -3331,6 +3368,7 @@ mod tests {
         let tally = Tally {
             op: Op::Max,
             of: "release".into(),
+            scope: None,
             field: Some("price".into()),
             rank: None,
             by: None,

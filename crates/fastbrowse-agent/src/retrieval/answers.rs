@@ -786,7 +786,7 @@ impl ComposeItem {
 
 // Told only "self-contained", the composer split a price off its record as "It costs £56.88.", which its support
 // check, judging that claim alone, rightly failed (6 of 10 first drafts; 0 of 15 once told how claims are checked).
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price, in which form code writes the computed part, so prose beside it never repeats a unit written there; the value as the notes write it even when the claim names only the record that holds it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record without the group (\"quote\"), by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false.\n\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, such as \"quote\", \"book\" or \"package\"), scope (which of those records the task lets count, such as \"by Albert Einstein\", \"in the Mystery category\", or \"httpx or requests\" when the task names the records it compares; null when every record of that kind counts; a record is never left out of scope for its value, so a selection by value, such as the cheapest or each store's newest listing, belongs to the tally or within, never to scope), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price, in which form code writes the computed part, so prose beside it never repeats a unit written there; the value as the notes write it even when the claim names only the record that holds it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record (\"quote\"), scope without the group, by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. When the records a min or max compares are each group's lowest or highest by another value, such as each supplier's latest offer, set within: by (the field that groups them, such as \"supplier\"), op (min or max) and field (the value compared inside each group, such as \"date\"); code selects each group's tied extremes before the outer tally, which is a min or max with a field and no by or group. Otherwise set within null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false.\n\n";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
@@ -802,7 +802,7 @@ const STEPS_TAKEN: &str = "When the task lists the steps this run took, they are
 fn compose_messages(task: &str, written: &[String]) -> [Message; 2] {
     [
         Message::system(format!(
-            "{DESCRIPTIVE_VALUES}\n{SOURCE_STATE}\n{STEPS_TAKEN}\n\n{COMPOSER}{COMPOSITION}\nA nested numeric selection uses within: by names the grouping field, op is min or max, and field names the inner compared value. Code selects each group's tied extremes before the outer tally. tally.of names the ordinary record kind, without asking Jev to order dates or compare values in its membership rule. within requires an outer min or max tally with a field and no by or group count grouping.\n\n# Trust\n{UNTRUSTED}"
+            "{DESCRIPTIVE_VALUES}\n{SOURCE_STATE}\n{STEPS_TAKEN}\n\n{COMPOSER}{COMPOSITION}\n\n# Trust\n{UNTRUSTED}"
         )),
         Message::user(format!("# Task\n{task}\n\n# Notes\n{}", written.join("\n"))),
     ]
@@ -1736,7 +1736,7 @@ fn ordinal(place: u64) -> String {
 /// choice rejected its count in favor of its maximum, and matching sibling record wording could not prevent it.
 /// Each calculation is checked independently; the computed group's identity and place are checked elsewhere.
 fn asks_check(task: &str, tally: &Tally) -> (Question, String) {
-    let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
+    let (of, field) = (text::repr(&tally.records()), text::repr(tally.field.as_deref().unwrap_or("value")));
     let worded = match tally.op {
         Op::Count => match tally.grouped() {
             Some((by, _)) => {
@@ -1782,7 +1782,7 @@ fn asks_check(task: &str, tally: &Tally) -> (Question, String) {
     let reason = format!(
         "the task does not ask for {worded}: work out with the tally what the task asks to be told about {of}, whether how \
          many there are, a value each has added up, or the lowest or highest one, over the records the task names with \
-         the scope it gives them in of, or state the value with tally null if the task asks for none of these"
+         the restriction it places on them in scope, or state the value with tally null if the task asks for none of these"
     );
     (question, reason)
 }
@@ -1819,13 +1819,14 @@ fn tally_checks_selected(
         "records selected by code at each {} group's {operation} {} among {}",
         text::repr(&within.by),
         text::repr(&within.field),
-        text::repr(&tally.of)
+        text::repr(&tally.records())
     );
+    outer.scope = None;
     tally_checks(&outer, text, winners)
 }
 
 fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec<(&'static str, Question, String)> {
-    let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
+    let (of, field) = (text::repr(&tally.records()), text::repr(tally.field.as_deref().unwrap_or("value")));
     let claim = text::repr(text);
     let side = match tally.op {
         Op::Count | Op::Sum => {
@@ -3837,7 +3838,8 @@ mod tests {
 
     fn tallied(text: &str, written: &str, op: tally::Op, of: &str, field: Option<&str>, ids: Vec<String>) -> Claim {
         let field = field.map(str::to_string);
-        let tally = Tally { op, of: of.into(), field, rank: None, by: None, group: None, written: written.into() };
+        let tally =
+            Tally { op, of: of.into(), scope: None, field, rank: None, by: None, group: None, written: written.into() };
         Claim { tally: Some(tally), ..Claim::new(text, ids) }
     }
 
@@ -5228,6 +5230,31 @@ mod tests {
         let schema = fastbrowse_core::schema::json_schema(&AnswerDraft::ty()).to_string();
         assert!(!schema.contains("\"partial\""), "{schema}");
         assert!(!COMPOSER.contains("partial"), "{COMPOSER}");
+    }
+
+    /// Told that `of` holds the task's scope, then that it names the ordinary record kind beside a nested selection,
+    /// the composer wrote "package" for a task comparing httpx and requests, and the task's own check rejected a
+    /// comparison over every package (#1270). The scope has a field of its own, and the checks name it.
+    #[test]
+    fn a_tally_states_the_task_scope_in_its_own_field_and_its_checks_name_it() {
+        let [system, _] = compose_messages("", &[]);
+        assert_eq!(system.content.matches("of (").count(), 1, "{}", system.content);
+        assert!(!system.content.contains("ordinary record kind"), "{}", system.content);
+        let schema = fastbrowse_core::schema::json_schema(&AnswerDraft::ty()).to_string();
+        assert!(schema.contains("\"scope\""), "{schema}");
+        let tally: Tally = serde_json::from_value(json!({
+            "op": "max", "of": "package", "scope": "httpx or requests", "field": "latest release date", "written": "1"
+        }))
+        .unwrap();
+        let (Question::Noul(asked), reason) = asks_check("Which is newer, httpx or requests?", &tally) else {
+            panic!("the asks check is yes-or-no")
+        };
+        assert!(
+            asked.instructions.contains("every 'package httpx or requests' and nothing narrower"),
+            "{}",
+            asked.instructions
+        );
+        assert!(reason.contains("'package httpx or requests'"), "{reason}");
     }
 
     #[test]
