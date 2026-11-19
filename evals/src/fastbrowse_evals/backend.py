@@ -19,7 +19,7 @@ from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets
 from fastbrowse.telemetry import traced
 from parallax.harnesses.browser import BrowserHarness
-from parallax.harnesses.browser.cloud import Browser, cloud_browser
+from parallax.harnesses.browser.cloud import Browser, browser_minutes, cloud_browser
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
 from fastbrowse_evals.evidence import result_answer, step_action
@@ -108,7 +108,8 @@ class FastbrowseHarness(BrowserHarness):
 
     @asynccontextmanager
     async def browser(self, http: httpx.AsyncClient) -> AsyncIterator[Browser]:
-        async with cloud_browser(http, screen=(1120, 780)) as browser:
+        # A browser whose stop is missed (the process was killed) then stops itself when its turn ends.
+        async with cloud_browser(http, screen=(1120, 780), minutes=browser_minutes(self.seconds_left())) as browser:
             yield browser
 
     async def execute(self, turn: TurnInput) -> dict[str, object]:

@@ -1,4 +1,6 @@
 import json
+import time
+from contextlib import asynccontextmanager
 from importlib.metadata import entry_points
 from pathlib import Path
 
@@ -244,3 +246,21 @@ def test_a_cancelled_run_reports_the_pages_and_steps_it_reached() -> None:
     BrowserEvidence.model_validate(
         {"final_page": None, "answer": None, "steps": evidence["step_log"], "pages": pages, "citations": []}
     )
+
+
+async def test_a_cloud_browser_lives_only_as_long_as_its_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A browser whose stop is missed (the process was killed) stops itself when its turn ends, not after Browser
+    Use's 240 minute default (#1264)."""
+    asked: list[int] = []
+
+    @asynccontextmanager
+    async def cloud_browser(http: object, *, screen: tuple[int, int], minutes: int):
+        asked.append(minutes)
+        yield Browser(cdp_url="ws://browser")
+
+    monkeypatch.setattr(backend, "cloud_browser", cloud_browser)
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._turn_ends_at = time.monotonic() + 600
+    async with harness.browser(None):  # ty: ignore[invalid-argument-type]
+        pass
+    assert asked == [10]
