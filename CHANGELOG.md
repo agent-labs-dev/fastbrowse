@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run that began on a site is told which links lead to a different site, and that it follows one only when the task asks for that link or for what that site holds. Shown only each link's address, a run checking a page on a Pages preview followed its store button to the store and ended at the store's security check ([#1137](https://github.com/agent-labs-dev/fastbrowse/issues/1137)).
+
 - A rejected answer draft is written again even after the run recovered from a stall on its way to the notes. Rewrites shared the one stall recovery, so a Books run whose draft swapped two prices, with the check naming both corrections, ended unverified without writing the answer again. Rewrites now have a budget of their own the size of `max_recoveries` ([#1176](https://github.com/agent-labs-dev/fastbrowse/issues/1176)).
 
 - A run that ends unfinished after sending a commit, such as posting a reply, names that commit with what it entered in the commit's own form, and says when the run ended before the page showed the commit taken. Its answer listed every field it had typed into as one that may still hold what it entered, so two replies the run had posted read as unsent ([#1317](https://github.com/agent-labs-dev/fastbrowse/issues/1317)).
