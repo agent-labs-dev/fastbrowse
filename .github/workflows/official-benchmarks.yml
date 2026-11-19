@@ -285,7 +285,6 @@ jobs:
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_UPSTREAM_OPENAI_KEY || secrets.OPENROUTER_JUDGE_API_KEY }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
-          PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL: ${{ vars.PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL }}
           PARALLAX_OFFICIAL_BU_BENCH_ROOT: ${{ github.workspace }}/upstream/bu-bench
           PARALLAX_OFFICIAL_BU_BENCH_JUDGE_PYTHON: ${{ github.workspace }}/upstream/bu-bench/.venv/bin/python
           PARALLAX_OFFICIAL_ONLINE_MIND2WEB_ROOT: ${{ github.workspace }}/upstream/online-mind2web
@@ -295,6 +294,8 @@ jobs:
           TASK_IDS: ${{ inputs.task_ids }}
         run: |
           cd harness/evals
+          # The upstream Online-Mind2Web judge asks the panel's first model, so the Opus refusal above covers it.
+          export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL="${PARALLAX_JUDGE_MODELS%%,*}"
           read -ra ids <<< "$TASK_IDS"
           if [ "${#ids[@]}" -gt 0 ]; then
             selection=("source=$SUITE" "${ids[@]}")
