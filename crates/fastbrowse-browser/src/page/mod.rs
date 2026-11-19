@@ -23,7 +23,8 @@ use fastbrowse_core::models::{Artifact, ArtifactKind, Link, Operation, SourceCon
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::json as json_document;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, Dialog, Media, Observation, Page, PageResult,
+    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, Media, Observation,
+    Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
@@ -1226,9 +1227,9 @@ impl CdpPage {
                 Some((header, data)) if !data.is_empty() => data
                     .iter()
                     .enumerate()
-                    .map(|(row, line)| (format!("download/{index}:{row}"), format!("{header}\n{line}"), false))
+                    .map(|(row, line)| (format!("{DOWNLOAD_SOURCE}{index}:{row}"), format!("{header}\n{line}"), false))
                     .collect(),
-                _ => vec![(format!("download/{index}"), download.text.clone(), download.complete)],
+                _ => vec![(format!("{DOWNLOAD_SOURCE}{index}"), download.text.clone(), download.complete)],
             };
             let heading = if download.complete {
                 format!("Downloaded file: {}", download.name)

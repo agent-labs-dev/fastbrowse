@@ -23,7 +23,7 @@ from parallax.harnesses.browser.site import TRANSIENT_TRANSPORT, Unavailable, re
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
 from fastbrowse_evals.evidence import result_answer, step_action
-from fastbrowse_evals.task_specs import start_url
+from fastbrowse_evals.task_specs import secrets_origin, start_url
 
 DEFAULT_URL = "https://api.fastbrowse.ai"
 POLL_SECONDS = 2.0
@@ -70,8 +70,9 @@ async def _call(http: httpx.AsyncClient, method: str, url: str, what: str, **kwa
 
 def _run_secrets(task: Task) -> list[dict[str, Any]]:
     """The task's logins as the hosted API's per-run inline secrets, each typed only on the start origin."""
-    parts = urlsplit(start_url(task))
-    origin = f"{parts.scheme}://{parts.netloc}"
+    if not task.secrets:
+        return []
+    origin = secrets_origin(task)
     # The runner made the trial INVALID before this point if any of these variables is unset.
     return [{"name": alias, "value": os.environ[env], "origins": [origin]} for alias, env in task.secrets.items()]
 

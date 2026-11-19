@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from fastbrowse.evals.live_tasks import Release
+from fastbrowse.safety import origin_of
 from parallax.models import Area, Capability, Maturity, Provenance, Task, TaskRecord
 from pydantic import BaseModel
 
@@ -743,25 +744,30 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
 _SPECS = tuple(TaskSpec(*spec) for spec in _SPECS_RAW)
 
 
-_SECRET_ENV = {
-    "saucedemo-cart": {"password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD"},
-    "saucedemo-locked-out": {"password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD"},
-    "expandtesting-login": {
-        "username": "FASTBROWSE_EVAL_EXPANDTESTING_USERNAME",
-        "password": "FASTBROWSE_EVAL_EXPANDTESTING_PASSWORD",
-    },
-    "practice-login": {
-        "username": "FASTBROWSE_EVAL_PRACTICE_USERNAME",
-        "password": "FASTBROWSE_EVAL_PRACTICE_PASSWORD",
-    },
-    "saucedemo-checkout": {
-        "username": "FASTBROWSE_EVAL_SAUCEDEMO_USERNAME",
-        "password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD",
-    },
-    "saucedemo-pause": {
-        "username": "FASTBROWSE_EVAL_SAUCEDEMO_USERNAME",
-        "password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD",
-    },
+class Login(NamedTuple):
+    """A task's login: the site it belongs to, the only origin its values are ever typed on, and the environment
+    variable holding each value."""
+
+    origin: str
+    env: dict[str, str]
+
+
+_SAUCEDEMO = "https://www.saucedemo.com"
+_SAUCEDEMO_PASSWORD = {"password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD"}
+_SAUCEDEMO_LOGIN = {"username": "FASTBROWSE_EVAL_SAUCEDEMO_USERNAME", **_SAUCEDEMO_PASSWORD}
+_LOGINS = {
+    "saucedemo-cart": Login(_SAUCEDEMO, _SAUCEDEMO_PASSWORD),
+    "saucedemo-locked-out": Login(_SAUCEDEMO, _SAUCEDEMO_PASSWORD),
+    "expandtesting-login": Login(
+        "https://practice.expandtesting.com",
+        {"username": "FASTBROWSE_EVAL_EXPANDTESTING_USERNAME", "password": "FASTBROWSE_EVAL_EXPANDTESTING_PASSWORD"},
+    ),
+    "practice-login": Login(
+        "https://practicetestautomation.com",
+        {"username": "FASTBROWSE_EVAL_PRACTICE_USERNAME", "password": "FASTBROWSE_EVAL_PRACTICE_PASSWORD"},
+    ),
+    "saucedemo-checkout": Login(_SAUCEDEMO, _SAUCEDEMO_LOGIN),
+    "saucedemo-pause": Login(_SAUCEDEMO, _SAUCEDEMO_LOGIN),
 }
 
 
@@ -775,7 +781,8 @@ def spec_for(task_id: str) -> TaskSpec:
 
 def secret_env(spec_or_task: TaskSpec | str) -> dict[str, str]:
     task_id = spec_or_task.id if isinstance(spec_or_task, TaskSpec) else spec_or_task
-    return dict(_SECRET_ENV.get(task_id, {}))
+    login = _LOGINS.get(task_id)
+    return dict(login.env) if login else {}
 
 
 _ANSWER_MODELS: dict[str, type[BaseModel]] = {"pypi-structured": Release}
@@ -804,7 +811,8 @@ def record(spec: TaskSpec) -> TaskRecord:
         data["bitwarden_item"] = spec.bitwarden_item
     secrets = secret_env(spec)
     requires = {Capability.BROWSER}
-    if secrets:
+    if login := _LOGINS.get(spec.id):
+        data["login_origin"] = login.origin
         requires.add(Capability.CREDENTIALS)
     return TaskRecord(
         id=spec.id,
@@ -828,11 +836,20 @@ def records() -> list[TaskRecord]:
     return [record(spec) for spec in _SPECS]
 
 
-def start_url(task: Task) -> str:
-    """Where a browser task begins. This catalog names it `start_url`; Parallax's official suites (Online-Mind2Web,
-    BU Bench) name the same page `website`, as their upstream datasets do."""
+def start_url(task: Task) -> str | None:
+    """Where a browser task begins. This catalog names it `start_url`; Parallax's official suites name the same page
+    `website`, as their upstream datasets do. BU Bench tasks name no page and begin in a blank browser, so None."""
     for key in ("start_url", "website"):
         value = task.data.get(key)
         if isinstance(value, str):
             return value
-    raise ValueError(f"browser task {task.id} has no start_url or website")
+    return None
+
+
+def secrets_origin(task: Task) -> str:
+    """The one origin a task's logins may be typed on, declared with the login rather than taken from where the
+    task starts."""
+    origin = task.data.get("login_origin")
+    if not isinstance(origin, str):
+        raise ValueError(f"browser task {task.id} has logins but declares no login_origin")
+    return origin_of(origin)
