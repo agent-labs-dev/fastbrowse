@@ -516,15 +516,14 @@ impl Drop for Billing<'_> {
             return;
         }
         if let Some(usage) = self.in_flight.take() {
-            self.charge_unanswered(&usage);
-        }
-        // Drop cannot wait on a price lookup, so only a ceiling already read bounds what was dropped: a capped call reads
-        // it before it sends. Every unpriced line is bounded, the answered one whose receipt lookup was dropped too. The
-        // body last sent holds every earlier attempt's prompt, so it bounds theirs as well.
-        if let Some(ceiling) = self.llm.cached_ceiling(&self.model) {
-            for line in &mut self.costs {
-                if line.dollars.is_none() {
-                    *line = bound(line.clone(), ceiling, self.sent.as_ref().unwrap_or(&Map::new()));
+            let offset = self.charge_unanswered(&usage);
+            // Drop cannot wait on a price lookup, so only a ceiling already read bounds what was dropped: a capped call
+            // reads it before it sends.
+            if let Some(ceiling) = self.llm.cached_ceiling(&self.model) {
+                for line in &mut self.costs[offset..] {
+                    if line.dollars.is_none() {
+                        *line = bound(line.clone(), ceiling, self.sent.as_ref().unwrap_or(&Map::new()));
+                    }
                 }
             }
         }
@@ -893,7 +892,15 @@ impl OpenAICompatibleLLM {
             // would let an unaccounted request pass a dollar cap. A request sent but never delivered carried the same
             // prompt, so it is charged as the answer was; charging it as unknown instead made every run with one slow
             // call stop at its dollar cap.
-            billing.costs.push(with_discarded(cost(&payload, purpose), &usage));
+            //
+            // The receipt lookup below may be dropped, and Drop cannot wait on a price, so the line it would leave is
+            // bounded now from the ceiling a capped call read before it sent: per request, before the requests it stands
+            // for are counted in.
+            let unsettled = match (cost(&payload, purpose), self.cached_ceiling(&billing.model)) {
+                (line, Some(ceiling)) if line.dollars.is_none() => bound(line, ceiling, body),
+                (line, _) => line,
+            };
+            billing.costs.push(with_discarded(unsettled, &usage));
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
             if truncated(&payload).map_err(LLMError::Failed)? {

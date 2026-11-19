@@ -465,6 +465,26 @@ async fn test_cancelled_receipt_lookup_bounds_the_generation_charge_from_the_lis
 }
 
 #[tokio::test(start_paused = true)]
+async fn test_a_dropped_receipt_lookup_bounds_every_request_its_answer_stands_for() {
+    // A request that stalled past its deadline carried the same prompt as the retry that was answered, so a receipt
+    // lookup dropped after that answer is bounded once for each of them.
+    let mut charged = Vec::new();
+    for stalled in [false, true] {
+        let mut steps = vec![reply(200, endpoints())];
+        steps.extend(stalled.then_some(Step::Stall));
+        steps.extend([reply(200, without_cost("generation-1")), Step::Cancel]);
+        let script = Script::new(steps);
+        let ledger = capped(Some(28.0));
+        let llm = client(script.http(), OPENROUTER, LLMPurpose::Start, "writer");
+        assert!(cancelled(generate(&llm, LLMPurpose::Start, &[], Some(&ledger)), &script.cancel).await);
+        let lines = ledger.state().lines.clone();
+        assert_eq!((lines.len(), lines[0].basis), (1, CostBasis::Bounded));
+        charged.push(lines[0].dollars.unwrap());
+    }
+    assert!((charged[1] - 2.0 * charged[0]).abs() < 1e-12, "{charged:?}");
+}
+
+#[tokio::test(start_paused = true)]
 async fn test_a_capped_first_call_dropped_in_flight_is_bounded_so_the_run_can_go_on() {
     // A capped run's first call to a model, dropped before any listing had been read, was charged as unknown and the
     // run stopped with "cannot be enforced" (#1291). An uncapped call reads no listing before it sends.
