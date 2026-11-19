@@ -338,7 +338,9 @@ mod viewport_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let big = dir.join("big.bin");
         std::fs::File::create(&big).unwrap().set_len(Config::default().max_upload_bytes as u64 + 1).unwrap();
-        assert!(attachments(std::slice::from_ref(&big)).unwrap_err().0.contains("upload limit"));
+        let paths = std::slice::from_ref(&big);
+        let mut named = attachments(paths).unwrap();
+        assert!(read_attachments(&mut named, paths).unwrap_err().0.contains("upload limit"));
         assert!(attachments(&[PathBuf::from("..")]).unwrap_err().0.contains("names no file"));
         std::fs::remove_file(&big).unwrap();
         std::fs::remove_dir(&dir).unwrap();
