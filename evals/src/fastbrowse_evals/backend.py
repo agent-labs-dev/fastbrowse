@@ -7,14 +7,18 @@ environment is read as fastbrowse reads it (`environment`).
 
 import json
 import os
+import tempfile
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import assert_never
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import httpx
 from fastbrowse.evals import harness
-from fastbrowse.models import Authorization, Citation, Limits, RunResult, Status
+from fastbrowse.models import Artifact, Authorization, Citation, Limits, RunResult, Status
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets
 from fastbrowse.telemetry import traced
@@ -101,6 +105,7 @@ class FastbrowseHarness(BrowserHarness):
         self._task: Task | None = None
         self._product_status: Status | None = None
         self._events: list[object] = []
+        self._assets: list[dict[str, str]] = []
 
     def bind_task(self, task: Task) -> None:
         super().bind_task(task)
@@ -121,6 +126,8 @@ class FastbrowseHarness(BrowserHarness):
         values = {alias: os.environ[env_name] for alias, env_name in task.secrets.items()}
         secrets = ScopedSecrets(values, secrets_origin(task)) if values else None
         authorization = Authorization(irreversible_actions=task.meta.authorizes)
+        # Where the run keeps its artifacts until they are retained as trial assets.
+        kept = tempfile.TemporaryDirectory(prefix="fastbrowse-artifacts-")
         async with httpx.AsyncClient() as http, self.browser(http) as browser:
             self._browser = browser
             self._details["browser"] = "cloud" if browser.browser_id else "pool"
@@ -139,10 +146,13 @@ class FastbrowseHarness(BrowserHarness):
                     authorization=authorization,
                     secrets=secrets,
                     http=http,
+                    downloads=Path(kept.name),
                     settings=self.settings(),
                 )
             # The answer is in: reading the final page and stopping the browser are not the agent's time.
             self._agent_finished()
+            with kept:
+                self.retain(output.artifacts)
             self._product_status = output.status
             latency_ms = round((time.perf_counter() - began) * 1000)
             # A run that read every page over HTTP never drove the browser, which still shows the blank tab it
@@ -153,6 +163,25 @@ class FastbrowseHarness(BrowserHarness):
     def settings(self) -> dict[str, str]:
         return run_settings()
 
+    def retain(self, artifacts: Iterable[Artifact]) -> None:
+        """Register each artifact the run kept (the screenshot an image reading read, a download, a text capture) as
+        a trial asset, and list it in the trial metadata. An asset is named by its content hash, so the
+        `screenshot-<sha256>` an image reading cites in the trace is the retained `assets/<sha256>`."""
+        assets = self.trial.assets
+        artifacts = tuple(artifacts)
+        if assets is None or not artifacts:
+            return
+        if self._secret_values:
+            # A bound login can show in a screenshot or a download, and neither can be scrubbed as text is.
+            self.trial_notes.append("run artifacts not retained: the task binds secrets")
+            return
+        for artifact in artifacts:
+            data = Path(url2pathname(urlparse(artifact.uri).path)).read_bytes()
+            # A trial asset takes the bare media type: a parameter such as `charset` is not part of it.
+            mime = artifact.mime_type.partition(";")[0].strip()
+            reference = assets.register(data, mime, digest=artifact.sha256)
+            self._assets.append({"kind": artifact.kind.value, "name": artifact.name, "asset": reference})
+
     def cancelled(self) -> dict[str, object]:
         """The pages and steps a run reached before Parallax's turn limit cancelled it, from its trace events: a
         cancelled `run_task` never returns the steps `_run_result` reads. The step it was in has no outcome yet, so
@@ -161,7 +190,10 @@ class FastbrowseHarness(BrowserHarness):
 
     @property
     def trial_metadata(self) -> dict[str, object]:
-        return super().trial_metadata | {"events": self._scrub(json.loads(json.dumps(self._events, default=str)))}
+        metadata = {"events": self._scrub(json.loads(json.dumps(self._events, default=str)))}
+        if self._assets:
+            metadata["assets"] = self._assets
+        return super().trial_metadata | metadata
 
     def trial_details(self) -> dict[str, object]:
         details = super().trial_details()
