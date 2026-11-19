@@ -200,12 +200,23 @@
     const NativeChannel = window.MessageChannel;
     if (NativeChannel) {
       const peers = new WeakMap();
+      // Each port's undelivered messages in the order they were posted: the work of the action each was posted in, or
+      // null for one posted outside any action's turn. Every post is listed because every delivery takes the oldest:
+      // a list of action posts alone handed a background message's delivery the click's entry, and the settle answered
+      // before the click's render.
       const inboxes = new WeakMap();
       const deliver = event => {
         const work = inboxes.get(event.currentTarget)?.shift();
         if (!work) return;
         registry.pendingWork.delete(work);
         registry.inputTurn(work.action);
+      };
+      // A port that closes or leaves for another context delivers nothing more here, so what waits at it is no one's
+      // work, and later posts to it are not tracked.
+      const forget = port => {
+        for (const work of inboxes.get(port) ?? []) if (work) registry.pendingWork.delete(work);
+        inboxes.delete(port);
+        peers.delete(port);
       };
       const listen = EventTarget.prototype.addEventListener;
       window.MessageChannel = class MessageChannel extends NativeChannel {
@@ -220,37 +231,67 @@
           }
         }
       };
-      const away = transfer => {
-        const list = Array.isArray(transfer) ? transfer : transfer?.transfer;
-        if (!Array.isArray(list)) return;
-        for (const port of list) {
-          for (const work of inboxes.get(port) ?? []) registry.pendingWork.delete(work);
-          inboxes.delete(port);
+      // The transfer list in `args[at]`, read once and handed to Chrome as read: an options getter or an iterable can
+      // change the page or answer differently on a second read, so the ports tracked must be the ports sent. `list`
+      // says the argument may be the list itself, which Chrome takes when it is iterable; `keys` names the options
+      // members Chrome reads, in its order, or is empty where only a list is taken.
+      const transferred = (args, at, list, keys) => {
+        const given = args[at];
+        if (given === null || typeof given !== 'object') return undefined;
+        const iterable = value =>
+          value !== null && typeof value === 'object' && typeof value[Symbol.iterator] === 'function';
+        if (list && iterable(given)) return (args[at] = [...given]);
+        if (!keys.length) return undefined;
+        const options = {};
+        for (const key of keys) {
+          const value = given[key];
+          if (value !== undefined) options[key] = key === 'transfer' && iterable(value) ? [...value] : value;
         }
+        args[at] = options;
+        return options.transfer;
+      };
+      // Run only once Chrome has sent the message: a send that throws, such as a DataCloneError, leaves the ports here.
+      const away = list => {
+        if (Array.isArray(list)) for (const port of list) if (peers.has(port)) forget(port);
+      };
+      const nativeClose = MessagePort.prototype.close;
+      MessagePort.prototype.close = function () {
+        const peer = peers.get(this);
+        forget(this);
+        if (peer) forget(peer);
+        return Reflect.apply(nativeClose, this, arguments);
       };
       const nativePost = MessagePort.prototype.postMessage;
-      MessagePort.prototype.postMessage = function (message, transfer) {
-        away(transfer);
+      MessagePort.prototype.postMessage = function () {
+        const args = [...arguments];
+        const list = transferred(args, 1, true, ['transfer']);
+        const result = Reflect.apply(nativePost, this, args);
+        away(list);
         const inbox = inboxes.get(peers.get(this));
-        if (registry.turn === null || !inbox) return Reflect.apply(nativePost, this, arguments);
-        const work = { action: registry.turn, due: performance.now(), nextFrame: false };
-        registry.pendingWork.add(work);
-        inbox.push(work);
-        try {
-          return Reflect.apply(nativePost, this, arguments);
-        } catch (error) {
-          registry.pendingWork.delete(work);
-          inbox.splice(inbox.indexOf(work), 1);
-          throw error;
+        if (inbox) {
+          const work =
+            registry.turn === null ? null : { action: registry.turn, due: performance.now(), nextFrame: false };
+          if (work) registry.pendingWork.add(work);
+          inbox.push(work);
         }
+        return result;
       };
       for (const target of [window, window.Worker?.prototype, window.ServiceWorker?.prototype]) {
         const post = target?.postMessage;
         if (typeof post !== 'function') continue;
-        target.postMessage = function (message, ...rest) {
-          // window.postMessage(message, targetOrigin, transfer) takes the list third; the others take it second.
-          away(rest.length > 1 ? rest[1] : rest[0]);
-          return Reflect.apply(post, this, arguments);
+        target.postMessage = function () {
+          const args = [...arguments];
+          // window.postMessage(message, targetOrigin, transfer) takes a list third, and (message, options) options
+          // second; a worker takes a list or options second.
+          const list =
+            target !== window
+              ? transferred(args, 1, true, ['transfer'])
+              : args.length > 2
+                ? transferred(args, 2, true, [])
+                : transferred(args, 1, false, ['targetOrigin', 'transfer']);
+          const result = Reflect.apply(post, this, args);
+          away(list);
+          return result;
         };
       }
     }

@@ -594,14 +594,91 @@ async fn test_a_message_to_a_transferred_port_does_not_hold_a_settle() {
         &h.session,
         "document.body.innerHTML = '<button>Send</button>'; \
          const channel = new MessageChannel(); \
-         window.postMessage(null, '*', [channel.port1]); \
+         window.reads = 0; \
+         window.postMessage(null, { targetOrigin: '*', get transfer() { window.reads += 1; return [channel.port1]; } }); \
          document.querySelector('button').onclick = () => channel.port2.postMessage(null);",
     )
     .await;
+    assert_eq!(eval_active(&h.session, "window.reads").await, json!(1), "the page's options are read once");
     let obs = h.observe().await;
     h.page.act(&targeted(Operation::Click, &find(&obs, "Send").id), &obs).await.expect("act");
     let pending = eval_active(&h.session, "window.__fastbrowse.pendingWork.size").await;
     assert_eq!(pending, json!(0), "a transferred port's messages are not this document's work");
+    h.close().await;
+}
+
+/// Each delivery takes a port's oldest message. A background message posted before the click and delivered first was
+/// given the click's entry, so the settle answered before the click's own message rendered.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_background_message_delivered_first_does_not_release_the_clicks() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // The port starts only in the click, so the background message waits there and is delivered first.
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Queued</button>'; \
+         const channel = new MessageChannel(); \
+         channel.port2.postMessage('background'); \
+         document.querySelector('button').onclick = () => { \
+           channel.port2.postMessage('click'); \
+           channel.port1.onmessage = event => { if (event.data === 'click') setTimeout(() => { \
+             document.querySelector('button').textContent = 'Rendered'; }, 150); }; };",
+    )
+    .await;
+    let obs = h.observe().await;
+    h.page.act(&targeted(Operation::Click, &find(&obs, "Queued").id), &obs).await.expect("act");
+    let after = h.observe().await;
+    assert!(after.controls.iter().any(|control| control.label == "Rendered"), "the click's message was released early");
+    h.close().await;
+}
+
+/// A closed port delivers nothing, so a message posted to it is no work, and the settle does not wait out its deadline.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_message_to_a_closed_port_does_not_hold_a_settle() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Close</button>'; \
+         const channel = new MessageChannel(); \
+         channel.port1.onmessage = () => {}; \
+         document.querySelector('button').onclick = () => { \
+           channel.port2.postMessage(null); channel.port1.close(); };",
+    )
+    .await;
+    let obs = h.observe().await;
+    h.page.act(&targeted(Operation::Click, &find(&obs, "Close").id), &obs).await.expect("act");
+    let pending = eval_active(&h.session, "window.__fastbrowse.pendingWork.size").await;
+    assert_eq!(pending, json!(0), "a message a closed port drops is not pending work");
+    h.close().await;
+}
+
+/// A send that throws transfers nothing: the port stays here, and a message the click posts to it still holds the
+/// settle until its render.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_port_whose_transfer_threw_still_holds_a_settle() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    let threw = eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Kept</button>'; \
+         const channel = new MessageChannel(); \
+         let threw = false; \
+         try { window.postMessage(Symbol('not cloneable'), '*', [channel.port1]); } catch { threw = true; } \
+         channel.port1.onmessage = () => setTimeout(() => { \
+           document.querySelector('button').textContent = 'Rendered'; }, 150); \
+         document.querySelector('button').onclick = () => channel.port2.postMessage(null); \
+         threw;",
+    )
+    .await;
+    assert_eq!(threw, json!(true));
+    let obs = h.observe().await;
+    h.page.act(&targeted(Operation::Click, &find(&obs, "Kept").id), &obs).await.expect("act");
+    let after = h.observe().await;
+    assert!(after.controls.iter().any(|control| control.label == "Rendered"), "the kept port stopped holding a settle");
     h.close().await;
 }
 
