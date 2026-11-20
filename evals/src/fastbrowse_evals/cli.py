@@ -1,5 +1,5 @@
 """Fastbrowse's benchmarks: `fastbrowse-evals browser <command>`, each command with its own `--help`, and
-`fastbrowse-evals desktop` for desktop apps."""
+`fastbrowse-evals desktop` and `fastbrowse-evals desktop-apps` for desktop apps."""
 
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ def parser() -> argparse.ArgumentParser:
     for name in FORWARDED:
         actions.add_parser(name, add_help=False, help=f"{name} benchmark command; use --help for its options")
     families.add_parser("desktop", add_help=False, help="desktop app tasks through deskpilot; use --help for options")
+    families.add_parser("desktop-apps", add_help=False, help="real desktop apps, graded on what each task left behind")
     return root
 
 
@@ -45,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
     if arguments[:1] == ["desktop"]:
         importlib.import_module("fastbrowse_evals.desktop.bench").main(arguments[1:])
         return 0
+    if arguments[:1] == ["desktop-apps"]:
+        return importlib.import_module("fastbrowse_evals.desktop.apps").main(arguments[1:])
     args = parser().parse_args(arguments)
     export(args.path, check=args.check)
     return 0
