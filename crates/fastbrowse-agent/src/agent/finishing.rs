@@ -21,6 +21,10 @@ use crate::retrieval::{ComposedAnswer, Draft, compose_reviewed, draft_answer, dr
 use crate::support::generate;
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
+/// The rejected drafts a run sends back to gather evidence, however much progress it makes between them. One run sent
+/// three different ones back over 53 steps and 455 Jev calls ($0.39) before its time limit.
+const MAX_REWRITES: i64 = 3;
+
 impl Agent {
     async fn observe_if_changed(&self, observation: &Observation) -> Step<Observation> {
         let raw = self.raw().unwrap_or_else(|| observation.clone());
@@ -369,6 +373,14 @@ impl Agent {
             && !repeated
             && let Some(rejection) = rejection
         {
+            // Progress renews the recovery budget, as the one stall rule has it, so a navigator sent back for
+            // evidence that never settles the draft earns a fresh budget with every new page. A run may still
+            // improve its draft as evidence arrives, so a few rewrites are free of the stall budget; past them the
+            // next rejection is the recovery that runs out.
+            if state.rewrites >= MAX_REWRITES {
+                state.recoveries = state.recoveries.max(self.config.stall.max_recoveries);
+            }
+            state.rewrites += 1;
             let reason = rejection_reason(&rejection, false);
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()

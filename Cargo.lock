@@ -51,6 +51,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -379,7 +385,7 @@ checksum = "c6e8948ce679d00a02a94739ea185595dca7118ed04feb991127e443bd3d761f"
 
 [[package]]
 name = "fastbrowse"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "fastbrowse-core",
  "fastbrowse-run",
@@ -388,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-agent"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "fastbrowse-clients",
  "fastbrowse-core",
@@ -404,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-browser"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "calamine",
  "data-encoding",
@@ -428,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-cli"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "bytes",
  "fastbrowse-agent",
@@ -454,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-clients"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "bytes",
  "fastbrowse-core",
@@ -466,12 +472,13 @@ dependencies = [
  "log",
  "serde_json",
  "tokio",
+ "tower-service",
  "url",
 ]
 
 [[package]]
 name = "fastbrowse-core"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "indexmap",
  "percent-encoding",
@@ -487,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-node"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "fastbrowse-cli",
  "fastbrowse-core",
@@ -509,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-py"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "fastbrowse-agent",
  "fastbrowse-browser",
@@ -526,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-run"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "encoding_rs",
  "fastbrowse-agent",
@@ -833,6 +840,7 @@ version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
+ "base64",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -840,7 +848,9 @@ dependencies = [
  "http-body",
  "httparse",
  "hyper",
+ "ipnet",
  "libc",
+ "percent-encoding",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -986,6 +996,12 @@ dependencies = [
  "block-padding",
  "generic-array",
 ]
+
+[[package]]
+name = "ipnet"
+version = "2.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "itoa"

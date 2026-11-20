@@ -11,7 +11,19 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run no longer sends rejected drafts back to gather evidence without limit. Each new page it reached renewed the recovery budget, so after a rejected draft a run kept rewriting and re-reading: one run took 53 steps and 455 Jev calls ($0.39, against $0.03 for the task) before the time limit stopped it. A run may still improve its draft as new pages arrive, but only three rejected drafts send it back to gather; the next ends the run with what holds.
+- Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five. The field reader also reasons at `medium` where the other purposes use `low`: at `low` it still answered null for 11 of 80 replays of a captured request for a plain card's `title`, and at `medium` for none of 80.
+
+- Runs sharing one Python process keep their deadlines while another run reads a large page. Reading a page of megabytes held one of the module's two async workers, and a task that run had just woken, such as another run's click, waited behind it unpolled, so its input deadline and liveness probe never armed. Page reads now hand their worker and that task to the runtime before the long work starts ([#1284](https://github.com/agent-labs-dev/fastbrowse/issues/1284)).
+
+- A run with a dollar limit goes on after its first call to a model is cancelled. That call's cost could be bounded only once the model's price listing had been read, and the listing was read after the call, so a cancelled first call was recorded with an unknown cost and the run stopped because the limit could not be enforced. The listing is now read before the first call to each model under a dollar limit ([#1291](https://github.com/agent-labs-dev/fastbrowse/issues/1291)).
+
 - `--help` and `docs/cli.md` list the flag combinations the CLI refuses, and `--fetch` now also refuses `--secret`, `--bitwarden`, `--input`, `--file` and `--authorize` before resolving any secret: a fetched page can only follow links, so these were accepted and never used ([#1337](https://github.com/agent-labs-dev/fastbrowse/issues/1337)). The lists leave `--record` out of what `--desktop` refuses, since a desktop run is filmed from its window. `--json` prints `dollars` and `cost_complete` after `status`, as the plain output does, and the MCP `browse` result names the `browser` that ran ([#1342](https://github.com/agent-labs-dev/fastbrowse/issues/1342)).
+
+## [0.12.0] - 2026-11-19
+
+- Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.
+
 - A `--record` clip (and live frames) now stop at the last clean frame once a secret is typed and stay stopped for the rest of the run. A page that echoed the secret on the next page, such as a form's result, was recorded in clear: a reading of the page text that came back clean released the hold, and frames arrived before the next reading. Closes #1347.
 - A run in your own Chrome opens a link's new tab behind your current tab. Chrome raised and activated its window for a tab the page opened, so on a desktop that gives focus to an activated window, such as Hyprland with `misc:focus_on_activate = true`, each link the run followed to a new tab took your keyboard focus. A tab a page script opens still activates the window; [Your own Chrome](docs/cli.md#your-own-chrome) names those cases and the desktop setting ([#1348](https://github.com/agent-labs-dev/fastbrowse/issues/1348)).
 
@@ -2284,7 +2296,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.11.2...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.12.0
 [0.11.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.2
 [0.11.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.1
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
