@@ -49,7 +49,7 @@ impl Agent {
             return Err(Stop::new(Status::NeedsConfirmation, "Confirm/unsent-form", unsent).into());
         }
         let intent = self.output_intent(state).await?;
-        if matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage) && self.page.over_http() {
+        if intent.attaches_screenshot() && self.page.over_http() {
             return Err(self
                 .page
                 .needs_browser("The requested output needs a screenshot of the rendered page.".into())
@@ -321,6 +321,7 @@ impl Agent {
                         Some(&ledger),
                         state.composition_feedback.as_deref(),
                         intent != OutputIntent::CarriedOut,
+                        intent.attaches_screenshot(),
                         &steps,
                     ),
                 )
@@ -329,27 +330,34 @@ impl Agent {
             Some(reviewed.answer)
         } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
             let (notes, task, ledger) = (state.notes.clone(), self.model_task(state), state.ledger.clone());
-            let reviewed =
-                match self.trace.phase("coverage", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
-                    Some(Draft::Reviewed(reviewed)) => Some(reviewed),
-                    // The picks hold the answer among other page text, which only a writer can narrow: it writes the
-                    // answer from them now, and their claim check holds it to their quotes.
-                    Some(Draft::Write(feedback)) => {
-                        let steps = state.executed_steps();
-                        let written = compose_reviewed(
-                            &*self.jev,
-                            &*self.llm,
-                            &task,
-                            &notes,
-                            Some(&ledger),
-                            Some(&feedback),
-                            true,
-                            &steps,
-                        );
-                        Some(self.trace.phase("compose", written).await?)
-                    }
-                    None => None,
-                };
+            let reviewed = match self
+                .trace
+                .phase(
+                    "coverage",
+                    draft_reviewed(&*self.jev, &task, intent.attaches_screenshot(), &notes, Some(&ledger)),
+                )
+                .await?
+            {
+                Some(Draft::Reviewed(reviewed)) => Some(reviewed),
+                // The picks hold the answer among other page text, which only a writer can narrow: it writes the
+                // answer from them now, and their claim check holds it to their quotes.
+                Some(Draft::Write(feedback)) => {
+                    let steps = state.executed_steps();
+                    let written = compose_reviewed(
+                        &*self.jev,
+                        &*self.llm,
+                        &task,
+                        &notes,
+                        Some(&ledger),
+                        Some(&feedback),
+                        true,
+                        intent.attaches_screenshot(),
+                        &steps,
+                    );
+                    Some(self.trace.phase("compose", written).await?)
+                }
+                None => None,
+            };
             reviewed.map(|reviewed| {
                 // A pick that falls short is written up next time, from everything read by then.
                 state.compose |= reviewed.rejection.is_some() || reviewed.answer.problem.is_some();
@@ -488,7 +496,7 @@ impl Agent {
         }
         let mut result = self.result(Some(state), &state.ledger.clone(), status, outcome);
         result.failure_kind = kind.map(Into::into);
-        Ok(Some(self.ending_frame(result, matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage)).await))
+        Ok(Some(self.ending_frame(result, intent.attaches_screenshot()).await))
     }
 
     /// The stop of a run whose page Jev judged to say an item the task requires cannot be bought. Jev made that

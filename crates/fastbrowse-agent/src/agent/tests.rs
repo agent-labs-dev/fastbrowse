@@ -2315,6 +2315,34 @@ async fn test_the_done_check_asks_no_choice() {
     }
 }
 
+/// A screenshot the task asks for is code's to attach, so the done check is told so whenever code attaches one: not
+/// told, Jev held "Include a screenshot of the release page." a step never carried out, and the run ended stuck.
+#[tokio::test]
+async fn test_the_done_check_is_told_the_run_attaches_its_screenshot() {
+    let page = observation(&[]);
+    for (intent, told) in [
+        (super::state::OutputIntent::TextAndImage, true),
+        (super::state::OutputIntent::Image, true),
+        (super::state::OutputIntent::Text, false),
+        (super::state::OutputIntent::CarriedOut, false),
+    ] {
+        let mut state = run_state();
+        state.task =
+            "Open the latest release and tell me its version. Include a screenshot of the release page.".into();
+        state.output_intent = intent;
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+        agent.actions_done(&mut state, &page).await.unwrap();
+        let asked = jev.5.lock().unwrap();
+        let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
+        assert_eq!(
+            carried.contains(&format!("been carried out? {}", crate::retrieval::SCREENSHOT_ATTACHED)),
+            told,
+            "{intent:?}: {carried}"
+        );
+    }
+}
+
 /// The caller's start address is where the run began, before any step, so the done check judges the task without it:
 /// asked about "Start at <url>." with no action that went there, Jev held a signed-in run that had read its answer
 /// short of done on every ask.

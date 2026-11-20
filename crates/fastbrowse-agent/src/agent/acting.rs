@@ -28,6 +28,7 @@ use super::seeing::cards;
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry, screenshot_reference};
+use crate::retrieval::SCREENSHOT_ATTACHED;
 use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
 use crate::verification::{page_state, page_verdict_state};
 use crate::writing::write_value;
@@ -2001,14 +2002,15 @@ impl Agent {
         // out, the start address held a signed-in run that had read its orders page below 0.5 on every ask, where the
         // task alone scored 0.98.
         let task = self.caller_task(state);
+        // A screenshot is code's to attach, not a step: not told so, this question held "Include a screenshot of the
+        // release page." undone on every ask, and a run that had read every value ended stuck. Told as a task suffix
+        // or a page fact, it still did; told beside the question, it held at 0.87 and still found a star left undone.
+        let mut question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?".to_string();
+        if state.output_intent.attaches_screenshot() {
+            question.push_str(&format!(" {SCREENSHOT_ATTACHED}"));
+        }
         let carried = NoulQuestion::new(
-            format!(
-                "{UNTRUSTED}\n\n# Task\n{task}\n\n{}",
-                HistoryEntry::told(
-                    "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?",
-                    &state.history
-                )
-            ),
+            format!("{UNTRUSTED}\n\n# Task\n{task}\n\n{}", HistoryEntry::told(&question, &state.history)),
             Some("Every such step has been carried out, or the task asks only to find, read or report something."),
             Some("A step the task asks for, other than finding, reading or reporting, has not been carried out yet."),
         );

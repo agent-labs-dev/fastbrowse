@@ -50,6 +50,14 @@ pub(crate) enum OutputIntent {
     CarriedOut,
 }
 
+impl OutputIntent {
+    /// Whether the run attaches a screenshot of the page it ends on to its answer, as code does when the task asks
+    /// for one.
+    pub fn attaches_screenshot(self) -> bool {
+        matches!(self, Self::Image | Self::TextAndImage)
+    }
+}
+
 /// A run ends here, as what it is.
 #[derive(Debug, Clone)]
 pub(crate) struct Stop {

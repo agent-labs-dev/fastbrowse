@@ -1022,6 +1022,12 @@ async fn compose_packed(
     }
 }
 
+/// What code does with a screenshot the task asks for, stated to each model that judges or writes the answer. Not told
+/// it, the done check held "Include a screenshot of the release page." to be a step never carried out, the composer
+/// wrote "screenshot not available in this response", and the coverage check judged the screenshot missing from the
+/// written answer, so a run that had read every value ended stuck or unverified.
+pub(crate) const SCREENSHOT_ATTACHED: &str = "The run attaches a screenshot of the page it ends on to its answer, so a screenshot the task asks for is given with the answer: it is not a step to carry out, and the written answer does not state it.";
+
 const UNREDUCED: &str = "The composed claims did not reduce to one request within the composing model's context window, so no single composition saw every note.";
 
 /// The answer Jev said must be composed, written from the notes. Jev judges the final claims against their original
@@ -1034,7 +1040,7 @@ pub async fn compose(
     ledger: Option<&Ledger>,
     steps: &[Value],
 ) -> Result<ComposedAnswer> {
-    Ok(compose_reviewed(jev, llm, task, notes, ledger, None, true, steps).await?.answer)
+    Ok(compose_reviewed(jev, llm, task, notes, ledger, None, true, false, steps).await?.answer)
 }
 
 pub(crate) struct ReviewedComposition {
@@ -1087,7 +1093,8 @@ fn distinct_claims(claims: impl IntoIterator<Item = BoundClaim>) -> Vec<BoundCla
 }
 
 /// `reports` is whether the task asks to be told anything: one only carried out is written up only when a step was
-/// refused, has no facts to cover, and its steps are judged on their own.
+/// refused, has no facts to cover, and its steps are judged on their own. `screenshot` is whether the run attaches a
+/// screenshot of its last page to the answer, as it does when the task asks for one.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn compose_reviewed(
     jev: &dyn DecisionClient,
@@ -1097,6 +1104,7 @@ pub(crate) async fn compose_reviewed(
     ledger: Option<&Ledger>,
     feedback: Option<&str>,
     reports: bool,
+    screenshot: bool,
     steps: &[Value],
 ) -> Result<ReviewedComposition> {
     let items = initial_items(notes, !steps.is_empty());
@@ -1114,6 +1122,9 @@ pub(crate) async fn compose_reviewed(
         relabeled(feedback, shown_items, steps),
         dumps(&json!(shown.iter().map(|claim| &claim.text).collect::<Vec<_>>()))
     ));
+        if screenshot {
+            writing_task.push_str(&format!("\n\n# Screenshot\n{SCREENSHOT_ATTACHED}"));
+        }
         // Every draft is written knowing what the run itself did, so it never says a step's work was already there. A
         // count no longer rests on the writer, so a long run's steps cannot cost it one.
         if !steps.is_empty() {
@@ -1136,7 +1147,8 @@ pub(crate) async fn compose_reviewed(
     // entire text, and unchecked, a whole release record of 16 fields stood in for "httpx", and a rewrite repeated
     // "The site received the file Received stocktake.txt (34 bytes)." after that check rejected it.
     let reviewed =
-        review_composition(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, true, steps).await?;
+        review_composition(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, screenshot, true, steps)
+            .await?;
     let CheckedClaims { claims, problem, rejection, denies_steps } = reviewed;
     let claims = if numbers { numbered(claims) } else { claims };
     if !reports {
@@ -1194,6 +1206,7 @@ fn judged(answer: Option<&Answer>) -> Option<bool> {
 /// citations even though the caller's answer included them (#1041).
 fn coverage_question(
     task: &str,
+    screenshot: bool,
     columns: Option<&[String]>,
     claims: &[Claim],
     notes: &Notes,
@@ -1201,7 +1214,8 @@ fn coverage_question(
 ) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form. Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values. A claim that a requested value is not shown or does not exist answers that request; whether it holds is checked separately. Task: {} Answer: {}",
+            "{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form. Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values.{} A claim that a requested value is not shown or does not exist answers that request; whether it holds is checked separately. Task: {} Answer: {}",
+            if screenshot { format!(" {SCREENSHOT_ATTACHED}") } else { String::new() },
             dumps(&json!(task)),
             dumps(&json!({"columns": columns, "answer": assemble_answer(claims, notes, steps).linked_answer}))
         ),
@@ -1251,6 +1265,7 @@ async fn review_claims(
         ledger,
         require_coverage,
         false,
+        false,
         steps,
     )
     .await
@@ -1266,6 +1281,7 @@ async fn review_composition(
     notes: &Notes,
     ledger: Option<&Ledger>,
     require_coverage: bool,
+    screenshot: bool,
     exact: bool,
     steps: &[Value],
 ) -> Result<CheckedClaims> {
@@ -1542,7 +1558,7 @@ async fn review_composition(
     let state_chars = text::len(&dumps(&state)) as i64;
     let fits_one = questions.values().any(|question| state_chars <= tokens.input_chars(&[question.dump_json()]));
     if require_coverage && fits_one {
-        questions.insert("coverage".into(), coverage_question(task, columns, &claims, notes, steps));
+        questions.insert("coverage".into(), coverage_question(task, screenshot, columns, &claims, notes, steps));
     }
     if exact && fits_one && !copied.is_empty() {
         questions.insert("exact".into(), copied_question(task, &copied));
@@ -2312,6 +2328,7 @@ pub(crate) enum Draft {
 pub(crate) async fn draft_reviewed(
     jev: &dyn DecisionClient,
     task: &str,
+    screenshot: bool,
     notes: &Notes,
     ledger: Option<&Ledger>,
 ) -> Result<Option<Draft>> {
@@ -2320,7 +2337,7 @@ pub(crate) async fn draft_reviewed(
         return Ok(None);
     }
     let questions = IndexMap::from([
-        ("coverage".to_string(), coverage_question(task, None, &claims, notes, &[])),
+        ("coverage".to_string(), coverage_question(task, screenshot, None, &claims, notes, &[])),
         ("exact".to_string(), exact_question(task, &claims, notes)),
     ]);
     let state = json!({"task": task, "pages_read": pages_read(notes)});
@@ -2402,6 +2419,7 @@ mod tests {
             vec![claim],
             &notes,
             None,
+            false,
             false,
             false,
             &[],
@@ -3088,6 +3106,7 @@ mod tests {
             &notes,
             None,
             false,
+            false,
             true,
             &[],
         )
@@ -3137,8 +3156,9 @@ mod tests {
         );
         let jev = Tallying::new("Galaxy", "1399.00|1299.00");
         let task = "Tell me the most expensive Samsung phone and its price";
-        let checked =
-            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, &[]).await.unwrap();
+        let checked = review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, false, &[])
+            .await
+            .unwrap();
         assert!(checked.claims.is_empty(), "{:?}", checked.claims);
         let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
         assert!(
@@ -3152,8 +3172,9 @@ mod tests {
         let tally = tallied("", "a", Op::Max, "Samsung phone", Some("price"), vec![]).tally;
         let bound = bind_claim(&items, json!([{"computed":true}, {"prose": " has the highest price."}]), tally);
         let jev = Tallying::new("Galaxy", "1399.00|1299.00");
-        let checked =
-            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, &[]).await.unwrap();
+        let checked = review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, false, &[])
+            .await
+            .unwrap();
         let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
         assert!(!rejection.contains("names the record already"), "{rejection}");
     }
@@ -3314,7 +3335,7 @@ mod tests {
         let base = estimated_context_bytes(&compose_messages(&format!("{task}{}", " ".repeat(2000)), &[]));
         let llm = Correcting { limit: base + 1400, calls: Mutex::new(Vec::new()) };
         let reviewed =
-            compose_reviewed(&Support::new(true), &llm, task, &notes, None, Some(&feedback), true, &[]).await;
+            compose_reviewed(&Support::new(true), &llm, task, &notes, None, Some(&feedback), true, false, &[]).await;
         assert!(reviewed.is_ok(), "{:?}", reviewed.err());
         let calls = llm.calls.lock().unwrap();
         assert!(calls.len() >= 2, "the notes were not packed into parts: {calls:?}");
@@ -3466,6 +3487,7 @@ mod tests {
             &notes,
             None,
             true,
+            false,
             false,
             &[],
         )
@@ -4475,6 +4497,7 @@ mod tests {
                 &notes,
                 None,
                 require_coverage,
+                false,
                 true,
                 &[],
             )
@@ -4501,7 +4524,8 @@ mod tests {
         jev.rejected = Some("coverage".into());
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("Record B: 34", vec!["e0".into()])]);
-        let reviewed = compose_reviewed(&jev, &llm, "Report B and C", &notes, None, None, true, &[]).await.unwrap();
+        let reviewed =
+            compose_reviewed(&jev, &llm, "Report B and C", &notes, None, None, true, false, &[]).await.unwrap();
         assert_eq!(reviewed.answer.claims.len(), 1);
         assert_eq!(
             reviewed.answer.problem.as_deref(),
@@ -4522,15 +4546,16 @@ mod tests {
             let jev = Support::new(false);
             let mut llm = RecordingLlm::new(None);
             llm.claims = Some(written);
-            let reviewed =
-                compose_reviewed(&jev, &llm, "Change my password", &notes, None, None, false, &[]).await.unwrap();
+            let reviewed = compose_reviewed(&jev, &llm, "Change my password", &notes, None, None, false, false, &[])
+                .await
+                .unwrap();
             assert_eq!((reviewed.answer.problem, reviewed.rejection), (None, None));
             assert!(reviewed.answer.claims.is_empty());
         }
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![]);
         let reported =
-            compose_reviewed(&Support::new(true), &llm, "Report the price", &notes, None, None, true, &[]).await;
+            compose_reviewed(&Support::new(true), &llm, "Report the price", &notes, None, None, true, false, &[]).await;
         assert!(reported.unwrap().answer.problem.is_some());
     }
 
@@ -4554,9 +4579,19 @@ mod tests {
             [(create_click(), None, true), (create_click(), Some(denied), true), (vec![], None, false)]
         {
             let llm = RecordingLlm::new(None);
-            compose_reviewed(&Support::new(true), &llm, "Create the project", &notes, None, feedback, false, &steps)
-                .await
-                .unwrap();
+            compose_reviewed(
+                &Support::new(true),
+                &llm,
+                "Create the project",
+                &notes,
+                None,
+                feedback,
+                false,
+                false,
+                &steps,
+            )
+            .await
+            .unwrap();
             let user = &llm.calls()[0][1].content;
             assert_eq!(user.contains("# Steps this run took"), shown, "{user}");
             assert_eq!(user.contains("Create project"), shown, "{user}");
@@ -4591,6 +4626,7 @@ mod tests {
             None,
             Some(&feedback),
             true,
+            false,
             &[],
         )
         .await
@@ -4640,7 +4676,9 @@ mod tests {
                 serde_json::from_value(json!({"evidence_ids": ["e0"], "text": text, "tally": null})).unwrap();
             let bound = draft.bind(&items).unwrap();
             let checked =
-                review_composition(&jev, &READS, task, None, vec![bound], &notes, None, true, true, &[]).await.unwrap();
+                review_composition(&jev, &READS, task, None, vec![bound], &notes, None, true, false, true, &[])
+                    .await
+                    .unwrap();
             assert_eq!(jev.asked.lock().unwrap().iter().any(|questions| questions.contains_key("exact")), asked);
             if asked {
                 let batches = jev.asked.lock().unwrap();
@@ -4728,6 +4766,7 @@ mod tests {
             &notes,
             Some(&ledger),
             true,
+            false,
             true,
             &steps,
         )
@@ -4772,6 +4811,7 @@ mod tests {
             &notes,
             None,
             true,
+            false,
             true,
             &steps,
         )
@@ -4823,7 +4863,8 @@ mod tests {
             vec!["e0".into(), "e1".into()],
         )]);
         let jev = Tallying::new("Book ", "£");
-        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, Some(&feedback), true, &[]).await.unwrap();
+        let reviewed =
+            compose_reviewed(&jev, &llm, task, &notes, None, Some(&feedback), true, false, &[]).await.unwrap();
         assert_eq!(reviewed.answer.problem, None);
         let asked = jev.asked();
         assert!(asked.contains_key("claim0/record") && !asked.contains_key("claim0"), "{:?}", asked.keys());
@@ -4841,7 +4882,7 @@ mod tests {
             let mut llm = RecordingLlm::new(None);
             llm.claims = Some(vec![Claim::new("The project already exists, so none was created.", vec!["e0".into()])]);
             let reviewed =
-                compose_reviewed(&jev, &llm, "Create the project", &notes, None, None, reports, &create_click())
+                compose_reviewed(&jev, &llm, "Create the project", &notes, None, None, reports, false, &create_click())
                     .await
                     .unwrap();
             assert!(reviewed.answer.claims.is_empty());
@@ -4876,6 +4917,7 @@ mod tests {
             None,
             None,
             true,
+            false,
             &create_click(),
         )
         .await
@@ -4926,9 +4968,19 @@ mod tests {
         let notes = Notes::new([fact(0, "Project: New Addon, 0 downloads".into())]);
         for (steps, shown) in [(create_click(), true), (vec![], false)] {
             let jev = Support::new(true);
-            compose_reviewed(&jev, &RecordingLlm::new(None), "Create the project", &notes, None, None, true, &steps)
-                .await
-                .unwrap();
+            compose_reviewed(
+                &jev,
+                &RecordingLlm::new(None),
+                "Create the project",
+                &notes,
+                None,
+                None,
+                true,
+                false,
+                &steps,
+            )
+            .await
+            .unwrap();
             let state = jev.states.lock().unwrap()[0].clone();
             assert_eq!(state.get("steps").is_some(), shown, "{state}");
             let asked = jev.asked.lock().unwrap();
@@ -5000,7 +5052,7 @@ mod tests {
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("The order was not placed.", vec!["e0".into()])]);
         let reviewed =
-            compose_reviewed(&Support::new(true), &llm, "Order it", &notes, None, Some(&feedback), true, &steps)
+            compose_reviewed(&Support::new(true), &llm, "Order it", &notes, None, Some(&feedback), true, false, &steps)
                 .await
                 .unwrap();
         assert_eq!(reviewed.answer.claims[0].text, passed.text);
@@ -5079,7 +5131,7 @@ mod tests {
         let task = "Replace the description with New text., save it, and confirm the public page shows it.";
         for (steps, shown) in [(steps, true), (vec![], false)] {
             let (jev, llm) = (Support::new(true), RecordingLlm::new(None));
-            compose_reviewed(&jev, &llm, task, &notes, None, None, true, &steps).await.unwrap();
+            compose_reviewed(&jev, &llm, task, &notes, None, None, true, false, &steps).await.unwrap();
             let calls = llm.calls();
             let note = |label: &str| -> Value {
                 let line = calls[0][1].content.lines().find_map(|line| line.strip_prefix(label)).unwrap();
@@ -5101,7 +5153,7 @@ mod tests {
         let notes = Notes::new([fact(0, "Record B: 34".into())]);
         let jev = Support::new(true);
         let llm = RecordingLlm::new(None);
-        compose_reviewed(&jev, &llm, "Report B", &notes, None, None, true, &[]).await.unwrap();
+        compose_reviewed(&jev, &llm, "Report B", &notes, None, None, true, false, &[]).await.unwrap();
         let asked = jev.asked.lock().unwrap();
         assert!(!asked.is_empty());
         assert!(asked.iter().all(|questions| !questions.contains_key("actions")));
@@ -5169,7 +5221,7 @@ mod tests {
         let claims = [Claim::new("Typed N1", vec!["s1".into()])];
         let steps = [json!({"operation": "fill", "target": "Postcode", "text": "N1"})];
         let Question::Noul(coverage) =
-            coverage_question("Report what was typed with its evidence", None, &claims, &notes, &steps)
+            coverage_question("Report what was typed with its evidence", false, None, &claims, &notes, &steps)
         else {
             panic!("coverage is yes-or-no")
         };
@@ -5188,10 +5240,62 @@ mod tests {
         assert!(!COMPOSER.contains("partial"), "{COMPOSER}");
     }
 
+    /// The run attaches its last page's screenshot, which no written claim gives: not told so, the coverage check held
+    /// a release's version, date and changelog item short of a task that also asked for a screenshot of the page.
+    #[test]
+    fn coverage_question_is_told_the_run_attaches_its_screenshot() {
+        for screenshot in [true, false] {
+            let Question::Noul(coverage) = coverage_question(
+                "Tell me the version. Include a screenshot.",
+                screenshot,
+                None,
+                &[],
+                &Notes::new([]),
+                &[],
+            ) else {
+                panic!("coverage is yes-or-no")
+            };
+            assert_eq!(
+                coverage
+                    .instructions
+                    .contains(&format!("include the requested facts and values. {SCREENSHOT_ATTACHED}")),
+                screenshot,
+                "{}",
+                coverage.instructions
+            );
+        }
+    }
+
+    /// Not told the screenshot is attached, the composer wrote "screenshot not available in this response" into the
+    /// answer, and the actions check rejected the draft for denying what the run would give.
+    #[tokio::test]
+    async fn the_composer_is_told_the_run_attaches_its_screenshot() {
+        let notes = Notes::new([fact(0, "Version 0.13.9".into())]);
+        for screenshot in [true, false] {
+            let llm = RecordingLlm::new(None);
+            compose_reviewed(
+                &Support::new(true),
+                &llm,
+                "Tell me the version. Include a screenshot.",
+                &notes,
+                None,
+                None,
+                true,
+                screenshot,
+                &[],
+            )
+            .await
+            .unwrap();
+            let user = &llm.calls()[0][1].content;
+            assert_eq!(user.contains(&format!("# Screenshot\n{SCREENSHOT_ATTACHED}")), screenshot, "{user}");
+        }
+    }
+
     #[test]
     fn coverage_question_says_the_form_a_task_asks_for_is_not_judged() {
         let Question::Noul(coverage) = coverage_question(
             "List each image. Answer with only JSON: {\"src\": \"...\"}",
+            false,
             None,
             &[],
             &Notes::new([]),
@@ -5278,6 +5382,7 @@ mod tests {
             None,
             Some(&"rejected draft ".repeat(limit)),
             true,
+            false,
             &[],
         )
         .await
@@ -5338,7 +5443,7 @@ mod tests {
         };
         let jev = Support::new(true);
         let task = "List the gallery's captions as a numbered list";
-        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true, &[]).await.unwrap();
+        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true, false, &[]).await.unwrap();
         assert_eq!(reviewed.answer.answer, "1. Dungeon entrances\n\n2. The Eastern Kingdoms");
         let asked = jev.asked.lock().unwrap();
         let Question::Noul(second) = &asked[0]["claim1"] else { panic!("support is yes-or-no") };
@@ -5354,8 +5459,9 @@ mod tests {
             ..RecordingLlm::new(None)
         };
         let jev = Support::new(true);
-        let reviewed =
-            compose_reviewed(&jev, &llm, "Report each record's value", &notes, None, None, true, &[]).await.unwrap();
+        let reviewed = compose_reviewed(&jev, &llm, "Report each record's value", &notes, None, None, true, false, &[])
+            .await
+            .unwrap();
         assert!(reviewed.answer.claims.is_empty());
         assert!(reviewed.answer.problem.is_some());
         assert!(jev.asked.lock().unwrap().is_empty());
@@ -5422,7 +5528,8 @@ mod tests {
             notes.add(Fact { answers: true, ..fact(index, format!("{index} {}", "x".repeat(limit / 8))) });
         }
         let jev = Support::new(true);
-        let Some(Draft::Reviewed(reviewed)) = draft_reviewed(&jev, "Report every record", &notes, None).await.unwrap()
+        let Some(Draft::Reviewed(reviewed)) =
+            draft_reviewed(&jev, "Report every record", false, &notes, None).await.unwrap()
         else {
             panic!("a draft too long to judge stands unjudged");
         };
@@ -5436,7 +5543,8 @@ mod tests {
     async fn a_pick_whose_exactness_is_unanswered_is_not_complete() {
         let notes = Notes::new([Fact { answers: true, ..fact(0, "Record B: 34".into()) }]);
         let jev = Support { unanswered: Some("exact"), ..Support::new(true) };
-        let Some(Draft::Reviewed(reviewed)) = draft_reviewed(&jev, "Report record B", &notes, None).await.unwrap()
+        let Some(Draft::Reviewed(reviewed)) =
+            draft_reviewed(&jev, "Report record B", false, &notes, None).await.unwrap()
         else {
             panic!("an unjudged pick stands as it is");
         };
@@ -5474,7 +5582,9 @@ mod tests {
         ]);
         notes.remember_capture(&captured, 0);
         let jev = Support::new(true);
-        draft_reviewed(&jev, "What does the form's heading say, and which plan is it?", &notes, None).await.unwrap();
+        draft_reviewed(&jev, "What does the form's heading say, and which plan is it?", false, &notes, None)
+            .await
+            .unwrap();
         let asked = jev.asked.lock().unwrap();
         let Question::Noul(exact) = &asked[0]["exact"] else { panic!("exactness is asked") };
         let answer: Value = serde_json::from_str(exact.instructions.split_once(" Answer: ").unwrap().1).unwrap();
