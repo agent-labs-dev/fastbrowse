@@ -320,6 +320,97 @@ async fn page_after_refusal(start: &str, task: &str, answers_it: f64) -> String 
     pages.get(1).copied().unwrap_or_default().to_string()
 }
 
+/// Asked while the browser starts whether the task answers a consent banner itself, Jev was shown the task as the
+/// caller wrote it, an address's credentials included: nothing had masked them yet (#1381).
+#[tokio::test]
+async fn test_the_consent_check_is_shown_the_task_with_its_credentials_masked() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let options = task(|o, h| {
+        o.task = "Accept the cookies at https://shopper:t4sk-pw@shop.test/orders".into();
+        o.browser = true;
+        h.jev = Some(Arc::new(RecordingDecision(seen.clone())));
+        h.open_browser = Some(no_browser());
+    });
+    let _ = run(options).await;
+    let states = seen.lock().unwrap();
+    let task = |state: &Value| state["task"].as_str().map(str::to_string);
+    assert!(states.iter().filter_map(task).any(|task| task.contains("@shop.test/orders")), "{states:?}");
+    for state in states.iter().map(Value::to_string) {
+        assert!(!state.contains("t4sk-pw") && !state.contains("shopper"), "{state}");
+    }
+}
+
+/// Stops the run at its first decision, a second after it, so the browser has had time to send frames.
+struct StopsAfterASecond;
+
+impl DecisionClient for StopsAfterASecond {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a Value,
+        _: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            Err(DecisionError::failed("stopped"))
+        })
+    }
+}
+
+/// A start with credentials can draw them from the first paint (a page writes `document.URL`, which keeps them), and
+/// frames went out from the browser's opening until the agent was built and first looked (#1381). With credentials,
+/// none of the run's frames goes out; without, the same page sends them.
+#[tokio::test]
+async fn test_no_frame_goes_out_of_a_run_whose_start_has_credentials() {
+    if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
+        return;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let page = "<html><body><p id=u></p><script>document.getElementById('u').textContent = document.URL; \
+                    setInterval(() => document.body.style.background = `hsl(${Date.now() % 360}, 50%, 50%)`, 50)\
+                    </script></body></html>";
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                page.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    for (start, sent) in
+        [(format!("http://shopper:fr4me-pw@127.0.0.1:{port}/"), false), (format!("http://127.0.0.1:{port}/"), true)]
+    {
+        let frames = Arc::new(AtomicUsize::new(0));
+        let counted = frames.clone();
+        let host = Host {
+            jev: Some(Arc::new(StopsAfterASecond)),
+            llm: Some(Arc::new(Silent)),
+            settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
+            on_frame: Some(Arc::new(move |_: Vec<u8>| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {})
+            })),
+            ..Host::default()
+        };
+        let task = RunTask {
+            task: "read the page".into(),
+            start: Some(start.clone()),
+            launch: true,
+            browser: true,
+            ..RunTask::default()
+        };
+        let _ = run_task(task, host).await;
+        assert_eq!(frames.load(Ordering::SeqCst) > 0, sent, "{start}");
+    }
+}
+
 fn answering(status: u16) -> Http {
     Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
         Box::pin(async move { Ok(Response::new(status, Vec::new())) })

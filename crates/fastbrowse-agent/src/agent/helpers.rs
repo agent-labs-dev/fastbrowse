@@ -8,7 +8,7 @@ use fastbrowse_core::models::{Evidence, Operation, StepOutcome, UNTRUSTED};
 use fastbrowse_core::page::{Control, Dialog, Observation};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
-use fastbrowse_core::safety::irreversible_question;
+use fastbrowse_core::safety::{irreversible_question, mask_userinfo};
 use serde_json::json;
 use url::Url;
 
@@ -118,7 +118,9 @@ pub(crate) fn navigation_question(url: &str) -> NoulQuestion {
 pub(crate) fn decision_label(decision: &Decision) -> Option<String> {
     match &decision.target {
         Some(target) => Some(describe(target)),
-        None => decision.url.clone().or_else(|| decision.tab_id.clone()),
+        // A navigation's address is the step's label in the history every model is shown, and one the caller's
+        // credentialed start resolved a path on carries its userinfo (#1381).
+        None => decision.url.as_deref().map(mask_userinfo).or_else(|| decision.tab_id.clone()),
     }
 }
 

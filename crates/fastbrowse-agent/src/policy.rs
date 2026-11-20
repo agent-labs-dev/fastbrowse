@@ -23,6 +23,7 @@ use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, pager_link
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{dumped_len, dumps};
 use fastbrowse_core::py::{lax, sha256_hex, text};
+use fastbrowse_core::safety::mask_userinfo;
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -595,6 +596,9 @@ pub struct Request {
     pub destinations: Vec<Control>,
     pub destination_groups: Vec<Vec<Control>>,
     pub navigation_groups: Vec<Vec<String>>,
+    /// The addresses the navigate question's options are indexed into when it asks no group, as they are opened: the
+    /// options show them with their userinfo masked.
+    pub navigation: Vec<String>,
     /// The rules a target is chosen by, again when a group's pick asks for its element.
     pub target_rules: String,
 }
@@ -1121,7 +1125,9 @@ pub fn build_request(
                         "Scroll the chosen vertical area up, or horizontal area left, to reveal content in that direction."
                             .into()
                     }
-                    (Operation::Navigate, [only]) => format!("{} The address: {only}", operation_label(*op)),
+                    (Operation::Navigate, [only]) => {
+                        format!("{} The address: {}", operation_label(*op), mask_userinfo(only))
+                    }
                     // Only a page with a control whose role defines keys is told so, so a page of plain fields asks
                     // what it always has.
                     (Operation::Press, _)
@@ -1200,18 +1206,24 @@ pub fn build_request(
         questions.insert(keys::SWITCH_TAB_TARGET.into(), choice(instructions, tabs).into());
     }
     let mut navigation_groups: Vec<Vec<String>> = Vec::new();
+    let mut navigation: Vec<String> = Vec::new();
     if offered.contains(&Operation::Navigate) {
         let instructions = format!(
             "{UNTRUSTED}\nChoose the address that advances what the task still needs: one the caller supplied, a page a site the task names is known to serve for an item the task names, which holds that item directly where a search of the site would only lead to it, or this page's own address to reload it after a site failure. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations."
         );
         if urls.len() > limit {
             navigation_groups = chunks(&urls, size);
-            let criteria =
-                navigation_groups.iter().enumerate().map(|(i, group)| (i.to_string(), Value::from(group.join(" | "))));
+            let criteria = navigation_groups
+                .iter()
+                .enumerate()
+                .map(|(i, group)| (i.to_string(), Value::from(mask_userinfo(&group.join(" | ")))));
             questions.insert(keys::NAVIGATE_GROUP.into(), choice(instructions, criteria).into());
         } else {
-            let criteria = urls.iter().enumerate().map(|(i, url)| (i.to_string(), Value::from(url.as_str())));
+            // Offered raw, an address the caller's credentialed start resolved a path on showed Jev its userinfo; the
+            // address opened is the raw one its index names (#1381).
+            let criteria = urls.iter().enumerate().map(|(i, url)| (i.to_string(), Value::from(mask_userinfo(url))));
             questions.insert(keys::NAVIGATE_TARGET.into(), choice(instructions, criteria).into());
+            navigation = urls.clone();
         }
     }
     if context.check_login {
@@ -1328,6 +1340,7 @@ pub fn build_request(
         destinations: drops,
         destination_groups: drop_groups,
         navigation_groups,
+        navigation,
         target_rules: target_rules.to_string(),
     }
 }
@@ -1441,32 +1454,33 @@ async fn evaluate(
         target_confidence = Some(target_answer.confidence);
     } else if operation == Operation::Navigate {
         let mut group_confidence = 1.0;
-        let (target_answer, question) = if request.navigation_groups.is_empty() {
-            let question = match request.questions.get(keys::NAVIGATE_TARGET) {
-                Some(Question::Choice(question)) => question.clone(),
-                _ => return Err(AgentError::Invalid("navigation requires caller-supplied choices".into())),
-            };
-            (choice_answer(&evaluation, keys::NAVIGATE_TARGET)?, question)
+        let (target_answer, urls) = if request.navigation_groups.is_empty() {
+            if !matches!(request.questions.get(keys::NAVIGATE_TARGET), Some(Question::Choice(_))) {
+                return Err(AgentError::Invalid("navigation requires caller-supplied choices".into()));
+            }
+            (choice_answer(&evaluation, keys::NAVIGATE_TARGET)?, &request.navigation)
         } else {
             let group_answer = choice_answer(&evaluation, keys::NAVIGATE_GROUP)?;
             let group = &request.navigation_groups[group_index(&group_answer.choice, request.navigation_groups.len())?];
             group_confidence = group_answer.confidence;
             let question = choice(
                 format!("{UNTRUSTED}\nChoose the caller-supplied address for what the task still needs."),
-                group.iter().enumerate().map(|(i, url)| (i.to_string(), Value::from(url.as_str()))),
+                group.iter().enumerate().map(|(i, url)| (i.to_string(), Value::from(mask_userinfo(url)))),
             );
-            let questions = IndexMap::from([(keys::NAVIGATE_TARGET.to_string(), question.clone().into())]);
+            let questions = IndexMap::from([(keys::NAVIGATE_TARGET.to_string(), question.into())]);
             let inner = ask(&questions).await?;
-            (choice_answer(&inner, keys::NAVIGATE_TARGET)?, question)
+            (choice_answer(&inner, keys::NAVIGATE_TARGET)?, group)
         };
-        let chosen = question
-            .criteria
-            .get(&target_answer.choice)
+        // The address opened is the raw one the option's index names; the option showed it masked.
+        let chosen = urls
+            .get(
+                target_answer
+                    .choice
+                    .parse::<usize>()
+                    .map_err(|_| AgentError::Invalid(text::repr(&target_answer.choice)))?,
+            )
             .ok_or_else(|| AgentError::Invalid(text::repr(&target_answer.choice)))?;
-        let Some(chosen) = chosen.as_str() else {
-            return Err(AgentError::Invalid("navigation requires an address".into()));
-        };
-        url = Some(chosen.to_string());
+        url = Some(chosen.clone());
         target_confidence = Some(group_confidence * target_answer.confidence);
     }
     let mut destination: Option<Control> = None;

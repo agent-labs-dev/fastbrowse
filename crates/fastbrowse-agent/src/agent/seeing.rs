@@ -106,7 +106,7 @@ impl Agent {
             target: surface,
             // A point Jev placed outside the surface would press an element no decision chose.
             on_target: true,
-            steps: task_steps(&state.task),
+            steps: task_steps(&self.caller_task(state)),
             event: "drawn",
         };
         self.click_sighted(state, observation, sighting).await

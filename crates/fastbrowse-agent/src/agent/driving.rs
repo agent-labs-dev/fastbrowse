@@ -30,6 +30,7 @@ use crate::policy::{Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, 
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
+use fastbrowse_core::navigation::written_addresses;
 
 pub(super) struct TaskJudgments {
     pub dates: Vec<crate::dates::DateReference>,
@@ -686,9 +687,15 @@ impl Agent {
         if self.page.search_price().is_some() {
             return self.search_entry(task, ledger).await;
         }
-        let proposal = propose_start(&*self.llm, task, Some(ledger)).await?;
+        let proposal = propose_start(&*self.llm, &self.mask(task), Some(ledger)).await?;
         ledger.record([proposal.cost])?;
-        let Some(opening) = accept_start(proposal.data.url.as_deref()) else {
+        let proposed = proposal.data.url.as_deref();
+        // The model was shown the task masked, so an address the task writes with credentials comes back as its
+        // bullets, and opens as the caller wrote it; any other address with userinfo is refused (`accept_start`).
+        let written = proposed.and_then(|proposed| {
+            written_addresses(task).into_iter().find(|address| address != proposed && self.mask(address) == proposed)
+        });
+        let Some(opening) = written.or_else(|| accept_start(proposed)) else {
             return Err(Stop::new(
                 Status::NeedsInput,
                 "Start/no-page",
@@ -696,6 +703,7 @@ impl Agent {
             )
             .into());
         };
+        self.learn_credentials([opening.as_str()]);
         self.event("start_page", || Map::from_iter([("url".into(), opening.clone().into())]));
         Ok(Some(opening))
     }
@@ -941,8 +949,11 @@ impl Agent {
         {
             return Ok(false);
         }
-        self.event("blank_reload", || Map::from_iter([("url".into(), observation.url.clone().into())]));
-        self.page.navigate(&observation.url, None).await?;
+        // Reopened as the browser holds it: the observation's address is masked, and a fetched page's can carry the
+        // caller's credentials, which bullets in their place would not send.
+        let url = self.raw().map_or_else(|| observation.url.clone(), |raw| raw.url);
+        self.event("blank_reload", || Map::from_iter([("url".into(), url.clone().into())]));
+        self.page.navigate(&url, None).await?;
         Ok(true)
     }
 
@@ -1851,22 +1862,27 @@ impl Agent {
     /// Whether a resolved secret shows on the page; live and recorded frames are held back while one does.
     pub(super) fn reveals(&self, observation: &Observation) -> bool {
         // A dialog hides the page text, so its observation cannot prove the pixels contain no secret.
-        // The page's own address and its tabs' are not drawn on the page, so the credentials a start address carries
-        // are set aside there: Chrome keeps them in a tab's address, and every image of such a run was withheld. A
-        // typed secret in an address still counts, as it did; the page showing either one is held back.
+        // An address a redirect or a new tab brings with credentials is learnt here, before its observation is masked
+        // for a model or a trace, and from then on the run's frames are held to its end (`learn_credentials`).
+        self.learn_credentials(
+            std::iter::once(observation.url.as_str()).chain(observation.tabs.iter().map(|tab| tab.url.as_str())),
+        );
+        // The page's own address and its tabs' are not drawn on the page, so they are set aside: Chrome keeps a
+        // start's credentials in a tab's address, and every model image of such a run was withheld.
+        let mut drawn = observation.dump();
+        if let Some(fields) = drawn.as_object_mut() {
+            fields.remove("url");
+            if let Some(tabs) = fields.get_mut("tabs").and_then(Value::as_array_mut) {
+                tabs.iter_mut().filter_map(Value::as_object_mut).for_each(|tab| {
+                    tab.remove("url");
+                });
+            }
+        }
         let redactor = self.redactor();
-        let unshown = Observation {
-            url: redactor.mask_credentials(&observation.url),
-            tabs: observation
-                .tabs
-                .iter()
-                .map(|tab| Tab { url: redactor.mask_credentials(&tab.url), ..tab.clone() })
-                .collect(),
-            ..observation.clone()
-        };
-        let revealed = observation.dialog.is_some() || redactor.reveals(&unshown.dump_json());
+        let revealed = observation.dialog.is_some() || redactor.reveals_value(&drawn);
+        let held = redactor.holds_credentials();
         drop(redactor);
-        self.page.withhold_frames(revealed);
+        self.page.withhold_frames(revealed || held);
         revealed
     }
 }

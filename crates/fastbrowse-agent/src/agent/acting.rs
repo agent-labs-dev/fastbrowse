@@ -143,8 +143,11 @@ fn several_values(target: &Control) -> String {
 
 /// What a field's value is picked from.
 pub(super) struct Value {
-    /// The task.
+    /// The task as Jev reads it, credentials in its addresses masked.
     task: String,
+    /// The text a value is typed from: `task` unmasked, character for character, so a span Jev picks on `task` is cut
+    /// from here (#1381).
+    typed: String,
     /// What was read that answers the task.
     read: String,
     label: String,
@@ -373,7 +376,7 @@ impl Agent {
             }),
             Operation::Navigate => {
                 let Some(url) = decision.url.clone().filter(|url| {
-                    task_urls(&state.task, state.caller_start.as_deref(), true).contains(url)
+                    task_urls(&state.raw_task, state.caller_start.as_deref(), true).contains(url)
                         || state.reload_target(&observation.url).as_ref() == Some(url)
                         || state.pager_followed.contains(url)
                         || state.routes.contains(url)
@@ -386,7 +389,8 @@ impl Agent {
                     )
                     .into());
                 };
-                if self.reveals_text(&url) {
+                // Credentials the caller wrote into the address are theirs to send; only a resolved secret stops it.
+                if self.redactor().reveals_secret(&url) {
                     return Err(Stop::new(
                         Status::NeedsInput,
                         "Navigate/secret-in-address",
@@ -394,10 +398,12 @@ impl Agent {
                     )
                     .into());
                 }
-                self.gate_download(state, observation, decision, &caller_link(&url)).await?;
-                let irreversible = navigation_question(&url);
-                let action = format!("open the address {url}.\n");
-                self.gate_question(state, observation, decision, &url, Some(irreversible), &action, None).await?;
+                // Jev classifies the address as the task shows it, credentials masked (#1381).
+                let shown = self.mask(&url);
+                self.gate_download(state, observation, decision, &caller_link(&shown)).await?;
+                let irreversible = navigation_question(&shown);
+                let action = format!("open the address {shown}.\n");
+                self.gate_question(state, observation, decision, &shown, Some(irreversible), &action, None).await?;
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
             Operation::Click | Operation::Enter => {
@@ -1178,7 +1184,7 @@ impl Agent {
             let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
-        let Value { mut task, read, label, group, mut sources, source_question } = self.value(state, target);
+        let Value { mut task, mut typed, read, label, group, mut sources, source_question } = self.value(state, target);
         if task_only {
             sources.retain(|source, _| source == IN_TASK);
         }
@@ -1211,7 +1217,7 @@ impl Agent {
                 Some(value) => {
                     // Words the task gives as they were typed are the task's value, however Jev got to them, so a
                     // recipe can type them again. Anything composed stays live.
-                    if state.task.contains(value.as_str()) {
+                    if state.raw_task.contains(value.as_str()) {
                         state.text_source = Some(RecipeText::Literal(value.clone()));
                     }
                     Ok(value)
@@ -1222,6 +1228,7 @@ impl Agent {
         if source == IN_READ {
             state.text_source = Some(RecipeText::Live);
             task = read;
+            typed = task.clone();
             (begins, ends) = self.located(state, observation, &task, &label, words(&task, target.max_length)).await?;
             let mut asked = value_questions(
                 state,
@@ -1396,7 +1403,8 @@ impl Agent {
                     let edges: Vec<_> = edges.into_iter().filter(|(edge, _)| *edge == "trail").collect();
                     trail = self.edges(state, observation, &question, edges).await?.1;
                 }
-                let value: String = chars[first.start - lead..last.end + trail].iter().collect();
+                let typed: Vec<char> = typed.chars().collect();
+                let value: String = typed[first.start - lead..last.end + trail].iter().collect();
                 if source == IN_TASK {
                     state.text_source = Some(RecipeText::Literal(value.clone()));
                 }
@@ -1550,7 +1558,8 @@ impl Agent {
         // A value can come from a page, such as a code a site sent.
         let read: Vec<&str> = state.notes.facts().iter().filter(|f| f.answers).map(|f| f.text.as_str()).collect();
         let read = read.join("\n");
-        let task = state.task.clone();
+        let typed = state.raw_task.clone();
+        let task = self.mask(&typed);
         let group = words(&task, target.max_length);
         let mut sources: IndexMap<String, JsonValue> = state
             .inputs
@@ -1588,7 +1597,7 @@ impl Agent {
         let source_question = format!(
             "What should be typed into {label}? Stored secrets are this site's sign-in credentials, named by role, and are only for signing in to the account: when this field is a sign-in field, the username is also the account's email address or phone number. Any other field takes a value the task gives, and a search field takes what the task is looking for."
         );
-        Value { task, read, label, group, source_question, sources }
+        Value { task, typed, read, label, group, source_question, sources }
     }
 
     /// Resolve replacement passwords separately from existing credentials, without model-written values.
@@ -2094,7 +2103,8 @@ impl Agent {
         } else if holds("refused")? {
             Carried::Refused
         } else {
-            let steps = spans(&state.task, SpanKind::Str);
+            // Shown to Jev as the task's own wording, so masked as the task is.
+            let steps = spans(&self.caller_task(state), SpanKind::Str);
             let criteria = steps
                 .iter()
                 .enumerate()
