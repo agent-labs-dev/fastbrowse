@@ -1423,6 +1423,91 @@ pub fn meta_charset(body: &[u8]) -> Option<&'static Encoding> {
     Some(if found == encoding_rs::UTF_16BE || found == encoding_rs::UTF_16LE { UTF_8 } else { found })
 }
 
+/// The type strings the HTML standard runs as a classic script: its JavaScript MIME type essences (MIME Sniffing,
+/// section 4.6).
+const JAVASCRIPT_TYPES: [&str; 16] = [
+    "application/ecmascript",
+    "application/javascript",
+    "application/x-ecmascript",
+    "application/x-javascript",
+    "text/ecmascript",
+    "text/javascript",
+    "text/javascript1.0",
+    "text/javascript1.1",
+    "text/javascript1.2",
+    "text/javascript1.3",
+    "text/javascript1.4",
+    "text/javascript1.5",
+    "text/jscript",
+    "text/livescript",
+    "text/x-ecmascript",
+    "text/x-javascript",
+];
+
+/// The `<script>` elements of `html` a browser would run, which a read of the markup never does. Whatever they build,
+/// links included, is missing from that read: example.com's served page is one paragraph and a script that adds its
+/// heading and its one link, and a fetched read of it was told the page led nowhere (#1380).
+///
+/// Counted as the HTML standard's "prepare the script element" decides: a script with neither a `src` nor any text
+/// does nothing, a type string that is not JavaScript or `module` is a data block, a classic script marked
+/// `nomodule` is skipped by a browser that runs modules, and a script inside a `<template>` is inert.
+pub fn scripts(html: &str) -> usize {
+    #[derive(Default)]
+    struct Scripts {
+        count: usize,
+        templates: usize,
+        /// The open script's `src`, and whether it would run if it has text.
+        open: Option<(bool, bool)>,
+        text: bool,
+    }
+    fn runs(tag: &Tag) -> (bool, bool) {
+        let get = |name: &str| tag.attrs.iter().find(|a| &*a.name.local == name).map(|a| a.value.to_string());
+        let kind = match (get("type"), get("language")) {
+            (Some(kind), _) if !kind.is_empty() => kind.trim_matches(|c: char| c.is_ascii_whitespace()).to_string(),
+            (None, Some(language)) if !language.is_empty() => format!("text/{language}"),
+            _ => "text/javascript".into(),
+        };
+        let classic = JAVASCRIPT_TYPES.iter().any(|known| known.eq_ignore_ascii_case(&kind));
+        let module = kind.eq_ignore_ascii_case("module");
+        (get("src").is_some(), (classic && get("nomodule").is_none()) || module)
+    }
+    impl Tags for Scripts {
+        fn start(&mut self, tag: &Tag, _at: usize) {
+            match &*tag.name {
+                "template" => self.templates += 1,
+                "script" if self.templates == 0 => {
+                    self.open = Some(runs(tag));
+                    self.text = false;
+                }
+                _ => {}
+            }
+        }
+        fn end(&mut self, name: &str, _at: usize) {
+            match name {
+                "template" => self.templates = self.templates.saturating_sub(1),
+                "script" => {
+                    if let Some((src, runs)) = self.open.take()
+                        && runs
+                        && (src || self.text)
+                    {
+                        self.count += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn data(&mut self, data: &str) {
+            if self.open.is_some() && !data.is_empty() {
+                self.text = true;
+            }
+        }
+    }
+    let mut sink = tokenize(html, Sink::new(Scripts::default())).into_inner();
+    // A script the document ends inside is still one the parser hands to the browser to run.
+    sink.end("script", 0);
+    sink.count
+}
+
 /// The `charset` parameter of a `Content-Type` value, unquoted.
 pub fn charset_parameter(content_type: &str) -> Option<String> {
     content_type.split(';').skip(1).find_map(|parameter| {
@@ -1434,6 +1519,23 @@ pub fn charset_parameter(content_type: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a script a browser runs can build what the markup lacks, as the HTML standard decides which ones run.
+    #[test]
+    fn scripts_counts_the_scripts_a_browser_runs() {
+        assert_eq!(scripts("<p>Text</p><script src=/s.js></script>"), 1);
+        assert_eq!(scripts("<script>document.body.append('x')</script><script type=module src=m.js></script>"), 2);
+        assert_eq!(scripts("<script type=' TEXT/JavaScript '>x()</script><script language=javascript>y()</script>"), 2);
+        assert_eq!(scripts("<script type=''>x()</script>"), 1);
+        assert_eq!(scripts("<p>Text</p><script>x()"), 1, "a document that ends inside a script still runs it");
+        assert_eq!(scripts("<p>Text</p>"), 0);
+        assert_eq!(scripts("<script></script>"), 0, "a script with no source and no text does nothing");
+        assert_eq!(scripts("<script type=application/ld+json>{\"a\": 1}</script>"), 0, "a data block");
+        assert_eq!(scripts("<script type=importmap>{}</script><script type='text/javascript; x=y'>a</script>"), 0);
+        assert_eq!(scripts("<script nomodule src=legacy.js></script>"), 0);
+        assert_eq!(scripts("<template><script src=t.js></script></template>"), 0, "a template's content is inert");
+        assert_eq!(scripts("<noscript><script src=n.js></script></noscript>"), 0);
+    }
 
     #[test]
     fn clean_collapses_what_a_browser_would() {

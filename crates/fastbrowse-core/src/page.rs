@@ -639,6 +639,12 @@ pub trait Page: Send + Sync {
         false
     }
 
+    /// Whether the current document carries scripts a browser would run and this page never ran, as a page fetched
+    /// over HTTP does: what they build, links included, is missing from what it observes.
+    fn scripts_unrun(&self) -> bool {
+        false
+    }
+
     /// The error that ends this run's page and sends it on to a browser.
     fn needs_browser(&self, message: String) -> BrowserError {
         BrowserError::NeedsBrowser(message)

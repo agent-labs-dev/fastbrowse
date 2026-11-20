@@ -194,7 +194,9 @@ offered, as a browser capture leaves it out, so a disabled next link is no next 
 take starts one on the same page, and the run carries on with
 what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
 build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a
-browser does it.
+browser does it. A served page with no links or controls is stated to Jev as leading nowhere only when its markup
+carries no script a browser would run; otherwise Jev is told the scripts did not run, and a wait or other step it
+picks there opens a browser that runs them.
 `fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
 A JSON response, including `application/*+json`, is read by its structure: each object key is a heading, and each

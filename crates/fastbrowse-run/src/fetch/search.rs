@@ -92,6 +92,7 @@ impl Page for SearchPage {
                     loaded.capture = Some(capture);
                     loaded.requested = None;
                     loaded.controls = controls;
+                    loaded.scripts = false;
                     loaded.generation += 1;
                     drop(loaded);
                     // Search observations describe the results, not any secret still visible in the retained browser.
@@ -105,6 +106,9 @@ impl Page for SearchPage {
 
     fn over_http(&self) -> bool {
         !self.active.load(Ordering::Relaxed) && self.inner.over_http()
+    }
+    fn scripts_unrun(&self) -> bool {
+        self.view().scripts_unrun()
     }
     fn needs_browser(&self, message: String) -> BrowserError {
         self.inner.needs_browser(message)

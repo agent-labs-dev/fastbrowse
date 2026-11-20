@@ -4627,12 +4627,30 @@ fn test_the_stop_with_several_drawn_surfaces_in_view_names_none() {
 fn test_a_drawn_surface_in_view_is_stated_as_a_fact() {
     let state = run_state();
     let view = Control { drawn: Some(true), ..button("Remote browser view") };
-    let facts = Agent::page_facts(&state, &observation(std::slice::from_ref(&view)));
+    let facts = Agent::page_facts(&state, &observation(std::slice::from_ref(&view)), false);
     assert!(facts.iter().any(|fact| fact.starts_with("An element marked `drawn` is a drawn surface")), "{facts:?}");
     let hidden = Control { offscreen: true, ..view };
-    let facts = Agent::page_facts(&state, &observation(&[hidden, button("Next")]));
+    let facts = Agent::page_facts(&state, &observation(&[hidden, button("Next")]), false);
     assert!(facts.iter().all(|fact| !fact.contains("drawn surface")), "{facts:?}");
     assert_eq!(crate::policy::element(&button("Next")).get("drawn"), None);
+}
+
+/// A page with no controls leads nowhere only when nothing could add one: scripts that never ran can (#1380). Told the
+/// page led nowhere, Jev picked done on a task to follow its link; told the scripts did not run, it picked a wait.
+#[test]
+fn test_a_page_with_unrun_scripts_and_no_controls_is_not_said_to_lead_nowhere() {
+    let state = run_state();
+    let nowhere = "This page offers no links or controls: nothing on it leads anywhere else.";
+    let unrun = Agent::page_facts(&state, &observation(&[]), true);
+    assert!(unrun.iter().all(|fact| fact != nowhere), "{unrun:?}");
+    assert!(
+        unrun.iter().any(|fact| fact.starts_with("This page was read over HTTP without running the scripts")
+            && fact.contains("a wait, scroll or other step on this page needs a browser")),
+        "{unrun:?}"
+    );
+    assert!(Agent::page_facts(&state, &observation(&[]), false).iter().any(|fact| fact == nowhere));
+    let linked = Agent::page_facts(&state, &observation(&[button("Next")]), true);
+    assert!(linked.iter().all(|fact| !fact.contains("links or controls")), "{linked:?}");
 }
 
 #[tokio::test]
@@ -5676,7 +5694,7 @@ async fn test_a_route_left_and_returned_to_in_one_document_stays_read() {
     state.changed_page = Some(super::state::read_key(&results));
     state.acted_from = Some(results.clone());
     agent().note_effect(&mut state, &results);
-    assert!(Agent::page_facts(&state, &results).iter().any(|fact| fact.starts_with("This page changed after")));
+    assert!(Agent::page_facts(&state, &results, false).iter().any(|fact| fact.starts_with("This page changed after")));
 }
 
 #[tokio::test]
@@ -8270,7 +8288,7 @@ fn a_link_to_a_page_already_read_is_marked_on_the_link_so_links_sharing_its_labe
     assert_eq!(marks, [Some(true), None]);
     assert_eq!(crate::policy::element(&page.controls[0])["already_read"], json!(true));
     assert!(crate::policy::element(&page.controls[1]).get("already_read").is_none());
-    assert!(Agent::page_facts(&state, &page).iter().all(|fact| !fact.contains("already read")));
+    assert!(Agent::page_facts(&state, &page, false).iter().all(|fact| !fact.contains("already read")));
 }
 
 /// A known page is read under the address the run built for it, while the site links to it by an address that

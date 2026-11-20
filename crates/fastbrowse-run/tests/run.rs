@@ -738,6 +738,82 @@ async fn test_a_run_goes_to_the_browser_when_the_read_needs_one() {
     assert!(result.error.as_deref().is_some_and(|error| error.contains("no browser here")), "{:?}", result.error);
 }
 
+/// Jev as `0` answers it, keeping the state of each step it is asked to choose.
+struct StepStates<J>(J, Arc<Mutex<Vec<Value>>>);
+
+impl<J: DecisionClient> DecisionClient for StepStates<J> {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.0.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if questions.contains_key("operation") {
+            self.1.lock().unwrap().push(state.clone());
+        }
+        self.0.evaluate(state, questions)
+    }
+}
+
+/// example.com's served page is a paragraph and a script that builds its heading and its one link. Read over HTTP,
+/// it offered no controls, Jev was told nothing on it led anywhere else, and a run asked to follow its link ended
+/// `complete` without following it (#1380). A page whose markup carries scripts is stated as read without running
+/// them, and the wait Jev picks there takes the run to a browser. A page with no scripts still leads nowhere.
+#[tokio::test]
+async fn test_a_fetched_page_whose_links_a_script_builds_is_not_said_to_lead_nowhere() {
+    let script_built = "<title>Example Domain</title><div><p>This domain is for use in documentation examples.</p></div>\
+                        <script src=/s.js></script>";
+    let plain = "<title>Example Domain</title><div><p>This domain is for use in documentation examples.</p></div>\
+                 <script type=application/ld+json>{\"@type\": \"WebSite\"}</script>";
+    for (markup, scripts) in [(script_built, true), (plain, false)] {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let wait = fastbrowse_agent::scripted::Step {
+            operation: fastbrowse_core::models::Operation::Wait,
+            label: String::new(),
+            pick: None,
+        };
+        let jev = StepStates(fastbrowse_agent::scripted::ScriptedJev::new(vec![wait]), asked.clone());
+        let options = task(|o, h| {
+            o.task = "Open https://docs.example.test/, follow the link on that page, and report the main heading of \
+                      the page the link opens."
+                .into();
+            o.start = Some("https://docs.example.test/".into());
+            h.http = Some(Http::new(Arc::new(
+                move |request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+                    let response = if request.url.contains("/json/version") {
+                        Response::new(404, Vec::new())
+                    } else {
+                        Response::new(200, markup).with_header("content-type", "text/html")
+                    };
+                    Box::pin(async move { Ok(response) })
+                },
+            )));
+            h.jev = Some(Arc::new(jev));
+            h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+            h.open_browser = Some(no_browser());
+        });
+        let result = run(options).await.unwrap();
+        let facts = asked.lock().unwrap()[0]["page_facts"].to_string();
+        let unrun = "This page was read over HTTP without running the scripts its markup carries: the markup holds no \
+                     links or controls, but a browser running those scripts may show some. A read takes in only this \
+                     markup; a wait, scroll or other step on this page needs a browser, which runs them.";
+        let nowhere = "This page offers no links or controls: nothing on it leads anywhere else.";
+        assert_eq!(facts.contains(unrun), scripts, "{facts}");
+        assert_eq!(facts.contains(nowhere), !scripts, "{facts}");
+        if scripts {
+            assert_eq!(result.status, Status::Error, "{:?}", result.error);
+            assert!(
+                result.error.as_deref().is_some_and(|error| error.contains("no browser here")),
+                "{:?}",
+                result.error
+            );
+        }
+    }
+}
+
 /// Jev as the scripted client answers, except that every page is a bot check.
 struct SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev);
 

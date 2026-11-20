@@ -1034,7 +1034,7 @@ impl Agent {
         check_login: bool,
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
-        let mut page_facts = Self::page_facts(state, observation);
+        let mut page_facts = Self::page_facts(state, observation, self.page.scripts_unrun());
         let page_origin = origin_of(&observation.url);
         let credential_origins: BTreeSet<_> = observation
             .controls
@@ -1194,7 +1194,8 @@ impl Agent {
     }
 
     /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
-    fn page_facts(state: &RunState, observation: &Observation) -> Vec<String> {
+    /// `scripts_unrun` is whether the page carries scripts that never ran, as a document fetched over HTTP does.
+    fn page_facts(state: &RunState, observation: &Observation, scripts_unrun: bool) -> Vec<String> {
         let mut facts = Vec::new();
         if let Some(status) = observation.response_status.filter(|status| *status >= 400) {
             facts.push(format!("This page answered HTTP {status}."));
@@ -1203,7 +1204,13 @@ impl Agent {
             facts
                 .push("This page was read and has not changed since: the notes hold what a read takes from it.".into());
         }
-        if observation.controls.is_empty() {
+        // A link a script adds is missing from markup read without running it, so a page whose markup has none is
+        // not known to lead nowhere: example.com's served page builds its one link with a script, and a run told
+        // the page led nowhere ended complete without following it (#1380). Told that the scripts did not run, Jev
+        // picked a wait over done on the same request; on a task its markup answers, done stayed its pick.
+        if observation.controls.is_empty() && scripts_unrun {
+            facts.push("This page was read over HTTP without running the scripts its markup carries: the markup holds no links or controls, but a browser running those scripts may show some. A read takes in only this markup; a wait, scroll or other step on this page needs a browser, which runs them.".into());
+        } else if observation.controls.is_empty() {
             facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into());
         }
         if !crate::policy::drawn_surfaces(&observation.controls).is_empty() {

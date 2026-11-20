@@ -166,10 +166,12 @@ fn decoded<'a>(coding: Option<&str>, body: &'a [u8]) -> Result<Cow<'a, [u8]>, No
     Ok(Cow::Owned(out))
 }
 
-/// One document read over HTTP: what it says and the controls its markup offers.
+/// One document read over HTTP: what it says, the controls its markup offers, and whether it carries scripts a
+/// browser would run.
 pub struct Fetched {
     pub capture: Capture,
     pub controls: Vec<Control>,
+    pub scripts: bool,
 }
 
 /// One fetched document before its frames are read into it.
@@ -179,6 +181,7 @@ struct Served {
     found: Vec<Found>,
     controls: Vec<Control>,
     frames: Vec<Frame>,
+    scripts: bool,
 }
 
 /// `url` read over HTTP, or [`NotFetched`] with the reason a browser is needed.
@@ -192,7 +195,8 @@ pub async fn fetch_document(
     allowed_origins: Option<&[String]>,
     seconds: f64,
 ) -> Result<Fetched, NotFetched> {
-    let Served { url, title, mut found, controls, frames } = serve(http, url, allowed_origins, seconds).await?;
+    let Served { url, title, mut found, controls, frames, scripts } =
+        serve(http, url, allowed_origins, seconds).await?;
     let origin = origin_of(&url);
     let mut unread = 0;
     let mut framed = Vec::new();
@@ -234,7 +238,7 @@ pub async fn fetch_document(
         // build, and reading the shell as the page would answer from nothing.
         return Err(refused("the page renders its content with scripts, so the markup holds no readable text"));
     }
-    Ok(Fetched { capture: capture(&url, title, found, unread), controls })
+    Ok(Fetched { capture: capture(&url, title, found, unread), controls, scripts })
 }
 
 /// `url`'s own document over HTTP, its frames unread.
@@ -315,14 +319,21 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
                     fields: Vec::new(),
                 }]
             });
-        return Ok(Served { url: final_url, title: String::new(), found, controls: Vec::new(), frames: Vec::new() });
+        return Ok(Served {
+            url: final_url,
+            title: String::new(),
+            found,
+            controls: Vec::new(),
+            frames: Vec::new(),
+            scripts: false,
+        });
     }
     if !HTML_TYPES.contains(&mime.as_str()) {
         let named = if mime.is_empty() { "the response" } else { &mime };
         return Err(refused(format!("{named} is not a document read as text")));
     }
     let (title, found, controls, frames) = read(&body, &final_url);
-    Ok(Served { url: final_url, title, found, controls, frames })
+    Ok(Served { url: final_url, title, found, controls, frames, scripts: html::scripts(&body) > 0 })
 }
 
 #[derive(Default)]
@@ -331,6 +342,7 @@ struct Loaded {
     /// The address the read asked for, before the server redirected it.
     requested: Option<String>,
     controls: Vec<Control>,
+    scripts: bool,
     generation: u64,
 }
 
@@ -392,6 +404,7 @@ impl FetchedPage {
         loaded.capture = Some(fetched.capture);
         loaded.requested = Some(url.to_string());
         loaded.controls = fetched.controls;
+        loaded.scripts = fetched.scripts;
         loaded.generation += 1;
         Ok(())
     }
@@ -400,6 +413,10 @@ impl FetchedPage {
 impl Page for FetchedPage {
     fn over_http(&self) -> bool {
         true
+    }
+
+    fn scripts_unrun(&self) -> bool {
+        self.loaded.lock().unwrap().scripts
     }
 
     fn needs_browser(&self, message: String) -> BrowserError {
