@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
+
 - The extension's native host launcher written by `fastbrowse extension install` falls back to another fastbrowse when the one it was installed from is removed: first any other fastbrowse that was on `PATH` at install time, then `fastbrowse` on the browser's `PATH`. Installed from a project venv through `uv run`, the launcher used to name only that venv, so deleting the checkout left the extension with no host and runs ended `unavailable`. Run `fastbrowse extension install` once to replace a launcher written by an earlier release ([#1191](https://github.com/agent-labs-dev/fastbrowse/issues/1191)).
 
 ## [0.12.0] - 2026-11-19
