@@ -70,6 +70,13 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
     if let Some((operation, label)) = withheld.action.clone() {
         let mut left_out = false;
         match &label {
+            // An address is no control, so removing controls by label left a reload that moved nothing on offer: a
+            // blank start page judged a site failure was reloaded until the run ended `unavailable` with the task's
+            // own /login beside it (#1365).
+            Some(url) if operation == Operation::Navigate => {
+                context.withheld_targets.push((operation, url.clone()));
+                left_out = true;
+            }
             Some(label) => {
                 for control in offered.controls.iter_mut().filter(|control| describe(control) == *label) {
                     if operation == Operation::Blur && leavable(control) {

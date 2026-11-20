@@ -5844,6 +5844,46 @@ fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
     assert!(context.problem.as_deref().unwrap().contains("not offered this time"));
 }
 
+/// A navigation that moved nothing is left out of the next ask like a click is. A blank start page judged a site failure
+/// was reloaded six times while the task's own /login stood beside it on offer, because the stall rule only removed
+/// controls and the reload address is not one, and the run ended `unavailable` (#1365).
+#[test]
+fn test_a_navigation_that_moved_nothing_is_not_offered_again() {
+    let entry = "https://shop.test/entry";
+    let offered_urls = |idle: Option<&str>| {
+        let mut offered = at(entry, &[]);
+        let mut context = crate::policy::StepContext::new("Sign in at /login as grace@example.com");
+        context.start_url = Some(entry.into());
+        context.reload = Some(entry.into());
+        context.problem = Some("no_progress (3)".into());
+        if let Some(url) = idle {
+            let problem = context.problem.take().unwrap_or_default();
+            super::recovery::withhold(
+                &mut offered,
+                &mut context,
+                &problem,
+                &super::recovery::Idle::performed(Some((Operation::Navigate, Some(url.into())))),
+            );
+        }
+        let request = crate::policy::build_request(&offered, &offered.controls, &context, &Default::default(), 64);
+        let urls: Vec<String> = match request.questions.get("navigate_target") {
+            Some(Question::Choice(targets)) => {
+                targets.criteria.values().map(|url| url.as_str().unwrap().to_string()).collect()
+            }
+            _ => Vec::new(),
+        };
+        (urls, context.problem)
+    };
+    let (before, _) = offered_urls(None);
+    assert_eq!(before, ["https://shop.test/login", entry]);
+    let (after, problem) = offered_urls(Some(entry));
+    assert_eq!(after, ["https://shop.test/login"]);
+    assert!(
+        problem.as_deref().unwrap().contains(&format!("navigate '{entry}' did not move the task on")),
+        "{problem:?}"
+    );
+}
+
 fn card(revealed: bool) -> Observation {
     let mut controls = vec![Control::new("card", "article", "Card", [Operation::Hover, Operation::Click])];
     if revealed {
