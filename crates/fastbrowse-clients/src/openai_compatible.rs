@@ -817,6 +817,13 @@ impl OpenAICompatibleLLM {
             body.entry("temperature").or_insert(0.0.into());
         }
         if let Some(effort) = self.reasoning_effort {
+            // Reading a field's value off a record is a judgment whether the text holds it, and at `low` GPT-6 Luna
+            // answered null for a title that was there in 14% of 80 replays of one captured request, against 0 of 80
+            // at `medium`. Every other purpose passes at `low`, so only this one is raised.
+            let effort = match (purpose, effort) {
+                (LLMPurpose::Groups, ReasoningEffort::Low) => ReasoningEffort::Medium,
+                _ => effort,
+            };
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
         self.billed(body, purpose, schema, ledger, model).await
