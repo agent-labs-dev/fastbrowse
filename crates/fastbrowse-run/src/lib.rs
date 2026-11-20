@@ -34,7 +34,8 @@ use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BrowserUsed, BrowserVia, BrowserWarningEvent,
     BudgetResource, BudgetStop, Bytes, CostBasis, CostBreakdown, CostComponent, CostLine, Event, EventHandler,
-    FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status, StepResult, UntilCheck, WallKind,
+    FailureKind, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status, StepResult, UntilCheck,
+    WallKind,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::output_schema::output_model;
@@ -62,6 +63,19 @@ pub enum RunError {
         error: Box<RunError>,
         receipt: CancellationReceipt,
     },
+}
+
+impl FailureKind for RunError {
+    fn failure_kind(&self) -> String {
+        match self {
+            RunError::Invalid(_) => "Invalid".into(),
+            RunError::UnsupportedSchema(_) => "UnsupportedSchema".into(),
+            RunError::Configuration(_) => "Configuration".into(),
+            RunError::Recording(_) => "Recording".into(),
+            RunError::Cancelled(_) => "Cancelled".into(),
+            RunError::AfterSpending { error, .. } => error.failure_kind(),
+        }
+    }
 }
 
 impl std::fmt::Display for RunError {
@@ -462,35 +476,41 @@ impl Drop for Scratch {
 
 fn sink(downloads: Option<&Path>, scratch: &Scratch) -> Result<Arc<dyn ArtifactSink>, BrowserError> {
     let root = downloads.unwrap_or(&scratch.0);
-    DirectorySink::new(root)
-        .map(|sink| Arc::new(sink) as Arc<dyn ArtifactSink>)
-        .map_err(|error| BrowserError::Failed(format!("cannot keep downloads in {}: {error}", root.display())))
+    DirectorySink::new(root).map(|sink| Arc::new(sink) as Arc<dyn ArtifactSink>).map_err(|error| {
+        BrowserError::failed("downloads/unwritable", format!("cannot keep downloads in {}: {error}", root.display()))
+    })
 }
 
 /// The websocket URL of the browser serving DevTools on `port`, read from its `/json/version` endpoint.
 pub async fn resolve_cdp_port(port: u16, host: &str, http: &Http) -> Result<String, BrowserError> {
     let endpoint = format!("http://{host}:{port}/json/version");
-    let response = http
-        .get(&endpoint, &[], 5.0)
-        .await
-        .map_err(|_| BrowserError::Failed(format!("no DevTools endpoint at {endpoint} (ConnectError)")))?;
+    let response = http.get(&endpoint, &[], 5.0).await.map_err(|_| {
+        BrowserError::failed("devtools/ConnectError", format!("no DevTools endpoint at {endpoint} (ConnectError)"))
+    })?;
     if response.status == 404 {
         // Chrome's remote debugging switch at chrome://inspect serves the websocket but not this discovery route.
-        return Err(BrowserError::Failed(format!(
-            "{endpoint} answered 404, so it names no DevTools websocket. A Chrome whose remote debugging was turned on at chrome://inspect serves none here: its DevToolsActivePort file holds the port on the first line and the browser path on the second, so pass ws://127.0.0.1:<port><path> as cdp_url instead."
-        )));
+        return Err(BrowserError::failed(
+            "devtools/http-404",
+            format!(
+                "{endpoint} answered 404, so it names no DevTools websocket. A Chrome whose remote debugging was turned on at chrome://inspect serves none here: its DevToolsActivePort file holds the port on the first line and the browser path on the second, so pass ws://127.0.0.1:<port><path> as cdp_url instead."
+            ),
+        ));
     }
     if !(200..300).contains(&response.status) {
-        return Err(BrowserError::Failed(format!(
-            "{endpoint} answered {}, so it names no DevTools websocket",
-            response.status
-        )));
+        return Err(BrowserError::failed(
+            format!("devtools/http-{}", response.status),
+            format!("{endpoint} answered {}, so it names no DevTools websocket", response.status),
+        ));
     }
-    let version: Value = serde_json::from_slice(&response.body)
-        .map_err(|_| BrowserError::Failed(format!("no DevTools endpoint at {endpoint} (JSONDecodeError)")))?;
+    let version: Value = serde_json::from_slice(&response.body).map_err(|_| {
+        BrowserError::failed(
+            "devtools/JSONDecodeError",
+            format!("no DevTools endpoint at {endpoint} (JSONDecodeError)"),
+        )
+    })?;
     match version.get("webSocketDebuggerUrl").and_then(Value::as_str) {
         Some(url) if !url.is_empty() => Ok(url.to_string()),
-        _ => Err(BrowserError::Failed(format!("{endpoint} named no webSocketDebuggerUrl"))),
+        _ => Err(BrowserError::failed("devtools/no-websocket", format!("{endpoint} named no webSocketDebuggerUrl"))),
     }
 }
 
@@ -545,16 +565,24 @@ impl Connected {
 pub async fn connect_cdp(options: ConnectCdp) -> Result<Connected, BrowserError> {
     check_browser_access(options.check_access.as_ref()).await?;
     if options.port.is_some() && options.cdp_url.is_some() {
-        return Err(BrowserError::Failed("port and cdp_url both name a browser to attach to; pass one".into()));
+        return Err(BrowserError::failed(
+            "connect_cdp/both-named",
+            "port and cdp_url both name a browser to attach to; pass one",
+        ));
     }
     let cdp_url = match (options.cdp_url, options.port) {
         (Some(url), _) => url,
         (None, Some(port)) => resolve_cdp_port(port, &options.host, &Http::hyper()).await?,
-        (None, None) => return Err(BrowserError::Failed("connect_cdp needs a port or a cdp_url".into())),
+        (None, None) => {
+            return Err(BrowserError::failed("connect_cdp/none-named", "connect_cdp needs a port or a cdp_url"));
+        }
     };
     let allowed = match options.allowed_origins {
         None => None,
-        Some(origins) => Some(parse_origins(origins).map_err(|error| BrowserError::Failed(error.to_string()))?),
+        Some(origins) => Some(
+            parse_origins(origins)
+                .map_err(|error| BrowserError::failed("allowed_origins/invalid", error.to_string()))?,
+        ),
     };
     let connection = BrowserConnection {
         attach: options.attach || options.target_match.is_some(),
@@ -564,7 +592,7 @@ pub async fn connect_cdp(options: ConnectCdp) -> Result<Connected, BrowserError>
         ..BrowserConnection::new(cdp_url, true)
     };
     let config = options.config.unwrap_or_default();
-    let scratch = Scratch::new().map_err(|error| BrowserError::Failed(error.to_string()))?;
+    let scratch = Scratch::new().map_err(|error| BrowserError::failed("scratch/unwritable", error.to_string()))?;
     let artifacts = match options.artifact_sink {
         Some(sink) => sink,
         None => sink(options.downloads.as_deref(), &scratch)?,
@@ -728,19 +756,19 @@ enum Owned {
 struct Refused {
     message: String,
     unavailable: bool,
-    /// `RunResult::failure_kind`: what failed, when a typed error said so. A refusal of the task's own options has none.
+    /// `RunResult::failure_kind`: what failed, named from a typed error or the rule that refused the run.
     kind: Option<String>,
 }
 
 impl From<BrowserError> for Refused {
     fn from(error: BrowserError) -> Self {
-        let kind = Some(fastbrowse_agent::agent::failure_kind(&error));
+        let kind = Some(error.failure_kind());
         Refused { unavailable: error.is_unavailable(), message: error.to_string(), kind }
     }
 }
 
-fn refused(message: &str) -> Refused {
-    Refused { message: message.into(), unavailable: false, kind: None }
+fn refused(kind: &str, message: &str) -> Refused {
+    Refused { message: message.into(), unavailable: false, kind: Some(kind.into()) }
 }
 
 /// Whether a run reads over HTTP before any browser starts. A browser it was told to use, or anything that only has a
@@ -801,14 +829,17 @@ async fn browser(
         return Ok((connection, Owned::Extension(Box::new(connected))));
     }
     let handed = match (&host.open_browser, &task.cdp_url, task.cdp_port) {
-        (Some(open), ..) => Some(open().await.map_err(|error| refused(&error))?),
+        (Some(open), ..) => Some(open().await.map_err(|error| refused("OpenBrowser", &error))?),
         (None, Some(url), _) => Some(url.clone()),
         (None, None, Some(port)) => Some(resolve_cdp_port(port, "127.0.0.1", http).await?),
         (None, None, None) => None,
     };
     if let Some(cdp_url) = handed {
         if key.is_some() {
-            return Err(refused("cdp_url/cdp_port is a browser to attach to; a cloud key would start a second one"));
+            return Err(refused(
+                "Options/cdp-and-cloud-key",
+                "cdp_url/cdp_port is a browser to attach to; a cloud key would start a second one",
+            ));
         }
         // The caller's browser outlives the run. The session either opens its own tab and closes only that, or,
         // attaching, drives a window already open and leaves it open.
@@ -828,11 +859,15 @@ async fn browser(
             ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
         ];
         if let Some((name, _)) = cloud.iter().find(|(_, on)| *on) {
-            return Err(refused(&format!("{name} belongs to a Browser Use Cloud browser, which needs a key")));
+            return Err(refused(
+                &format!("Options/{name}-needs-cloud-key"),
+                &format!("{name} belongs to a Browser Use Cloud browser, which needs a key"),
+            ));
         }
         let (process, connection) = LocalChromeProcess::launch(chrome).await.map_err(|error| Refused {
-            kind: Some(format!("LocalChrome.{}", fastbrowse_agent::agent::failure_kind(&error))),
-            ..refused(&error.to_string())
+            kind: Some(format!("LocalChrome.{}", error.failure_kind())),
+            message: error.to_string(),
+            unavailable: false,
         })?;
         let connection = BrowserConnection { foreground: connection.foreground || foreground, ..connection };
         return Ok((connection, Owned::Local(Box::new(process))));
@@ -850,7 +885,7 @@ async fn browser(
     let cloud = |error: fastbrowse_browser::adapters::browser_use_cloud::BrowserUseCloudError| Refused {
         unavailable: error.is_unavailable(),
         message: error.to_string(),
-        kind: Some(format!("BrowserUseCloud.{}", fastbrowse_agent::agent::failure_kind(&error))),
+        kind: Some(format!("BrowserUseCloud.{}", error.failure_kind())),
     };
     // Held by the caller while it starts, so a start that fails or is cancelled still reports the browser it billed.
     let remote = starting.insert(BrowserUseCloudBrowser::new(key, options).map_err(cloud)?);
@@ -1134,7 +1169,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
                 Ok(started) => *recording.lock().await = Some(started),
                 Err(error) => {
                     recording_failed = Some(error.0.clone());
-                    return Err(refused(&error.0));
+                    return Err(refused("Recording/start", &error.0));
                 }
             }
         }
@@ -1163,8 +1198,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             recipe_sink: recipe_sink.clone(),
         };
         let result = agent.run(&task.task, run).await.map_err(|error| Refused {
-            kind: Some(fastbrowse_agent::agent::failure_kind(&error)),
-            ..refused(&error.to_string())
+            kind: Some(error.failure_kind()),
+            message: error.to_string(),
+            unavailable: false,
         })?;
         // The card is a data: document navigated into the tab, which would replace the caller's own app page; an
         // attached window is theirs and stays where it is, as does a tab the run left for a person to finish.
@@ -1311,12 +1347,12 @@ fn remaining(limits: Option<&Limits>, spent: &LedgerState, seconds: f64) -> Resu
 
 /// The fetched attempt's result, ended on the limit it used up rather than on the page's refusal.
 fn out_of_budget(mut result: RunResult, stop: BudgetStop) -> RunResult {
-    result.status = Status::BudgetExceeded;
-    result.error = Some(format!(
+    let error = format!(
         "the fetched read used the {} limit of {} before a browser could take over",
         stop.resource,
         fastbrowse_core::py::json::float_str(stop.limit)
-    ));
+    );
+    result.end_as(Status::BudgetExceeded, stop.failure_kind(), error);
     result.budget = Some(stop);
     result
 }
@@ -1348,7 +1384,7 @@ async fn fetched(
     on_event: EventHandler,
     told: &Told,
 ) -> Result<Read, RunError> {
-    if check_browser_access(host.check_access.as_ref()).await.is_err() {
+    if let Err(refusal) = check_browser_access(host.check_access.as_ref()).await {
         // The caller's own gate refused the run, which is an error result, not an error to the embedder. Python reports
         // the exception's class name.
         let result = RunResult {
@@ -1363,7 +1399,7 @@ async fn fetched(
             artifacts: Vec::new(),
             citations: Vec::new(),
             error: Some("BrowserError".into()),
-            failure_kind: None,
+            failure_kind: Some(refusal.failure_kind()),
             final_url: None,
             final_frame: None,
             recordings: Vec::new(),
@@ -1564,6 +1600,24 @@ mod tests {
         let error = Cancel::default();
         error.trip();
         assert_eq!(error.guard(std::future::pending::<()>()).await.unwrap_err().to_string(), "the run was cancelled");
+    }
+
+    /// A fetched read that spent the browser run's allowance ended `budget_exceeded` still carrying the kind of the
+    /// read's own stop, which named a browser as needed rather than the limit that ended the run.
+    #[test]
+    fn a_fetched_read_out_of_budget_names_the_limit_as_its_kind() {
+        let read = serde_json::from_value(serde_json::json!({
+            "status": "blocked", "answer": null, "data": null, "evidence": [], "steps": [], "cost": {"lines": []},
+            "artifacts": [], "error": "a step needs a browser", "failure_kind": "NeedsBrowser",
+        }))
+        .unwrap();
+        let result = out_of_budget(read, BudgetStop { resource: BudgetResource::Steps, limit: 3.0 });
+        assert_eq!(result.status, Status::BudgetExceeded);
+        assert_eq!(result.failure_kind.as_deref(), Some("Budget/steps"));
+        assert_eq!(
+            result.error.as_deref(),
+            Some("the fetched read used the steps limit of 3.0 before a browser could take over")
+        );
     }
 
     #[test]

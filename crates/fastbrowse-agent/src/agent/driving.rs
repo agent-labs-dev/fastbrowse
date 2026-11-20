@@ -315,10 +315,9 @@ impl Agent {
                     );
                     let evidence = self.wall_quotes(&raw).await;
                     return Err(Stop {
-                        status: Status::Blocked,
-                        error: Some(error),
                         evidence,
                         wall: Some(WallKind::BotCheck),
+                        ..Stop::new(Status::Blocked, "Wall/bot-check", error)
                     }
                     .into());
                 }
@@ -690,9 +689,12 @@ impl Agent {
         let proposal = propose_start(&*self.llm, task, Some(ledger)).await?;
         ledger.record([proposal.cost])?;
         let Some(opening) = accept_start(proposal.data.url.as_deref()) else {
-            return Err(
-                Stop::new(Status::NeedsInput, "the task names no page to start from, and none was given").into()
-            );
+            return Err(Stop::new(
+                Status::NeedsInput,
+                "Start/no-page",
+                "the task names no page to start from, and none was given",
+            )
+            .into());
         };
         self.event("start_page", || Map::from_iter([("url".into(), opening.clone().into())]));
         Ok(Some(opening))
@@ -1897,6 +1899,7 @@ pub(super) fn drawn_surface_stop(url: &str, surfaces: &[&Control]) -> Stop {
     };
     Stop::new(
         Status::Stuck,
+        "DrawnSurface",
         format!(
             "Could not complete the task: it needs an action inside {inside}: fastbrowse acts on page elements and cannot act inside a streamed or canvas view."
         ),
@@ -1905,9 +1908,7 @@ pub(super) fn drawn_surface_stop(url: &str, surfaces: &[&Control]) -> Stop {
 
 pub(super) fn require(target: Option<&Control>) -> Step<&Control> {
     target.ok_or_else(|| {
-        Flow::from(fastbrowse_core::decision::DecisionError::Failed(
-            "operation needs a target and Jev offered none".into(),
-        ))
+        Flow::from(fastbrowse_core::decision::DecisionError::failed("operation needs a target and Jev offered none"))
     })
 }
 

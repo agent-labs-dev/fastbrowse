@@ -55,6 +55,7 @@ use crate::system_one::{
     AIMLAPI_MODEL, AIMLAPI_URL, DECISIONS_PATH, OLLAMA_URL, OPENROUTER_MODEL, OPENROUTER_URL, PERPLEXITY_MODEL,
     PERPLEXITY_URL, SystemOneClient, TELNYX_MODEL, TELNYX_URL, TYPESAFE_URL,
 };
+use crate::validation::Sourced;
 use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 
 /// The default LLM is GPT-6 Luna, the one model every LLM purpose uses, because a second model is a second set of
@@ -538,6 +539,15 @@ impl Settings {
         source: DecisionSource,
         http: &Http,
     ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        let client = self.source_client(source, http)?;
+        Ok(Box::new(Sourced { client, source: source.as_str() }))
+    }
+
+    fn source_client(
+        &self,
+        source: DecisionSource,
+        http: &Http,
+    ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
         let base_url = |default: &'static str| match &self.decision_base_url {
             Some(url) if !url.is_empty() => url.clone(),
             _ => default.to_string(),
@@ -753,6 +763,7 @@ impl Settings {
             // A provider reached directly caches without a mark, and a strict one refuses a field it does not know.
             cache_breakpoints: false,
             extra_body: self.extra_body()?,
+            provider: preset.provider,
         };
         OpenAICompatibleLLM::new(key, http.clone(), &base_url, self.preset_models(&preset)?, options)
             .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
@@ -781,13 +792,13 @@ impl Settings {
             },
             provider => return self.preset_llm(provider.preset(), http),
         };
-        let primary = self.routed_llm(key, base_url, routing, http)?;
+        let primary = self.routed_llm(source, key, base_url, routing, http)?;
         // Chosen only because its key is set, OpenRouter falls back to a gateway key set beside it.
         let gateway = self.ai_gateway_api_key.as_ref().filter(|key| key.is_set());
         match (source, self.llm_provider, gateway) {
             (LLMProvider::OpenRouter, None, Some(gateway)) => Ok(Box::new(FailoverLLMClient::new(
                 primary,
-                self.routed_llm(gateway, LLM_GATEWAY_URL, gateway_provider_routing(), http)?,
+                self.routed_llm(LLMProvider::Gateway, gateway, LLM_GATEWAY_URL, gateway_provider_routing(), http)?,
                 http.clone(),
             ))),
             _ => Ok(primary),
@@ -796,6 +807,7 @@ impl Settings {
 
     fn routed_llm(
         &self,
+        provider: LLMProvider,
         key: &Secret,
         base_url: &str,
         routing: Value,
@@ -805,6 +817,7 @@ impl Settings {
             reasoning_effort: self.llm_reasoning,
             reasoning_default: default_reasoning(&self.model()),
             provider_routing: Some(routing),
+            provider,
             ..LLMOptions::default()
         };
         OpenAICompatibleLLM::new(key.expose(), http.clone(), base_url, self.models(), options)

@@ -163,8 +163,9 @@ pub fn merged_secrets(
     Ok(merged)
 }
 
-/// A run with nothing to report but why it failed, in the shape of any other, so a caller branches on `status`.
-pub fn error_result(error: impl Into<String>) -> RunResult {
+/// A run with nothing to report but why it failed, in the shape of any other, so a caller branches on `status`. The
+/// kind names the failure in content-free terms, as `RunResult::failure_kind` does.
+pub fn error_result(kind: impl Into<String>, error: impl Into<String>) -> RunResult {
     RunResult {
         browser: None,
         status: Status::Error,
@@ -177,7 +178,7 @@ pub fn error_result(error: impl Into<String>) -> RunResult {
         artifacts: Vec::new(),
         citations: Vec::new(),
         error: Some(error.into()),
-        failure_kind: None,
+        failure_kind: Some(kind.into()),
         final_url: None,
         final_frame: None,
         recordings: Vec::new(),
@@ -187,9 +188,9 @@ pub fn error_result(error: impl Into<String>) -> RunResult {
 
 /// The `error` result of a cancelled run that is reported as a failure, with the steps, cost and videos its receipt
 /// holds: a run a failing callback stopped had spent and done all of that.
-pub fn cancelled_result(error: impl Into<String>, receipt: CancellationReceipt) -> RunResult {
+pub fn cancelled_result(kind: impl Into<String>, error: impl Into<String>, receipt: CancellationReceipt) -> RunResult {
     let CancellationReceipt { steps, cost, recordings, browser, .. } = receipt;
-    RunResult { steps, cost, recordings, browser: browser.map(|browser| *browser), ..error_result(error) }
+    RunResult { steps, cost, recordings, browser: browser.map(|browser| *browser), ..error_result(kind, error) }
 }
 
 /// One step as a line: what was done, and to what.

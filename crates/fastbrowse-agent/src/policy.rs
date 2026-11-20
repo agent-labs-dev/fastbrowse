@@ -1961,6 +1961,7 @@ mod tests {
                             requests: 1,
                             answered: Vec::new(),
                             last: "503".into(),
+                            cause: Default::default(),
                         },
                     )));
                 }
@@ -2556,7 +2557,7 @@ mod tests {
             let sent = referenced(images, state, questions).len();
             self.pictures.lock().unwrap().push(sent);
             if sent > 1 {
-                return Box::pin(async { Err(DecisionError::InputTooLarge("over the body limit".into())) });
+                return Box::pin(async { Err(DecisionError::input_too_large("over the body limit")) });
             }
             self.inner.evaluate(state, questions)
         }

@@ -331,6 +331,14 @@ The JSON result says why a run stopped where a caller can act on it:
 
 - `budget` names the limit a `budget_exceeded` run hit (`steps`, `seconds`, `dollars`, `jev_calls` or
   `llm_calls`) and its value.
+- `failure_kind` names why a run ended short of `complete`, in parts joined by `/`, and holds no page text,
+  address, prompt or secret, so it can be logged where `error` cannot. A model failure names the error, provider,
+  purpose and HTTP status or error class (`Llm.Rejected/openrouter/action/http-401`,
+  `Jev.RetriesExhausted/openrouter/read/http-503`); `host` is the provider of a client the embedder passed in. A
+  browser failure names the command and its reason (`Failed/Page.navigate/net::ERR_ABORTED`), a limit its resource
+  (`Budget/seconds`), a callback that threw its method and the internal error code
+  (`Callback/run/event/error/-32603`, the same from every SDK and transport), and a stop the rule that made it
+  (`SiteFailure/http-503`, `Wall/sign-in`, `Done/unanswered`, `Recovery/exhausted`). A `complete` run has none.
 - `browser` says which browser the run drove: `via` is `cloud`, `launched`, `attached` or `extension`, with the
   `profile` and the `browser` product and version where known. A run that read every page over HTTP has none.
 - `wall` describes a `needs_login` or `blocked` page: its `kind` (`password`, `one_time_code`, `sign_in` or

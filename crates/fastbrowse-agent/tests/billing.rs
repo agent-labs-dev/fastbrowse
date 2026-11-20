@@ -193,6 +193,7 @@ impl DecisionClient for CustomPartial {
                 requests: 3,
                 answered: vec![single.clone(), single],
                 last: "failed".into(),
+                cause: Default::default(),
             })))
         })
     }

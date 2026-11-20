@@ -463,7 +463,9 @@ impl Page for FetchedPage {
                 Ok(()) => Ok(()),
                 // A guessed address, not the caller's page: the loop falls back to `start` on a browser failure, and
                 // concluding that the task needs a browser here would end the run.
-                Err(NotFetched(message)) if back_to.is_some() => Err(BrowserError::Failed(message)),
+                Err(NotFetched(message)) if back_to.is_some() => {
+                    Err(BrowserError::failed("fetch/not-fetched", message))
+                }
                 Err(NotFetched(message)) => Err(self.needs_browser(message)),
             }
         })

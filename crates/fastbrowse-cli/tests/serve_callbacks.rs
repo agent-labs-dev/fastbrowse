@@ -116,11 +116,11 @@ async fn test_a_run_whose_client_holds_no_check_gets_none_and_is_not_asked() {
     assert_eq!(client.inbox.iter().map(|m| m["method"].clone()).collect::<Vec<_>>(), [json!("run/event")]);
 }
 
-/// A run that a client's callback ended, apart from its `error`: nothing the run did before then is in it.
-fn errored(error: &str) -> Value {
+/// A run that a client's callback ended, apart from its `error` and kind: nothing the run did before then is in it.
+fn errored(kind: &str, error: &str) -> Value {
     json!({
         "status": "error", "budget": null, "answer": null, "data": null, "evidence": [], "steps": [],
-        "cost": {"lines": []}, "artifacts": [], "citations": [], "error": error, "failure_kind": null, "final_url": null,
+        "cost": {"lines": []}, "artifacts": [], "citations": [], "error": error, "failure_kind": kind, "final_url": null,
         "recordings": [], "wall": null, "browser": null,
     })
 }
@@ -137,7 +137,7 @@ async fn test_an_error_reply_to_the_check_ends_the_run_as_an_error_result_after_
     // The run is over, so the server takes the next one.
     let after = client.request("run", Some(run_params("run-2", json!({})))).await;
     assert!(reply.get("error").is_none());
-    assert_eq!(reply["result"], errored("run/until: orders page never loaded"));
+    assert_eq!(reply["result"], errored("Callback/run/until/error/-32000", "run/until: orders page never loaded"));
     assert!(closed_by_the_reply);
     assert_eq!(after["result"]["status"], "complete");
 }
@@ -184,7 +184,13 @@ async fn test_an_error_reply_to_a_secret_ends_the_run_as_an_error_result() {
     client.refuse(&asked, -32000, &format!("the vault refused {VALUE}"));
     let reply = client.reply(run).await;
     // The text is the server's own: a client that is not the SDK could put the value in its message.
-    assert_eq!(reply["result"], errored("secrets/resolve: the client could not resolve the secret 'SHOP_PASSWORD'"));
+    assert_eq!(
+        reply["result"],
+        errored(
+            "Callback/secrets/resolve/error/-32000",
+            "secrets/resolve: the client could not resolve the secret 'SHOP_PASSWORD'"
+        )
+    );
 }
 
 #[tokio::test]
@@ -206,7 +212,7 @@ async fn test_a_run_that_fails_on_its_own_is_an_error_result() {
     let mut client = serving(broken, settings());
     let response = client.request("run", Some(run_params("run-1", json!({"until": true, "frames": true})))).await;
     assert!(response.get("error").is_none());
-    assert_eq!(response["result"], errored("no such page"));
+    assert_eq!(response["result"], errored("Invalid", "no such page"));
 }
 
 #[tokio::test]
@@ -219,7 +225,10 @@ async fn test_an_error_reply_the_server_cannot_read_still_ends_the_run_and_none_
         let asked = client.asked("run/until").await;
         client.send(json!({"jsonrpc": "2.0", "id": asked["id"], "error": error}));
         let reply = client.reply(run).await;
-        assert_eq!(reply["result"], errored("run/until: the client replied with an error"));
+        assert_eq!(
+            reply["result"],
+            errored("Callback/run/until/unusable-reply", "run/until: the client replied with an error")
+        );
         assert!(!String::from_utf8_lossy(&client.written).contains("never loaded"));
     }
 }
