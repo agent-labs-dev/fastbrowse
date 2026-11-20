@@ -13,6 +13,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
 
+- A comparison between records the task names, such as which of httpx and requests has the newer release, ranges over only those records on the first answer. The answer writer was told the records' kind once with the task's scope and once without it, and wrote the kind alone in most first drafts, so the answer was rejected as comparing every package and written again ([#1270](https://github.com/agent-labs-dev/fastbrowse/issues/1270)).
+
+- An answer rejected for copying more than the task asks is rewritten knowing which page text it copied. Told only that the check failed, the rewrite copied "katherine@example.com." with the sentence's period again and the run ended unverified ([#1283](https://github.com/agent-labs-dev/fastbrowse/issues/1283)).
+
+- Comparison answers include the calculated value when asked for it alongside the winning record. The answer could name the winner while leaving the value in its formatting data ([#1304](https://github.com/agent-labs-dev/fastbrowse/issues/1304)).
+
 ## [0.12.0] - 2026-11-19
 
 - Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.
