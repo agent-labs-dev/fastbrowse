@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
+
 - `--extension` finds the connected browser from inside Codex's `workspace-write` sandbox. A run counted a browser as connected only when its host's process id was visible, and that sandbox gives the CLI its own process namespace, so every run there ended `unavailable` with "no browser has the fastbrowse extension connected" while the extension was connected. A run now counts a browser as connected when its host's socket accepts a connection. A sandbox that refuses the host's directory, a host's record or its socket ends the run with `no browser's fastbrowse extension can be reached from this process` and the refusal, and [The extension is not connected](docs/troubleshooting.md#the-extension-is-not-connected) says what a sandbox must allow ([#1344](https://github.com/agent-labs-dev/fastbrowse/issues/1344)).
 
 ## [0.12.0] - 2026-11-19
