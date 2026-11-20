@@ -306,6 +306,12 @@ pub(crate) struct RunState {
     /// What Jev was offered for the latest decision, for the next step recorded, which is the one that decision led to.
     pub choices: Vec<StepChoice>,
     pub history: Vec<HistoryEntry>,
+    /// The run's own opening of its first page, made before any step and kept out of `history`, which counts the
+    /// steps. Asked to open example.com, follow its link and report the heading there, a run that had read the heading
+    /// was judged never to have opened example.com, shown only the click and the read, and ended stuck (#1373). It
+    /// holds the addresses as they were, and is masked where a model is shown it: a value typed as a secret later in
+    /// the run can sit in either address, and masked at the opening it would not yet have been known.
+    pub opened: Option<HistoryEntry>,
     pub site_failure: Option<SiteFailure>,
     /// A failure on the address the run started at, kept after the run leaves it until that address loads. A run
     /// whose start page answered 404 searched the site, stalled on the results and ended `no_progress`, since leaving
@@ -487,6 +493,11 @@ pub(crate) struct RunState {
 pub type PartialComposition = (ComposedAnswer, Vec<(Fact, bool)>, usize);
 
 impl RunState {
+    /// What the run has done, as a model judging that is shown it: the opening of its first page, then its steps.
+    pub fn actions_taken(&self) -> impl Iterator<Item = &HistoryEntry> {
+        self.opened.iter().chain(&self.history)
+    }
+
     /// Jev's answer to whether the task needs an action inside a drawn surface, when it was asked in `page` and holds
     /// there still; `None` when the next step must ask it. A failed page is asked again.
     pub(super) fn surface_judgement(&self, page: &(String, String)) -> Option<f64> {
@@ -821,6 +832,7 @@ impl RunState {
             steps: Vec::new(),
             choices: Vec::new(),
             history: Vec::new(),
+            opened: None,
             site_failure: None,
             start_failure: None,
             http_seen: HashSet::new(),

@@ -537,7 +537,11 @@ fn test_a_run_carried_on_keeps_what_it_learned_and_no_action_in_flight() {
     state.unchanged = 2;
     state.landing = Some(None);
     let browser = Arc::new(Ledger::new(Limits::default()));
+    // A run resumed on the page it had reached has not opened its first page again, so the opening stays as it was.
+    let opening = HistoryEntry::new(Some(Operation::Navigate), Some("https://a.test/"), StepOutcome::Executed, true);
+    state.opened = Some(opening.clone());
     let carried = state.carried_on(browser.clone());
+    assert_eq!(carried.opened, Some(opening));
     assert!(carried.compose && carried.history.len() == 1);
     assert!(carried.unchanged == 0 && carried.landing.is_none());
     assert!(Arc::ptr_eq(&carried.ledger, &browser));
@@ -1900,7 +1904,8 @@ impl Page for FinishPage {
     }
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
-        unreachable!("the finish-path test does not capture")
+        // A schema run's extraction captures the page it ends on: the one `composition_repair_state` read, unchanged.
+        Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Record B: 34")])) })
     }
 
     fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
@@ -2057,7 +2062,7 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     }
     // #937: what was read is still the answer, but it does not stand as the task done.
     let ledger = state.ledger.clone();
-    let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger).await;
+    let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger, None).await;
     let answer = stopped.answer.expect("what was read is answered");
     assert!(
         answer.contains("Sign in, enter the code the Phone page shows, then tell me your account email.")
@@ -2130,6 +2135,137 @@ async fn test_a_done_after_a_step_that_was_not_carried_out_checks_the_task_steps
         matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("task step"))),
         "{result:?}"
     );
+}
+
+/// The opening of the first page is recorded before any secret is typed, so a value typed as a secret later, such as a
+/// reset token the start address carries, was not yet known to be one when it was recorded. The done check masks it.
+#[tokio::test]
+async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opened_address() {
+    const TOKEN: &str = "s3cr3t-reset-token";
+    let start = format!("https://example.test/reset?token={TOKEN}");
+    let mut state = run_state();
+    state.task = "Open the reset link and set a new password.".into();
+    state.opened = Some(HistoryEntry {
+        effect: Some(format!("went to {start}")),
+        ..HistoryEntry::new(Some(Operation::Navigate), Some(&start), StepOutcome::Executed, true)
+    });
+    state.history.push(HistoryEntry::new(Some(Operation::Click), Some("Save"), StepOutcome::Executed, true));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("reset_token", TOKEN, Some("https://example.test"));
+
+    agent.actions_done(&mut state, &observation(&[])).await.expect("the done check answers");
+    let sent = jev.3.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert!(!sent[0].to_string().contains(TOKEN), "{}", sent[0]);
+    let opened = &sent[0]["recent_actions"][0];
+    assert_eq!(opened["operation"], "navigate");
+    assert!(opened["target"].as_str().is_some_and(|target| target.starts_with("https://example.test/reset?token=")));
+}
+
+/// Answers the opening at `landed` whatever address it was sent to, as a server that redirects does, and shows a page
+/// with nothing on it to act on, so a run's first decision is DONE.
+struct Redirecting {
+    landed: &'static str,
+    navigated: Mutex<Vec<String>>,
+}
+
+impl Page for Redirecting {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let observation = Observation { url: self.landed.into(), ..observation(&[]) };
+        Box::pin(async move { Ok(observation) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, url: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.navigated.lock().unwrap().push(url.to_string());
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        let page = capture(&[(BlockKind::Paragraph, "Welcome")]);
+        Box::pin(async move { Ok(page) })
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("the page offers nothing to act on")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::NeedsBrowser("no pixels".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        let landed = self.landed.to_string();
+        Box::pin(async move { Ok(landed) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+/// The opening the done check is shown is the address the run opened and the one the browser landed on, which a
+/// redirect makes two. A run fetched over HTTP that needed a browser is resumed with no page open, and opens its
+/// first page again in the browser: that opening is the one shown, not one the run held from before.
+#[tokio::test]
+async fn test_the_done_check_is_shown_where_the_opening_landed_and_the_browser_reopening_after_a_fetch() {
+    const START: &str = "https://example.test/old";
+    const LANDED: &str = "https://example.test/new";
+    let fetch =
+        Agent::new(Arc::new(Unfetchable::default()), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let options = super::RunOptions { start: Some(START.into()), ..Default::default() };
+    let _ = fetch.run("Open the page and tell me what it says", options).await;
+    let Some(super::Resume { state: mut fetched, url: None }) = fetch.resume() else {
+        panic!("a fetch that needs a browser hands the run on with no page open")
+    };
+    assert_eq!(fetched.opened, None, "nothing opened over HTTP");
+    // Held from before, an opening would be stale once the browser opens the page itself.
+    fetched.opened = Some(HistoryEntry::new(Some(Operation::Navigate), Some("stale"), StepOutcome::Executed, true));
+    // Judged by the fetch's scripted Jev; judged again here, the task reads as the run opened with a redirect does.
+    fetched.output_intent = super::state::OutputIntent::Unknown;
+    fetched.output_answers = None;
+    for (case, resume) in [
+        ("a run opened with a redirect", None),
+        ("a run resumed in the browser after a fetch", Some(super::Resume { state: fetched, url: None })),
+    ] {
+        let page = Arc::new(Redirecting { landed: LANDED, navigated: Mutex::default() });
+        // No to every other yes-or-no question, such as whether the page is a bot check.
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 0.0, "done"));
+        let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
+        let start = resume.is_none().then(|| START.to_string());
+        let options = super::RunOptions { start, resume, ..Default::default() };
+        let _ = agent.run("Open the page and tell me what it says", options).await;
+        assert_eq!(page.navigated.lock().unwrap().first().map(String::as_str), Some(START), "{case}");
+        let sent = jev.3.lock().unwrap();
+        let opened = sent
+            .iter()
+            .find_map(|state| state["recent_actions"].get(0).filter(|entry| entry["operation"] == "navigate"))
+            .unwrap_or_else(|| panic!("{case}: no done check was shown the opening: {sent:?}"));
+        assert_eq!(opened["target"], START, "{case}");
+        assert_eq!(opened["effect"], format!("went to {LANDED}"), "{case}");
+    }
 }
 
 /// Asked to add a variant the page showed out of stock, the done check rightly found the step undone, and every DONE
@@ -2442,7 +2578,7 @@ async fn test_a_stopped_task_carried_out_answers_only_with_what_it_read_after_it
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let ledger = state.ledger.clone();
         let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
-        let result = agent.stopped(stop, Some(&mut state), &ledger).await;
+        let result = agent.stopped(stop, Some(&mut state), &ledger, None).await;
         assert_eq!(result.status, Status::Stuck);
         assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the task's output is asked once");
         answers.push(result.answer);
@@ -5361,7 +5497,7 @@ async fn test_rejected_composed_claims_cannot_end_complete() {
     assert!(result.error.unwrap().contains("unsupported"));
     let ledger = state.ledger.clone();
     let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
-    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
+    let stopped = agent.stopped(stop, Some(&mut state), &ledger, None).await;
     assert_eq!(stopped.status, Status::Stuck);
     assert_eq!(stopped.error.as_deref(), Some("no_progress (3)"));
     // The stop's rule is the result's kind, so a stuck run says which rule ended it (#1372).
@@ -5415,7 +5551,7 @@ async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
         state.notes.add(Fact::read("Record B: 34", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
         let ledger = state.ledger.clone();
         let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
-        agent.stopped(stop, Some(&mut state), &ledger).await
+        agent.stopped(stop, Some(&mut state), &ledger, None).await
     };
     let text = super::state::OutputIntent::Text;
     let told = stopped(text, None, None).await;
@@ -5603,7 +5739,7 @@ async fn test_a_run_the_clock_stopped_answers_from_what_it_read() {
     state.notes.add(oak);
     let ledger = state.ledger.clone();
     let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
-    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::BudgetExceeded);
     let answer = result.answer.as_deref().unwrap_or_default();
     assert!(answer.contains("Pine capacity 10"), "{answer}");
@@ -5622,7 +5758,7 @@ async fn test_a_stopped_run_with_only_context_notes_has_no_answer() {
     state.notes.add(oak);
     let ledger = state.ledger.clone();
     let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
-    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::BudgetExceeded);
     assert_eq!(result.answer, None);
     assert!(result.citations.is_empty());
@@ -5645,7 +5781,7 @@ async fn test_a_failed_or_unavailable_run_answers_partially_from_answering_notes
             state.notes.add(pine.answering());
             state.notes.add(oak);
             let ledger = state.ledger.clone();
-            let result = agent().stopped(flow(), Some(&mut state), &ledger).await;
+            let result = agent().stopped(flow(), Some(&mut state), &ledger, None).await;
             assert!(matches!(result.status, Status::Unavailable | Status::Error), "{:?}", result.status);
             let answer = result.answer.unwrap_or_default();
             assert!(answer.starts_with("Partial evidence only."), "compose {compose}: {answer}");
@@ -5655,7 +5791,7 @@ async fn test_a_failed_or_unavailable_run_answers_partially_from_answering_notes
             let (pine, oak) = capacities();
             state.notes.add(pine);
             state.notes.add(oak);
-            let result = agent().stopped(flow(), Some(&mut state), &ledger).await;
+            let result = agent().stopped(flow(), Some(&mut state), &ledger, None).await;
             assert_eq!(result.answer, None);
             assert!(result.citations.is_empty());
         }
@@ -5673,7 +5809,7 @@ async fn test_a_step_limited_composing_run_reports_what_it_read() {
     state.notes.add(Fact::read("Record A: 99", block_evidence(&page, "s0"), FactReader::JevChoice));
     let ledger = state.ledger.clone();
     let error = ledger.check(0.0).unwrap_err();
-    let result = agent.stopped(Flow::Agent(error.into()), Some(&mut state), &ledger).await;
+    let result = agent.stopped(Flow::Agent(error.into()), Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::BudgetExceeded);
     assert_eq!(result.budget.unwrap().resource, fastbrowse_core::models::BudgetResource::Steps);
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record A: 99")));
@@ -7337,7 +7473,7 @@ async fn test_recovery_retains_the_latest_checked_partial_revision() {
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("missing D exhausts recovery");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unverified);
     let answer = result.answer.unwrap();
     assert!(answer.contains("Record B: 34"));
@@ -7571,6 +7707,119 @@ async fn test_rejected_composition_exhausts_the_existing_recovery_budget() {
     assert_eq!(state.recoveries, agent.config.stall.max_recoveries + 1);
 }
 
+/// Drafts "Record A: 99" until told a draft was rejected, then "Record B: 34", both citing the one note.
+struct CorrectsOnFeedback(std::sync::Mutex<Vec<Vec<Message>>>);
+
+impl LLMClient for CorrectsOnFeedback {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        let told = messages.iter().any(|message| message.content.contains("# Previous composition feedback"));
+        self.0.lock().unwrap().push(messages.to_vec());
+        Box::pin(async move {
+            let text = if told { "Record B: 34" } else { "Record A: 99" };
+            let claims = json!([{"text": [{"prose": text}], "evidence_ids": ["e0"]}]);
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::schema)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// A run spent its one recovery on a stall, then its first draft was rejected: the recovery that would have sent it
+/// back for a rewrite ran out, and the answer written as the run stopped was the first request again, byte for byte,
+/// without the rejection. It returned the same draft and the run ended unverified (#1377). The answer written as a run
+/// stops is told what was rejected.
+#[tokio::test]
+async fn test_the_answer_written_as_a_run_stops_is_told_the_rejected_draft() {
+    let page = observation(&[]);
+    let llm = Arc::new(CorrectsOnFeedback(Default::default()));
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(RejectsRecordA(ScriptedJev::new(Vec::new()))),
+        llm.clone(),
+    );
+    let mut state = composition_repair_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let flow = agent.finish(&mut state, &page, None, None).await.expect_err("the rejection finds recovery spent");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
+    let calls = llm.0.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(
+        calls[1]
+            .iter()
+            .any(|m| m.content.contains("# Previous composition feedback") && m.content.contains("Record A: 99"))
+    );
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    let answer = result.answer.unwrap();
+    assert!(answer.contains("Record B: 34") && !answer.contains("Record A: 99"), "{answer}");
+}
+
+/// Rejects Record A's claims as `RejectsRecordA` does, and fills a schema field only with a candidate the answer it is
+/// given states.
+struct FillsFromTheAnswer(RejectsRecordA);
+
+impl DecisionClient for FillsFromTheAnswer {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let Some((name, Question::Choice(field))) = questions.first().filter(|_| state.get("page").is_some()) else {
+            return self.0.evaluate(state, questions);
+        };
+        let claims: Vec<&str> =
+            state["answer"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
+        let choice = field
+            .criteria
+            .iter()
+            .find(|(key, source)| *key != "none" && claims.iter().any(|claim| source.to_string().contains(claim)))
+            .map_or("none", |(key, _)| key.as_str());
+        let answer = Answer::Choice(ChoiceAnswer {
+            kind: Default::default(),
+            choice: choice.into(),
+            probabilities: Default::default(),
+            confidence: 1.0,
+        });
+        let answers = IndexMap::from([(name.clone(), answer)]);
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// The rewrite written as a run stops completed a schema run, but its data came from the extraction kept for the
+/// rejected draft, which named none of the rewrite's values: the prose said "Record B: 34" and `data` was null. A
+/// complete result's data is drawn from the answer it returns.
+#[tokio::test]
+async fn test_a_schema_run_completed_by_the_answer_written_as_it_stops_draws_its_data_from_that_answer() {
+    let page = observation(&[]);
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(FillsFromTheAnswer(RejectsRecordA(ScriptedJev::new(Vec::new())))),
+        Arc::new(CorrectsOnFeedback(Default::default())),
+    );
+    let model = fastbrowse_core::output_schema::output_model(&json!({
+        "type": "object", "properties": {"Record B": {"type": "integer"}}, "required": ["Record B"],
+    }))
+    .unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+    let mut state = composition_repair_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let flow = agent.finish(&mut state, &page, Some(&schema), None).await.expect_err("recovery spent");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger, Some(&schema)).await;
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    assert_eq!(result.data, json!({"Record B": 34}));
+}
+
 #[tokio::test]
 async fn test_recovery_exhaustion_reuses_partial_only_while_its_sources_are_unchanged() {
     for changed in [false, true] {
@@ -7591,7 +7840,7 @@ async fn test_recovery_exhaustion_reuses_partial_only_while_its_sources_are_unch
                 .add(Fact::read("Record C: 57", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
         }
         let ledger = state.ledger.clone();
-        let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+        let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
         // The kept partial stays unverified; new notes are composed afresh, and that answer passes its checks.
         assert_eq!(result.status, if changed { Status::Complete } else { Status::Unverified });
         assert!(result.answer.unwrap().contains("Record B: 34"));
@@ -7611,7 +7860,7 @@ async fn a_composition_that_passes_every_check_after_recovery_ran_out_completes_
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("a second rejection exhausts recovery");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Complete);
     assert_eq!(result.error, None);
     let answer = result.answer.unwrap();
@@ -7653,7 +7902,7 @@ async fn test_a_refused_step_keeps_a_passing_composition_after_recovery_unverifi
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("a second rejection exhausts recovery");
     assert!(state.refused, "the done check found the step refused");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unverified);
     assert!(result.answer.unwrap().contains("Record B: 34"));
 }
@@ -7682,7 +7931,7 @@ async fn test_rejected_composition_preserves_the_callers_schema_result() {
     assert_eq!(state.recoveries, 1);
     let flow = agent.finish(&mut state, &observation(&[]), Some(&schema), None).await.expect_err("recovery spent");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unverified);
     assert_eq!(result.data, json!({}));
 }
@@ -7702,7 +7951,7 @@ async fn test_composition_recovery_preserves_partial_answer_with_a_missing_field
         }
         let flow = agent.finish(&mut state, &page, None, None).await.expect_err("recovery is exhausted");
         let ledger = state.ledger.clone();
-        let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+        let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
         assert_eq!(result.status, if unavailable { Status::Unavailable } else { Status::NeedsInput });
         assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record B: 34")), "{result:?}");
         assert_eq!(llm.0.lock().unwrap().len(), 2);
@@ -7728,6 +7977,7 @@ async fn test_a_failed_repair_or_hard_deadline_keeps_the_verified_partial() {
                     ),
                     Some(&mut state),
                     &ledger,
+                    None,
                 )
                 .await
         } else {
@@ -7793,7 +8043,7 @@ async fn test_a_later_empty_or_uncertain_repair_cannot_erase_a_checked_partial()
                     "an empty repair erased checked claims"
                 );
                 let ledger = state.ledger.clone();
-                agent.stopped(flow, Some(&mut state), &ledger).await
+                agent.stopped(flow, Some(&mut state), &ledger, None).await
             }
             other => panic!("expected terminal repair: {other:?}"),
         };
@@ -7823,7 +8073,7 @@ async fn test_checked_partial_preserves_non_composition_stop_statuses_and_wall_m
         }
         let stop = super::state::Stop::new(status, "test/stopped", "stopped");
         let ledger = state.ledger.clone();
-        let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+        let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger, None).await;
         assert_eq!(result.status, status);
         assert!(
             result
@@ -8088,7 +8338,7 @@ async fn test_a_second_hung_page_ends_unavailable() {
         panic!("the second hang was recovered or converted to another flow");
     };
     let ledger = state.ledger.clone();
-    let result = agent.stopped(error, Some(&mut state), &ledger).await;
+    let result = agent.stopped(error, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unavailable);
 }
 
@@ -8099,12 +8349,12 @@ async fn test_a_browser_lost_after_a_step_that_changed_the_site_is_not_unavailab
     let mut state = run_state();
     state.history.push(executed(Some(Operation::Scroll), None, true));
     let ledger = state.ledger.clone();
-    let read_only = agent.stopped(lost(), Some(&mut state), &ledger).await;
+    let read_only = agent.stopped(lost(), Some(&mut state), &ledger, None).await;
     assert_eq!(read_only.status, Status::Unavailable);
 
     state.history.push(executed(Some(Operation::Fill), Some("Comment"), true));
     state.history.push(executed(Some(Operation::Click), Some("Post"), true));
-    let wrote = agent.stopped(lost(), Some(&mut state), &ledger).await;
+    let wrote = agent.stopped(lost(), Some(&mut state), &ledger, None).await;
     assert_eq!(wrote.status, Status::Error);
     assert_eq!(
         wrote.error.as_deref(),
@@ -8915,7 +9165,7 @@ async fn test_a_stopped_run_never_answers_against_its_own_step() {
     });
     let ledger = state.ledger.clone();
     let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
-    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
+    let stopped = agent.stopped(stop, Some(&mut state), &ledger, None).await;
     assert_eq!(stopped.status, Status::Stuck);
     assert!(!stopped.answer.unwrap_or_default().contains("already exists"));
 }

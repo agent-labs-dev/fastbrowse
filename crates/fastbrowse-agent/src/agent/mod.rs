@@ -33,8 +33,8 @@ use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     Artifact, Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler,
-    Evidence, FailureKind, Limits, MaybeUnavailable, RunResult, SecretResolver, Status, StepFact, UntilCheck, Wall,
-    WallKind,
+    Evidence, FailureKind, Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact,
+    StepOutcome, UntilCheck, Wall, WallKind,
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
 use fastbrowse_core::safety::{
@@ -51,7 +51,9 @@ use state::{Flow, RunState, Stop};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::policy::{HistoryEntry, StepContext};
-use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, noticed, partial_answer};
+use crate::retrieval::{
+    ComposedAnswer, cited_quote, compose_reviewed, draft_answer, marked_partial, noticed, partial_answer,
+};
 use crate::verification::RecordSchema;
 
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
@@ -292,7 +294,11 @@ impl Agent {
                     Err(Flow::Browser(BrowserError::NeedsBrowser(message))) => {
                         (blocked_without_browser(message), false, true)
                     }
-                    Err(flow) => (self.stopped(flow, slot.as_mut(), &ledger).await, false, false),
+                    Err(flow) => (
+                        self.stopped(flow, slot.as_mut(), &ledger, options.output_schema.as_deref()).await,
+                        false,
+                        false,
+                    ),
                 }
             });
             // Reporting can await providers too, so the same deadline must cover the stop path.
@@ -534,14 +540,27 @@ impl Agent {
         }
         let state = slot.insert(*prepared?);
         self.tell_page_ready().await;
-        if start.is_some() {
-            state.start_landing_url = Some(self.page.address().await?);
+        if let Some(opening) = state.started_url.clone() {
+            let landed = self.page.address().await?;
+            state.opened = Some(HistoryEntry {
+                effect: Some(format!("went to {landed}")),
+                ..HistoryEntry::new(Some(Operation::Navigate), Some(&opening), StepOutcome::Executed, true)
+            });
+            if start.is_some() {
+                state.start_landing_url = Some(landed);
+            }
         }
         Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }
 
     /// The result of a run a step stopped: the error the loop raised, as the status it means.
-    async fn stopped(&self, flow: Flow, mut state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped(
+        &self,
+        flow: Flow,
+        mut state: Option<&mut RunState>,
+        ledger: &Ledger,
+        output_schema: Option<&RecordSchema>,
+    ) -> RunResult {
         let schema = state.as_deref_mut().and_then(|state| state.schema_partial.take());
         // Browser and other agent errors name their kind where `failed` reports them; a stop names its rule.
         let kind = match &flow {
@@ -549,7 +568,7 @@ impl Agent {
             Flow::Agent(error) => Some(error.failure_kind()),
             Flow::Browser(_) | Flow::Unsure(_) => None,
         };
-        let mut result = self.stopped_result(flow, state, ledger).await;
+        let mut result = self.stopped_result(flow, state, ledger, output_schema).await;
         // A stop whose evidence answers the task after all ends complete, and a complete run names no failure.
         if result.status != Status::Complete && result.failure_kind.is_none() {
             result.failure_kind = kind;
@@ -564,7 +583,13 @@ impl Agent {
         result
     }
 
-    async fn stopped_result(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped_result(
+        &self,
+        flow: Flow,
+        state: Option<&mut RunState>,
+        ledger: &Ledger,
+        output_schema: Option<&RecordSchema>,
+    ) -> RunResult {
         let (flow, exhausted) = match flow {
             Flow::Agent(AgentError::Budget(error)) => (
                 Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.failure_kind(), error.to_string())),
@@ -602,9 +627,23 @@ impl Agent {
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
                 let reporting = ledger.for_answer();
                 let steps = state.executed_steps();
+                // A draft rejected as the run stopped is a rewrite's to correct: written without the rejection, after a
+                // stall had spent the recovery that would have sent it back, this was the first request byte for byte,
+                // and it returned the rejected draft again (#1377).
+                let (task, feedback) = (self.model_task(state), state.composition_feedback.clone());
                 if state.compose
-                    && let Ok(composed) =
-                        compose(&*self.jev, &*self.llm, &self.model_task(state), &notes, Some(&reporting), &steps).await
+                    && let Ok(composed) = compose_reviewed(
+                        &*self.jev,
+                        &*self.llm,
+                        &task,
+                        &notes,
+                        Some(&reporting),
+                        feedback.as_deref(),
+                        true,
+                        &steps,
+                    )
+                    .await
+                    .map(|reviewed| reviewed.answer)
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
@@ -637,9 +676,28 @@ impl Agent {
                             None => false,
                         };
                     }
-                    if answers {
-                        let result =
+                    // A schema run's data is drawn from this answer, as at done: the extraction kept from the draft it
+                    // replaces holds only that draft's passed claims, so a value the rewrite corrected was in the prose
+                    // and missing from the data of a complete result. Data that cannot be drawn keeps the stop's status.
+                    let extraction = match output_schema {
+                        _ if !answers => None,
+                        None => Some(None),
+                        Some(_) => match self.schema_fields(state, output_schema, Some(&composed)).await {
+                            Ok(Some(extraction)) if extraction.problem.is_none() => Some(Some(extraction)),
+                            _ => None,
+                        },
+                    };
+                    if let Some(extraction) = extraction {
+                        let mut result =
                             self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
+                        if let Some(extraction) = extraction {
+                            result.data = extraction.data.unwrap_or(Value::Null);
+                            for item in extraction.evidence {
+                                if !result.evidence.iter().any(|e| e.url == item.url && e.quote == item.quote) {
+                                    result.evidence.push(item);
+                                }
+                            }
+                        }
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;
                         return self.ending_frame(result, requested).await;
                     }

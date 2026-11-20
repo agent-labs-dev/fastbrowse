@@ -26,7 +26,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value};
 use tokio::time::Instant;
 
-use crate::http::{Http, Response, TransportError};
+use crate::http::{Handoff, Http, Response, TransportError};
 
 pub fn wire_questions(questions: &IndexMap<String, Question>, gateway: bool) -> Value {
     let mut result = Map::new();
@@ -393,17 +393,30 @@ fn backoff(response: Option<&Response>, delay: f64) -> f64 {
     delay
 }
 
-/// Counts a dispatched request that never finished, so a dropped one is charged rather than free.
+/// Counts a dispatched request that never finished, so a dropped one is charged rather than free, unless the
+/// transport still held it in its queue: that one reached no provider.
 struct InFlight<'a> {
     usage: &'a Usage,
+    handoff: Handoff,
     finished: bool,
 }
 
 impl Drop for InFlight<'_> {
     fn drop(&mut self) {
         if !self.finished {
-            self.usage.lock().unaccounted_requests += 1;
+            settle_unanswered(self.usage, &self.handoff);
         }
+    }
+}
+
+/// Records a request that brought no response: possibly billed once it left the transport, and not a request at all
+/// when the transport never let it go.
+fn settle_unanswered(usage: &Usage, handoff: &Handoff) {
+    let mut usage = usage.lock();
+    if handoff.withdraw() {
+        usage.requests -= 1;
+    } else {
+        usage.unaccounted_requests += 1;
     }
 }
 
@@ -416,8 +429,9 @@ async fn send(
     usage: &Usage,
 ) -> Result<Option<Response>, &'static str> {
     usage.lock().requests += 1;
-    let mut flight = InFlight { usage, finished: false };
-    let sent = http.post_json(url, body, headers, attempt_seconds).await;
+    let handoff = Handoff::default();
+    let mut flight = InFlight { usage, handoff: handoff.clone(), finished: false };
+    let sent = http.post_json_handed(url, body, headers, attempt_seconds, handoff.clone()).await;
     flight.finished = true;
     let (response, failure) = match sent {
         Ok(response) if !retryable(&response) => return Ok(Some(response)),
@@ -429,17 +443,18 @@ async fn send(
         // The type names the failure; its text can quote the request, credential included.
         Err(TransportError::Transient(name)) => (None, format!("no response ({name})")),
         Err(TransportError::Fatal(name)) => {
-            usage.lock().unaccounted_requests += 1;
+            settle_unanswered(usage, &handoff);
             return Err(name);
         }
     };
+    if response.is_none() {
+        // A transport that timed out waiting to send it, as httpx's PoolTimeout does, never let it go.
+        settle_unanswered(usage, &handoff);
+    }
     let mut usage = usage.lock();
     usage.consecutive_5xx =
         if response.as_ref().is_some_and(|response| response.status >= 500) { usage.consecutive_5xx + 1 } else { 0 };
     usage.failures.push(failure);
-    if response.is_none() {
-        usage.unaccounted_requests += 1;
-    }
     Ok(response)
 }
 
