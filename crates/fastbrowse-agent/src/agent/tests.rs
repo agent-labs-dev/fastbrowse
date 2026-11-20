@@ -7385,22 +7385,24 @@ async fn test_a_draft_rejected_again_unchanged_ends_the_run() {
 
 /// A run whose reader failed to copy a winner field went back to read for it, and every new page it reached renewed
 /// the recovery budget, so each rewrite got a fresh one: one trial sent three different rejected drafts back over 53
-/// steps and 455 Jev calls, $0.39 for a task that costs $0.03. A rejected draft spends a rewrite that progress cannot
-/// renew, so a run sends one back as many times as it may recover, however many new pages it reads between.
+/// steps and 455 Jev calls, $0.39 for a task that costs $0.03. Progress between drafts still renews the stall budget,
+/// so a run may improve its draft as evidence arrives, but only three rejected drafts go back to gather.
 #[tokio::test]
 async fn test_progress_does_not_renew_the_rewrites_a_rejected_draft_may_spend() {
     let page = observation(&[]);
-    let jev = repair_jev(vec![(0.0, 1.0), (0.0, 1.0)]);
+    let jev = repair_jev(vec![(0.0, 1.0); 4]);
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev, Arc::new(WrongRecord));
     let mut state = composition_repair_state();
-    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
-    // New pages read since, and a different draft next time: nothing here is the same draft rejected again.
-    state.recoveries = 0;
-    state.composition_feedback = None;
+    for _ in 0..3 {
+        assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+        // New pages read since, and a different draft next time: nothing here is the same draft rejected again.
+        state.recoveries = 0;
+        state.composition_feedback = None;
+    }
     let ended = match agent.finish(&mut state, &page, None, None).await {
         Ok(Some(result)) => result.status,
         Err(Flow::Stop(stop)) => stop.status,
-        other => panic!("a second rejected draft was sent back to gather again: {:?}", other.map(|r| r.is_some())),
+        other => panic!("a fourth rejected draft was sent back to gather again: {:?}", other.map(|r| r.is_some())),
     };
     assert_eq!(ended, Status::Unverified);
 }
