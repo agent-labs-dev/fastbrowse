@@ -1336,12 +1336,12 @@ fn remaining(limits: Option<&Limits>, spent: &LedgerState, seconds: f64) -> Resu
 
 /// The fetched attempt's result, ended on the limit it used up rather than on the page's refusal.
 fn out_of_budget(mut result: RunResult, stop: BudgetStop) -> RunResult {
-    result.status = Status::BudgetExceeded;
-    result.error = Some(format!(
+    let error = format!(
         "the fetched read used the {} limit of {} before a browser could take over",
         stop.resource,
         fastbrowse_core::py::json::float_str(stop.limit)
-    ));
+    );
+    result.end_as(Status::BudgetExceeded, stop.failure_kind(), error);
     result.budget = Some(stop);
     result
 }
@@ -1589,6 +1589,24 @@ mod tests {
         let error = Cancel::default();
         error.trip();
         assert_eq!(error.guard(std::future::pending::<()>()).await.unwrap_err().to_string(), "the run was cancelled");
+    }
+
+    /// A fetched read that spent the browser run's allowance ended `budget_exceeded` still carrying the kind of the
+    /// read's own stop, which named a browser as needed rather than the limit that ended the run.
+    #[test]
+    fn a_fetched_read_out_of_budget_names_the_limit_as_its_kind() {
+        let read = serde_json::from_value(serde_json::json!({
+            "status": "blocked", "answer": null, "data": null, "evidence": [], "steps": [], "cost": {"lines": []},
+            "artifacts": [], "error": "a step needs a browser", "failure_kind": "NeedsBrowser",
+        }))
+        .unwrap();
+        let result = out_of_budget(read, BudgetStop { resource: BudgetResource::Steps, limit: 3.0 });
+        assert_eq!(result.status, Status::BudgetExceeded);
+        assert_eq!(result.failure_kind.as_deref(), Some("Budget/steps"));
+        assert_eq!(
+            result.error.as_deref(),
+            Some("the fetched read used the steps limit of 3.0 before a browser could take over")
+        );
     }
 
     #[test]

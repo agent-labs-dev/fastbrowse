@@ -15,9 +15,10 @@ use fastbrowse_browser::session::{AccessRefused, CheckAccess};
 use fastbrowse_cli::embed::{HostCall, HostResolve};
 use fastbrowse_cli::runner::Cancel;
 use fastbrowse_clients::http::{Request, Response, Transport, TransportError};
+use fastbrowse_clients::validation::current_jev_purpose;
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question, RetriesExhausted};
-use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, JevCause, Question, RetriesExhausted};
+use fastbrowse_core::llm::{FaultClass, Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{BudgetStop, CostComponent, CostLine, LLMPurpose, SecretRef, SecretResolver};
 use fastbrowse_core::protocol::Base64Bytes;
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
@@ -109,16 +110,17 @@ impl DecisionClient for HostJev {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         Box::pin(async move {
             let questions =
-                serde_json::to_string(questions).map_err(|error| DecisionError::Failed(error.to_string()))?;
+                serde_json::to_string(questions).map_err(|error| DecisionError::failed(error.to_string()))?;
             let answered = match (self.call)((state.to_string(), questions)).await {
                 Ok(text) => reply::<Evaluation>(&text),
                 Err(message) => Err(message),
             };
-            match answered {
-                Ok(Ok(evaluation)) => Ok(evaluation),
-                Ok(Err(fault)) => Err(jev_error(fault)),
-                Err(message) => Err(DecisionError::Failed(message)),
-            }
+            let error = match answered {
+                Ok(Ok(evaluation)) => return Ok(evaluation),
+                Ok(Err(fault)) => jev_error(fault),
+                Err(message) => DecisionError::failed(message).classed(FaultClass::Client),
+            };
+            Err(error.from_call(HOST, current_jev_purpose()))
         })
     }
 }
@@ -128,8 +130,8 @@ fn jev_error(fault: Fault) -> DecisionError {
         return DecisionError::Budget(budget);
     }
     match fault.kind.as_str() {
-        "input_too_large" => DecisionError::InputTooLarge(fault.message),
-        "transport_failed" => DecisionError::TransportFailed(fault.message),
+        "input_too_large" => DecisionError::input_too_large(fault.message).classed(FaultClass::Client),
+        "transport_failed" => DecisionError::transport_failed(fault.message).classed(FaultClass::Transport),
         "retries_exhausted" => DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
             message: fault.message,
             seconds: fault.seconds,
@@ -137,8 +139,9 @@ fn jev_error(fault: Fault) -> DecisionError {
             requests: fault.requests,
             answered: fault.answered,
             last: fault.last,
+            cause: JevCause { class: Some(FaultClass::Transport), ..JevCause::default() },
         })),
-        _ => DecisionError::Failed(fault.message),
+        _ => DecisionError::failed(fault.message).classed(FaultClass::Client),
     }
 }
 
@@ -150,6 +153,9 @@ pub struct LlmCall {
     pub schema: String,
     pub context: Context,
 }
+
+/// The provider a host client's failure names: the embedder's own client, behind which fastbrowse sees no provider.
+const HOST: &str = "host";
 
 /// The caller's `LLMClient`.
 pub struct HostLlm {
@@ -331,20 +337,22 @@ impl LLMClient for HostLlm {
                 Ok(text) => reply::<Generated>(&text),
                 Err(message) => Err(message),
             };
-            match answered {
-                Ok(Ok(generated)) => {
-                    let data = schema.validate_json(&generated.data.to_string()).map_err(LLMError::schema)?;
-                    Ok(Generation { data, cost: generated.cost })
-                }
-                Ok(Err(fault)) => Err(match fault.budget() {
+            let error = match answered {
+                Ok(Ok(generated)) => match schema.validate_json(&generated.data.to_string()) {
+                    Ok(data) => return Ok(Generation { data, cost: generated.cost }),
+                    Err(message) => LLMError::schema(message),
+                },
+                Ok(Err(fault)) => match fault.budget() {
                     Some(budget) => LLMError::Budget(budget),
                     None if fault.kind == "retries_exhausted" => LLMError::RetriesExhausted(
-                        fastbrowse_core::llm::Fault::new(fastbrowse_core::llm::FaultClass::Transport, fault.message),
+                        fastbrowse_core::llm::Fault::new(FaultClass::Transport, fault.message),
                     ),
-                    None => LLMError::failed(fastbrowse_core::llm::FaultClass::Client, fault.message),
-                }),
-                Err(message) => Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, message)),
-            }
+                    None => LLMError::failed(FaultClass::Client, fault.message),
+                },
+                Err(message) => LLMError::failed(FaultClass::Client, message),
+            };
+            // The purpose is known here and lost past it: a host client's failure read `unknown/unknown/client`.
+            Err(error.from_call(HOST, purpose))
         })
     }
 }

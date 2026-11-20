@@ -73,12 +73,13 @@ impl FailoverDecisionClient {
             Err(DecisionError::RetriesExhausted(error)) if !on_backup => error,
             // A revoked OPENROUTER_API_KEY failed every run at its first Jev call with a working gateway key beside it.
             Err(DecisionError::Rejected(reason)) if !on_backup => Box::new(RetriesExhausted {
-                message: reason.clone(),
+                message: reason.message.clone(),
                 seconds: 0.0,
                 unaccounted_requests: 0,
                 requests: 1,
                 answered: Vec::new(),
-                last: reason,
+                last: reason.message,
+                cause: reason.cause,
             }),
             other => return other,
         };
@@ -107,6 +108,7 @@ impl FailoverDecisionClient {
                     requests,
                     answered,
                     last: backup_error.last.clone(),
+                    cause: backup_error.cause.clone(),
                 })));
             }
             Err(other) => return Err(other),

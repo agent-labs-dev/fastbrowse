@@ -303,10 +303,10 @@ fn choice_picks(
     for (key, question) in questions {
         let Question::Choice(question) = question else { continue };
         let Some(Answer::Choice(answer)) = answers.get(key) else {
-            return Err(DecisionError::Failed("expected a choice answer".into()));
+            return Err(DecisionError::failed("expected a choice answer"));
         };
         if !question.criteria.contains_key(&answer.choice) {
-            return Err(DecisionError::Failed(format!("Jev picked {}, which was not offered", answer.choice)));
+            return Err(DecisionError::failed(format!("Jev picked {}, which was not offered", answer.choice)));
         }
         picks.insert(key.clone(), answer.choice.clone());
     }
@@ -1427,7 +1427,7 @@ impl Agent {
             .iter()
             .find(|word| Some(word.index) == picked)
             .cloned()
-            .ok_or_else(|| DecisionError::Failed("expected a word of the source".into()).into())
+            .ok_or_else(|| DecisionError::failed("expected a word of the source").into())
     }
 
     /// How many punctuation characters the beginning and the end of a value keep, as Jev picks among `edges`.
@@ -1484,8 +1484,8 @@ impl Agent {
     ) -> Step<(Vec<Word>, Vec<Word>)> {
         let max = self.jev.profile().max_choice_options;
         if max < 3 {
-            return Err(fastbrowse_core::decision::DecisionError::Failed(
-                "value selection needs a provider supporting at least three choices".into(),
+            return Err(fastbrowse_core::decision::DecisionError::failed(
+                "value selection needs a provider supporting at least three choices",
             )
             .into());
         }
@@ -1527,12 +1527,13 @@ impl Agent {
                 if picked == NO_VALUE {
                     return Ok((Vec::new(), Vec::new()));
                 }
-                let chosen = picked.parse::<usize>().map_err(|_| {
-                    fastbrowse_core::decision::DecisionError::Failed("expected a source part index".into())
-                })?;
-                let part = parts.into_iter().nth(chosen).ok_or_else(|| {
-                    fastbrowse_core::decision::DecisionError::Failed("expected a source part index".into())
-                })?;
+                let chosen = picked
+                    .parse::<usize>()
+                    .map_err(|_| fastbrowse_core::decision::DecisionError::failed("expected a source part index"))?;
+                let part = parts
+                    .into_iter()
+                    .nth(chosen)
+                    .ok_or_else(|| fastbrowse_core::decision::DecisionError::failed("expected a source part index"))?;
                 if key == "begins" { begins = part } else { ends = part }
             }
         }
@@ -2081,7 +2082,7 @@ impl Agent {
         state.ledger.record([evaluation.cost.clone()])?;
         let holds = |key: &str| match evaluation.answers.get(key) {
             Some(Answer::Noul(answer)) => Ok(answer.probability > 0.5),
-            _ => Err(DecisionError::Failed(format!("expected a yes-or-no answer to {key}"))),
+            _ => Err(DecisionError::failed(format!("expected a yes-or-no answer to {key}"))),
         };
         Ok(if holds("carried")? {
             Carried::Done
@@ -2105,10 +2106,9 @@ impl Agent {
                     criteria,
                 )
                 .await?;
-            let index =
-                picked.parse::<usize>().map_err(|_| DecisionError::Failed("expected an undone task step".into()))?;
+            let index = picked.parse::<usize>().map_err(|_| DecisionError::failed("expected an undone task step"))?;
             let Some((_, _, step)) = steps.get(index) else {
-                return Err(DecisionError::Failed("expected an undone task step".into()).into());
+                return Err(DecisionError::failed("expected an undone task step").into());
             };
             Carried::Undone(step.clone())
         })

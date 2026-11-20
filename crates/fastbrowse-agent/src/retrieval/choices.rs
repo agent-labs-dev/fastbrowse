@@ -808,7 +808,7 @@ mod tests {
                 let answer = match question {
                     Question::Noul(_) => match self.focus {
                         Some(probability) => Answer::Noul(NoulAnswer { kind: NoulTag, probability }),
-                        None => return Box::pin(async { Err(DecisionError::Failed("unavailable".into())) }),
+                        None => return Box::pin(async { Err(DecisionError::failed("unavailable")) }),
                     },
                     _ => Answer::Choice(ChoiceAnswer {
                         kind: ChoiceTag,

@@ -2152,6 +2152,7 @@ async fn test_a_done_whose_remaining_step_the_site_refuses_ends_unverified_with_
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await.expect("finish").expect("a result");
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/refused"));
     assert!(result.answer.is_some());
     assert!(result.error.as_deref().is_some_and(|error| error.contains("does not allow")), "{:?}", result.error);
     assert_eq!(state.recoveries, 0);
@@ -3586,6 +3587,7 @@ async fn test_a_screenshot_read_checks_coverage_before_complete() {
     *evidence_id.lock().unwrap() = Some(crate::memory::fact_id(state.notes.facts()[0]));
     let result = agent.conclude(&mut state, &page, None).await.expect("conclusion");
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/answer-problem"));
     assert_eq!(result.error.as_deref(), Some("The answer does not establish every requested fact or value."));
 }
 
@@ -4007,7 +4009,7 @@ impl DecisionClient for OversizedStartup {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         self.calls.lock().unwrap().push(questions.keys().cloned().collect());
         if questions.contains_key("dates") && questions.len() > 1 {
-            return Box::pin(async { Err(DecisionError::InputTooLarge("provider input limit".into())) });
+            return Box::pin(async { Err(DecisionError::input_too_large("provider input limit")) });
         }
         Box::pin(async move {
             let mut result = self.fallback.evaluate(state, questions).await?;
@@ -4169,6 +4171,7 @@ async fn test_required_screenshot_withheld_for_a_fresh_secret_is_unverified() {
     assert_eq!(result.status, Status::Unverified);
     assert!(result.final_frame.is_none());
     assert_eq!(result.error.as_deref(), Some("The requested final screenshot could not be captured."));
+    assert_eq!(result.failure_kind.as_deref(), Some("FinalFrame/uncaptured"));
     let trace = Trace::collecting();
     let agent = agent.with_trace(trace.clone());
     let result = agent.with_changes(result, None);
@@ -5560,7 +5563,7 @@ fn a_failure_kind_names_the_error_and_none_of_its_text() {
         budget: fastbrowse_core::models::BudgetStop { resource: BudgetResource::Dollars, limit: 1.0 },
     });
     assert_eq!(budget.failure_kind(), "Budget/dollars");
-    let jev = AgentError::Jev(fastbrowse_core::decision::DecisionError::TransportFailed("the page said secret".into()));
+    let jev = AgentError::Jev(fastbrowse_core::decision::DecisionError::transport_failed("the page said secret"));
     assert_eq!(jev.failure_kind(), "Jev.TransportFailed");
     // A browser failure names the reason its maker set, never the address its message carries.
     let navigation = BrowserError::failed(
@@ -5718,6 +5721,7 @@ async fn test_partial_composition_obeys_the_run_deadline() {
     assert_eq!(ledger.state().llm_calls, 1);
     assert_eq!(result.status, Status::BudgetExceeded);
     assert_eq!(result.budget.unwrap().resource, fastbrowse_core::models::BudgetResource::Seconds);
+    assert_eq!(result.failure_kind.as_deref(), Some("Budget/seconds"));
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record A: 99")));
     assert!(!result.evidence.is_empty());
 }
@@ -8426,6 +8430,7 @@ async fn test_a_whole_list_answer_with_a_next_page_still_unread_is_not_complete(
 
     let result = agent.conclude(&mut state, &first, None).await.expect("a conclusion");
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/list-unread"));
     let error = result.error.expect("the unread page is named");
     assert!(error.contains("https://list.test/page/2/"), "{error}");
 }
@@ -9338,6 +9343,23 @@ impl DecisionClient for Noul {
     }
 }
 
+/// A run that finished `complete` and was then found over its spend limit became `budget_exceeded` with no kind, so a
+/// caller could not tell the limit from any other cause.
+#[test]
+fn test_a_run_found_over_its_spend_limit_after_it_finished_names_the_limit() {
+    let ledger = Ledger::new(Limits { max_dollars: Some(0.001), ..Limits::default() });
+    let _ = ledger.record([CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.01))]);
+    let mut result: fastbrowse_core::models::RunResult = serde_json::from_value(json!({
+        "status": "complete", "answer": "42", "data": null, "evidence": [], "steps": [], "cost": {"lines": []},
+        "artifacts": [],
+    }))
+    .unwrap();
+    assert!(super::over_spend(&mut result, &ledger));
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert_eq!(result.failure_kind.as_deref(), Some("Budget/dollars"));
+    assert_eq!(result.error.as_deref(), Some("spend limit $0.001 reached"));
+}
+
 /// The scripted Jev, refusing the step decision the way the real client does when its estimate breaks the run's spend
 /// limit: a `DecisionError::Budget` from the run's own ledger.
 struct OverSpend(ScriptedJev, Arc<Ledger>);
@@ -9378,6 +9400,7 @@ async fn test_a_jev_spend_stop_ends_budget_exceeded_naming_the_limit_as_set() {
     assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
     assert_eq!(result.budget, Some(BudgetStop { resource: BudgetResource::Dollars, limit: 0.001 }));
     assert_eq!(result.error.as_deref(), Some("spend limit $0.001 reached"));
+    assert_eq!(result.failure_kind.as_deref(), Some("Budget/dollars"));
 }
 
 /// The scripted Jev, answering the question of what the task asks to be told with `intent`, and counting the reads
@@ -9915,6 +9938,7 @@ async fn test_image_storage_obeys_public_run_deadline() {
         assert_eq!(storage.writes.lock().unwrap().len(), attempt, "{result:?}");
         assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
         assert_eq!(result.budget.unwrap().resource, BudgetResource::Seconds);
+        assert_eq!(result.failure_kind.as_deref(), Some("Budget/seconds"));
         assert!(result.artifacts.is_empty());
     }
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -10100,7 +10124,7 @@ impl DecisionClient for Counted {
             self.0.fetch_add(1, Ordering::SeqCst);
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             self.1.fetch_add(1, Ordering::SeqCst);
-            Err(DecisionError::Failed("a counted request has no answer".into()))
+            Err(DecisionError::failed("a counted request has no answer"))
         })
     }
 
@@ -10185,6 +10209,20 @@ async fn a_text_task_done_on_nothing_read_ends_unverified_once_recovery_runs_out
     );
 }
 
+/// A run whose requested fields the page cannot fill is unverified, and its kind names the extraction, not the answer.
+#[tokio::test]
+async fn a_conclusion_whose_schema_fields_the_page_lacks_names_the_extraction() {
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let model = fastbrowse_core::output_schema::output_model(&json!({
+        "type": "object", "properties": {"seats": {"type": "integer"}}, "required": ["seats"],
+    }))
+    .unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+    let result = agent.conclude(&mut run_state(), &observation(&[]), Some(&schema)).await.unwrap();
+    assert_eq!(result.status, Status::Unverified, "{:?} {:?}", result.error, result.data);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/extraction-problem"));
+}
+
 /// #1343: a task that wants to be told something and ends with nothing answering it is not `complete`.
 #[tokio::test]
 async fn a_text_task_concluded_with_no_answer_is_not_complete() {
@@ -10192,5 +10230,6 @@ async fn a_text_task_concluded_with_no_answer_is_not_complete() {
     let result = agent.conclude(&mut run_state(), &observation(&[]), None).await.unwrap();
     assert_eq!(result.answer, None);
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/unanswered"));
     assert_eq!(result.error.as_deref(), Some(super::finishing::UNANSWERED));
 }

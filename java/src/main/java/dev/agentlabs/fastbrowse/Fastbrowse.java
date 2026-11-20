@@ -73,6 +73,8 @@ public final class Fastbrowse implements AutoCloseable {
         final RunOptions options;
         /** What ended the run from this side: the first onEvent or onFrame that threw. */
         volatile String failure;
+        /** The callback that threw, as the result's failureKind names it, never with what it threw. */
+        volatile String failureKind;
         // Guarded by this: whether the run request went out, and whether the run was cancelled before or after.
         private boolean sent;
         private boolean cancelled;
@@ -222,7 +224,7 @@ public final class Fastbrowse implements AutoCloseable {
             }
             if (served.failure != null && (finished != null || cancelled)) {
                 // A run can finish before the cancellation reaches it, and its callback failed all the same.
-                result.complete(endedBy(served.failure, spent.orElse(null)));
+                result.complete(endedBy(served.failure, served.failureKind, spent.orElse(null)));
             } else if (failure != null) {
                 result.completeExceptionally(failure);
             } else {
@@ -308,6 +310,7 @@ public final class Fastbrowse implements AutoCloseable {
                 run.options.onFrame().accept(Base64.getDecoder().decode(params.path("frame").asString()));
             }
         } catch (Exception e) {
+            run.failureKind = "Callback/" + method + "/failed";
             run.failure = method + ": " + e.getMessage();
             run.cancel();
         }
@@ -398,7 +401,7 @@ public final class Fastbrowse implements AutoCloseable {
      * The result of a run that a throwing callback ended, in the shape the server gives one, with the steps, cost and
      * videos of what it did when the reply carried them.
      */
-    private static RunResult endedBy(String failure, CancellationReceipt spent) {
+    private static RunResult endedBy(String failure, String kind, CancellationReceipt spent) {
         CancellationReceipt kept = spent != null ? spent : new CancellationReceipt(List.of(), new CostBreakdown(List.of()), List.of(), null);
         return RunResult.builder()
                 .status(Status.ERROR)
@@ -408,7 +411,7 @@ public final class Fastbrowse implements AutoCloseable {
                 .artifacts(List.of())
                 .citations(List.of())
                 .error(failure)
-                .failureKind(null)
+                .failureKind(kind)
                 .recordings(kept.recordings())
                 .browser(kept.browser())
                 .build();

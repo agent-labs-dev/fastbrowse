@@ -170,7 +170,7 @@ impl DecisionClient for ScriptedJev {
                 }
                 Question::Score(_) | Question::Box(_) => {
                     failure =
-                        Some(DecisionError::Failed(format!("the scripted Jev has no answer for {}", text::repr(key))));
+                        Some(DecisionError::failed(format!("the scripted Jev has no answer for {}", text::repr(key))));
                     break;
                 }
             }

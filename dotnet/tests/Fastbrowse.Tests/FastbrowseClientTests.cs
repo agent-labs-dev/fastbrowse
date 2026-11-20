@@ -188,6 +188,7 @@ public sealed class FastbrowseClientTests : IAsyncLifetime
         }, TestContext.Current.CancellationToken);
         Assert.Equal(Status.Error, result.Status);
         Assert.Equal("run/event: full disk", result.Error);
+        Assert.Equal("Callback/run/event/failed", result.FailureKind);
         Assert.Equal(1, calls);
     }
 
@@ -292,6 +293,7 @@ public sealed class FastbrowseClientTests : IAsyncLifetime
         }, TestContext.Current.CancellationToken);
         Assert.Equal(Status.Error, result.Status);
         Assert.Equal("run/event: full disk", result.Error);
+        Assert.Equal("Callback/run/event/failed", result.FailureKind);
         Assert.Single(result.Steps);
         Assert.Equal([0.004, null], result.Cost.Lines.Select(line => line.Dollars));
         File.Delete(closed);

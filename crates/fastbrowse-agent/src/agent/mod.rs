@@ -349,16 +349,7 @@ impl Agent {
             result
         } else {
             self.keep_captures(&mut result).await;
-            // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a
-            // spend limit instead of naming the key.
-            if let Err(error) = ledger.check_spend(0.0) {
-                if result.status != Status::Error
-                    && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
-                {
-                    result.status = Status::BudgetExceeded;
-                    result.error = Some(error.to_string());
-                    result.budget = Some(error.budget);
-                }
+            if over_spend(&mut result, &ledger) {
                 loop_returned = false;
             }
             if result.status.waits_on_person() {
@@ -753,8 +744,11 @@ impl Agent {
                 _ => None,
             };
         if requested && result.final_frame.is_none() && result.status == Status::Complete {
-            result.status = Status::Unverified;
-            result.error = Some("The requested final screenshot could not be captured.".into());
+            result.end_as(
+                Status::Unverified,
+                "FinalFrame/uncaptured".into(),
+                "The requested final screenshot could not be captured.".into(),
+            );
         }
         result
     }
@@ -1238,6 +1232,20 @@ pub(super) fn out_of_browsing_time(state: &RunState) -> Option<Stop> {
 
 /// The kind of a stop the run's clock made, named as a ledger's `BudgetExceeded` on seconds names its own.
 const BROWSING_TIME: &str = "Budget/seconds";
+
+/// Whether the run's ledger is over a spend limit once the run is over, ending `result` on that limit if so.
+fn over_spend(result: &mut RunResult, ledger: &Ledger) -> bool {
+    let Err(error) = ledger.check_spend(0.0) else { return false };
+    // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a spend
+    // limit instead of naming the key.
+    if result.status != Status::Error
+        && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
+    {
+        result.end_as(Status::BudgetExceeded, error.failure_kind(), error.to_string());
+        result.budget = Some(error.budget);
+    }
+    true
+}
 
 fn time_limit(limit: f64) -> String {
     format!("time limit {}s reached", fastbrowse_core::py::json::float_str(limit))

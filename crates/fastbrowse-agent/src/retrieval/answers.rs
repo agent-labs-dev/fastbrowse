@@ -2706,7 +2706,7 @@ mod tests {
             self.states.lock().unwrap().push(state.clone());
             Box::pin(async move {
                 if self.fail {
-                    return Err(fastbrowse_core::decision::DecisionError::Failed("support unavailable".into()));
+                    return Err(fastbrowse_core::decision::DecisionError::failed("support unavailable"));
                 }
                 Ok(Evaluation {
                     model: "test".into(),

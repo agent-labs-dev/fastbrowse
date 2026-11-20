@@ -283,6 +283,32 @@ mod tests {
     use super::*;
     use crate::py::dump::Dump;
 
+    /// A client that hands back data without validating it against the schema it was given.
+    struct Unvalidated;
+
+    impl LLMClient for Unvalidated {
+        fn generate_value<'a>(
+            &'a self,
+            _purpose: LLMPurpose,
+            _messages: &'a [Message],
+            _schema: &'a dyn ResponseSchema,
+            _ledger: Option<&'a Ledger>,
+        ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+            let cost = CostLine::new(crate::models::CostComponent::Llm, crate::models::CostBasis::Metered, Some(0.0));
+            Box::pin(async move { Ok(Generation { data: serde_json::json!({}), cost }) })
+        }
+    }
+
+    #[test]
+    fn data_that_is_not_the_type_asked_for_names_the_purpose_and_no_provider() {
+        // A client validates its answer against this schema, so only one that skipped it reaches here: no provider
+        // answered wrong, and none is named.
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let generated = runtime.block_on(Unvalidated.generate::<crate::models::Link>(LLMPurpose::Compose, &[], None));
+        let Err(LLMError::Failed(fault)) = generated else { panic!("expected a failed generation") };
+        assert_eq!(fault.cause(), "unknown/compose/schema");
+    }
+
     #[test]
     fn a_message_dumps_as_pydantic_does() {
         assert_eq!(Message::user("hi").dump_json(), r#"{"role":"user","content":"hi","images":[]}"#);

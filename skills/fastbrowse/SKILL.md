@@ -88,6 +88,10 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 | `observation_limit` | Narrow the task or required evidence to fit the observation limit. |
 | `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. Present any answer as partial, whether or not it starts with `Partial evidence only.`. |
 
+A result short of `complete` also has `failure_kind`, the cause without page text or secrets (`Budget/dollars`,
+`Wall/sign-in`, `Llm.Rejected/openrouter/action/http-401`). Quote it when reporting a failure, and read `error`
+for the detail.
+
 For every status other than `complete`, preserve any returned answer and citations as partial alongside the
 status and its recovery instructions. Checked partial claims can survive stops such as a sign-in wall,
 pending authorization or an exhausted budget while their source evidence remains unchanged.

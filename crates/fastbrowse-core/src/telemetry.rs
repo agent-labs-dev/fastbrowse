@@ -45,7 +45,7 @@ pub struct BudgetExceeded {
 
 impl crate::models::FailureKind for BudgetExceeded {
     fn failure_kind(&self) -> String {
-        format!("Budget/{}", self.budget.resource)
+        self.budget.failure_kind()
     }
 }
 

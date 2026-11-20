@@ -1910,9 +1910,7 @@ pub(super) fn drawn_surface_stop(url: &str, surfaces: &[&Control]) -> Stop {
 
 pub(super) fn require(target: Option<&Control>) -> Step<&Control> {
     target.ok_or_else(|| {
-        Flow::from(fastbrowse_core::decision::DecisionError::Failed(
-            "operation needs a target and Jev offered none".into(),
-        ))
+        Flow::from(fastbrowse_core::decision::DecisionError::failed("operation needs a target and Jev offered none"))
     })
 }
 

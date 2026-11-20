@@ -33,7 +33,7 @@ impl DecisionClient for RecordingDecision {
         _: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         self.0.lock().unwrap().push(state.clone());
-        Box::pin(async { Err(DecisionError::Failed("stop after recording observation".into())) })
+        Box::pin(async { Err(DecisionError::failed("stop after recording observation")) })
     }
 }
 
@@ -47,7 +47,7 @@ impl DecisionClient for Silent {
         _: &'a Value,
         _: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        Box::pin(async { Err(DecisionError::Failed("not scripted".into())) })
+        Box::pin(async { Err(DecisionError::failed("not scripted")) })
     }
 }
 
@@ -137,7 +137,7 @@ impl DecisionClient for HandoffDecision {
         }
         if state.get("page").is_some() {
             self.seen.lock().unwrap().push(state.clone());
-            return Box::pin(async { Err(DecisionError::Failed("stop on the rendered page".into())) });
+            return Box::pin(async { Err(DecisionError::failed("stop on the rendered page")) });
         }
         self.scripted.evaluate(state, questions)
     }
@@ -219,7 +219,7 @@ impl DecisionClient for ConsentDecision {
                 };
                 // The assertion needs this observation, not an unlimited wait on the static banner that follows it.
                 if recorded {
-                    return Err(DecisionError::Failed("consent observation recorded".into()));
+                    return Err(DecisionError::failed("consent observation recorded"));
                 }
                 if first {
                     // Time for the browser to refuse the banner before the next page is read.
@@ -1184,7 +1184,7 @@ impl DecisionClient for SearchEntry {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         Box::pin(async move {
             if !questions.contains_key("entry") {
-                return Err(DecisionError::Failed("stop after search entry".into()));
+                return Err(DecisionError::failed("stop after search entry"));
             }
             Ok(Evaluation {
                 model: "jev".into(),

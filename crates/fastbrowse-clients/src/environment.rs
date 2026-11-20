@@ -55,6 +55,7 @@ use crate::system_one::{
     AIMLAPI_MODEL, AIMLAPI_URL, DECISIONS_PATH, OLLAMA_URL, OPENROUTER_MODEL, OPENROUTER_URL, PERPLEXITY_MODEL,
     PERPLEXITY_URL, SystemOneClient, TELNYX_MODEL, TELNYX_URL, TYPESAFE_URL,
 };
+use crate::validation::Sourced;
 use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 
 /// The default LLM is GPT-6 Luna, the one model every LLM purpose uses, because a second model is a second set of
@@ -534,6 +535,15 @@ impl Settings {
     }
 
     fn decision_client(
+        &self,
+        source: DecisionSource,
+        http: &Http,
+    ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        let client = self.source_client(source, http)?;
+        Ok(Box::new(Sourced { client, source: source.as_str() }))
+    }
+
+    fn source_client(
         &self,
         source: DecisionSource,
         http: &Http,

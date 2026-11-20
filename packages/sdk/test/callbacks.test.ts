@@ -160,6 +160,7 @@ for (const [how, resolve] of refusals) {
       const result = await typeTwice(fb, { refs, resolve });
       assert.equal(result.status, 'error');
       assert.equal(result.error, "secrets/resolve: the client could not resolve the secret 'SHOP_TOTP'");
+      assert.equal(result.failure_kind, 'Callback/secrets/resolve/error/-32603');
       assert.doesNotMatch(JSON.stringify(result), /horse/);
       // The server is done with that run, and takes the next one.
       assert.deepEqual((await typeTwice(fb, { refs, resolve: () => '7' })).data, ['7', '7']);
@@ -177,6 +178,7 @@ test('an until that throws ends the run as an error with its message', async () 
     });
     assert.equal(result.status, 'error');
     assert.equal(result.error, 'run/until: the order service is down');
+    assert.equal(result.failure_kind, 'Callback/run/until/error/-32603');
   });
 });
 
@@ -186,6 +188,7 @@ test('an until that rejects ends the run as an error with its message', async ()
     const result = await fb.run('Place the order', { ...ownBrowser, until });
     assert.equal(result.status, 'error');
     assert.equal(result.error, 'run/until: the order service is down');
+    assert.equal(result.failure_kind, 'Callback/run/until/error/-32603');
   });
 });
 
@@ -203,6 +206,7 @@ test('an onFrame that throws ends the run as an error, and hears no more of it',
     });
     assert.equal(result.status, 'error');
     assert.equal(result.error, 'run/frame: the viewer went away');
+    assert.equal(result.failure_kind, 'Callback/run/frame/failed');
     assert.equal(frames, 1);
     assert.deepEqual(events, []);
   });
@@ -220,6 +224,7 @@ test('an onEvent that throws ends the run as an error', async () => {
     });
     assert.equal(result.status, 'error');
     assert.equal(result.error, 'run/event: the progress bar broke');
+    assert.equal(result.failure_kind, 'Callback/run/event/failed');
     assert.equal(events, 1);
   });
 });
@@ -234,6 +239,7 @@ test('an onEvent that rejects stops a run that would have gone on, and its brows
     });
     assert.equal(result.status, 'error');
     assert.equal(result.error, 'run/event: the progress bar broke');
+    assert.equal(result.failure_kind, 'Callback/run/event/failed');
     // The run's receipt is folded into the result, so what it did and spent before it stopped is kept.
     assert.equal(result.steps.length, 1);
     assert.deepEqual(

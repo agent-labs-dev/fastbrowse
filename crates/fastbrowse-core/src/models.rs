@@ -749,6 +749,12 @@ pub struct BudgetStop {
     pub limit: f64,
 }
 
+impl FailureKind for BudgetStop {
+    fn failure_kind(&self) -> String {
+        format!("Budget/{}", self.resource)
+    }
+}
+
 impl Schema for BudgetStop {
     fn ty() -> Ty {
         ModelTy::frozen(
@@ -848,6 +854,15 @@ pub struct RunResult {
 impl RunResult {
     pub fn succeeded(&self) -> bool {
         self.status == Status::Complete
+    }
+
+    /// The result moved to `status`, with the cause and message of that move. The three change together: a run whose
+    /// spend was found over its limit after it finished became `budget_exceeded` with no kind at all, or with the kind
+    /// of the status it replaced.
+    pub fn end_as(&mut self, status: Status, kind: String, error: String) {
+        self.status = status;
+        self.failure_kind = Some(kind);
+        self.error = Some(error);
     }
 }
 

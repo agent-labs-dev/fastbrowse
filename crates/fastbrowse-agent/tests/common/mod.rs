@@ -153,7 +153,7 @@ fn jev_response(response: &Value) -> Result<Evaluation, DecisionError> {
     }
     let message = response["message"].as_str().unwrap_or_default().to_string();
     Err(match response["error"].as_str() {
-        Some("input_too_large") => DecisionError::InputTooLarge(message),
+        Some("input_too_large") => DecisionError::input_too_large(message),
         Some("retries_exhausted") => DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
             message,
             seconds: response["seconds"].as_f64().unwrap_or_default(),
@@ -161,8 +161,9 @@ fn jev_response(response: &Value) -> Result<Evaluation, DecisionError> {
             requests: response["requests"].as_i64().unwrap_or_default(),
             answered: Vec::new(),
             last: String::new(),
+            cause: Default::default(),
         })),
-        _ => DecisionError::Failed(message),
+        _ => DecisionError::failed(message),
     })
 }
 

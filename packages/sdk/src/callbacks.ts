@@ -23,6 +23,8 @@ interface Served {
   cancel: () => void;
   /** What ended the run from this side: the first `onEvent` or `onFrame` that threw. */
   failure?: string;
+  /** The callback that threw, as the result's `failure_kind` names it, never with what it threw. */
+  failureKind?: string;
 }
 
 export class Callbacks {
@@ -92,10 +94,10 @@ export class Callbacks {
     try {
       const result = await run();
       // A run can finish before the cancellation reaches it, and its callback failed all the same.
-      return served.failure === undefined ? result : endedBy(served.failure, result);
+      return served.failure === undefined ? result : endedBy(served, result);
     } catch (error) {
       if (served.failure !== undefined && error instanceof RpcError && error.code === ErrorCode.CANCELLED) {
-        return endedBy(served.failure, error.receipt);
+        return endedBy(served, error.receipt);
       }
       throw error;
     } finally {
@@ -109,6 +111,7 @@ export class Callbacks {
     const fail = (error: unknown) => {
       // An async callback can reject after its run was answered, and then there is no run left to end.
       if (served.failure !== undefined || this.#runs.get(runId) !== served) return;
+      served.failureKind = `Callback/${method}/failed`;
       served.failure = `${method}: ${messageOf(error)}`;
       served.cancel();
     };
@@ -131,7 +134,7 @@ export class Callbacks {
  * The result of a run that a throwing callback ended, in the shape the server gives one, with the steps, cost
  * and videos of what it did: its receipt, or its own result when it finished before the cancellation reached it.
  */
-function endedBy(failure: string, spent?: CancellationReceipt): RunResult {
+function endedBy({ failure, failureKind }: Served, spent?: CancellationReceipt): RunResult {
   return {
     status: 'error',
     budget: null,
@@ -142,8 +145,8 @@ function endedBy(failure: string, spent?: CancellationReceipt): RunResult {
     cost: spent?.cost ?? { lines: [] },
     artifacts: [],
     citations: [],
-    error: failure,
-    failure_kind: null,
+    error: failure ?? null,
+    failure_kind: failureKind ?? null,
     final_url: null,
     recordings: spent?.recordings ?? [],
     wall: null,
