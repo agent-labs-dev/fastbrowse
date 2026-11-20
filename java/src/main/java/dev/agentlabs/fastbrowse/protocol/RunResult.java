@@ -7,7 +7,7 @@ import java.util.List;
 import tools.jackson.databind.JsonNode;
 
 /**
- * @param failureKind What ended the run short of complete, in content-free terms: the error type and its cause ({@code Llm.Rejected/openrouter/action/http-401}, {@code Failed/Page.navigate/net::ERR_ABORTED}) or the rule that stopped it ({@code SiteFailure/http-503}). Never page text, an address, a prompt or a secret. Present for every status but {@code complete}.
+ * @param failureKind What ended the run short of {@code complete}: an error's type and cause, or a stop's rule, never content.
  * @param finalUrl Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
  * @param recordings The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.
  * @param wall The sign-in or bot wall a {@code needs_login} or {@code blocked} run stopped at, when the page showed one.

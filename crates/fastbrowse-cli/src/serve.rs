@@ -138,7 +138,7 @@ impl FailureKind for ClientError {
     /// The callback and the client's error code, never its message: the client wrote that, and it can carry anything.
     fn failure_kind(&self) -> String {
         match self.code {
-            Some(code) => format!("Callback/{}/code-{code}", self.method),
+            Some(code) => format!("Callback/{}/error/{code}", self.method),
             None => format!("Callback/{}/unusable-reply", self.method),
         }
     }

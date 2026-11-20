@@ -526,7 +526,7 @@ export interface RunResult {
   citations: Citation[];
   error: string | null;
   /**
-   * What ended the run short of complete, in content-free terms: the error type and its cause (`Llm.Rejected/openrouter/action/http-401`, `Failed/Page.navigate/net::ERR_ABORTED`) or the rule that stopped it (`SiteFailure/http-503`). Never page text, an address, a prompt or a secret. Present for every status but `complete`.
+   * What ended the run short of `complete`: an error's type and cause, or a stop's rule, never content.
    */
   failure_kind: string | null;
   /**

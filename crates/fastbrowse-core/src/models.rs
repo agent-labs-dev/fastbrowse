@@ -823,7 +823,10 @@ pub struct RunResult {
     pub citations: Vec<Citation>,
     #[serde(default)]
     pub error: Option<String>,
-    /// What ended the run short of complete, in content-free terms: the error type and its cause (`Llm.Rejected/openrouter/action/http-401`, `Failed/Page.navigate/net::ERR_ABORTED`) or the rule that stopped it (`SiteFailure/http-503`). Never page text, an address, a prompt or a secret. Present for every status but `complete`.
+    /// What ended the run short of complete, in content-free terms: the error type and its cause
+    /// (`Llm.Rejected/openrouter/action/http-401`, `Failed/Page.navigate/net::ERR_ABORTED`) or the rule that stopped it
+    /// (`SiteFailure/http-503`). Never page text, an address, a prompt or a secret. Present for every status but
+    /// `complete`.
     #[serde(default)]
     pub failure_kind: Option<String>,
     /// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
@@ -866,7 +869,7 @@ impl Schema for RunResult {
                 Field::default("citations", Ty::list(Citation::ty()), empty()),
                 Field::default("error", Ty::optional(Ty::Str), none()),
                 Field::default("failure_kind", Ty::optional(Ty::Str), none()).doc(
-                    "What ended the run short of complete, in content-free terms: the error type and its cause (`Llm.Rejected/openrouter/action/http-401`, `Failed/Page.navigate/net::ERR_ABORTED`) or the rule that stopped it (`SiteFailure/http-503`). Never page text, an address, a prompt or a secret. Present for every status but `complete`.",
+                    "What ended the run short of `complete`: an error's type and cause, or a stop's rule, never content.",
                 ),
                 Field::default("final_url", Ty::optional(Ty::Str), none()).doc(
                     "Where the browser was last observed; what a caller checks when the task was to arrive somewhere.",

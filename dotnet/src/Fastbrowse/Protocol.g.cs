@@ -802,7 +802,7 @@ public sealed record RunResult
     public string? Error { get; init; }
 
     /// <summary>
-    /// What ended the run short of complete, in content-free terms: the error type and its cause (<c>Llm.Rejected/openrouter/action/http-401</c>, <c>Failed/Page.navigate/net::ERR_ABORTED</c>) or the rule that stopped it (<c>SiteFailure/http-503</c>). Never page text, an address, a prompt or a secret. Present for every status but <c>complete</c>.
+    /// What ended the run short of <c>complete</c>: an error's type and cause, or a stop's rule, never content.
     /// </summary>
     [JsonPropertyName("failure_kind")]
     public string? FailureKind { get; init; }
