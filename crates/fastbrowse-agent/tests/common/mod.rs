@@ -203,7 +203,7 @@ impl LLMClient for ReplayLLM {
             );
             assert_eq!(schema.name(), request["schema_name"].as_str().unwrap(), "{name}: schema name #{index}");
             assert_eq!(dumps(&schema.json_schema()), request["schema"].as_str().unwrap(), "{name}: schema #{index}");
-            let data = schema.validate_json(&dumps(&call["response"]["data"])).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&dumps(&call["response"]["data"])).map_err(LLMError::schema)?;
             let cost: CostLine = parse(&call["response"]["cost"]);
             Ok(Generation { data, cost })
         })

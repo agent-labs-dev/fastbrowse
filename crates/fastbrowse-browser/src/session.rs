@@ -191,7 +191,10 @@ pub async fn check_browser_access(check: Option<&CheckAccess>) -> Result<(), Bro
     let Some(check) = check else { return Ok(()) };
     check().await.map_err(|error| {
         let kind = error.downcast_ref::<AccessRefused>().map_or("Exception", |refused| refused.0.as_str());
-        BrowserError::Failed(format!("check_access refused the browser ({kind}, caller supplied)"))
+        BrowserError::failed(
+            "check_access/refused",
+            format!("check_access refused the browser ({kind}, caller supplied)"),
+        )
     })
 }
 
@@ -737,7 +740,8 @@ impl BrowserSession {
     }
 
     pub fn client(&self) -> Result<Cdp, BrowserError> {
-        self.client_opt().ok_or_else(|| BrowserError::Failed("CDP.client failed (SessionClosed)".into()))
+        self.client_opt()
+            .ok_or_else(|| BrowserError::failed("CDP.client/SessionClosed", "CDP.client failed (SessionClosed)"))
     }
 
     /// A command through the client's deadlines.
@@ -1051,7 +1055,7 @@ impl BrowserSession {
 
     pub async fn switch_tab(&self, target_id: &str) -> Result<(), BrowserError> {
         if !self.0.state.lock().unwrap().tabs.iter().any(|t| t.target_id == target_id) {
-            return Err(BrowserError::Failed(format!("Unknown tab {target_id}")));
+            return Err(BrowserError::failed("tab/unknown", format!("Unknown tab {target_id}")));
         }
         Shared::set_active_target(&self.0, target_id);
         self.bring_to_front().await
@@ -1202,7 +1206,7 @@ impl BrowserSession {
                 Some(needle) => format!("no page matching {}", py_repr(needle)),
             };
             let seen = seen.iter().map(|s| py_repr(s)).collect::<Vec<_>>().join(", ");
-            return Err(BrowserError::Failed(format!("{wanted} to attach to; pages: [{seen}]")));
+            return Err(BrowserError::failed("attach/no-page", format!("{wanted} to attach to; pages: [{seen}]")));
         };
         let target_id = str_of(&target["targetId"]);
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
@@ -1478,7 +1482,10 @@ impl BrowserSession {
         };
         // Python's `next(...)` raises when nothing is pending; a dispatch for a dialog that is gone fails the same way.
         let Some(session_id) = session_id else {
-            return Err(BrowserError::Failed("Page.handleJavaScriptDialog failed (StopIteration)".into()));
+            return Err(BrowserError::failed(
+                "Page.handleJavaScriptDialog/StopIteration",
+                "Page.handleJavaScriptDialog failed (StopIteration)",
+            ));
         };
         let mut params = json!({"accept": accept});
         if let Some(text) = prompt_text {

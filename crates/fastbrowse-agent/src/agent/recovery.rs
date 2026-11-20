@@ -284,6 +284,7 @@ impl Agent {
                 } else {
                     reason
                 };
+                let rule = if unfilled.is_empty() { "Recovery/exhausted" } else { "Recovery/unfilled" };
                 let reason = match unfilled.as_slice() {
                     [] => reason,
                     [only] => format!("{} needs a value the task does not give: {reason}", text::repr(only)),
@@ -292,7 +293,7 @@ impl Agent {
                         many.iter().map(|label| text::repr(label)).collect::<Vec<_>>().join(", ")
                     ),
                 };
-                return Err(Stop::new(status, reason).into());
+                return Err(Stop::new(status, rule, reason).into());
             }
             self.ask_jev_again(state, observation, &reason, withheld).await
         })

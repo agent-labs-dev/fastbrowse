@@ -43,6 +43,12 @@ pub struct BudgetExceeded {
     pub budget: BudgetStop,
 }
 
+impl crate::models::FailureKind for BudgetExceeded {
+    fn failure_kind(&self) -> String {
+        format!("Budget/{}", self.budget.resource)
+    }
+}
+
 impl BudgetExceeded {
     fn new(reason: String, resource: BudgetResource, limit: f64) -> Self {
         BudgetExceeded { reason, budget: BudgetStop { resource, limit } }

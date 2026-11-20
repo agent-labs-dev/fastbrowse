@@ -413,7 +413,10 @@ class RunResult(Frozen):
     citations: tuple[Citation, ...] = ()
     error: str | None = None
     failure_kind: str | None = None
-    """The error's provider or browser variant path, never message text; present for failures, absent otherwise."""
+    """What ended the run short of complete, in content-free terms: the error type and its cause
+    (`Llm.Rejected/openrouter/action/http-401`, `Failed/Page.navigate/net::ERR_ABORTED`) or the rule that stopped it
+    (`SiteFailure/http-503`). Never page text, an address, a prompt or a secret. Present for every status but
+    `complete`."""
     final_url: str | None = None
     """Where the browser was last observed; what a caller checks when the task was to arrive somewhere."""
     final_frame: bytes | None = Field(default=None, exclude=True, repr=False)

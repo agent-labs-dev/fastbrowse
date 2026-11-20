@@ -59,7 +59,7 @@ impl LLMClient for Silent {
         _: &'a dyn ResponseSchema,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
-        Box::pin(async { Err(LLMError::Failed("not scripted".into())) })
+        Box::pin(async { Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "not scripted")) })
     }
 }
 
@@ -1163,10 +1163,10 @@ impl LLMClient for SearchEntry {
                 LLMPurpose::Start => r#"{"url":null,"queries":["returns policy"]}"#,
                 LLMPurpose::KnownPages => r#"{"urls":[]}"#,
                 LLMPurpose::Dates => r#"{"dates":[]}"#,
-                _ => return Err(LLMError::Failed("stop after search entry".into())),
+                _ => return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "stop after search entry")),
             };
             Ok(Generation {
-                data: schema.validate_json(value).map_err(LLMError::Failed)?,
+                data: schema.validate_json(value).map_err(LLMError::schema)?,
                 cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)),
             })
         })

@@ -24,7 +24,7 @@ where
 {
     let schema = Typed::<T>::default();
     let generated = llm.generate_value(purpose, messages, &schema, ledger).await?;
-    let data = serde_json::from_value(generated.data).map_err(|error| LLMError::Failed(error.to_string()))?;
+    let data = serde_json::from_value(generated.data).map_err(|error| LLMError::schema(error.to_string()))?;
     Ok(Generation { data, cost: generated.cost })
 }
 

@@ -225,9 +225,10 @@ impl LLMClient for ScriptedLLM {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
-            let reply =
-                ScriptedLLM::reply(purpose).ok_or_else(|| LLMError::Failed(format!("<LLMPurpose.{}>", purpose)))?;
-            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let reply = ScriptedLLM::reply(purpose).ok_or_else(|| {
+                LLMError::failed(fastbrowse_core::llm::FaultClass::Client, format!("<LLMPurpose.{}>", purpose))
+            })?;
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
             let cost = CostLine {
                 purpose: Some(purpose),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))

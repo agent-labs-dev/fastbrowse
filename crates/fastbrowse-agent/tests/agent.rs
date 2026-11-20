@@ -112,7 +112,7 @@ impl Page for FakeSite {
             None => screens.as_str(),
         };
         let Some(screen) = screen else {
-            return ready(Err(BrowserError::Failed(format!("no page at {url}"))));
+            return ready(Err(BrowserError::failed("test/no-page", format!("no page at {url}"))));
         };
         let mut at = self.at.lock().unwrap();
         let left = std::mem::replace(&mut at.0, screen.to_string());
@@ -436,9 +436,9 @@ impl LLMClient for ReplayLLM {
             });
             let response = self.0.take(&key, request, |log| scripted_llm(&self.1, purpose.as_str(), &schema_name, log));
             if let Some(failure) = response["raise"].as_str() {
-                return Err(LLMError::Failed(failure.to_string()));
+                return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, failure.to_string()));
             }
-            let data = schema.validate_json(&dumps(&response["data"])).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&dumps(&response["data"])).map_err(LLMError::schema)?;
             let cost: CostLine = serde_json::from_value(response["cost"].clone()).expect("cost");
             Ok(Generation { data, cost })
         })

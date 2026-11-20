@@ -69,6 +69,16 @@ pub trait MaybeUnavailable {
     fn is_unavailable(&self) -> bool;
 }
 
+/// `RunResult::failure_kind`: what failed, named only from typed fields.
+///
+/// The hosted worker logs the kind verbatim, so it never holds page text, an address, a prompt or a secret. A variant
+/// nests under its parent with `.` (`Llm.Rejected`), and its content-free cause follows a `/`
+/// (`Llm.Rejected/openrouter/action/http-401`, `Failed/Page.navigate/net::ERR_ABORTED`). Each error type builds its
+/// own: a kind read off a `Debug` string named a variant but never its cause (#1372).
+pub trait FailureKind {
+    fn failure_kind(&self) -> String;
+}
+
 str_enum! {
     pub enum Operation {
         Click = "click",
@@ -813,7 +823,7 @@ pub struct RunResult {
     pub citations: Vec<Citation>,
     #[serde(default)]
     pub error: Option<String>,
-    /// The error's provider or browser variant path, never message text; present for failures, absent otherwise.
+    /// What ended the run short of complete, in content-free terms: the error type and its cause (`Llm.Rejected/openrouter/action/http-401`, `Failed/Page.navigate/net::ERR_ABORTED`) or the rule that stopped it (`SiteFailure/http-503`). Never page text, an address, a prompt or a secret. Present for every status but `complete`.
     #[serde(default)]
     pub failure_kind: Option<String>,
     /// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
@@ -856,7 +866,7 @@ impl Schema for RunResult {
                 Field::default("citations", Ty::list(Citation::ty()), empty()),
                 Field::default("error", Ty::optional(Ty::Str), none()),
                 Field::default("failure_kind", Ty::optional(Ty::Str), none()).doc(
-                    "The error's provider or browser variant path, never message text; present for failures, absent otherwise.",
+                    "What ended the run short of complete, in content-free terms: the error type and its cause (`Llm.Rejected/openrouter/action/http-401`, `Failed/Page.navigate/net::ERR_ABORTED`) or the rule that stopped it (`SiteFailure/http-503`). Never page text, an address, a prompt or a secret. Present for every status but `complete`.",
                 ),
                 Field::default("final_url", Ty::optional(Ty::Str), none()).doc(
                     "Where the browser was last observed; what a caller checks when the task was to arrive somewhere.",

@@ -193,7 +193,7 @@ impl LLMClient for FailoverLLMClient {
                         );
                         self.http.trace.event("llm_failover", || {
                             let mut fields = Map::new();
-                            fields.insert("reason".into(), reason.clone().into());
+                            fields.insert("reason".into(), reason.message.clone().into());
                             fields
                         });
                     }

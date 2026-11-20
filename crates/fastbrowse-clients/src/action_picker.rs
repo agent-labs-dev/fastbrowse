@@ -126,9 +126,9 @@ impl LlmDecisionClient {
         let generated =
             self.llm.generate_value(LLMPurpose::Action, &messages, &schema, ledger.as_deref()).await.map_err(
                 |error| match error {
-                    LLMError::Failed(message) => DecisionError::Failed(message),
-                    LLMError::RetriesExhausted(message) => DecisionError::TransportFailed(message),
-                    LLMError::Rejected(message) => DecisionError::Rejected(message),
+                    LLMError::Failed(fault) => DecisionError::Failed(fault.message),
+                    LLMError::RetriesExhausted(fault) => DecisionError::TransportFailed(fault.message),
+                    LLMError::Rejected(fault) => DecisionError::Rejected(fault.message),
                     LLMError::Budget(exceeded) => DecisionError::Budget(exceeded),
                     LLMError::Superseded => DecisionError::Superseded,
                 },
@@ -320,7 +320,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use fastbrowse_core::decision::{ChoiceQuestion, NoulQuestion, reserve};
-    use fastbrowse_core::llm::Generation;
+    use fastbrowse_core::llm::{FaultClass, Generation};
     use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Limits};
     use fastbrowse_core::telemetry::Ledger;
 
@@ -369,7 +369,9 @@ mod tests {
         ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
             self.purposes.lock().unwrap().push(purpose);
             self.sent.lock().unwrap().extend_from_slice(messages);
-            let data = schema.validate_json(&self.reply.to_string()).map_err(LLMError::Failed);
+            let data = schema
+                .validate_json(&self.reply.to_string())
+                .map_err(|error| LLMError::failed(FaultClass::Schema, error));
             Box::pin(async move {
                 let mut cost = CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.001));
                 cost.purpose = Some(purpose);

@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::BoxFuture;
 use crate::config::{Config, JSON_CHARS_PER_TOKEN, Thresholds};
-use crate::models::{CostComponent, CostLine, JevPurpose, MaybeUnavailable};
+use crate::models::{CostComponent, CostLine, FailureKind, JevPurpose, MaybeUnavailable};
 use crate::py::lax;
 use crate::schema::{Field, ModelTy, Schema, Ty};
 use crate::telemetry::{BudgetExceeded, Ledger};
@@ -462,6 +462,21 @@ pub enum DecisionError {
     /// The page redrew under the decision that would have sent this request, so it was not sent.
     #[error("the page redrew, so the decision it was for is discarded")]
     Superseded,
+}
+
+/// Named by variant alone: a Jev failure's message is the provider's, and this error carries no status or class yet.
+impl FailureKind for DecisionError {
+    fn failure_kind(&self) -> String {
+        match self {
+            DecisionError::Failed(_) => "Failed".into(),
+            DecisionError::InputTooLarge(_) => "InputTooLarge".into(),
+            DecisionError::TransportFailed(_) => "TransportFailed".into(),
+            DecisionError::RetriesExhausted(_) => "RetriesExhausted".into(),
+            DecisionError::Rejected(_) => "Rejected".into(),
+            DecisionError::Budget(exceeded) => exceeded.failure_kind(),
+            DecisionError::Superseded => "Superseded".into(),
+        }
+    }
 }
 
 impl MaybeUnavailable for DecisionError {

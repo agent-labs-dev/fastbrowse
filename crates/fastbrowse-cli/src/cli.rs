@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::ConfigurationError;
 use fastbrowse_core::config::Config;
-use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, SecretValue, Status};
+use fastbrowse_core::models::{Authorization, Event, FailureKind, Limits, LocalChrome, SecretValue, Status};
 use fastbrowse_core::protocol::{Base64Bytes, RunAttachment};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Style};
@@ -523,9 +523,11 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         // run's last tab. The reason says which.
         Err(RunError::Cancelled(receipt)) => fastbrowse_core::models::RunResult {
             status: Status::Cancelled,
-            ..options::cancelled_result(receipt.why().to_owned(), receipt)
+            ..options::cancelled_result("Cancelled", receipt.why().to_owned(), receipt)
         },
-        Err(RunError::AfterSpending { error, receipt }) => options::cancelled_result(error.to_string(), receipt),
+        Err(RunError::AfterSpending { error, receipt }) => {
+            options::cancelled_result(error.failure_kind(), error.to_string(), receipt)
+        }
         Err(error) => return Err(ConfigurationError(error.to_string())),
     };
     if let Some(sink) = recipe_sink
@@ -608,7 +610,7 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
         Err(error) => {
             if args.json {
                 context.streams.print(&json::write(
-                    &with_build(options::error_result(&error.0).dump(), &context.build),
+                    &with_build(options::error_result("Configuration", &error.0).dump(), &context.build),
                     Style::PYDANTIC.indented(2),
                 ));
             }

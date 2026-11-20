@@ -37,7 +37,7 @@ use tokio::time::{Instant, sleep, timeout};
 
 use crate::PdfUnread;
 use crate::cdp::secs;
-use crate::error::BrowserError;
+use crate::error::{BrowserError, Failure};
 use crate::pdf::PARSE_SECONDS;
 use crate::session::{
     BrowserSession, CAPTURE_JS, LISTENERS_UNREAD, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json,
@@ -556,7 +556,7 @@ pub(crate) fn sha256_bytes(bytes: &[u8]) -> String {
 fn parse<T: DeserializeOwned>(raw: Value, shape: &str) -> Result<T, BrowserError> {
     // Our own page script produced this, so a mismatch is a bug in one side of the contract.
     serde_json::from_value(raw)
-        .map_err(|e| BrowserError::Failed(format!("page script returned an unexpected {shape}: {e}")))
+        .map_err(|e| BrowserError::failed("script/shape", format!("page script returned an unexpected {shape}: {e}")))
 }
 
 /// A length or offset as core's models hold it, the `int` Python writes.
@@ -1399,7 +1399,7 @@ impl CdpPage {
         };
         BASE64
             .decode(shot["data"].as_str().unwrap_or_default().as_bytes())
-            .map_err(|_| BrowserError::Failed("Page.captureScreenshot failed (Error)".into()))
+            .map_err(|_| BrowserError::failed("Page.captureScreenshot/Error", "Page.captureScreenshot failed (Error)"))
     }
 
     pub async fn origin(&self) -> Result<String, BrowserError> {
@@ -1599,12 +1599,12 @@ impl CdpPage {
         // caller's own, and a run that failed before its first step has no other record of where it was going.
         let message = format!("Page.navigate failed ({failure}) for {url}");
         if timed_out {
-            return Err(BrowserError::NavigationTimeout(message));
+            return Err(BrowserError::NavigationTimeout(Failure::new(format!("Page.navigate/{failure}"), message)));
         }
         if failure.strip_prefix("net::ERR_").is_some_and(site_unreachable) {
-            return Err(BrowserError::SiteUnreachable(message));
+            return Err(BrowserError::SiteUnreachable(Failure::new(format!("Page.navigate/{failure}"), message)));
         }
-        Err(BrowserError::Failed(message))
+        Err(BrowserError::failed(format!("Page.navigate/{failure}"), message))
     }
 
     #[doc(hidden)]
@@ -1759,7 +1759,10 @@ impl CdpPage {
             {
                 Ok((*stable, fingerprint.as_str().map(str::to_owned)))
             }
-            _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None, str]".into())),
+            _ => Err(BrowserError::failed(
+                "script/shape",
+                "page script returned an unexpected tuple[bool, str | None, str]",
+            )),
         }
     }
 
@@ -1911,7 +1914,10 @@ impl Page for CdpPage {
             let sink = &self.session.0.artifact_sink;
             match sink.put(ArtifactKind::Capture, name, "text/plain; charset=utf-8", text.as_bytes()).await {
                 Ok(artifact) => Ok(Some(artifact)),
-                Err(error) => Err(fastbrowse_core::page::BrowserError::Failed(format!("keeping {name}: {error}"))),
+                Err(error) => Err(fastbrowse_core::page::BrowserError::failed(
+                    "artifact/keep",
+                    format!("keeping {name}: {error}"),
+                )),
             }
         })
     }
@@ -1921,7 +1927,10 @@ impl Page for CdpPage {
             let sink = &self.session.0.artifact_sink;
             match sink.put(ArtifactKind::Screenshot, name, "image/png", png).await {
                 Ok(artifact) => Ok(Some(artifact)),
-                Err(error) => Err(fastbrowse_core::page::BrowserError::Failed(format!("keeping {name}: {error}"))),
+                Err(error) => Err(fastbrowse_core::page::BrowserError::failed(
+                    "artifact/keep",
+                    format!("keeping {name}: {error}"),
+                )),
             }
         })
     }
@@ -2063,10 +2072,15 @@ fn csv_rows(text: &str) -> Vec<&str> {
 /// 0.6 s in front (#771). The failure says so, since nothing else points at the option.
 fn held_in_background(error: BrowserError, foreground: bool) -> BrowserError {
     match error {
-        BrowserError::PageUnresponsive(message) if !foreground => BrowserError::PageUnresponsive(format!(
-            "{message}. The tab was opened behind the window's current tab, where a browser profile can hold a \
-             navigation; --foreground opens it in front"
-        )),
+        BrowserError::PageUnresponsive(Failure { reason, message }) if !foreground => {
+            BrowserError::PageUnresponsive(Failure::new(
+                reason,
+                format!(
+                    "{message}. The tab was opened behind the window's current tab, where a browser profile can hold a \
+                 navigation; --foreground opens it in front"
+                ),
+            ))
+        }
         other => other,
     }
 }
@@ -2079,7 +2093,10 @@ mod tests {
     // loaded in 0.6 s (#771), and the run ended unavailable with nothing pointing at --foreground.
     #[test]
     fn a_navigation_held_in_a_background_tab_names_the_foreground_option() {
-        let held = BrowserError::PageUnresponsive("Page.navigate exceeded its command deadline".into());
+        let held = BrowserError::PageUnresponsive(Failure::new(
+            "Page.navigate/deadline",
+            "Page.navigate exceeded its command deadline",
+        ));
         let told = held_in_background(held.clone(), false).to_string();
         assert!(matches!(held_in_background(held.clone(), false), BrowserError::PageUnresponsive(_)));
         assert!(told.contains("--foreground"), "{told}");

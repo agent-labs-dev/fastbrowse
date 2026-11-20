@@ -378,10 +378,20 @@ impl Agent {
                         || state.routes.contains(url)
                         || state.known_pages.contains(url)
                 }) else {
-                    return Err(Stop::new(Status::Stuck, "navigation address was not supplied by the caller").into());
+                    return Err(Stop::new(
+                        Status::Stuck,
+                        "Navigate/unsupplied-address",
+                        "navigation address was not supplied by the caller",
+                    )
+                    .into());
                 };
                 if self.reveals_text(&url) {
-                    return Err(Stop::new(Status::NeedsInput, "navigation address contains a resolved secret").into());
+                    return Err(Stop::new(
+                        Status::NeedsInput,
+                        "Navigate/secret-in-address",
+                        "navigation address contains a resolved secret",
+                    )
+                    .into());
                 }
                 self.gate_download(state, observation, decision, &caller_link(&url)).await?;
                 let irreversible = navigation_question(&url);
@@ -409,7 +419,12 @@ impl Agent {
             }
             Operation::Drag => {
                 let Some(destination) = &decision.destination else {
-                    return Err(Stop::new(Status::NeedsInput, "the page offers no drop target for the drag").into());
+                    return Err(Stop::new(
+                        Status::NeedsInput,
+                        "Drag/no-target",
+                        "the page offers no drop target for the drag",
+                    )
+                    .into());
                 };
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action {
@@ -482,13 +497,23 @@ impl Agent {
             }
             Operation::Upload => {
                 if state.attachments.is_empty() {
-                    return Err(Stop::new(Status::NeedsInput, "the page asks for a file and none was provided").into());
+                    return Err(Stop::new(
+                        Status::NeedsInput,
+                        "Upload/no-file",
+                        "the page asks for a file and none was provided",
+                    )
+                    .into());
                 }
                 let names: Vec<String> = state.attachments.iter().map(|a| a.name.clone()).collect();
                 let name = self.choose(state, observation, "Which file belongs in this input?", &names).await?;
                 let files: Vec<_> = state.attachments.iter().filter(|a| a.name == name).cloned().collect();
                 if files.iter().map(|f| f.content.0.len() as i64).sum::<i64>() > self.config.max_upload_bytes {
-                    return Err(Stop::new(Status::NeedsInput, format!("{name} exceeds the upload size limit")).into());
+                    return Err(Stop::new(
+                        Status::NeedsInput,
+                        "Upload/too-large",
+                        format!("{name} exceeds the upload size limit"),
+                    )
+                    .into());
                 }
                 Ok(Action { target_id: Some(require(target)?.id.clone()), files, ..Action::new(Operation::Upload) })
             }
@@ -939,7 +964,7 @@ impl Agent {
             if decision.replayed { Decider::Recipe } else { Decider::Jev },
         )
         .await?;
-        Err(Stop::new(Status::NeedsConfirmation, reason).into())
+        Err(Stop::new(Status::NeedsConfirmation, "Confirm/irreversible", reason).into())
     }
 
     /// Why the page does not show a conditional commit allowed, or `None` when it does: Jev's yes that it shows the
@@ -1132,11 +1157,9 @@ impl Agent {
                     return Ok(text);
                 }
                 RecipeText::Input(name) => {
-                    let value = state
-                        .inputs
-                        .get(&name)
-                        .cloned()
-                        .ok_or_else(|| Stop::new(Status::NeedsInput, format!("the recipe needs input {name}")))?;
+                    let value = state.inputs.get(&name).cloned().ok_or_else(|| {
+                        Stop::new(Status::NeedsInput, "Recipe/input-missing", format!("the recipe needs input {name}"))
+                    })?;
                     state.text_source = Some(RecipeText::Input(name));
                     return Ok(value);
                 }
@@ -1604,6 +1627,7 @@ impl Agent {
                     _ => {
                         return Err(Stop::new(
                             Status::NeedsInput,
+                            "Password/unclear-role",
                             format!(
                                 "{} does not establish whether it takes the current password or a replacement",
                                 text::repr(&target.label),
@@ -1618,6 +1642,7 @@ impl Agent {
             if !secrets.iter().any(|name| name == "new_password") {
                 return Err(Stop::new(
                     Status::NeedsInput,
+                    "Password/replacement-unset",
                     "A replacement password requires --secret new_password=ENV_VAR@https://host; set ENV_VAR to the new value instead of putting it in the task.",
                 )
                 .into());
@@ -1629,6 +1654,7 @@ impl Agent {
         match secrets.as_slice() {
             [] => Err(Stop::new(
                 Status::NeedsLogin,
+                "Secret/none-stored",
                 format!("{} wants a secret and none is stored", text::repr(&target.label)),
             )
             .into()),
@@ -1670,9 +1696,14 @@ impl Agent {
         let Some(value) = value else {
             if credential {
                 let error = format!("sign-in required at {origin}: secret {name} is not available there");
-                return Err(Stop::new(Status::NeedsLogin, error).into());
+                return Err(Stop::new(Status::NeedsLogin, "Secret/sign-in", error).into());
             }
-            return Err(Stop::new(Status::NeedsInput, format!("secret {name} is not available for {origin}")).into());
+            return Err(Stop::new(
+                Status::NeedsInput,
+                "Secret/unavailable",
+                format!("secret {name} is not available for {origin}"),
+            )
+            .into());
         };
         self.redactor().register(name, &value, Some(origin));
         Ok(value)
@@ -1700,7 +1731,7 @@ impl Agent {
     fn unsupplied(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
         if target.required == Some(true) {
             let error = format!("{} needs a value the task does not give", text::repr(&target.label));
-            return Stop::new(Status::NeedsInput, error).into();
+            return Stop::new(Status::NeedsInput, "Field/required-unsupplied", error).into();
         }
         self.missing(state, observation, target)
     }
@@ -1747,7 +1778,11 @@ impl Agent {
     ) -> Step<Chosen> {
         match options {
             [only] if instead.is_empty() => return Ok(Chosen::Option(only.clone())),
-            [] => return Err(Stop::new(Status::Stuck, format!("no options to answer: {question}")).into()),
+            [] => {
+                return Err(
+                    Stop::new(Status::Stuck, "Choice/no-options", format!("no options to answer: {question}")).into()
+                );
+            }
             _ => {}
         }
         let offered = |criteria: &mut IndexMap<String, JsonValue>| {
@@ -2121,7 +2156,7 @@ impl Agent {
 
     async fn accept_dialog(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
         let Some(dialog) = &observation.dialog else {
-            return Err(Stop::new(Status::Stuck, "DIALOG chosen with no dialog open").into());
+            return Err(Stop::new(Status::Stuck, "Dialog/none-open", "DIALOG chosen with no dialog open").into());
         };
         let question = format!(
             "The page shows a {} dialog saying {}, opened by the agent's last action. Accept it if it asks to go ahead with what the task wants done; dismiss it if it would do something the task did not ask for.",
@@ -2173,7 +2208,8 @@ impl Agent {
         };
         // The error reaches the caller as it is, so it is built from what models see and redacted as well: a page can
         // echo a typed secret into its title or a field's label.
-        Stop::new(Status::NeedsLogin, self.redact(&format!("sign-in required at {origin}: {evidence}"))).into()
+        Stop::new(Status::NeedsLogin, "Wall/sign-in", self.redact(&format!("sign-in required at {origin}: {evidence}")))
+            .into()
     }
 }
 

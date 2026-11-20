@@ -333,15 +333,17 @@ impl LLMClient for HostLlm {
             };
             match answered {
                 Ok(Ok(generated)) => {
-                    let data = schema.validate_json(&generated.data.to_string()).map_err(LLMError::Failed)?;
+                    let data = schema.validate_json(&generated.data.to_string()).map_err(LLMError::schema)?;
                     Ok(Generation { data, cost: generated.cost })
                 }
                 Ok(Err(fault)) => Err(match fault.budget() {
                     Some(budget) => LLMError::Budget(budget),
-                    None if fault.kind == "retries_exhausted" => LLMError::RetriesExhausted(fault.message),
-                    None => LLMError::Failed(fault.message),
+                    None if fault.kind == "retries_exhausted" => LLMError::RetriesExhausted(
+                        fastbrowse_core::llm::Fault::new(fastbrowse_core::llm::FaultClass::Transport, fault.message),
+                    ),
+                    None => LLMError::failed(fastbrowse_core::llm::FaultClass::Client, fault.message),
                 }),
-                Err(message) => Err(LLMError::Failed(message)),
+                Err(message) => Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, message)),
             }
         })
     }

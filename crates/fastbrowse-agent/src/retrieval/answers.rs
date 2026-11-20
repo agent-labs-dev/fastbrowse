@@ -830,7 +830,12 @@ pub(super) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -
 }
 
 pub(super) fn context_limit(context: i64) -> Result<usize> {
-    usize::try_from(context).map_err(|_| AgentError::Llm(LLMError::Failed("a model context window is invalid".into())))
+    usize::try_from(context).map_err(|_| {
+        AgentError::Llm(LLMError::failed(
+            fastbrowse_core::llm::FaultClass::Request,
+            "a model context window is invalid",
+        ))
+    })
 }
 
 /// The bytes one note adds to the request: its line as the JSON string escapes it, and the newline joining it.
@@ -842,7 +847,12 @@ fn line_bytes(item: &ComposeItem, text: &str) -> usize {
 /// part is cut at character boundaries into pieces that each fit, so nothing is dropped.
 fn pack_items(task: &str, items: &[ComposeItem], limit: usize) -> Result<Vec<Vec<ComposeItem>>> {
     let room = limit.saturating_sub(estimated_context_bytes(&compose_messages(task, &[])));
-    let too_small = || AgentError::Llm(LLMError::Failed("compose context window cannot hold a note".into()));
+    let too_small = || {
+        AgentError::Llm(LLMError::failed(
+            fastbrowse_core::llm::FaultClass::Request,
+            "compose context window cannot hold a note",
+        ))
+    };
     let mut pieces = Vec::new();
     for original in items {
         let mut item = original.clone();
@@ -899,14 +909,14 @@ async fn compose_part(
     }
     // A table with no columns holds no row, so `[]` is no table: read as one, it sent a cheapest claim to the plain
     // support question instead of its tally's checks, and the answer was withheld.
-    let draft: AnswerDraft = serde_json::from_value(draft.data).map_err(|error| LLMError::Failed(error.to_string()))?;
+    let draft: AnswerDraft = serde_json::from_value(draft.data).map_err(|error| LLMError::schema(error.to_string()))?;
     let columns = draft.columns.filter(|columns| !columns.is_empty());
     let claims = draft
         .claims
         .into_iter()
         .map(|claim| claim.bind(items))
         .collect::<std::result::Result<_, _>>()
-        .map_err(LLMError::Failed)?;
+        .map_err(LLMError::schema)?;
     Ok((columns, draft.numbered, claims))
 }
 
@@ -2649,7 +2659,7 @@ mod tests {
                 let claims =
                     reply.unwrap_or_else(|| ids.into_iter().map(|id| Claim::new(&id, vec![id.clone()])).collect());
                 let draft = json!({"claims": claims.into_iter().map(draft_claim).collect::<Vec<_>>(), "columns": columns, "numbered": numbered});
-                let data = schema.validate_json(&draft.to_string()).map_err(LLMError::Failed)?;
+                let data = schema.validate_json(&draft.to_string()).map_err(LLMError::schema)?;
                 Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
             })
         }
@@ -3222,7 +3232,7 @@ mod tests {
                 let reply = json!({"claims":[{"text":text, "evidence_ids":[labels[0]]}], "columns":null});
                 Box::pin(async move {
                     Ok(Generation {
-                        data: schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?,
+                        data: schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?,
                         cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)),
                     })
                 })
@@ -3283,7 +3293,7 @@ mod tests {
                     json!({"claims":[{"text":[{"note":note,"quoted":true}], "evidence_ids":[note]}], "columns":null});
                 Box::pin(async move {
                     Ok(Generation {
-                        data: schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?,
+                        data: schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?,
                         cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)),
                     })
                 })
@@ -3339,7 +3349,7 @@ mod tests {
                 Box::pin(async move {
                     let data = schema
                         .validate_json(&json!({"claims":claims,"columns":null}).to_string())
-                        .map_err(LLMError::Failed)?;
+                        .map_err(LLMError::schema)?;
                     Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
                 })
             }
@@ -3816,7 +3826,7 @@ mod tests {
                 })
                 .collect();
             Box::pin(async move {
-                let data = schema.validate_json(&json!({"records": records}).to_string()).map_err(LLMError::Failed)?;
+                let data = schema.validate_json(&json!({"records": records}).to_string()).map_err(LLMError::schema)?;
                 Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
             })
         }
@@ -5631,7 +5641,7 @@ mod tests {
                         &json!({"claims": claims.into_iter().map(draft_claim).collect::<Vec<_>>(), "columns": null})
                             .to_string(),
                     )
-                    .map_err(LLMError::Failed)?;
+                    .map_err(LLMError::schema)?;
                 Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
             })
         }
