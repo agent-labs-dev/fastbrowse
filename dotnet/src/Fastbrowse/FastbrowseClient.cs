@@ -253,7 +253,8 @@ public sealed class FastbrowseClient : IAsyncDisposable
         }
         catch (Exception e)
         {
-            run.FailureKind = $"Callback/{method}/failed";
+            // Named as the core names a request callback that threw, so a kind reads the same whichever callback failed.
+            run.FailureKind = $"Callback/{method}/error/{ProtocolConstants.ErrorInternalError}";
             run.Failure = $"{method}: {e.Message}";
             Cancel(run.RunId);
         }

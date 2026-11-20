@@ -233,7 +233,8 @@ func (c *Client) fail(run *served, method ServerMethod, err error) {
 	first := run.failure == ""
 	if first {
 		run.failure = fmt.Sprintf("%s: %s", method, err)
-		run.failureKind = fmt.Sprintf("Callback/%s/failed", method)
+		// Named as the core names a request callback that failed, so a kind reads the same whichever callback failed.
+		run.failureKind = fmt.Sprintf("Callback/%s/error/%d", method, ErrorCodeInternalError)
 	}
 	c.mu.Unlock()
 	if first {

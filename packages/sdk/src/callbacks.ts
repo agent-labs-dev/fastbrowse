@@ -111,7 +111,8 @@ export class Callbacks {
     const fail = (error: unknown) => {
       // An async callback can reject after its run was answered, and then there is no run left to end.
       if (served.failure !== undefined || this.#runs.get(runId) !== served) return;
-      served.failureKind = `Callback/${method}/failed`;
+      // Named as the core names a request callback that threw, so a kind reads the same whichever callback failed.
+      served.failureKind = `Callback/${method}/error/${ErrorCode.INTERNAL_ERROR}`;
       served.failure = `${method}: ${messageOf(error)}`;
       served.cancel();
     };

@@ -310,7 +310,8 @@ public final class Fastbrowse implements AutoCloseable {
                 run.options.onFrame().accept(Base64.getDecoder().decode(params.path("frame").asString()));
             }
         } catch (Exception e) {
-            run.failureKind = "Callback/" + method + "/failed";
+            // Named as the core names a request callback that threw, so a kind reads the same whichever callback failed.
+            run.failureKind = "Callback/" + method + "/error/" + Protocol.ERROR_INTERNAL_ERROR;
             run.failure = method + ": " + e.getMessage();
             run.cancel();
         }

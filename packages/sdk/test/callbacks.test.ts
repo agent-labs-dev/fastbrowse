@@ -206,7 +206,7 @@ test('an onFrame that throws ends the run as an error, and hears no more of it',
     });
     assert.equal(result.status, 'error');
     assert.equal(result.error, 'run/frame: the viewer went away');
-    assert.equal(result.failure_kind, 'Callback/run/frame/failed');
+    assert.equal(result.failure_kind, 'Callback/run/frame/error/-32603');
     assert.equal(frames, 1);
     assert.deepEqual(events, []);
   });
@@ -224,7 +224,7 @@ test('an onEvent that throws ends the run as an error', async () => {
     });
     assert.equal(result.status, 'error');
     assert.equal(result.error, 'run/event: the progress bar broke');
-    assert.equal(result.failure_kind, 'Callback/run/event/failed');
+    assert.equal(result.failure_kind, 'Callback/run/event/error/-32603');
     assert.equal(events, 1);
   });
 });
@@ -239,7 +239,7 @@ test('an onEvent that rejects stops a run that would have gone on, and its brows
     });
     assert.equal(result.status, 'error');
     assert.equal(result.error, 'run/event: the progress bar broke');
-    assert.equal(result.failure_kind, 'Callback/run/event/failed');
+    assert.equal(result.failure_kind, 'Callback/run/event/error/-32603');
     // The run's receipt is folded into the result, so what it did and spent before it stopped is kept.
     assert.equal(result.steps.length, 1);
     assert.deepEqual(

@@ -831,8 +831,11 @@ pub struct RunResult {
     pub error: Option<String>,
     /// What ended the run short of complete, in content-free terms: the error type and its cause
     /// (`Llm.Rejected/openrouter/action/http-401`, `Failed/Page.navigate/net::ERR_ABORTED`) or the rule that stopped it
-    /// (`SiteFailure/http-503`). Never page text, an address, a prompt or a secret. Present for every status but
-    /// `complete`.
+    /// (`SiteFailure/http-503`). A client callback that threw is `Callback/<method>/error/-32603` whichever SDK or
+    /// transport ran it, `error/<code>` with the client's own code when it replied with another, and
+    /// `unusable-reply` when its reply had no code or a result of the wrong shape: that is a client that broke the
+    /// protocol, not a callback that failed. Never page text, an address, a prompt or a secret. Present for every
+    /// status but `complete`.
     #[serde(default)]
     pub failure_kind: Option<String>,
     /// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.

@@ -45,7 +45,7 @@ try {
 stopped it in `result.wall`: `kind` is `password`, `one_time_code`, `sign_in` or `bot_check`, with the page's
 `origin`, the labels of the `fields` it asked for and `seen_at_ms`. Every result short of `complete` names its
 cause in `result.failure_kind`, which holds no page text or secret: `Budget/seconds` for a time limit,
-`Callback/run/event/failed` when your `onEvent` callback threw, or a model failure's provider, purpose and status
+`Callback/run/event/error/-32603` when your `onEvent` callback threw, or a model failure's provider, purpose and status
 such as `Llm.Rejected/openrouter/action/http-401`.
 
 ## Processes and errors

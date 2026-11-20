@@ -197,7 +197,7 @@ class FastbrowseTest {
         }).build()).join();
         assertEquals(Status.ERROR, result.status());
         assertEquals("run/event: full disk", result.error());
-        assertEquals("Callback/run/event/failed", result.failureKind());
+        assertEquals("Callback/run/event/error/-32603", result.failureKind());
         assertEquals(1, calls.get());
     }
 
@@ -323,7 +323,7 @@ class FastbrowseTest {
                 .build()).join();
         assertEquals(Status.ERROR, result.status());
         assertEquals("run/event: full disk", result.error());
-        assertEquals("Callback/run/event/failed", result.failureKind());
+        assertEquals("Callback/run/event/error/-32603", result.failureKind());
         assertEquals(1, result.steps().size());
         assertEquals(2, result.cost().lines().size());
     }
