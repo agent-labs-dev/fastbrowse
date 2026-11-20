@@ -13,6 +13,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
 
+- A click that starts a client-side navigation through a React scheduler is read after the navigation, not before it. The page's update ran in a task posted through a `MessageChannel`, which the settle after a click did not wait for, so the run read the page it was leaving beside a screenshot of the next one, and Jev took the mismatch for a site failure: a research run ended `unavailable` with "the site failed to deliver" on a page that had answered ([#1336](https://github.com/agent-labs-dev/fastbrowse/issues/1336)).
+
+- An answer cites the page a search reports on, not the search. A run that read a search results page and then the page it pointed to cited the results page and its generated summary beside the page it named as its source ([#1332](https://github.com/agent-labs-dev/fastbrowse/issues/1332)).
+
+- A run that reads pages over HTTP and chose its own start page opens another one when it cannot read the first, such as one scripts build. `--fetch` with no `--start` began on a search results page whose markup holds no text and ended `blocked` before its first step, though the project page it needed was readable. The start page is now proposed again, told each address that failed and why, and the run ends `blocked` only when no readable page is known; a run that then moves to a browser opens the page it first chose ([#1330](https://github.com/agent-labs-dev/fastbrowse/issues/1330)).
+
 ## [0.12.0] - 2026-11-19
 
 - Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.

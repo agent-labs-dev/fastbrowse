@@ -710,6 +710,11 @@ async fn test_one_read_buys_one_return_to_a_page_state_already_reached() {
 struct Unfetchable {
     opens: bool,
     failure: Option<BrowserError>,
+    /// The one address whose markup holds text, when there is one.
+    readable: Option<&'static str>,
+    /// An address the server answers with HTTP 404.
+    missing: Option<&'static str>,
+    opened: Mutex<Vec<String>>,
 }
 
 impl Page for Unfetchable {
@@ -729,8 +734,10 @@ impl Page for Unfetchable {
         Box::pin(async { Ok(true) })
     }
 
-    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
-        let opens = self.opens;
+    fn navigate<'a>(&'a self, url: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.opened.lock().unwrap().push(url.to_string());
+        let opens = self.opens || self.readable == Some(url);
+        let missing = self.missing == Some(url);
         let failure = self.failure.clone();
         Box::pin(async move {
             if let Some(failure) = failure {
@@ -738,6 +745,9 @@ impl Page for Unfetchable {
             }
             if opens {
                 return Ok(());
+            }
+            if missing {
+                return Err(BrowserError::NeedsBrowser("the fetch got HTTP 404".into()));
             }
             Err(BrowserError::NeedsBrowser("the page renders its content with scripts".into()))
         })
@@ -954,6 +964,99 @@ async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason()
     assert_eq!(result.status, Status::Blocked);
     assert_eq!(result.error.as_deref(), Some("the page renders its content with scripts"));
     assert!(result.steps.is_empty() && result.evidence.is_empty() && result.final_url.is_none());
+}
+
+/// Proposes a search results page to begin on, and another address once told that page was unreadable.
+#[derive(Default)]
+struct StartProposer {
+    again: Option<&'static str>,
+    told: Mutex<Vec<String>>,
+}
+
+impl LLMClient for StartProposer {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        if purpose != LLMPurpose::Start {
+            return ScriptedLLM.generate_value(purpose, messages, schema, ledger);
+        }
+        let retold = messages[0].content.starts_with("# Another start page");
+        if retold {
+            self.told.lock().unwrap().push(messages[1].content.clone());
+        }
+        let url = if retold { self.again } else { Some("https://search.test/search?q=ruff") };
+        Box::pin(async move {
+            let data = schema.validate_json(&json!({"url": url}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// A run reading over HTTP began on a search results page it chose, which scripts build, and ended `blocked` before
+/// its first step though the project's own page was readable (#1330). Told the page was unreadable, the proposer
+/// gives another page and the run opens it.
+#[tokio::test]
+async fn test_a_chosen_start_page_scripts_build_is_proposed_again_knowing_it_was_unreadable() {
+    let releases = "https://code.test/ruff/releases";
+    let page = Arc::new(Unfetchable { readable: Some(releases), ..Default::default() });
+    let llm = Arc::new(StartProposer { again: Some(releases), ..Default::default() });
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(Vec::new())), llm.clone());
+    let options = super::RunOptions { choose_start: true, ..Default::default() };
+    agent.run("What is the latest version of ruff?", options).await.expect("a result");
+    assert_eq!(*page.opened.lock().unwrap(), vec!["https://search.test/search?q=ruff".to_string(), releases.into()]);
+    let told = llm.told.lock().unwrap().clone();
+    assert_eq!(told.len(), 1);
+    assert!(
+        told[0].ends_with(
+            "# Unreadable addresses\n- https://search.test/search?q=ruff: the page renders its content with scripts"
+        ),
+        "{}",
+        told[0]
+    );
+
+    // With no other page known, the run ends on the page it could not read, as before.
+    let page = Arc::new(Unfetchable::default());
+    let llm = Arc::new(StartProposer { again: Some("https://search.test/search?q=ruff"), ..Default::default() });
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(Vec::new())), llm);
+    let options = super::RunOptions { choose_start: true, ..Default::default() };
+    let result = agent.run("What is the latest version of ruff?", options).await.expect("a result");
+    assert_eq!(result.status, Status::Blocked);
+    assert_eq!(result.error.as_deref(), Some("the page renders its content with scripts"));
+    assert_eq!(page.opened.lock().unwrap().len(), 1, "an address already found unreadable is not opened again");
+    // A run that moves to a browser opens the address it could not read, not a second choice of start page.
+    let resume = agent.resume().expect("a browser handoff");
+    assert_eq!(resume.state.started_url.as_deref(), Some("https://search.test/search?q=ruff"));
+}
+
+/// A proposed start page the server does not have is no page a browser could read either. The proposer was told every
+/// failed address was built by scripts, and a run that moved to a browser opened the last guess, a missing page,
+/// instead of the page the run chose.
+#[tokio::test]
+async fn test_a_start_page_proposed_again_is_told_why_each_failed_and_a_browser_opens_the_first() {
+    let guess = "https://code.test/ruff/latest";
+    let page = Arc::new(Unfetchable { missing: Some(guess), ..Default::default() });
+    let llm = Arc::new(StartProposer { again: Some(guess), ..Default::default() });
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(Vec::new())), llm.clone());
+    let options = super::RunOptions { choose_start: true, ..Default::default() };
+    let result = agent.run("What is the latest version of ruff?", options).await.expect("a result");
+    assert_eq!(result.status, Status::Blocked);
+    assert_eq!(result.error.as_deref(), Some("the page renders its content with scripts"));
+    assert_eq!(*page.opened.lock().unwrap(), vec!["https://search.test/search?q=ruff".to_string(), guess.into()]);
+    let told = llm.told.lock().unwrap().clone();
+    assert!(
+        told[1].ends_with(
+            "- https://search.test/search?q=ruff: the page renders its content with scripts\n\
+             - https://code.test/ruff/latest: the fetch got HTTP 404"
+        ),
+        "{}",
+        told[1]
+    );
+    let resume = agent.resume().expect("a browser handoff");
+    assert_eq!(resume.state.started_url.as_deref(), Some("https://search.test/search?q=ruff"));
 }
 
 #[tokio::test]
