@@ -33,6 +33,13 @@ pub struct Element {
     pub height: i64,
     #[serde(default)]
     pub children: Vec<Element>,
+    /// The AT-SPI interfaces the element implements, without their `org.a11y.atspi.` prefix. A deskpilot that does
+    /// not report them leaves this empty on every element, the root included.
+    #[serde(default)]
+    pub interfaces: Vec<String>,
+    /// The names the app gives what the element can do: `click`, `toggle`, `Press`.
+    #[serde(default)]
+    pub actions: Vec<String>,
     /// On the root only: the snapshot its ids belong to. A peek, which binds nothing, has none.
     #[serde(default)]
     pub snapshot: Option<String>,
@@ -88,8 +95,9 @@ impl Window {
     }
 }
 
-/// Roles whose element does something when clicked, by AT-SPI's role names. at-spi2-core renamed `push button` to
-/// `button`; an app on an older one still says the first.
+/// Roles whose element does something when clicked, by AT-SPI's role names, for a tree from a deskpilot that does
+/// not say what each element can do (`Capabilities::Unknown`). at-spi2-core renamed `push button` to `button`; an app
+/// on an older one still says the first.
 const CLICKABLE: [&str; 17] = [
     "button",
     "push button",
@@ -113,7 +121,30 @@ const CLICKABLE: [&str; 17] = [
 /// Roles whose checked state is a value of their own, so an unchecked one says so rather than saying nothing.
 const CHECKABLE: [&str; 5] = ["check box", "radio button", "toggle button", "check menu item", "radio menu item"];
 
-fn operations(element: &Element) -> Vec<Operation> {
+/// Whether the tree says what each element can do. deskpilot lists every element's interfaces or none's, and every
+/// element implements at least `Accessible`, so the root tells for the whole tree.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Capabilities {
+    Stated,
+    Unknown,
+}
+
+impl Capabilities {
+    pub fn of(root: &Element) -> Self {
+        if root.interfaces.is_empty() { Self::Unknown } else { Self::Stated }
+    }
+}
+
+/// Whether a click does something on the element: the app names an action it can take. Every toolkit words its roles
+/// its own way (a GTK 4 switch, a Qt spin box, a Qt list item that toggles), and each says so here.
+fn clickable(element: &Element, capabilities: Capabilities) -> bool {
+    match capabilities {
+        Capabilities::Stated => !element.actions.is_empty(),
+        Capabilities::Unknown => CLICKABLE.contains(&element.role.as_str()),
+    }
+}
+
+fn operations(element: &Element, capabilities: Capabilities) -> Vec<Operation> {
     // Editable is a state the app sets, on entries, spin buttons, password fields and editable combo boxes alike.
     if element.has("editable") {
         return vec![Operation::Click, Operation::Fill, Operation::Enter];
@@ -123,7 +154,7 @@ fn operations(element: &Element) -> Vec<Operation> {
     if !options(element).is_empty() {
         return vec![Operation::Select];
     }
-    if CLICKABLE.contains(&element.role.as_str()) {
+    if clickable(element, capabilities) {
         return vec![Operation::Click, Operation::Hover];
     }
     Vec::new()
@@ -204,11 +235,11 @@ pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
     element.children.iter().find_map(|child| find(child, id))
 }
 
-fn control(element: &Element, context: Option<&str>) -> Option<Control> {
+fn control(element: &Element, context: Option<&str>, capabilities: Capabilities) -> Option<Control> {
     if !element.showing() || !element.operable() {
         return None;
     }
-    let operations = operations(element);
+    let operations = operations(element, capabilities);
     if operations.is_empty() {
         return None;
     }
@@ -260,28 +291,29 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
 /// the observation it was chosen from. A control's context is the name of the nearest named
 /// element holding it below the window itself, as a group box or a page tab names what it holds.
 pub fn controls(root: &Element) -> Vec<Control> {
-    fn walk(element: &Element, context: Option<&str>, out: &mut Vec<Control>) {
-        let made = control(element, context);
+    fn walk(element: &Element, context: Option<&str>, capabilities: Capabilities, out: &mut Vec<Control>) {
+        let made = control(element, context, capabilities);
         // A control's own name is its label, not the context of what it holds.
         let inner = if element.name.is_empty() || made.is_some() { context } else { Some(element.name.as_str()) };
         out.extend(made);
         for child in &element.children {
-            walk(child, inner, out);
+            walk(child, inner, capabilities, out);
         }
     }
     // The window's own name is its title, which every control shares, so it tells none apart.
+    let capabilities = Capabilities::of(root);
     let mut out = Vec::new();
-    out.extend(control(root, None));
+    out.extend(control(root, None, capabilities));
     for child in &root.children {
-        walk(child, None, &mut out);
+        walk(child, None, capabilities, &mut out);
     }
     out
 }
 
 /// The text an element shows of its own: an editable field's value is the control's, and a control's name is its
 /// label, so only elements that are neither add text.
-fn own_text(element: &Element) -> Option<&str> {
-    if !operations(element).is_empty() {
+fn own_text(element: &Element, capabilities: Capabilities) -> Option<&str> {
+    if !operations(element, capabilities).is_empty() {
         return None;
     }
     element.text.as_deref().filter(|text| !text.trim().is_empty())
@@ -289,16 +321,16 @@ fn own_text(element: &Element) -> Option<&str> {
 
 /// The text the window shows on screen, and the text it holds out of view, each in the tree's order.
 pub fn texts(root: &Element) -> (String, String) {
-    fn walk<'a>(element: &'a Element, shown: &mut Vec<&'a str>, hidden: &mut Vec<&'a str>) {
-        if let Some(text) = own_text(element) {
+    fn walk<'a>(element: &'a Element, capabilities: Capabilities, shown: &mut Vec<&'a str>, hidden: &mut Vec<&'a str>) {
+        if let Some(text) = own_text(element, capabilities) {
             if element.showing() { shown.push(text) } else { hidden.push(text) }
         }
         for child in &element.children {
-            walk(child, shown, hidden);
+            walk(child, capabilities, shown, hidden);
         }
     }
     let (mut shown, mut hidden) = (Vec::new(), Vec::new());
-    walk(root, &mut shown, &mut hidden);
+    walk(root, Capabilities::of(root), &mut shown, &mut hidden);
     (shown.join("\n"), hidden.join("\n"))
 }
 
@@ -371,7 +403,7 @@ fn kind(role: &str) -> BlockKind {
 
 /// Every text the window holds, shown or not, as a capture whose blocks a quote is checked against.
 pub fn capture(window: &Window, root: &Element) -> Capture {
-    fn walk<'a>(element: &'a Element, out: &mut Vec<(&'a str, &'a str)>) {
+    fn walk<'a>(element: &'a Element, capabilities: Capabilities, out: &mut Vec<(&'a str, &'a str)>) {
         // A combo box says the item it has chosen, as it shows on screen; the items of its list are its options, not
         // what the window says.
         if element.role == "combo box" {
@@ -382,18 +414,19 @@ pub fn capture(window: &Window, root: &Element) -> Capture {
         }
         let text = element.text.as_deref().filter(|t| !t.trim().is_empty());
         // A control's text is read too: a field's value or a button's words are part of what the window says.
-        let named = (!operations(element).is_empty() && !element.name.is_empty()).then_some(element.name.as_str());
+        let named = (!operations(element, capabilities).is_empty() && !element.name.is_empty())
+            .then_some(element.name.as_str());
         if let Some(text) = text.or(named)
             && element.role != "password text"
         {
             out.push((element.role.as_str(), text));
         }
         for child in &element.children {
-            walk(child, out);
+            walk(child, capabilities, out);
         }
     }
     let mut found = Vec::new();
-    walk(root, &mut found);
+    walk(root, Capabilities::of(root), &mut found);
     let mut whole = String::new();
     let mut blocks = Vec::with_capacity(found.len());
     let mut offset = 0;
@@ -449,8 +482,38 @@ mod tests {
             width: 0,
             height: 0,
             children,
+            interfaces: Vec::new(),
+            actions: Vec::new(),
             snapshot: None,
         }
+    }
+
+    /// An element of a tree that says what each can do: `actions` are the names the app gives its actions.
+    fn able(mut element: Element, interfaces: &[&str], actions: &[&str]) -> Element {
+        element.interfaces = ["Accessible", "Component"].iter().chain(interfaces).map(|s| s.to_string()).collect();
+        element.actions = actions.iter().map(|s| s.to_string()).collect();
+        element
+    }
+
+    #[test]
+    fn a_control_is_offered_by_what_the_app_says_it_can_do() {
+        // A GTK 4 switch, a Qt spin box and a Qt label have roles no list of clickable ones names, or names wrongly.
+        let switch = able(node("e2", "switch", "Dark mode", &shown(&[]), None, vec![]), &["Action"], &["toggle"]);
+        let label = able(node("e3", "label", "Theme", &shown(&[]), Some("Theme"), vec![]), &["Action"], &[]);
+        let cell = able(node("e4", "table cell", "Total", &shown(&[]), Some("12"), vec![]), &["Text"], &[]);
+        let root = able(node("e1", "frame", "Settings", &shown(&[]), None, vec![switch, label, cell]), &[], &[]);
+        let offered = controls(&root);
+        assert_eq!(offered.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["e2"]);
+        assert!(offered[0].operations.contains(&Operation::Click));
+        assert_eq!(texts(&root).0, "Theme\n12");
+    }
+
+    #[test]
+    fn a_tree_that_states_no_capabilities_is_offered_by_role() {
+        let button = node("e2", "push button", "Save", &shown(&[]), None, vec![]);
+        let switch = node("e3", "switch", "Dark mode", &shown(&[]), None, vec![]);
+        let root = node("e1", "frame", "Settings", &shown(&[]), None, vec![button, switch]);
+        assert_eq!(controls(&root).into_iter().map(|c| c.id).collect::<Vec<_>>(), vec!["e2"]);
     }
 
     const SHOWN: [&str; 4] = ["enabled", "sensitive", "showing", "visible"];
