@@ -91,7 +91,10 @@ The extension has to match the fastbrowse you install: the Store's **0.1.0** wor
    ```
 
 2. Run `fastbrowse extension install`. It registers the installed program with the Chromium browsers it finds
-   for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows.
+   for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows. The launcher it
+   writes runs the fastbrowse you ran `install` from, else another fastbrowse that was on your `PATH` at
+   install time, else `fastbrowse` on the browser's `PATH`, so removing a project venv or upgrading keeps the
+   extension working.
 3. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
    Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
 4. Run a task that reads a public page:

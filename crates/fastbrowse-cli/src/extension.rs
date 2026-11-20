@@ -65,16 +65,43 @@ fn config_base() -> PathBuf {
     }
 }
 
-/// The command that runs this fastbrowse again: the program as the user invoked it, found on `PATH` when bare.
-fn this_fastbrowse(program: &str) -> PathBuf {
-    let named = Path::new(program);
-    if named.components().count() > 1 {
-        return std::fs::canonicalize(named).unwrap_or_else(|_| named.to_path_buf());
+/// The fastbrowse commands the launcher tries, in order: this fastbrowse (the program as the user invoked it, found on
+/// `search`, a `PATH`, when bare), then every other fastbrowse on `search`.
+///
+/// The first one can disappear while the host stays registered: `uv run` runs a project's venv, which is deleted with
+/// the checkout, so the extension found no host and runs said it was not installed (#1191). The others are the
+/// installed ones the user's shell would run next, so the launcher falls back to one of them instead of nothing. An
+/// invoked path is made absolute but its links are kept: a package manager's `bin` link outlives the versioned
+/// folder it points into, which the next upgrade removes.
+fn host_commands(program: &str, search: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    let mut program = std::ffi::OsString::from(program);
+    if Path::new(&program).extension().is_none() {
+        program.push(std::env::consts::EXE_SUFFIX);
     }
-    let found = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path).map(|dir| dir.join(program)).find(|candidate| candidate.is_file())
-    });
-    found.or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| named.to_path_buf())
+    let named = Path::new(&program);
+    let name = named.file_name().map(std::ffi::OsString::from).unwrap_or_default();
+    // A relative `PATH` entry names a folder only from the directory this ran in, not from the one Chrome starts in.
+    let installed: Vec<PathBuf> = search
+        .map(|search| {
+            std::env::split_paths(search)
+                .filter(|dir| dir.is_absolute())
+                .map(|dir| dir.join(&name))
+                .filter(|candidate| candidate.is_file())
+                .collect()
+        })
+        .unwrap_or_default();
+    let this = if named.components().count() > 1 {
+        std::path::absolute(named).unwrap_or_else(|_| named.to_path_buf())
+    } else {
+        installed.first().cloned().or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| named.to_path_buf())
+    };
+    let mut commands = vec![this];
+    for candidate in installed {
+        if !commands.contains(&candidate) {
+            commands.push(candidate);
+        }
+    }
+    commands
 }
 
 /// A fastbrowse that a package runner unpacked for one call, which the cache may delete later.
@@ -95,16 +122,32 @@ fn host_manifest(launcher: &Path) -> String {
     serde_json::to_string_pretty(&manifest).unwrap_or_default()
 }
 
-fn write_launcher(dir: &Path, fastbrowse: &Path) -> std::io::Result<PathBuf> {
+/// A launcher that runs the first of `commands` still present as the host, else the `fastbrowse` on the `PATH` Chrome
+/// starts it with, which finds one installed after this ran.
+fn write_launcher(dir: &Path, commands: &[PathBuf]) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     if cfg!(windows) {
         let launcher = dir.join("native-host.bat");
-        std::fs::write(&launcher, format!("@echo off\r\n\"{}\" native-host %*\r\n", fastbrowse.display()))?;
+        let mut text = String::from("@echo off\r\n");
+        for command in commands {
+            // In a batch file a `%` in a path would start a variable, so each is doubled.
+            let command = command.display().to_string().replace('%', "%%");
+            text.push_str(&format!("if exist \"{command}\" (\r\n  \"{command}\" native-host %*\r\n  exit /b\r\n)\r\n"));
+        }
+        text.push_str("fastbrowse native-host %*\r\n");
+        std::fs::write(&launcher, text)?;
         return Ok(launcher);
     }
     let launcher = dir.join("native-host");
-    let quoted = fastbrowse.display().to_string().replace('\'', r"'\''");
-    std::fs::write(&launcher, format!("#!/bin/sh\nexec '{quoted}' native-host \"$@\"\n"))?;
+    let quoted: Vec<String> =
+        commands.iter().map(|command| format!("'{}'", command.display().to_string().replace('\'', r"'\''"))).collect();
+    std::fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nfor fastbrowse in {}; do\n    if [ -x \"$fastbrowse\" ]; then exec \"$fastbrowse\" native-host \"$@\"; fi\ndone\nexec fastbrowse native-host \"$@\"\n",
+            quoted.join(" ")
+        ),
+    )?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -115,8 +158,9 @@ fn write_launcher(dir: &Path, fastbrowse: &Path) -> std::io::Result<PathBuf> {
 
 /// Register the host with every browser found; the names of the browsers registered.
 fn install(program: &str, out: &mut String) -> Result<Vec<&'static str>, String> {
-    let fastbrowse = this_fastbrowse(program);
-    if ephemeral(&fastbrowse) {
+    let commands = host_commands(program, std::env::var_os("PATH").as_deref());
+    let fastbrowse = &commands[0];
+    if ephemeral(fastbrowse) {
         out.push_str(&format!(
             "warning: {} looks like a one-off copy from a package runner's cache, which may be deleted. Install \
              fastbrowse (for example `uv tool install fastbrowse`) and run this again from it.\n",
@@ -124,7 +168,7 @@ fn install(program: &str, out: &mut String) -> Result<Vec<&'static str>, String>
         ));
     }
     let dir = data_dir();
-    let launcher = write_launcher(&dir, &fastbrowse).map_err(|e| format!("cannot write the launcher: {e}"))?;
+    let launcher = write_launcher(&dir, &commands).map_err(|e| format!("cannot write the launcher: {e}"))?;
     let manifest = host_manifest(&launcher);
     let manifest_path = dir.join(format!("{HOST_NAME}.json"));
     std::fs::write(&manifest_path, &manifest).map_err(|e| format!("cannot write {}: {e}", manifest_path.display()))?;
@@ -326,13 +370,63 @@ mod tests {
     #[test]
     fn a_launcher_runs_this_fastbrowse_as_the_host() {
         let dir = std::env::temp_dir().join(format!("fastbrowse-launcher-{}", std::process::id()));
-        let launcher = write_launcher(&dir, Path::new("/opt/it's/fastbrowse")).unwrap();
+        let launcher = write_launcher(&dir, &[PathBuf::from("/opt/it's/fastbrowse")]).unwrap();
         let text = std::fs::read_to_string(&launcher).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         if cfg!(windows) {
             assert!(text.contains("native-host %*"));
         } else {
-            assert_eq!(text, "#!/bin/sh\nexec '/opt/it'\\''s/fastbrowse' native-host \"$@\"\n");
+            assert!(text.contains("for fastbrowse in '/opt/it'\\''s/fastbrowse'; do"), "{text}");
         }
+    }
+
+    /// Two fastbrowse installs, each on `PATH`, as `uv run` sees them: the project's venv first, then the installed one.
+    #[cfg(unix)]
+    fn two_installs(root: &Path) -> (PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut installs = vec![];
+        for name in ["venv", "installed"] {
+            let bin = root.join(name).join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let fastbrowse = bin.join("fastbrowse");
+            std::fs::write(&fastbrowse, format!("#!/bin/sh\necho {name} \"$@\"\n")).unwrap();
+            std::fs::set_permissions(&fastbrowse, std::fs::Permissions::from_mode(0o755)).unwrap();
+            installs.push(fastbrowse);
+        }
+        (installs[0].clone(), installs[1].clone())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_host_outlives_the_venv_it_was_installed_from() {
+        let root = std::env::temp_dir().join(format!("fastbrowse-host-commands-{}", std::process::id()));
+        let (venv, installed) = two_installs(&root);
+        let search =
+            std::env::join_paths([venv.parent().unwrap(), Path::new("relative"), installed.parent().unwrap()]).unwrap();
+        let commands = host_commands("fastbrowse", Some(&search));
+        assert_eq!(commands, [venv.clone(), installed.clone()]);
+        let launcher = write_launcher(&root, &commands).unwrap();
+        let run = || {
+            let out = std::process::Command::new(&launcher).arg("chrome-extension://x/").output().unwrap();
+            String::from_utf8(out.stdout).unwrap()
+        };
+        let before = run();
+        std::fs::remove_dir_all(root.join("venv")).unwrap();
+        let after = run();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(before, "venv native-host chrome-extension://x/\n");
+        assert_eq!(after, "installed native-host chrome-extension://x/\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_invoked_link_is_kept_rather_than_the_folder_it_points_into() {
+        let root = std::env::temp_dir().join(format!("fastbrowse-host-link-{}", std::process::id()));
+        let (versioned, _) = two_installs(&root);
+        let link = root.join("fastbrowse");
+        std::os::unix::fs::symlink(&versioned, &link).unwrap();
+        let commands = host_commands(link.to_str().unwrap(), None);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(commands, [link]);
     }
 }
