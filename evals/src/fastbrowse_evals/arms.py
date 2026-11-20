@@ -14,6 +14,8 @@ PublicArm = Literal[
     "browser-use-oss",
     "browser-harness",
     "cua-codex",
+    "fastbrowse-desktop",
+    "claude-code-deskpilot",
 ]
 
 
@@ -35,6 +37,10 @@ ARM_BINDINGS: tuple[ArmBinding, ...] = (
     # Codex on Luna, price-matched with the Claude Code arm (browser-harness-claude-code on Haiku 5.5, diagnostic).
     ArmBinding("browser-harness", "browser-harness", "openai/gpt-6-luna"),
     ArmBinding("cua-codex", "cua-codex"),
+    # The desktop arms run files-desktop-report-cross-app in a Hyprland box (.github/workflows/desktop-eval.yml), outside
+    # every published group. claude-code on Haiku 5.5, as the browser-harness baseline.
+    ArmBinding("fastbrowse-desktop", "fastbrowse-desktop"),
+    ArmBinding("claude-code-deskpilot", "claude-code-deskpilot", "anthropic/claude-haiku-5.5"),
 )
 
 BY_PUBLIC = {binding.public: binding for binding in ARM_BINDINGS}
