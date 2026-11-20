@@ -1,10 +1,11 @@
 """The desktop apps eval's grading, with no app, compositor or model."""
 
+import argparse
 from pathlib import Path
 
 import pytest
 
-from fastbrowse_evals.desktop.apps import TASKS, AppTask, holds, missing, outcome, posted, serve
+from fastbrowse_evals.desktop.apps import ORDERS, TASKS, AppTask, holds, missing, outcome, posted, run, serve
 
 BY_ID = {task.id: task for task in TASKS}
 
@@ -24,6 +25,7 @@ def test_task_ids_are_unique_and_a_claim_is_only_for_a_task_that_reads() -> None
         (True, "stuck", "", "pass"),
         (True, "stuck", "the file changed", "fail"),
         (True, "complete", "", "false complete"),
+        (True, "no result", "", "fail"),
     ],
 )
 def test_a_run_reported_complete_without_the_work_is_a_false_complete(
@@ -74,3 +76,13 @@ def test_a_page_post_is_kept_for_grading(tmp_path: Path) -> None:
 def test_a_program_behind_env_is_the_one_checked() -> None:
     assert missing([["env", "A=1", "no-such-program-xyz", "--flag"]]) == ["no-such-program-xyz"]
     assert missing([["sh", "-c", "true"]]) == []
+
+
+def test_the_order_asked_about_is_in_the_log_once() -> None:
+    assert sum(" order 49309 " in line for line in ORDERS) == 1
+
+
+def test_a_directory_holding_an_earlier_run_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "work").mkdir()
+    with pytest.raises(SystemExit):
+        run(BY_ID["zenity-question"], 1, tmp_path, argparse.Namespace())

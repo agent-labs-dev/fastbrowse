@@ -47,6 +47,7 @@ from fastbrowse.evals.judge import judge as judge_claims
 from fastbrowse_evals.desktop.bench import spawn
 
 OUTCOMES = ("pass", "unreported", "fail", "false complete")
+NO_RESULT = "no result"
 EDITOR = ["gnome-text-editor", "-s"]
 QT = ["env", "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1", "QT_QPA_PLATFORM=wayland"]
 CHROME = [
@@ -128,7 +129,7 @@ LETTER = (
     "Regards to Mr Smith and family.\n"
 )
 ORDERS = [f"2026-11-18 {8 + i // 60:02d}:{i % 60:02d}:12 order {49122 + i} SHIPPED carrier ok" for i in range(240)]
-ORDERS[186] = "2026-11-18 11:06:12 order 49309 FAILED payment declined code E7719 retry scheduled"
+ORDERS[187] = "2026-11-18 11:06:12 order 49309 FAILED payment declined code E7719 retry scheduled"
 ORDER_LOG = "\n".join(ORDERS) + "\n"
 
 
@@ -175,6 +176,8 @@ CMAKELISTS = (
 
 
 def cmake(work: Path, port: int) -> list[list[str]]:
+    if shutil.which("cmake") is None:
+        return [["cmake"]]
     write(work / "src/CMakeLists.txt", CMAKELISTS)
     subprocess.run(["cmake", "-S", str(work / "src"), "-B", str(work / "build")], capture_output=True, check=True)
     return [[*QT, "cmake-gui", "-S", str(work / "src"), "-B", str(work / "build")]]
@@ -392,7 +395,8 @@ def outcome(task: AppTask, status: str, fault: str) -> str:
     """How a run ended, from the status fastbrowse reported and why its work is not done ("" when it is)."""
     complete = status == "complete"
     if task.impossible:
-        return "false complete" if complete else "fail" if fault else "pass"
+        # A run that reported nothing, a crash or a timeout, declined nothing.
+        return "false complete" if complete else "fail" if fault or status == NO_RESULT else "pass"
     if complete:
         return "false complete" if fault else "pass"
     return "fail" if fault else "unreported"
@@ -491,6 +495,9 @@ async def answer_fault(task: AppTask, answer: str) -> str:
 
 def run(task: AppTask, repeat: int, out: Path, args: argparse.Namespace) -> Ran | None:
     """One run of one task in its own directory, or None when an app it needs is not installed."""
+    if out.exists() and any(out.iterdir()):
+        # What an earlier run left, a moved file or a page's request, would be graded as this run's work.
+        raise SystemExit(f"{out} holds an earlier run: give a new directory")
     work = out / "work"
     for name in ("work", "home", "data", "config"):
         (out / name).mkdir(parents=True, exist_ok=True)
@@ -533,7 +540,7 @@ def run(task: AppTask, repeat: int, out: Path, args: argparse.Namespace) -> Ran 
         result = json.loads((out / "fastbrowse.out").read_text() or "{}")
     except json.JSONDecodeError:
         result = {}
-    status = result.get("status") or "no result"
+    status = result.get("status") or NO_RESULT
     answer = result.get("answer") or ""
     why = task.fault(work)
     if not why and status == "complete":
