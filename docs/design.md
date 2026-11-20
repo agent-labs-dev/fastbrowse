@@ -197,7 +197,8 @@ build. So a run over HTTP that took no step cannot finish a task that asks for o
 browser does it. A served page with no links or controls is stated to Jev as leading nowhere only when nothing a
 browser would add is missing from the read: no `<script>` the HTML standard runs (a classic script with a
 JavaScript type and no `nomodule`, or a module, with a `src` or text, outside `<template>` and `<noscript>`), no
-non-empty event handler attribute the standard defines, such as `onload`, in the page or a frame read into it,
+non-empty event handler attribute, such as `onload` or `onanimationstart` (every one the web's specs add to
+elements, and those Chrome adds), in the page or a frame read into it,
 and no frame left unread. Otherwise Jev is told what was left out and whether a step can open a browser: by
 default a wait or other step it picks there opens one on the page, and with `fetch` none opens.
 `fetch` forbids the browser, and `browser` starts one from the first step.

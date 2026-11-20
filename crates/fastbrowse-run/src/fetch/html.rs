@@ -1444,14 +1444,26 @@ const JAVASCRIPT_TYPES: [&str; 16] = [
     "text/x-javascript",
 ];
 
-/// The event handler content attributes the HTML standard has every element support (its tables for
-/// `GlobalEventHandlers` and `DocumentAndElementEventHandlers`): a handler set by one runs script on that event.
-const ELEMENT_HANDLERS: [&str; 76] = [
+/// Every event handler content attribute an HTML, SVG or MathML element runs as script when its event fires: the
+/// `GlobalEventHandlers` members of the HTML standard and of each spec that extends the mixin (CSS Animations, CSS
+/// Transitions, Pointer Events, Touch Events, the Selection API, CSS Scroll Snap 2, WebXR DOM Overlays, Fenced Frame,
+/// the install element), the Fullscreen standard's `Element` handlers, and the `on` properties Chrome 157 has on a
+/// `<p>`, an SVG `<circle>` and a MathML `<mi>`, as the browser a run opens is Chrome. Taken from the curated IDL in
+/// `@webref/idl` 3.87.1 and that Chrome; `tests/golden/event_handlers.json` records each source.
+pub const ELEMENT_HANDLERS: [&str; 118] = [
     "onabort",
+    "onanimationcancel",
+    "onanimationend",
+    "onanimationiteration",
+    "onanimationstart",
     "onauxclick",
+    "onbeforecopy",
+    "onbeforecut",
     "onbeforeinput",
     "onbeforematch",
+    "onbeforepaste",
     "onbeforetoggle",
+    "onbeforexrselect",
     "onblur",
     "oncancel",
     "oncanplay",
@@ -1460,6 +1472,7 @@ const ELEMENT_HANDLERS: [&str; 76] = [
     "onclick",
     "onclose",
     "oncommand",
+    "oncontentvisibilityautostatechange",
     "oncontextlost",
     "oncontextmenu",
     "oncontextrestored",
@@ -1478,9 +1491,14 @@ const ELEMENT_HANDLERS: [&str; 76] = [
     "onemptied",
     "onended",
     "onerror",
+    "onfencedtreeclick",
     "onfocus",
     "onformdata",
+    "onfullscreenchange",
+    "onfullscreenerror",
+    "ongotpointercapture",
     "oninput",
+    "oninstallresult",
     "oninvalid",
     "onkeydown",
     "onkeypress",
@@ -1489,6 +1507,7 @@ const ELEMENT_HANDLERS: [&str; 76] = [
     "onloadeddata",
     "onloadedmetadata",
     "onloadstart",
+    "onlostpointercapture",
     "onmousedown",
     "onmouseenter",
     "onmouseleave",
@@ -1496,41 +1515,71 @@ const ELEMENT_HANDLERS: [&str; 76] = [
     "onmouseout",
     "onmouseover",
     "onmouseup",
+    "onmousewheel",
     "onpaste",
     "onpause",
     "onplay",
     "onplaying",
+    "onpointercancel",
+    "onpointerdown",
+    "onpointerenter",
+    "onpointerleave",
+    "onpointermove",
+    "onpointerout",
+    "onpointerover",
+    "onpointerrawupdate",
+    "onpointerup",
     "onprogress",
     "onratechange",
     "onreset",
     "onresize",
     "onscroll",
     "onscrollend",
+    "onscrollsnapchange",
+    "onscrollsnapchanging",
+    "onsearch",
     "onsecuritypolicyviolation",
     "onseeked",
     "onseeking",
     "onselect",
+    "onselectionchange",
+    "onselectstart",
     "onslotchange",
+    "onsnapchanged",
+    "onsnapchanging",
     "onstalled",
     "onsubmit",
     "onsuspend",
     "ontimeupdate",
     "ontoggle",
+    "ontouchcancel",
+    "ontouchend",
+    "ontouchmove",
+    "ontouchstart",
+    "ontransitioncancel",
+    "ontransitionend",
+    "ontransitionrun",
+    "ontransitionstart",
     "onvolumechange",
     "onwaiting",
     "onwebkitanimationend",
     "onwebkitanimationiteration",
     "onwebkitanimationstart",
+    "onwebkitfullscreenchange",
+    "onwebkitfullscreenerror",
     "onwebkittransitionend",
     "onwheel",
 ];
 
-/// The event handler content attributes the HTML standard adds on `<body>` and `<frameset>` for their window, such as
-/// `onpageshow`, which a load fires with no step taken.
-const WINDOW_HANDLERS: [&str; 18] = [
+/// The handlers `<body>` and `<frameset>` add for their window (`WindowEventHandlers` in the HTML standard, the Gamepad
+/// API and Portals, and the `on` properties Chrome 157 has on `<body>` but not on `<p>`), such as `onpageshow`, which a
+/// load fires with no step taken. The SVG standard gives `<svg>` these too, but Chrome has none of them there.
+pub const WINDOW_HANDLERS: [&str; 21] = [
     "onafterprint",
     "onbeforeprint",
     "onbeforeunload",
+    "ongamepadconnected",
+    "ongamepaddisconnected",
     "onhashchange",
     "onlanguagechange",
     "onmessage",
@@ -1542,6 +1591,7 @@ const WINDOW_HANDLERS: [&str; 18] = [
     "onpageshow",
     "onpageswap",
     "onpopstate",
+    "onportalactivate",
     "onrejectionhandled",
     "onstorage",
     "onunhandledrejection",
@@ -1557,8 +1607,8 @@ const WINDOW_HANDLERS: [&str; 18] = [
 /// `nomodule` is skipped by a browser that runs modules, and a script inside a `<template>` is inert. A type string
 /// with parameters, such as `text/javascript; charset=utf-8`, is no essence match, and Chrome does not run it either.
 /// A script whose text is only whitespace or a comment still runs, as the standard has it, doing nothing: telling
-/// what a script does is past what reading markup can know. An element with one of the standard's event handler
-/// attributes counts as one more script, unless the handler is empty, which compiles to nothing.
+/// what a script does is past what reading markup can know. An element with one of the event handler
+/// attributes above counts as one more script, unless the handler is empty, which compiles to nothing.
 pub fn scripts(html: &str) -> usize {
     #[derive(Default)]
     struct Scripts {
