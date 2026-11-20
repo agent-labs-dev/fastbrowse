@@ -11,6 +11,27 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
+
+- **A pull request that changes what the agent asks refills its own bench cassettes.** The `replay` check used to fail with a list of tasks and wait for a maintainer to dispatch a paid run, download an encrypted artifact and commit what was in it. A new `Cassette refill` workflow now reads the missed tasks from the check's result, fills only those under a small cap (`CASSETTE_REFILL_BUDGET`, 1 dollar by default), commits the cassettes to the branch as a signed commit, and posts each task's result and cost on the pull request. It runs only for branches in this repository, once per head commit. Cassettes are plain `bench/cassettes/<task>.jsonl` files, so a diff shows the questions that changed ([#1198](https://github.com/agent-labs-dev/fastbrowse/issues/1198)).
+
+- `bench fill` and `bench record` no longer record an error response from the provider, such as a 429, as an answer, which a later fill served instead of asking again. A pass that met one leaves the cassette as it was and is reported as not refilled. Their `--budget` is checked before each model request rather than only between tasks, so one task's passes can no longer spend far past it: the requests they pay for go upstream one at a time, and a response with no price stops the spending ([#1198](https://github.com/agent-labs-dev/fastbrowse/issues/1198)).
+
+## [0.12.0] - 2026-11-19
+
+- Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.
+
+- A `--record` clip (and live frames) now stop at the last clean frame once a secret is typed and stay stopped for the rest of the run. A page that echoed the secret on the next page, such as a form's result, was recorded in clear: a reading of the page text that came back clean released the hold, and frames arrived before the next reading. Closes #1347.
+- A run in your own Chrome opens a link's new tab behind your current tab. Chrome raised and activated its window for a tab the page opened, so on a desktop that gives focus to an activated window, such as Hyprland with `misc:focus_on_activate = true`, each link the run followed to a new tab took your keyboard focus. A tab a page script opens still activates the window; [Your own Chrome](docs/cli.md#your-own-chrome) names those cases and the desktop setting ([#1348](https://github.com/agent-labs-dev/fastbrowse/issues/1348)).
+
+- A desktop run can use more than one app. Repeat `--desktop` to start each one (`desktop_apps` in the SDKs and `serve`), and every window on the run's hidden workspace is a tab: the apps' windows and the dialogs they open. The run moves between them as between browser tabs, without focusing anything, follows a window an action opens, and goes back to the previous window when the one it reads closes. Before, a run stayed in one window, and a dialog the app opened was out of its reach.
+
+- A desktop run closes the apps it started when it ends, whether it finishes, fails or is cancelled. It killed deskpilot before deskpilot could close them, so they stayed open, and a later run of the same app could fail because deskpilot could not tell its window from the old one with the same title. That failure is now reported as a failed read naming the cause, not as deskpilot being unavailable ([#1345](https://github.com/agent-labs-dev/fastbrowse/issues/1345)).
+
+- A desktop run that reads the answer and then ends returns it. Each window was keyed by its app alone, so a read of one window could retire notes from another, and an answer derived from quotes read after the last step was dropped, so the run ended `complete` with no answer. A run that asked a question and has no answer now ends `unverified`, saying nothing read answers the task ([#1343](https://github.com/agent-labs-dev/fastbrowse/issues/1343)).
+
+- `--record` works with `--desktop`. A desktop run was refused before its app started ("desktop drives an app, not a browser, so drop record"), and `--help` did not say so ([#1334](https://github.com/agent-labs-dev/fastbrowse/issues/1334)). The run now films the app's window from deskpilot's shots, taken when the app opens and after each action settles, captions each step, draws the cursor gliding to each click, fill, hover and choice, and ends on the result card, so a hidden desktop run leaves a video of what it did. As with a browser recording, no frame is filmed while the window may show a resolved secret. `--help` and the docs now also say that `--record` cannot be combined with `--fetch`, which starts no browser.
+
 - A downloaded file read again from a later page is one note. Each read after a download stored the whole file as another note, so composing the answer sent every copy: one sec.gov task stored a 23 MB file ten times and spent $30.90 composing ([#1299](https://github.com/agent-labs-dev/fastbrowse/issues/1299)).
 
 - A step on a page with pictured controls stays under Jev's 32 MiB request limit. Each click on a canvas that filled the viewport kept a viewport-sized card, and thirteen of them took every request on a Google Maps Street View page over the limit. Each refused request was resent with the same pictures, so one decision took about two minutes. A control that fills the viewport now has no card beside the screenshot, which already shows it. A request is fitted to the limit before it is sent, leaving out the oldest cards first. A refused request is asked again with fewer pictures ([#1301](https://github.com/agent-labs-dev/fastbrowse/issues/1301)).
@@ -40,10 +61,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Browser reads preserve text drawn by CSS before and after page elements, including separators between carrier names. HTTP reads keep the accessible labels of empty elements, so a separator supplied as a space no longer joins adjacent names ([#1267](https://github.com/agent-labs-dev/fastbrowse/issues/1267)).
 
 - Closing a run attached to your own Chrome releases its request interception and paused-target setting before it returns, and turns service workers back on for the tabs you keep, including a tab whose setup failed. Over a direct DevTools connection, your next navigation in that window could hang until the connection finished closing. The extension accepts the same release; its current store version still closes cleanly without it ([#1257](https://github.com/agent-labs-dev/fastbrowse/issues/1257)).
-
-- **A pull request that changes what the agent asks refills its own bench cassettes.** The `replay` check used to fail with a list of tasks and wait for a maintainer to dispatch a paid run, download an encrypted artifact and commit what was in it. A new `Cassette refill` workflow now reads the missed tasks from the check's result, fills only those under a small cap (`CASSETTE_REFILL_BUDGET`, 1 dollar by default), commits the cassettes to the branch as a signed commit, and posts each task's result and cost on the pull request. It runs only for branches in this repository, once per head commit. Cassettes are plain `bench/cassettes/<task>.jsonl` files, so a diff shows the questions that changed ([#1198](https://github.com/agent-labs-dev/fastbrowse/issues/1198)).
-
-- `bench fill` and `bench record` no longer record an error response from the provider, such as a 429, as an answer, which a later fill served instead of asking again. A pass that met one leaves the cassette as it was and is reported as not refilled. Their `--budget` is checked before each model request rather than only between tasks, so one task's passes can no longer spend far past it: the requests they pay for go upstream one at a time, and a response with no price stops the spending ([#1198](https://github.com/agent-labs-dev/fastbrowse/issues/1198)).
 
 - Reads preserve the headings and individual records inside inline containers, including custom elements. A page of flight results could be captured as one paragraph, leaving the answer unable to cite an individual flight and its price ([#1250](https://github.com/agent-labs-dev/fastbrowse/issues/1250)).
 
@@ -2276,7 +2293,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.11.2...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.12.0
 [0.11.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.2
 [0.11.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.1
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
