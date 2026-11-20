@@ -489,7 +489,9 @@ This safety reading preserves the pending action's guards and leaves download no
 Jev identifies whether the task requests a final image, text, both, or an action without a report. A requested
 final screenshot does not require step frames. Image-only output skips answer composition and text evidence
 requirements; a request for both keeps the text evidence checks. An HTTP-first run opens a browser when
-its requested output needs pixels. A fresh secret check can withhold the image; a completed task without
+its requested output needs pixels. When the run has a browser page, the done check, the composer and the coverage
+check are told that code attaches one screenshot, of the page the run ends on: a requested screenshot is given when
+that page is the one the task asks to have pictured, and the answer need not say whether one is attached. A fresh secret check can withhold the image; a completed task without
 its requested image becomes `unverified`. Python and Rust expose the PNG as `RunResult.final_frame`.
 JSON clients receive a `screenshot` artifact with an `image/png` MIME type, SHA-256 digest and a base64 data URI.
 `Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried

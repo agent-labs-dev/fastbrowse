@@ -330,9 +330,7 @@ impl Agent {
             {
                 state.known_pages_unused().await;
             }
-            requested_frame = slot.as_ref().is_some_and(|state| {
-                matches!(state.output_intent, state::OutputIntent::Image | state::OutputIntent::TextAndImage)
-            });
+            requested_frame = slot.as_ref().is_some_and(|state| state.output_intent.attaches_screenshot());
             if let (Some(sink), Some(state)) = (&options.recipe_sink, &slot) {
                 self.store_recipe(state, sink);
             }
@@ -640,6 +638,7 @@ impl Agent {
                         Some(&reporting),
                         feedback.as_deref(),
                         true,
+                        self.screenshot(state.output_intent),
                         &steps,
                     )
                     .await
@@ -698,8 +697,7 @@ impl Agent {
                                 }
                             }
                         }
-                        let requested = state.output_intent == state::OutputIntent::TextAndImage;
-                        return self.ending_frame(result, requested).await;
+                        return self.ending_frame(result, state.output_intent.attaches_screenshot()).await;
                     }
                     // A draft that does not answer keeps the stop's own status.
                     let partial = marked_partial(composed);
