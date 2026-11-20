@@ -8,8 +8,11 @@ use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
-use fastbrowse_core::models::{BrowserUsed, BrowserVia, CostBasis, CostComponent, CostLine, Event, LLMPurpose, Status};
+use fastbrowse_core::models::{
+    Authorization, BrowserUsed, BrowserVia, CostBasis, CostComponent, CostLine, Event, LLMPurpose, SecretValue, Status,
+};
 use fastbrowse_core::protocol::CancellationReceipt;
+use fastbrowse_core::safety::ScopedSecrets;
 use fastbrowse_core::telemetry::Ledger;
 use fastbrowse_run::{Cancel, Host, RunError, RunTask, on_cloud, run_task};
 use indexmap::IndexMap;
@@ -425,6 +428,24 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
             "allowed_origins cannot be combined with extension",
         ),
         (
+            task(|o, _| {
+                o.fetch = true;
+                o.inputs = Some([("name".to_string(), "Ada".to_string())].into_iter().collect());
+                o.authorization = Some(Authorization { irreversible_actions: true });
+            }),
+            "fetch starts no browser, so it cannot be combined with inputs, authorization",
+        ),
+        (
+            task(|o, h| {
+                o.fetch = true;
+                h.secrets = Some(Arc::new(ScopedSecrets::per_secret([(
+                    "password".to_string(),
+                    (SecretValue::from("hunter2"), vec!["https://example.com".to_string()]),
+                )])));
+            }),
+            "fetch starts no browser, so it cannot be combined with secrets",
+        ),
+        (
             task(|o, h| {
                 o.cdp_url = Some("ws://localhost:1/x".into());
                 h.browser_api_key = Some("key".into());
@@ -474,6 +495,20 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
 }
 
 #[tokio::test]
+async fn a_fetch_run_given_a_resolver_that_declares_no_secret_is_not_refused_for_secrets() {
+    // Python's `ScopedSecrets.per_secret({})` installs a resolver with nothing in it, which `serve` sees as an empty
+    // list: counting the resolver itself refused that fetch run for secrets it was never given.
+    let error = run(task(|o, h| {
+        o.fetch = true;
+        o.inputs = Some([("name".to_string(), "Ada".to_string())].into_iter().collect());
+        h.secrets = Some(Arc::new(ScopedSecrets::per_secret(Vec::new())));
+    }))
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "fetch starts no browser, so it cannot be combined with inputs");
+}
+
+#[tokio::test]
 async fn a_run_naming_no_browser_needs_the_cloud_key() {
     let error = run(task(|o, _| o.browser = true)).await.unwrap_err();
     assert!(matches!(&error, RunError::Configuration(message) if message.contains("BROWSER_USE_API_KEY")), "{error}");
@@ -506,8 +541,10 @@ fn local_uses_the_extension_unless_a_launch_is_asked_for() {
     ] {
         assert!(!task(launched).wants_extension());
     }
-    assert!(fastbrowse_run::check(&task(RunTask { local: true, extension: true, ..RunTask::default() })).is_ok());
-    let refused = |given: RunTask| fastbrowse_run::check(&task(given)).unwrap_err().to_string();
+    assert!(
+        fastbrowse_run::check(&task(RunTask { local: true, extension: true, ..RunTask::default() }), false).is_ok()
+    );
+    let refused = |given: RunTask| fastbrowse_run::check(&task(given), false).unwrap_err().to_string();
     let error = refused(RunTask { local: true, viewport: Some((640, 480)), ..RunTask::default() });
     assert!(error.contains("pass launch") && error.contains("viewport"), "{error}");
     assert!(
@@ -531,20 +568,19 @@ fn local_uses_the_extension_unless_a_launch_is_asked_for() {
 fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
     let local =
         RunTask { task: "read the page".into(), launch: true, viewport: Some((640, 480)), ..RunTask::default() };
-    assert!(fastbrowse_run::check(&local).is_ok());
+    assert!(fastbrowse_run::check(&local, false).is_ok());
     let handed = RunTask {
         task: "read the page".into(),
         cdp_port: Some(9222),
         viewport: Some((640, 480)),
         ..RunTask::default()
     };
-    let error = fastbrowse_run::check(&handed).unwrap_err().to_string();
+    let error = fastbrowse_run::check(&handed, false).unwrap_err().to_string();
     assert!(error.contains("viewport"), "{error}");
-    let error = fastbrowse_run::check(&RunTask {
-        task: "read the page".into(),
-        viewport: Some((0, 480)),
-        ..RunTask::default()
-    })
+    let error = fastbrowse_run::check(
+        &RunTask { task: "read the page".into(), viewport: Some((0, 480)), ..RunTask::default() },
+        false,
+    )
     .unwrap_err()
     .to_string();
     assert!(error.contains("greater than zero"), "{error}");
@@ -553,32 +589,36 @@ fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
 #[test]
 fn a_desktop_run_refuses_browser_options_and_recipes() {
     let desktop = |app: &str| RunTask { task: "fill the form".into(), desktop: Some(app.into()), ..RunTask::default() };
-    assert!(fastbrowse_run::check(&desktop("gnome-text-editor --new-window")).is_ok());
+    assert!(fastbrowse_run::check(&desktop("gnome-text-editor --new-window"), false).is_ok());
     for app in [" ", "gedit 'unclosed"] {
-        let error = fastbrowse_run::check(&desktop(app)).unwrap_err().to_string();
+        let error = fastbrowse_run::check(&desktop(app), false).unwrap_err().to_string();
         assert!(error.contains("must name an app to start"), "{app:?}: {error}");
     }
-    let error = fastbrowse_run::check(&RunTask {
-        start: Some("https://example.com".into()),
-        recipe: Some("steps.json".into()),
-        ..desktop("gnome-text-editor")
-    })
+    let error = fastbrowse_run::check(
+        &RunTask {
+            start: Some("https://example.com".into()),
+            recipe: Some("steps.json".into()),
+            ..desktop("gnome-text-editor")
+        },
+        false,
+    )
     .unwrap_err()
     .to_string();
     assert!(error.contains("drop start, recipe"), "{error}");
     // Further apps start beside the first, so they need one.
     let alone =
         RunTask { task: "add the numbers".into(), desktop_apps: vec!["gnome-calculator".into()], ..RunTask::default() };
-    let error = fastbrowse_run::check(&alone).unwrap_err().to_string();
+    let error = fastbrowse_run::check(&alone, false).unwrap_err().to_string();
     assert!(error.contains("name the first app in desktop"), "{error}");
     let empty = RunTask { desktop_apps: vec![" ".into()], ..desktop("gnome-text-editor") };
-    let error = fastbrowse_run::check(&empty).unwrap_err().to_string();
+    let error = fastbrowse_run::check(&empty, false).unwrap_err().to_string();
     assert!(error.contains("must name an app to start"), "{error}");
     let both = RunTask { desktop_apps: vec!["gnome-calculator".into()], ..desktop("gnome-text-editor") };
-    assert!(fastbrowse_run::check(&both).is_ok());
+    assert!(fastbrowse_run::check(&both, false).is_ok());
     // A desktop run is recorded from its window's own frames.
     assert!(
-        fastbrowse_run::check(&RunTask { record: Some("clip.mp4".into()), ..desktop("gnome-text-editor") }).is_ok()
+        fastbrowse_run::check(&RunTask { record: Some("clip.mp4".into()), ..desktop("gnome-text-editor") }, false)
+            .is_ok()
     );
 }
 
@@ -936,7 +976,7 @@ async fn a_run_cancelled_while_its_browser_opens_keeps_what_the_fetched_read_spe
 fn an_empty_task_is_refused_before_provider_or_browser_setup() {
     for text in ["", " ", "\n\t"] {
         let (task, _) = task(|task, _| task.task = text.into());
-        let result = fastbrowse_run::check(&task);
+        let result = fastbrowse_run::check(&task, false);
         assert!(
             matches!(result, Err(RunError::Invalid(ref message)) if message == "task must not be empty"),
             "{result:?}"

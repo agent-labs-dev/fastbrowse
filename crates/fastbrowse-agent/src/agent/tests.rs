@@ -5876,6 +5876,79 @@ fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
     assert!(context.problem.as_deref().unwrap().contains("not offered this time"));
 }
 
+const ENTRY: &str = "https://shop.test/entry";
+const SIGN_IN: &str = "Sign in at /login as grace@example.com, or at /entry?mode=login";
+
+/// The addresses an ask on `page` offers to navigate to, with the problem it states, after the stalled actions are left
+/// out the way the ask does.
+fn navigate_targets(state: &RunState, page: &Observation) -> (Vec<String>, Option<String>) {
+    let mut offered = page.clone();
+    let mut context = crate::policy::StepContext::new(&state.task);
+    context.start_url = Some(ENTRY.into());
+    context.reload = Some(ENTRY.into());
+    context.problem = Some("no_progress (3)".into());
+    super::recovery::leave_out_idle(state, &mut offered, &mut context);
+    let request = crate::policy::build_request(&offered, &offered.controls, &context, &Default::default(), 64);
+    let urls = match request.questions.get("navigate_target") {
+        Some(Question::Choice(targets)) => {
+            targets.criteria.values().map(|url| url.as_str().unwrap().to_string()).collect()
+        }
+        _ => Vec::new(),
+    };
+    (urls, context.problem)
+}
+
+/// A run on the blank /entry page that reloaded it, and the reload landed on the page state it left.
+async fn reloaded_entry(agent: &Agent) -> (RunState, Observation) {
+    let mut state = run_state();
+    state.task = SIGN_IN.into();
+    let page = at(ENTRY, &[]);
+    agent.settle(&mut state, &page).await.expect("settled");
+    let reload = Decision { url: Some(ENTRY.into()), ..code_decision(Operation::Navigate, None) };
+    state.landing = Some(super::recovery::withheld(&reload));
+    agent.settle(&mut state, &page).await.expect("settled");
+    assert_eq!(state.unchanged, 1);
+    (state, page)
+}
+
+/// A navigation that moved nothing is left out of the next ask like a click is. A blank start page judged a site failure
+/// was reloaded six times while the task's own /login stood beside it on offer, because the stall rule only removed
+/// controls and the reload address is not one, and the run ended `unavailable` (#1365). Only that address is left out:
+/// another route on the same path stays on offer.
+#[tokio::test]
+async fn test_a_navigation_that_moved_nothing_is_not_offered_again() {
+    let agent = agent();
+    let mut state = run_state();
+    state.task = SIGN_IN.into();
+    let (before, _) = navigate_targets(&state, &at(ENTRY, &[]));
+    assert!(before.iter().any(|url| url == ENTRY), "{before:?}");
+
+    let (state, page) = reloaded_entry(&agent).await;
+    let (after, problem) = navigate_targets(&state, &page);
+    assert!(!after.iter().any(|url| url == ENTRY), "{after:?}");
+    for route in ["https://shop.test/login", "https://shop.test/entry?mode=login"] {
+        assert!(after.iter().any(|url| url == route), "{route} left out: {after:?}");
+    }
+    assert!(
+        problem.as_deref().unwrap().contains(&format!("navigate '{ENTRY}' did not move the task on")),
+        "{problem:?}"
+    );
+}
+
+/// New evidence renews the stall budget, so an address left out before it is offered again: a read that found new
+/// evidence reset the count but kept the reload withheld, and a route that once moved nothing stayed hidden after it.
+#[tokio::test]
+async fn test_new_evidence_offers_a_withheld_navigation_again() {
+    let field = "Sign-in is open again.";
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));
+    let (mut state, page) = reloaded_entry(&agent).await;
+    assert!(
+        agent.read(&mut state, capture(&[(BlockKind::Paragraph, field)]), &page, true).await.expect("new evidence")
+    );
+    let (urls, _) = navigate_targets(&state, &page);
+    assert!(urls.iter().any(|url| url == ENTRY), "{urls:?}");
+}
+
 fn card(revealed: bool) -> Observation {
     let mut controls = vec![Control::new("card", "article", "Card", [Operation::Hover, Operation::Click])];
     if revealed {

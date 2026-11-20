@@ -488,7 +488,7 @@ pub fn arguments(
         let local = task.chrome.clone().unwrap_or_default();
         task.chrome = Some(options::chrome(&settings, local.headed, local.profile.as_deref(), local.binary.as_deref()));
     }
-    fastbrowse_run::check(&task).map_err(|error| match error {
+    fastbrowse_run::check(&task, !secrets.is_empty()).map_err(|error| match error {
         RunError::UnsupportedSchema(message) => refused(ErrorCode::UnsupportedSchema, message),
         RunError::Configuration(message) => refused(ErrorCode::Configuration, message),
         other => refused(ErrorCode::InvalidParams, other.to_string()),

@@ -606,6 +606,15 @@ impl RunState {
         self.read_tries.remove(&page);
     }
 
+    /// A step or read moved the run on, so the stall budget starts again and nothing done before is stalled. A read that
+    /// found new evidence reset the count but kept the stalled actions, so a route left out before it stayed hidden
+    /// after it, though the one stall rule renews the budget on new evidence.
+    pub fn renew_stall(&mut self) {
+        self.unchanged = 0;
+        self.hint = None;
+        self.idle.clear();
+    }
+
     /// Count a read begun on this page, returning how many have begun since its last finished read.
     pub fn begin_read(&mut self, observation: &Observation) -> u8 {
         let tries = self.read_tries.entry(read_key(observation)).or_default();

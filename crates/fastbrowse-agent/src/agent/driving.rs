@@ -1313,9 +1313,7 @@ impl Agent {
         gives_up_as: Status,
     ) -> Step {
         if progressed {
-            state.unchanged = 0;
-            state.hint = None;
-            state.idle.clear();
+            state.renew_stall();
             return Ok(());
         }
         state.unchanged += 1;

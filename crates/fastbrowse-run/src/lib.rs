@@ -241,12 +241,13 @@ struct Checked {
 /// Whether the arguments hold together, found before anything about the machine or the network is.
 ///
 /// Every entry point calls this before it reads its environment, and `run_task` calls it again, so each rule has one
-/// wording wherever the run was asked for.
-pub fn check(task: &RunTask) -> Result<(), RunError> {
-    checked(task).map(drop)
+/// wording wherever the run was asked for. `secrets` says whether the run was given any, which an entry point knows
+/// before it resolves one: refusing them after resolving named a missing variable or vault item instead (#1337).
+pub fn check(task: &RunTask, secrets: bool) -> Result<(), RunError> {
+    checked(task, secrets).map(drop)
 }
 
-fn checked(task: &RunTask) -> Result<Checked, RunError> {
+fn checked(task: &RunTask, secrets: bool) -> Result<Checked, RunError> {
     let refuse = |message: String| Err(RunError::Invalid(message));
     if task.task.trim().is_empty() {
         return refuse("task must not be empty".into());
@@ -286,6 +287,13 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("cursor", task.cursor == Some(true)),
             ("downloads", task.downloads.is_some()),
             ("extension", extension),
+            // A fetched page can only follow links (`FetchedPage::act`), so nothing is typed, attached or submitted:
+            // accepting these reported a run that could use them when none could (#1337).
+            ("inputs", task.inputs.as_ref().is_some_and(|inputs| !inputs.is_empty())),
+            ("attachments", !task.attachments.is_empty()),
+            ("authorization", task.authorization.as_ref().is_some_and(|given| given.irreversible_actions)),
+            // Secrets are typed into fields, and a fetched page has none to type into.
+            ("secrets", secrets),
         ]);
         if !browser.is_empty() {
             return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
@@ -947,7 +955,10 @@ pub async fn run_task(task: RunTask, host: Host) -> Result<RunResult, RunError> 
 }
 
 async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
-    let Checked { schema, origins } = checked(&task)?;
+    // A resolver that declares no secret gives the run none to type, as an empty list to `serve` does; counting the
+    // resolver itself refused a fetch run for an empty `ScopedSecrets` that serve and the CLI accept.
+    let secrets = host.secrets.as_ref().is_some_and(|secrets| !secrets.available().is_empty());
+    let Checked { schema, origins } = checked(&task, secrets)?;
     if host.open_browser.is_some() && task.viewport.is_some() {
         return Err(RunError::Invalid("viewport cannot be applied to a browser handed through open_browser".into()));
     }
