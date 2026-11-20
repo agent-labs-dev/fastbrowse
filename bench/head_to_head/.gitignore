@@ -1,0 +1,4 @@
+# fastbrowse's traces run to tens of MB a campaign; a campaign's are kept beside the repo, not in it.
+results/*/raw/*/trace.jsonl.gz
+results/*/raw/*/events.json.gz
+results/*/raw/*/run.json.gz
