@@ -34,7 +34,7 @@ from fastbrowse import run_task as run_fastbrowse
 from fastbrowse import traced
 from fastbrowse.config import Config
 from fastbrowse.evals.harness import TaskSecrets, chrome, providers, transient_seconds
-from fastbrowse.evals.judge import jev_from_environment, judge
+from fastbrowse.evals.judge import ProviderError, jev_from_environment, judge
 from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
@@ -74,6 +74,9 @@ assert LOCAL_LIMITS.max_steps is not None
 HEADROOM = 0.6
 """The share of a step budget a task may use before the runner says so. A task at this share is one bad run from
 its cap, and reaching the cap fails a run that was doing the right thing slowly."""
+
+PROVIDER_EXIT = 2
+"""The runner's exit when a provider refused it, apart from 1 for a task that failed, so the cause is not a task's."""
 
 
 class _BudgetReceipt(Frozen):
@@ -382,12 +385,20 @@ async def main(argv: list[str]) -> int:
                     if campaign is not None
                     else (LOCAL_LIMITS if suite == "local" else MOCK_LIMITS)
                 )
-                if suite == "local":
-                    assert isinstance(task, LocalTask)
-                    row = await run_task(task, base_url, recorder, cdp_url, Path(downloads), limits=limits)
-                else:
-                    assert isinstance(task, MockTask)
-                    row = await run_mock_task(task, cdp_url, Path(downloads), limits=limits, suite=suite)
+                try:
+                    if suite == "local":
+                        assert isinstance(task, LocalTask)
+                        row = await run_task(task, base_url, recorder, cdp_url, Path(downloads), limits=limits)
+                    else:
+                        assert isinstance(task, MockTask)
+                        row = await run_mock_task(task, cdp_url, Path(downloads), limits=limits, suite=suite)
+                except ProviderError as error:
+                    # A refused key fails every later task the same way, so the campaign stops here with the cause
+                    # named, and no row claims the task was graded (#1307). The annotation puts it on the run page.
+                    cause = f"PROVIDER {error.status} {error.host} on {task.id}: {error.hint}"
+                    print(cause, flush=True)
+                    print(f"::error title=Eval provider refused::{cause}", flush=True)
+                    return PROVIDER_EXIT
                 row |= {
                     "run": run
                     | {

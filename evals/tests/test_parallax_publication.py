@@ -557,7 +557,7 @@ def test_a_changed_task_drops_only_its_own_earlier_rows(tmp_path: Path) -> None:
 
     earlier = fastbrowse_run("earlier", 14, [task.id for task in tasks], stale=changed)
     # The changed task's earlier rows no longer count, so the run alone leaves its slots unmeasured.
-    with pytest.raises(ValueError, match="every scheduled slot"):
+    with pytest.raises(ValueError, match=r"slots with no row \(first: "):
         candidate_from_runs([earlier], campaign_id="changed-task")
 
     rerun = fastbrowse_run("rerun", 16, [changed])

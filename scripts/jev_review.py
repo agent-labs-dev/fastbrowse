@@ -17,9 +17,11 @@ the key is never in reach of code the pull request changed.
 import argparse
 import asyncio
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -112,28 +114,68 @@ def questions(prose: Mapping[str, str], *, user_visible: bool) -> dict[str, list
     return asked
 
 
-def combined(path: str, grid: list[list[float]]) -> float:
-    """One doubt from a `grid` of answers, a row per prose part and a column per diff part.
+@dataclass(frozen=True, slots=True)
+class Doubt:
+    """A file's doubt and the part that set it: the prose part, or for the changelog the files of the diff part whose
+    change it misses. A score alone left the reviewer to guess which claim Jev doubted (#1262)."""
+
+    probability: float
+    part: str
+
+
+def combined(path: str, grid: list[list[float]]) -> tuple[float, int]:
+    """One doubt from a `grid` of answers, a row per prose part and a column per diff part, and the part that set it:
+    the prose row, or for the changelog the diff column.
 
     A claim is supported when any diff part supports it, and the prose doubted when any of its parts is. A change is
     in the changelog when any changelog part mentions it, and the changelog doubted when any diff part's change is
     missing from all of them.
     """
     if path == "CHANGELOG.md":
-        return max(min(row[column] for row in grid) for column in range(len(grid[0])))
-    return max(min(row) for row in grid)
+        scores = [min(row[column] for row in grid) for column in range(len(grid[0]))]
+    else:
+        scores = [min(row) for row in grid]
+    index = max(range(len(scores)), key=scores.__getitem__)
+    return scores[index], index
 
 
-def report(answers: Mapping[str, NoulAnswer]) -> tuple[str, list[str]]:
-    """The Markdown report and one warning per doubt."""
+_DIFF_HEADER = re.compile(r"^diff --git a/.* b/(.*)$", re.MULTILINE)
+
+
+def touched(diffs: list[str], index: int) -> list[str]:
+    """The files diff part `index` covers: the file a previous part left open, and every file it starts."""
+    current: list[str] = []
+    for part in diffs[:index]:
+        current = _DIFF_HEADER.findall(part)[-1:] or current
+    return [*current, *(path for path in _DIFF_HEADER.findall(diffs[index]) if path not in current)]
+
+
+def _annotation(text: str) -> str:
+    """`text` escaped for a workflow command's message, which ends at a raw newline."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _fenced(text: str) -> str:
+    """`text` in a code fence longer than any backtick run inside it, so the prose cannot close it."""
+    fence = "`" * max([3, *(len(run) + 1 for run in re.findall(r"`+", text))])
+    return f"{fence}text\n{text.rstrip()}\n{fence}"
+
+
+def report(doubts: Mapping[str, Doubt]) -> tuple[str, list[str]]:
+    """The Markdown report, quoting each doubted part, and one warning per doubt."""
     lines = ["### Jev review (advisory)", "", "| Check | Doubt | |", "| --- | --- | --- |"]
+    quoted = []
     warnings = []
-    for path, answer in sorted(answers.items()):
-        doubted = answer.probability >= _DOUBT
+    for path, doubt in sorted(doubts.items()):
+        doubted = doubt.probability >= _DOUBT
         what = "changelog misses a user-visible change" if path == "CHANGELOG.md" else "prose not supported by diff"
-        lines.append(f"| `{path}`: {what} | {answer.probability:.2f} | {'check this' if doubted else 'ok'} |")
+        lines.append(f"| `{path}`: {what} | {doubt.probability:.2f} | {'check this' if doubted else 'ok'} |")
         if doubted:
-            warnings.append(f"::warning file={path},title=Jev review::{what} (p={answer.probability:.2f})")
+            warnings.append(
+                f"::warning file={path},title=Jev review::{what} (p={doubt.probability:.2f}): {_annotation(doubt.part)}"
+            )
+            quoted += ["", f"#### `{path}`: {what}", "", _fenced(doubt.part)]
+    lines += quoted
     lines += ["", "Advisory only: a doubt is worth a reviewer's look, not a failure."]
     return "\n".join(lines) + "\n", warnings
 
@@ -170,16 +212,17 @@ async def _ask(jev: Judge, state: JsonValue, key: str, question: NoulQuestion) -
         return None
 
 
-async def review(base: str, head: str = "HEAD") -> str:
+async def review(base: str, head: str = "HEAD") -> tuple[str, list[str]]:
+    """The report and its warning annotations."""
     async with httpx.AsyncClient(timeout=120) as http:
         try:
             jev = jev_from_environment(http)
         except RuntimeError:
-            return "### Jev review (advisory)\n\nSkipped: no Jev key is set.\n"
+            return "### Jev review (advisory)\n\nSkipped: no Jev key is set.\n", []
         code_diff, visible, prose = changes(f"{base}...{head}")
         asked = questions(prose, user_visible=visible)
         if not asked:
-            return "### Jev review (advisory)\n\nNothing to judge: the change touches no prose and no code.\n"
+            return "### Jev review (advisory)\n\nNothing to judge: the change touches no prose and no code.\n", []
         diffs = [part or "(no code changes)" for part in parts(code_diff, _CODE_CHARS)]
         cells = [(key, row, diff) for key, rows in asked.items() for row in rows for diff in diffs]
         slots = asyncio.Semaphore(_CONCURRENT)
@@ -189,18 +232,22 @@ async def review(base: str, head: str = "HEAD") -> str:
                 return await _ask(jev, {"code_diff": diff}, key, question)
 
         results = await asyncio.gather(*(ask(key, question, diff) for key, question, diff in cells))
-    answers = {}
+    doubts = {}
     for key in asked:
         found = [answer for (asked_key, _, _), answer in zip(cells, results, strict=True) if asked_key == key]
         if None not in found:
             probabilities = [answer.probability for answer in found if answer is not None]
             grid = [probabilities[i : i + len(diffs)] for i in range(0, len(probabilities), len(diffs))]
-            answers[key] = NoulAnswer(probability=combined(key, grid))
-    text, warnings = report(answers)
-    if missing := [key for key in asked if key not in answers]:
+            probability, index = combined(key, grid)
+            if key == "CHANGELOG.md":
+                part = "A change in " + ", ".join(touched(diffs, index) or ["the code diff"])
+            else:
+                part = parts(prose[key], _PROSE_CHARS)[index]
+            doubts[key] = Doubt(probability, part)
+    text, warnings = report(doubts)
+    if missing := [key for key in asked if key not in doubts]:
         text += f"\nJev did not answer for {', '.join(f'`{key}`' for key in missing)}.\n"
-    print("\n".join(warnings))
-    return text
+    return text, warnings
 
 
 def main(argv: list[str]) -> int:
@@ -208,7 +255,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--base", default="origin/main", help="the ref the pull request merges into")
     parser.add_argument("--head", default="HEAD", help="the pull request's head, read only as a git ref")
     args = parser.parse_args(argv)
-    text = asyncio.run(review(args.base, args.head))
+    text, warnings = asyncio.run(review(args.base, args.head))
+    print("\n".join(warnings))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as out:

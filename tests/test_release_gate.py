@@ -314,8 +314,16 @@ def test_official_release_requires_three_complete_repeats(repeats):
         check_official(raw)
 
 
-@pytest.mark.parametrize("mutation", ["missing", "duplicate", "extra", "foreign-task"])
-def test_official_release_refuses_inexact_slots(mutation):
+@pytest.mark.parametrize(
+    ("mutation", "problem"),
+    [
+        ("missing", r"1 slot with no row \(first: task299 r2\)"),
+        ("duplicate", r"1 slot with several rows \(first: task0 r0\)"),
+        ("extra", r"1 slot outside the schedule \(first: task0 r3\)"),
+        ("foreign-task", r"1 task with no row in any repeat: task299"),
+    ],
+)
+def test_official_release_refuses_inexact_slots(mutation, problem):
     from pydantic import ValidationError
 
     raw = official_raw()
@@ -330,7 +338,7 @@ def test_official_release_refuses_inexact_slots(mutation):
         for row in rows[-3:]:
             row["task"] = "unrelated"
         raw["groups"][-1]["sources"][0]["tasks"][-1] = "unrelated"
-    with pytest.raises(ValidationError, match="scheduled slot"):
+    with pytest.raises(ValidationError, match=rf"online-mind2web/fastbrowse: .*{problem}"):
         check_official(raw)
 
 

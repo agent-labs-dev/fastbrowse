@@ -1,9 +1,8 @@
+import asyncio
 import importlib.util
 from pathlib import Path
 
 import pytest
-
-from fastbrowse.jev import NoulAnswer
 
 _spec = importlib.util.spec_from_file_location("jev_review", Path(__file__).parents[1] / "scripts" / "jev_review.py")
 assert _spec is not None and _spec.loader is not None
@@ -35,10 +34,36 @@ def test_long_prose_and_diffs_are_split_into_parts_that_keep_every_character() -
 
 
 def test_a_claim_any_diff_part_supports_stands_and_a_change_any_changelog_part_mentions_is_covered() -> None:
-    # Rows are prose parts, columns diff parts.
-    assert jev_review.combined("docs/x.md", [[0.9, 0.1], [0.2, 0.3]]) == 0.2
-    assert jev_review.combined("docs/x.md", [[0.9, 0.1], [0.8, 0.7]]) == 0.7
-    assert jev_review.combined("CHANGELOG.md", [[0.9, 0.1], [0.2, 0.3]]) == 0.2
+    # Rows are prose parts, columns diff parts; the index is the part that set the doubt.
+    assert jev_review.combined("docs/x.md", [[0.9, 0.1], [0.2, 0.3]]) == (0.2, 1)
+    assert jev_review.combined("docs/x.md", [[0.9, 0.1], [0.8, 0.7]]) == (0.7, 1)
+    assert jev_review.combined("CHANGELOG.md", [[0.9, 0.1], [0.2, 0.3]]) == (0.2, 0)
+
+
+def test_a_doubt_quotes_the_prose_part_that_set_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`prose not supported by diff (p=0.68)` named only the file, so the reviewer had to guess the claim (#1262)."""
+    first, second = "The first claim holds.\n", "The second claim\nis doubted.\n"
+    monkeypatch.setattr(jev_review, "_PROSE_CHARS", len(second))
+    monkeypatch.setattr(jev_review, "changes", lambda span: ("+code\n", False, {"docs/x.md": first + second}))
+
+    class Judge:
+        async def evaluate(self, state: object, questions: dict[str, dict]) -> dict[str, float]:
+            return {key: 0.9 if "is doubted" in q["instructions"] else 0.1 for key, q in questions.items()}
+
+    monkeypatch.setattr(jev_review, "jev_from_environment", lambda http: Judge())
+    text, warnings = asyncio.run(jev_review.review("b"))
+    assert warnings == [
+        "::warning file=docs/x.md,title=Jev review::prose not supported by diff (p=0.90): "
+        "The second claim%0Ais doubted.%0A"
+    ]
+    assert "The second claim\nis doubted." in text
+    assert "The first claim" not in text
+
+
+def test_a_changelog_doubt_names_the_files_of_the_diff_part_it_misses() -> None:
+    diffs = ["diff --git a/src/a.py b/src/a.py\n+one\n", "+two\ndiff --git a/src/b.py b/src/b.py\n+three\n"]
+    assert jev_review.touched(diffs, 0) == ["src/a.py"]
+    assert jev_review.touched(diffs, 1) == ["src/a.py", "src/b.py"]
 
 
 @pytest.mark.parametrize(
@@ -56,9 +81,9 @@ def test_prose_is_judged_against_every_change_but_only_the_package_is_user_visib
 
 def test_a_doubt_warns_and_never_fails() -> None:
     text, warnings = jev_review.report(
-        {"docs/x.md": NoulAnswer(probability=0.8), "README.md": NoulAnswer(probability=0.1)}
+        {"docs/x.md": jev_review.Doubt(0.8, "50% off"), "README.md": jev_review.Doubt(0.1, "fine")}
     )
-    assert warnings == ["::warning file=docs/x.md,title=Jev review::prose not supported by diff (p=0.80)"]
+    assert warnings == ["::warning file=docs/x.md,title=Jev review::prose not supported by diff (p=0.80): 50%25 off"]
     assert "| `README.md`: prose not supported by diff | 0.10 | ok |" in text
 
 
