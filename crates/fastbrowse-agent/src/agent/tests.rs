@@ -1904,7 +1904,8 @@ impl Page for FinishPage {
     }
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
-        unreachable!("the finish-path test does not capture")
+        // A schema run's extraction captures the page it ends on: the one `composition_repair_state` read, unchanged.
+        Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Record B: 34")])) })
     }
 
     fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
@@ -2061,7 +2062,7 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     }
     // #937: what was read is still the answer, but it does not stand as the task done.
     let ledger = state.ledger.clone();
-    let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger).await;
+    let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger, None).await;
     let answer = stopped.answer.expect("what was read is answered");
     assert!(
         answer.contains("Sign in, enter the code the Phone page shows, then tell me your account email.")
@@ -2577,7 +2578,7 @@ async fn test_a_stopped_task_carried_out_answers_only_with_what_it_read_after_it
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let ledger = state.ledger.clone();
         let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
-        let result = agent.stopped(stop, Some(&mut state), &ledger).await;
+        let result = agent.stopped(stop, Some(&mut state), &ledger, None).await;
         assert_eq!(result.status, Status::Stuck);
         assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the task's output is asked once");
         answers.push(result.answer);
@@ -5496,7 +5497,7 @@ async fn test_rejected_composed_claims_cannot_end_complete() {
     assert!(result.error.unwrap().contains("unsupported"));
     let ledger = state.ledger.clone();
     let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
-    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
+    let stopped = agent.stopped(stop, Some(&mut state), &ledger, None).await;
     assert_eq!(stopped.status, Status::Stuck);
     assert_eq!(stopped.error.as_deref(), Some("no_progress (3)"));
     // The stop's rule is the result's kind, so a stuck run says which rule ended it (#1372).
@@ -5550,7 +5551,7 @@ async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
         state.notes.add(Fact::read("Record B: 34", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
         let ledger = state.ledger.clone();
         let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
-        agent.stopped(stop, Some(&mut state), &ledger).await
+        agent.stopped(stop, Some(&mut state), &ledger, None).await
     };
     let text = super::state::OutputIntent::Text;
     let told = stopped(text, None, None).await;
@@ -5738,7 +5739,7 @@ async fn test_a_run_the_clock_stopped_answers_from_what_it_read() {
     state.notes.add(oak);
     let ledger = state.ledger.clone();
     let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
-    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::BudgetExceeded);
     let answer = result.answer.as_deref().unwrap_or_default();
     assert!(answer.contains("Pine capacity 10"), "{answer}");
@@ -5757,7 +5758,7 @@ async fn test_a_stopped_run_with_only_context_notes_has_no_answer() {
     state.notes.add(oak);
     let ledger = state.ledger.clone();
     let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
-    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::BudgetExceeded);
     assert_eq!(result.answer, None);
     assert!(result.citations.is_empty());
@@ -5780,7 +5781,7 @@ async fn test_a_failed_or_unavailable_run_answers_partially_from_answering_notes
             state.notes.add(pine.answering());
             state.notes.add(oak);
             let ledger = state.ledger.clone();
-            let result = agent().stopped(flow(), Some(&mut state), &ledger).await;
+            let result = agent().stopped(flow(), Some(&mut state), &ledger, None).await;
             assert!(matches!(result.status, Status::Unavailable | Status::Error), "{:?}", result.status);
             let answer = result.answer.unwrap_or_default();
             assert!(answer.starts_with("Partial evidence only."), "compose {compose}: {answer}");
@@ -5790,7 +5791,7 @@ async fn test_a_failed_or_unavailable_run_answers_partially_from_answering_notes
             let (pine, oak) = capacities();
             state.notes.add(pine);
             state.notes.add(oak);
-            let result = agent().stopped(flow(), Some(&mut state), &ledger).await;
+            let result = agent().stopped(flow(), Some(&mut state), &ledger, None).await;
             assert_eq!(result.answer, None);
             assert!(result.citations.is_empty());
         }
@@ -5808,7 +5809,7 @@ async fn test_a_step_limited_composing_run_reports_what_it_read() {
     state.notes.add(Fact::read("Record A: 99", block_evidence(&page, "s0"), FactReader::JevChoice));
     let ledger = state.ledger.clone();
     let error = ledger.check(0.0).unwrap_err();
-    let result = agent.stopped(Flow::Agent(error.into()), Some(&mut state), &ledger).await;
+    let result = agent.stopped(Flow::Agent(error.into()), Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::BudgetExceeded);
     assert_eq!(result.budget.unwrap().resource, fastbrowse_core::models::BudgetResource::Steps);
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record A: 99")));
@@ -7472,7 +7473,7 @@ async fn test_recovery_retains_the_latest_checked_partial_revision() {
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("missing D exhausts recovery");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unverified);
     let answer = result.answer.unwrap();
     assert!(answer.contains("Record B: 34"));
@@ -7722,7 +7723,7 @@ impl LLMClient for CorrectsOnFeedback {
         Box::pin(async move {
             let text = if told { "Record B: 34" } else { "Record A: 99" };
             let claims = json!([{"text": [{"prose": text}], "evidence_ids": ["e0"]}]);
-            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -7745,7 +7746,7 @@ async fn test_the_answer_written_as_a_run_stops_is_told_the_rejected_draft() {
     state.recoveries = agent.config.stall.max_recoveries;
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("the rejection finds recovery spent");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     let calls = llm.0.lock().unwrap();
     assert_eq!(calls.len(), 2);
     assert!(
@@ -7756,6 +7757,67 @@ async fn test_the_answer_written_as_a_run_stops_is_told_the_rejected_draft() {
     assert_eq!(result.status, Status::Complete, "{:?}", result.error);
     let answer = result.answer.unwrap();
     assert!(answer.contains("Record B: 34") && !answer.contains("Record A: 99"), "{answer}");
+}
+
+/// Rejects Record A's claims as `RejectsRecordA` does, and fills a schema field only with a candidate the answer it is
+/// given states.
+struct FillsFromTheAnswer(RejectsRecordA);
+
+impl DecisionClient for FillsFromTheAnswer {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let Some((name, Question::Choice(field))) = questions.first().filter(|_| state.get("page").is_some()) else {
+            return self.0.evaluate(state, questions);
+        };
+        let claims: Vec<&str> =
+            state["answer"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
+        let choice = field
+            .criteria
+            .iter()
+            .find(|(key, source)| *key != "none" && claims.iter().any(|claim| source.to_string().contains(claim)))
+            .map_or("none", |(key, _)| key.as_str());
+        let answer = Answer::Choice(ChoiceAnswer {
+            kind: Default::default(),
+            choice: choice.into(),
+            probabilities: Default::default(),
+            confidence: 1.0,
+        });
+        let answers = IndexMap::from([(name.clone(), answer)]);
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// The rewrite written as a run stops completed a schema run, but its data came from the extraction kept for the
+/// rejected draft, which named none of the rewrite's values: the prose said "Record B: 34" and `data` was null. A
+/// complete result's data is drawn from the answer it returns.
+#[tokio::test]
+async fn test_a_schema_run_completed_by_the_answer_written_as_it_stops_draws_its_data_from_that_answer() {
+    let page = observation(&[]);
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(FillsFromTheAnswer(RejectsRecordA(ScriptedJev::new(Vec::new())))),
+        Arc::new(CorrectsOnFeedback(Default::default())),
+    );
+    let model = fastbrowse_core::output_schema::output_model(&json!({
+        "type": "object", "properties": {"Record B": {"type": "integer"}}, "required": ["Record B"],
+    }))
+    .unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+    let mut state = composition_repair_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let flow = agent.finish(&mut state, &page, Some(&schema), None).await.expect_err("recovery spent");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger, Some(&schema)).await;
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    assert_eq!(result.data, json!({"Record B": 34}));
 }
 
 #[tokio::test]
@@ -7778,7 +7840,7 @@ async fn test_recovery_exhaustion_reuses_partial_only_while_its_sources_are_unch
                 .add(Fact::read("Record C: 57", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
         }
         let ledger = state.ledger.clone();
-        let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+        let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
         // The kept partial stays unverified; new notes are composed afresh, and that answer passes its checks.
         assert_eq!(result.status, if changed { Status::Complete } else { Status::Unverified });
         assert!(result.answer.unwrap().contains("Record B: 34"));
@@ -7798,7 +7860,7 @@ async fn a_composition_that_passes_every_check_after_recovery_ran_out_completes_
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("a second rejection exhausts recovery");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Complete);
     assert_eq!(result.error, None);
     let answer = result.answer.unwrap();
@@ -7840,7 +7902,7 @@ async fn test_a_refused_step_keeps_a_passing_composition_after_recovery_unverifi
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("a second rejection exhausts recovery");
     assert!(state.refused, "the done check found the step refused");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unverified);
     assert!(result.answer.unwrap().contains("Record B: 34"));
 }
@@ -7869,7 +7931,7 @@ async fn test_rejected_composition_preserves_the_callers_schema_result() {
     assert_eq!(state.recoveries, 1);
     let flow = agent.finish(&mut state, &observation(&[]), Some(&schema), None).await.expect_err("recovery spent");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unverified);
     assert_eq!(result.data, json!({}));
 }
@@ -7889,7 +7951,7 @@ async fn test_composition_recovery_preserves_partial_answer_with_a_missing_field
         }
         let flow = agent.finish(&mut state, &page, None, None).await.expect_err("recovery is exhausted");
         let ledger = state.ledger.clone();
-        let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+        let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
         assert_eq!(result.status, if unavailable { Status::Unavailable } else { Status::NeedsInput });
         assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record B: 34")), "{result:?}");
         assert_eq!(llm.0.lock().unwrap().len(), 2);
@@ -7915,6 +7977,7 @@ async fn test_a_failed_repair_or_hard_deadline_keeps_the_verified_partial() {
                     ),
                     Some(&mut state),
                     &ledger,
+                    None,
                 )
                 .await
         } else {
@@ -7980,7 +8043,7 @@ async fn test_a_later_empty_or_uncertain_repair_cannot_erase_a_checked_partial()
                     "an empty repair erased checked claims"
                 );
                 let ledger = state.ledger.clone();
-                agent.stopped(flow, Some(&mut state), &ledger).await
+                agent.stopped(flow, Some(&mut state), &ledger, None).await
             }
             other => panic!("expected terminal repair: {other:?}"),
         };
@@ -8010,7 +8073,7 @@ async fn test_checked_partial_preserves_non_composition_stop_statuses_and_wall_m
         }
         let stop = super::state::Stop::new(status, "test/stopped", "stopped");
         let ledger = state.ledger.clone();
-        let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+        let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger, None).await;
         assert_eq!(result.status, status);
         assert!(
             result
@@ -8275,7 +8338,7 @@ async fn test_a_second_hung_page_ends_unavailable() {
         panic!("the second hang was recovered or converted to another flow");
     };
     let ledger = state.ledger.clone();
-    let result = agent.stopped(error, Some(&mut state), &ledger).await;
+    let result = agent.stopped(error, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unavailable);
 }
 
@@ -8286,12 +8349,12 @@ async fn test_a_browser_lost_after_a_step_that_changed_the_site_is_not_unavailab
     let mut state = run_state();
     state.history.push(executed(Some(Operation::Scroll), None, true));
     let ledger = state.ledger.clone();
-    let read_only = agent.stopped(lost(), Some(&mut state), &ledger).await;
+    let read_only = agent.stopped(lost(), Some(&mut state), &ledger, None).await;
     assert_eq!(read_only.status, Status::Unavailable);
 
     state.history.push(executed(Some(Operation::Fill), Some("Comment"), true));
     state.history.push(executed(Some(Operation::Click), Some("Post"), true));
-    let wrote = agent.stopped(lost(), Some(&mut state), &ledger).await;
+    let wrote = agent.stopped(lost(), Some(&mut state), &ledger, None).await;
     assert_eq!(wrote.status, Status::Error);
     assert_eq!(
         wrote.error.as_deref(),
@@ -9102,7 +9165,7 @@ async fn test_a_stopped_run_never_answers_against_its_own_step() {
     });
     let ledger = state.ledger.clone();
     let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
-    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
+    let stopped = agent.stopped(stop, Some(&mut state), &ledger, None).await;
     assert_eq!(stopped.status, Status::Stuck);
     assert!(!stopped.answer.unwrap_or_default().contains("already exists"));
 }

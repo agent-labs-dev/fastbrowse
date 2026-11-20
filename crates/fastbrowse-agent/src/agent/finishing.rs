@@ -152,7 +152,7 @@ impl Agent {
 
     /// The caller's schema, filled from a capture taken inside this branch so it overlaps the answer, each field chosen
     /// to agree with `answer`'s claims.
-    async fn schema_fields(
+    pub(super) async fn schema_fields(
         &self,
         state: &RunState,
         output_schema: Option<&RecordSchema>,

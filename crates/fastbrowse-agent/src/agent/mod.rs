@@ -294,7 +294,11 @@ impl Agent {
                     Err(Flow::Browser(BrowserError::NeedsBrowser(message))) => {
                         (blocked_without_browser(message), false, true)
                     }
-                    Err(flow) => (self.stopped(flow, slot.as_mut(), &ledger).await, false, false),
+                    Err(flow) => (
+                        self.stopped(flow, slot.as_mut(), &ledger, options.output_schema.as_deref()).await,
+                        false,
+                        false,
+                    ),
                 }
             });
             // Reporting can await providers too, so the same deadline must cover the stop path.
@@ -550,7 +554,13 @@ impl Agent {
     }
 
     /// The result of a run a step stopped: the error the loop raised, as the status it means.
-    async fn stopped(&self, flow: Flow, mut state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped(
+        &self,
+        flow: Flow,
+        mut state: Option<&mut RunState>,
+        ledger: &Ledger,
+        output_schema: Option<&RecordSchema>,
+    ) -> RunResult {
         let schema = state.as_deref_mut().and_then(|state| state.schema_partial.take());
         // Browser and other agent errors name their kind where `failed` reports them; a stop names its rule.
         let kind = match &flow {
@@ -558,7 +568,7 @@ impl Agent {
             Flow::Agent(error) => Some(error.failure_kind()),
             Flow::Browser(_) | Flow::Unsure(_) => None,
         };
-        let mut result = self.stopped_result(flow, state, ledger).await;
+        let mut result = self.stopped_result(flow, state, ledger, output_schema).await;
         // A stop whose evidence answers the task after all ends complete, and a complete run names no failure.
         if result.status != Status::Complete && result.failure_kind.is_none() {
             result.failure_kind = kind;
@@ -573,7 +583,13 @@ impl Agent {
         result
     }
 
-    async fn stopped_result(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped_result(
+        &self,
+        flow: Flow,
+        state: Option<&mut RunState>,
+        ledger: &Ledger,
+        output_schema: Option<&RecordSchema>,
+    ) -> RunResult {
         let (flow, exhausted) = match flow {
             Flow::Agent(AgentError::Budget(error)) => (
                 Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.failure_kind(), error.to_string())),
@@ -660,9 +676,28 @@ impl Agent {
                             None => false,
                         };
                     }
-                    if answers {
-                        let result =
+                    // A schema run's data is drawn from this answer, as at done: the extraction kept from the draft it
+                    // replaces holds only that draft's passed claims, so a value the rewrite corrected was in the prose
+                    // and missing from the data of a complete result. Data that cannot be drawn keeps the stop's status.
+                    let extraction = match output_schema {
+                        _ if !answers => None,
+                        None => Some(None),
+                        Some(_) => match self.schema_fields(state, output_schema, Some(&composed)).await {
+                            Ok(Some(extraction)) if extraction.problem.is_none() => Some(Some(extraction)),
+                            _ => None,
+                        },
+                    };
+                    if let Some(extraction) = extraction {
+                        let mut result =
                             self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
+                        if let Some(extraction) = extraction {
+                            result.data = extraction.data.unwrap_or(Value::Null);
+                            for item in extraction.evidence {
+                                if !result.evidence.iter().any(|e| e.url == item.url && e.quote == item.quote) {
+                                    result.evidence.push(item);
+                                }
+                            }
+                        }
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;
                         return self.ending_frame(result, requested).await;
                     }
