@@ -709,6 +709,50 @@ async fn a_surface_that_appears_in_a_document_already_seen_is_still_asked_about(
     assert!(outcome["error"].as_str().unwrap().contains("'Remote browser view'"), "{outcome}");
 }
 
+/// Asked to open example.com, follow its link and report the heading the link leads to, a run that had read that
+/// heading had its DONE refused, the opening of example.com judged never carried out, and ended stuck (#1373): the
+/// done check was shown the click and the read, not the run's own opening of its first page. Shown that opening first,
+/// Jev judged every step carried out. It is shown whether the caller gave the page or the run worked it out from the
+/// task, with the page it landed on, and is no step: a run that only opened and read is still told it took none.
+#[tokio::test(start_paused = true)]
+async fn the_done_check_is_shown_the_runs_opening_of_its_first_page() {
+    for (name, opened, landed, stepped) in [
+        (
+            "an HTTP 404 page goes to Jev, and its DONE ends the run",
+            "https://shop.test/missing",
+            "https://shop.test/missing",
+            false,
+        ),
+        (
+            "a start page worked out from the task that opens nothing falls back to the front page",
+            "https://site.test/deep/path",
+            "https://site.test",
+            true,
+        ),
+    ] {
+        // Played with a log, a request no recording answers takes the answer recorded at its place.
+        let case = cases().into_iter().find(|case| case["name"] == name).unwrap();
+        let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+        play(&case, Some(log.clone())).await;
+        let log = log.lock().unwrap();
+        let state: Value = log
+            .iter()
+            .find(|call| call["jev"]["questions"].as_str().is_some_and(|q| q.contains("\"carried\":")))
+            .map(|call| serde_json::from_str(call["jev"]["state"].as_str().unwrap()).unwrap())
+            .expect("a done check");
+        assert_eq!(
+            state["recent_actions"][0],
+            serde_json::json!({
+                "operation": "navigate", "target": opened, "outcome": "executed", "page_changed": true,
+                "effect": format!("went to {landed}"), "read_progress": false,
+            }),
+            "{name}"
+        );
+        let untouched = state["page_facts"].to_string().contains("This run has taken no step on any page");
+        assert_eq!(untouched, !stepped, "{name}: {state}");
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_page_saying_the_tasks_item_is_sold_out_ends_the_run_unavailable_naming_it() {
     // #960: a run that read "Sold out" on its first step spent 74 more steps because nothing asked whether the task

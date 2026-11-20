@@ -33,8 +33,8 @@ use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     Artifact, Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler,
-    Evidence, FailureKind, Limits, MaybeUnavailable, RunResult, SecretResolver, Status, StepFact, UntilCheck, Wall,
-    WallKind,
+    Evidence, FailureKind, Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact,
+    StepOutcome, UntilCheck, Wall, WallKind,
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
 use fastbrowse_core::safety::{
@@ -534,8 +534,15 @@ impl Agent {
         }
         let state = slot.insert(*prepared?);
         self.tell_page_ready().await;
-        if start.is_some() {
-            state.start_landing_url = Some(self.page.address().await?);
+        if let Some(opening) = state.started_url.clone() {
+            let landed = self.page.address().await?;
+            state.opened = Some(HistoryEntry {
+                effect: Some(format!("went to {landed}")),
+                ..HistoryEntry::new(Some(Operation::Navigate), Some(&opening), StepOutcome::Executed, true)
+            });
+            if start.is_some() {
+                state.start_landing_url = Some(landed);
+            }
         }
         Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }

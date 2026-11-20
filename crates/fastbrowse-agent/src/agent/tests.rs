@@ -537,7 +537,11 @@ fn test_a_run_carried_on_keeps_what_it_learned_and_no_action_in_flight() {
     state.unchanged = 2;
     state.landing = Some(None);
     let browser = Arc::new(Ledger::new(Limits::default()));
+    // A run resumed on the page it had reached has not opened its first page again, so the opening stays as it was.
+    let opening = HistoryEntry::new(Some(Operation::Navigate), Some("https://a.test/"), StepOutcome::Executed, true);
+    state.opened = Some(opening.clone());
     let carried = state.carried_on(browser.clone());
+    assert_eq!(carried.opened, Some(opening));
     assert!(carried.compose && carried.history.len() == 1);
     assert!(carried.unchanged == 0 && carried.landing.is_none());
     assert!(Arc::ptr_eq(&carried.ledger, &browser));
@@ -2130,6 +2134,137 @@ async fn test_a_done_after_a_step_that_was_not_carried_out_checks_the_task_steps
         matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("task step"))),
         "{result:?}"
     );
+}
+
+/// The opening of the first page is recorded before any secret is typed, so a value typed as a secret later, such as a
+/// reset token the start address carries, was not yet known to be one when it was recorded. The done check masks it.
+#[tokio::test]
+async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opened_address() {
+    const TOKEN: &str = "s3cr3t-reset-token";
+    let start = format!("https://example.test/reset?token={TOKEN}");
+    let mut state = run_state();
+    state.task = "Open the reset link and set a new password.".into();
+    state.opened = Some(HistoryEntry {
+        effect: Some(format!("went to {start}")),
+        ..HistoryEntry::new(Some(Operation::Navigate), Some(&start), StepOutcome::Executed, true)
+    });
+    state.history.push(HistoryEntry::new(Some(Operation::Click), Some("Save"), StepOutcome::Executed, true));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("reset_token", TOKEN, Some("https://example.test"));
+
+    agent.actions_done(&mut state, &observation(&[])).await.expect("the done check answers");
+    let sent = jev.3.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert!(!sent[0].to_string().contains(TOKEN), "{}", sent[0]);
+    let opened = &sent[0]["recent_actions"][0];
+    assert_eq!(opened["operation"], "navigate");
+    assert!(opened["target"].as_str().is_some_and(|target| target.starts_with("https://example.test/reset?token=")));
+}
+
+/// Answers the opening at `landed` whatever address it was sent to, as a server that redirects does, and shows a page
+/// with nothing on it to act on, so a run's first decision is DONE.
+struct Redirecting {
+    landed: &'static str,
+    navigated: Mutex<Vec<String>>,
+}
+
+impl Page for Redirecting {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let observation = Observation { url: self.landed.into(), ..observation(&[]) };
+        Box::pin(async move { Ok(observation) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, url: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.navigated.lock().unwrap().push(url.to_string());
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        let page = capture(&[(BlockKind::Paragraph, "Welcome")]);
+        Box::pin(async move { Ok(page) })
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("the page offers nothing to act on")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::NeedsBrowser("no pixels".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        let landed = self.landed.to_string();
+        Box::pin(async move { Ok(landed) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+/// The opening the done check is shown is the address the run opened and the one the browser landed on, which a
+/// redirect makes two. A run fetched over HTTP that needed a browser is resumed with no page open, and opens its
+/// first page again in the browser: that opening is the one shown, not one the run held from before.
+#[tokio::test]
+async fn test_the_done_check_is_shown_where_the_opening_landed_and_the_browser_reopening_after_a_fetch() {
+    const START: &str = "https://example.test/old";
+    const LANDED: &str = "https://example.test/new";
+    let fetch =
+        Agent::new(Arc::new(Unfetchable::default()), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let options = super::RunOptions { start: Some(START.into()), ..Default::default() };
+    let _ = fetch.run("Open the page and tell me what it says", options).await;
+    let Some(super::Resume { state: mut fetched, url: None }) = fetch.resume() else {
+        panic!("a fetch that needs a browser hands the run on with no page open")
+    };
+    assert_eq!(fetched.opened, None, "nothing opened over HTTP");
+    // Held from before, an opening would be stale once the browser opens the page itself.
+    fetched.opened = Some(HistoryEntry::new(Some(Operation::Navigate), Some("stale"), StepOutcome::Executed, true));
+    // Judged by the fetch's scripted Jev; judged again here, the task reads as the run opened with a redirect does.
+    fetched.output_intent = super::state::OutputIntent::Unknown;
+    fetched.output_answers = None;
+    for (case, resume) in [
+        ("a run opened with a redirect", None),
+        ("a run resumed in the browser after a fetch", Some(super::Resume { state: fetched, url: None })),
+    ] {
+        let page = Arc::new(Redirecting { landed: LANDED, navigated: Mutex::default() });
+        // No to every other yes-or-no question, such as whether the page is a bot check.
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 0.0, "done"));
+        let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
+        let start = resume.is_none().then(|| START.to_string());
+        let options = super::RunOptions { start, resume, ..Default::default() };
+        let _ = agent.run("Open the page and tell me what it says", options).await;
+        assert_eq!(page.navigated.lock().unwrap().first().map(String::as_str), Some(START), "{case}");
+        let sent = jev.3.lock().unwrap();
+        let opened = sent
+            .iter()
+            .find_map(|state| state["recent_actions"].get(0).filter(|entry| entry["operation"] == "navigate"))
+            .unwrap_or_else(|| panic!("{case}: no done check was shown the opening: {sent:?}"));
+        assert_eq!(opened["target"], START, "{case}");
+        assert_eq!(opened["effect"], format!("went to {LANDED}"), "{case}");
+    }
 }
 
 /// Asked to add a variant the page showed out of stock, the done check rightly found the step undone, and every DONE
