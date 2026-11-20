@@ -827,7 +827,7 @@ const STATUSES: [u16; 3] = [500, 429, 404];
 
 /// Chrome fails `Page.navigate` with ERR_HTTP_RESPONSE_CODE_FAILURE and shows its own page when an error status comes
 /// with no body; a run that met one at its first page ended `error` before its first step (#1371). The tab is the
-/// address it asked for and the status it got either way.
+/// address it asked for, that address's origin and the status it got either way.
 async fn an_error_status_loads_as_its_address(allowed: bool) {
     let port = error_statuses();
     let origin = format!("http://127.0.0.1:{port}");
@@ -842,6 +842,7 @@ async fn an_error_status_loads_as_its_address(allowed: bool) {
             assert_eq!(observation.url, url, "{path}");
             assert_eq!(observation.response_status, Some(i64::from(status)), "{path}");
             assert_eq!(h.page.address().await.unwrap(), url, "{path}");
+            assert_eq!(h.page.origin().await.unwrap(), origin, "{path}");
             assert!(!h.page.document_changed(&observation).await.unwrap(), "{path}");
         }
     }

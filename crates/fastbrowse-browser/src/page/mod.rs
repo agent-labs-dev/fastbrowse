@@ -1408,7 +1408,12 @@ impl CdpPage {
 
     async fn origin_once(&self) -> Result<String, BrowserError> {
         // An observation already reading again calls this, so it reads once rather than nesting a second allowance.
-        self.address_once().await?; // refuses a document outside the grant before its origin is read
+        let (href, address) = self.located_once().await?; // refuses a document outside the grant before its origin is read
+        // Chrome's error page for an empty-body error status has its own opaque origin, so the page's origin is the
+        // one of the address it stands in for, or `address()` and `origin()` would disagree.
+        if href != address {
+            return Ok(origin_of(&address).unwrap_or_else(|| "null".to_owned()));
+        }
         let raw = self.evaluate(&self.session.active_session_id()?, "location.origin").await?;
         Ok(value_str(&raw))
     }
@@ -1418,17 +1423,22 @@ impl CdpPage {
     }
 
     async fn address_once(&self) -> Result<String, BrowserError> {
+        Ok(self.located_once().await?.1)
+    }
+
+    /// The document's own `location.href` and the address the page stands for, refused outside the grant.
+    async fn located_once(&self) -> Result<(String, String), BrowserError> {
         self.session.check_access().await?;
         let session_id = self.session.active_session_id()?;
-        let raw = self.evaluate(&session_id, "location.href").await?;
-        let address = self.session.page_address(&session_id, value_str(&raw));
+        let href = value_str(&self.evaluate(&session_id, "location.href").await?);
+        let address = self.session.page_address(&session_id, href.clone());
         if let Some(grant) = self.session.grant()
             && !address.is_empty()
             && !grant.allows(&address)
         {
             return Err(BrowserError::OriginNotAllowed);
         }
-        Ok(address)
+        Ok((href, address))
     }
 
     /// Whether the current URL or document differs, without indexing the page's controls again.
