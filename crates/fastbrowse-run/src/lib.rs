@@ -277,12 +277,18 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
         }
     }
+    if task.desktop.is_none() && !task.desktop_apps.is_empty() {
+        return refuse("desktop_apps are started beside desktop, so name the first app in desktop".into());
+    }
     if let Some(app) = &task.desktop {
-        if shlex::split(app).is_none_or(|words| words.is_empty()) {
+        if std::iter::once(app)
+            .chain(&task.desktop_apps)
+            .any(|app| shlex::split(app).is_none_or(|words| words.is_empty()))
+        {
             return refuse("desktop must name an app to start, as a command line".into());
         }
         // A desktop run opens no browser and no address. Recipes key their steps by web address, so a desktop run
-        // neither records one nor replays one yet.
+        // neither records one nor replays one yet. A recording is filmed from the window's own shots.
         let browser = given(&[
             ("start", task.start.is_some()),
             ("fetch", task.fetch),
@@ -300,7 +306,6 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("cloud_extensions", !task.cloud_extensions.is_empty()),
             ("viewport", task.viewport.is_some()),
             ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
-            ("record", task.record.is_some()),
             ("recipe", task.recipe.is_some()),
             ("save_recipe", task.save_recipe.is_some()),
             ("cursor", task.cursor == Some(true)),
@@ -971,8 +976,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     let mut resume = None;
     let told: Told = Arc::default();
     if let Some(app) = task.desktop.clone() {
+        let apps: Vec<String> = std::iter::once(app).chain(task.desktop_apps.iter().cloned()).collect();
         let on_event = noting(host.on_event.clone(), &told);
-        return desktop(&task, &app, &host, schema, &config, &http, (jev, llm), on_event, &told).await;
+        return desktop(&task, &apps, &host, schema, &config, &http, (jev, llm), on_event, &told).await;
     }
     if task.recipe.is_none() && task.save_recipe.is_none() && reads_first(&task, &chrome) {
         let on_event = noting(host.on_event.clone(), &told);
@@ -1409,7 +1415,7 @@ async fn fetched(
 #[allow(clippy::too_many_arguments)]
 async fn desktop(
     task: &RunTask,
-    app: &str,
+    apps: &[String],
     host: &Host,
     schema: Option<Arc<RecordSchema>>,
     config: &Config,
@@ -1430,10 +1436,22 @@ async fn desktop(
         }
     };
     let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
+    // Kept outside the run, so the video is finished however the run ends, after the apps have closed.
+    let recording: Filming = Arc::default();
+    // Kept outside the run too, so the apps are closed however it ends, a cancel included: a server dropped with the
+    // run is killed before it closes them, which left a run's apps open after it (#1345).
+    let server: Arc<tokio::sync::Mutex<Option<Arc<desktop::Deskpilot>>>> = Arc::default();
     let run = async {
         // `check` refused a command line that does not split into words.
-        let command = shlex::split(app).unwrap_or_default();
-        let page = match desktop::DeskpilotPage::open(&program, &command, view).await {
+        let commands: Vec<Vec<String>> = apps.iter().map(|app| shlex::split(app).unwrap_or_default()).collect();
+        let opened = match desktop::connect(&program, view).await {
+            Ok(client) => {
+                *server.lock().await = Some(client.clone());
+                desktop::DeskpilotPage::open(client, &commands, view).await
+            }
+            Err(error) => Err(error),
+        };
+        let page = match opened {
             Ok(page) => page,
             Err(desktop::OpenError::Invalid(message)) => return Err(RunError::Invalid(message)),
             // A deskpilot that cannot start or answer is an outage, as a cloud browser that cannot start is.
@@ -1458,12 +1476,21 @@ async fn desktop(
                 });
             }
         };
+        let page = match &task.record {
+            None => page,
+            // Started once the app is open, so a deskpilot that cannot start leaves no encoder behind.
+            Some(path) => {
+                let (started, feed) = Recording::start_fed(path).map_err(|error| RunError::Recording(error.0))?;
+                *recording.lock().await = Some(started);
+                page.filmed(Arc::new(feed)).await
+            }
+        };
         let agent = Agent::new(Arc::new(page), jev, llm)
             .with_redactor(http.trace.redactor().unwrap_or_default())
             .with_config(config.clone())
             .with_secrets(host.secrets.clone())
             .with_trace(http.trace.clone())
-            .with_events(Some(on_event));
+            .with_events(captioned(Some(on_event), &recording));
         let run = RunOptions {
             start: None,
             choose_start: false,
@@ -1479,13 +1506,32 @@ async fn desktop(
             recipe: None,
             recipe_sink: None,
         };
-        agent.run(&task.task, run).await.map_err(|error| RunError::Invalid(error.to_string()))
+        let result = agent.run(&task.task, run).await.map_err(|error| RunError::Invalid(error.to_string()))?;
+        // The app stays open for a person to finish nothing: it closes with the run, so every outcome gets its card.
+        if let Some(filming) = recording.lock().await.as_mut() {
+            let _ = filming.show_result(&task.task, &card(&result)).await;
+        }
+        Ok(result)
     };
-    // Starting deskpilot is inside the guard too, so a cancel drops a startup that hangs and its child with it.
-    let Ok(outcome) = host.cancel.guard(run).await else {
-        return Err(cancelled(told, ledger.breakdown().lines, Vec::new(), None, host.cancel.reason()));
+    // Starting deskpilot is inside the guard too, so a cancel drops a startup that hangs.
+    let outcome = host.cancel.guard(run).await;
+    // The run's outcome is decided by now: a `stop` deskpilot refused changes nothing the run reports.
+    let client = server.lock().await.take();
+    if let Some(client) = client {
+        let _ = client.close().await;
+    }
+    let filming = recording.lock().await.take();
+    let recordings = match filming {
+        Some(filming) => filming.finish().await,
+        None => Vec::new(),
     };
-    outcome
+    match outcome {
+        Err(_) => Err(cancelled(told, ledger.breakdown().lines, recordings, None, host.cancel.reason())),
+        Ok(Ok(result)) => Ok(RunResult { recordings, ..result }),
+        Ok(Err(error)) if recordings.is_empty() => Err(error),
+        // The videos were written however the run failed, so the error still names them.
+        Ok(Err(error)) => Err(error.after(told, ledger.breakdown().lines, recordings)),
+    }
 }
 
 #[cfg(test)]

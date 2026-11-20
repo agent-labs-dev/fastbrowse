@@ -764,6 +764,9 @@ public sealed record RunParams
 
     [JsonPropertyName("desktop")]
     public string? Desktop { get; init; }
+
+    [JsonPropertyName("desktop_apps")]
+    public IReadOnlyList<string>? DesktopApps { get; init; }
 }
 
 public sealed record RunResult

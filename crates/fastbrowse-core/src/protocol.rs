@@ -352,6 +352,10 @@ pub struct RunTask {
     /// when the run ends.
     #[serde(default)]
     pub desktop: Option<String>,
+    /// More desktop apps to start in the same run beside `desktop`, each a command line as `desktop` is. Every window
+    /// the run's apps open is one of its tabs, so the run moves between apps as a browser run moves between tabs.
+    #[serde(default)]
+    pub desktop_apps: Vec<String>,
 }
 
 impl RunTask {
@@ -697,6 +701,7 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("extension", Ty::Bool, false),
         Field::default("extension_browser", text(), none()),
         Field::default("desktop", text(), none()),
+        Field::default("desktop_apps", Ty::list(Ty::Str), empty()),
     ]
 }
 

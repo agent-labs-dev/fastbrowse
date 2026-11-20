@@ -566,6 +566,20 @@ fn a_desktop_run_refuses_browser_options_and_recipes() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("drop start, recipe"), "{error}");
+    // Further apps start beside the first, so they need one.
+    let alone =
+        RunTask { task: "add the numbers".into(), desktop_apps: vec!["gnome-calculator".into()], ..RunTask::default() };
+    let error = fastbrowse_run::check(&alone).unwrap_err().to_string();
+    assert!(error.contains("name the first app in desktop"), "{error}");
+    let empty = RunTask { desktop_apps: vec![" ".into()], ..desktop("gnome-text-editor") };
+    let error = fastbrowse_run::check(&empty).unwrap_err().to_string();
+    assert!(error.contains("must name an app to start"), "{error}");
+    let both = RunTask { desktop_apps: vec!["gnome-calculator".into()], ..desktop("gnome-text-editor") };
+    assert!(fastbrowse_run::check(&both).is_ok());
+    // A desktop run is recorded from its window's own frames.
+    assert!(
+        fastbrowse_run::check(&RunTask { record: Some("clip.mp4".into()), ..desktop("gnome-text-editor") }).is_ok()
+    );
 }
 
 #[tokio::test]
