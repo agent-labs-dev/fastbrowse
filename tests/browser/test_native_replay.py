@@ -6,6 +6,7 @@ fill --only TASK`. Whether a task passes depends on timing and is a benchmark me
 below, which have no race, must also pass.
 """
 
+import errno
 import socket
 from pathlib import Path
 from typing import Any
@@ -80,8 +81,13 @@ async def test_a_replay_does_not_need_the_port_it_was_recorded_on(tmp_path: Path
     cassette = Cassette.load(CASSETTES / f"{task.id}.jsonl.gz")
     origin = next(e.fixture_origin for e in reversed(cassette.exchanges) if e.fixture_origin)
     with socket.socket() as held:
-        held.bind(("127.0.0.1", int(origin.rsplit(":", 1)[1])))
-        held.listen()
+        try:
+            held.bind(("127.0.0.1", int(origin.rsplit(":", 1)[1])))
+            held.listen()
+        except OSError as exc:
+            # Another socket already holds the port, which is the condition under test.
+            if exc.errno != errno.EADDRINUSE:
+                raise
         entry = await replayed(task, tmp_path)
     assert entry["fixture_origin"] != origin
     assert entry["misses"] == [], _misses(entry)

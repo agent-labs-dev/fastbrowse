@@ -5,6 +5,7 @@ which case it reads those alone. The harness passes them, so the Jev route is on
 environment is read as fastbrowse reads it (`environment`).
 """
 
+import hashlib
 import json
 import os
 import tempfile
@@ -105,7 +106,10 @@ class FastbrowseHarness(BrowserHarness):
         self._task: Task | None = None
         self._product_status: Status | None = None
         self._events: list[object] = []
-        self._assets: list[dict[str, str]] = []
+        self._assets: list[dict[str, str | None]] = []
+        # One media type per content digest: an asset is named by its bytes, so the same bytes served under two
+        # types are one asset, and the first type wins.
+        self._asset_mimes: dict[str, str] = {}
 
     def bind_task(self, task: Task) -> None:
         super().bind_task(task)
@@ -179,7 +183,13 @@ class FastbrowseHarness(BrowserHarness):
             data = Path(url2pathname(urlparse(artifact.uri).path)).read_bytes()
             # A trial asset takes the bare media type: a parameter such as `charset` is not part of it.
             mime = artifact.mime_type.partition(";")[0].strip()
-            reference = assets.register(data, mime, digest=artifact.sha256)
+            # A trial asset holds non-empty bytes: an empty download is listed in the metadata with no asset, since
+            # there is nothing to replay.
+            reference = (
+                assets.register(data, self._asset_mimes.setdefault(hashlib.sha256(data).hexdigest(), mime))
+                if data
+                else None
+            )
             self._assets.append({"kind": artifact.kind.value, "name": artifact.name, "asset": reference})
 
     def cancelled(self) -> dict[str, object]:

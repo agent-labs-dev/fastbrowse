@@ -304,6 +304,29 @@ def test_the_screenshot_an_image_reading_read_is_retained_under_the_reference_it
     ]
 
 
+def test_an_empty_download_and_one_content_under_two_media_types_do_not_abort_retention(tmp_path: Path) -> None:
+    """fastbrowse keeps an empty download and the same bytes under two media types; a trial asset takes neither
+    as is, and the registration error would discard the completed result."""
+    run = tmp_path / "run"
+    empty = _kept(run, ArtifactKind.DOWNLOAD, "empty.csv", "text/csv", b"")
+    csv = b"item,price\nbook,12\n"
+    first = _kept(run, ArtifactKind.DOWNLOAD, "report-a.csv", "text/csv", csv)
+    second = _kept(run, ArtifactKind.DOWNLOAD, "report-b.csv", "application/octet-stream", csv)
+    assets = TrialAssets(tmp_path / "trial")
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._trial = SimpleNamespace(assets=assets)  # ty: ignore[invalid-assignment]
+
+    harness.retain([empty, first, second])
+
+    assert assets.validate() == ()
+    assert assets.read(f"assets/{first.sha256}") == (csv, "text/csv")
+    assert harness.trial_metadata["assets"] == [
+        {"kind": "download", "name": "empty.csv", "asset": None},
+        {"kind": "download", "name": "report-a.csv", "asset": f"assets/{first.sha256}"},
+        {"kind": "download", "name": "report-b.csv", "asset": f"assets/{first.sha256}"},
+    ]
+
+
 def test_a_task_that_binds_secrets_retains_no_run_artifact(tmp_path: Path) -> None:
     """A bound login can show in a screenshot's pixels, which the trace's text scrubbing cannot reach."""
     screenshot = _kept(tmp_path / "run", ArtifactKind.SCREENSHOT, "login.png", "image/png", b"\x89PNG\r\n\x1a\nlogin")
