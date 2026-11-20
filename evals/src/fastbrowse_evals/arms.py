@@ -13,6 +13,7 @@ PublicArm = Literal[
     "browser-use-ultrafast",
     "browser-use-oss",
     "browser-harness",
+    "agent-browser",
     "cua-codex",
 ]
 
@@ -34,6 +35,8 @@ ARM_BINDINGS: tuple[ArmBinding, ...] = (
     ArmBinding("browser-use-oss", "browser-use-oss", "bu-4.0"),
     # Codex on Luna, price-matched with the Claude Code arm (browser-harness-claude-code on Haiku 5.5, diagnostic).
     ArmBinding("browser-harness", "browser-harness", "openai/gpt-6-luna"),
+    # The same agent, model and browser as browser-harness, running Vercel's agent-browser CLI and skill.
+    ArmBinding("agent-browser", "agent-browser", "openai/gpt-6-luna"),
     ArmBinding("cua-codex", "cua-codex"),
 )
 
@@ -56,7 +59,7 @@ def binding(public: str) -> ArmBinding:
 
 # Harnesses whose public arm is one model: a run on any other model is not that arm. Rows recorded before the arm
 # pinned its model carry none and match their model-less entry exactly.
-ONE_MODEL: frozenset[str] = frozenset({"browser-harness"})
+ONE_MODEL: frozenset[str] = frozenset({"browser-harness", "agent-browser"})
 
 
 def public_arm(harness: str, model: str | None) -> PublicArm | None:
