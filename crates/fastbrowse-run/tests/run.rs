@@ -658,6 +658,20 @@ fn local_uses_the_extension_unless_a_launch_is_asked_for() {
     assert!(error.contains("cloud_profile needs the cloud browser"), "{error}");
 }
 
+/// `check` runs before `run_task`, outside the run's redactor, and its refusals quoted the value refused: a proxy
+/// country or a DevTools endpoint holding an address's password reached the embedder's log whole (#1381).
+#[test]
+fn a_preflight_refusal_masks_the_credential_it_quotes() {
+    let read = RunTask { task: "read the page".into(), ..RunTask::default() };
+    for given in [
+        RunTask { proxy_country: Some("https://ops:pf-d00r@h.test/".into()), ..read.clone() },
+        RunTask { cdp_url: Some("http://ops:pf-d00r@h.test/".into()), ..read.clone() },
+    ] {
+        let error = fastbrowse_run::check(&given, false).unwrap_err().to_string();
+        assert!(!error.contains("pf-d00r"), "{error}");
+    }
+}
+
 #[test]
 fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
     let local =
@@ -1539,6 +1553,8 @@ impl LLMClient for Recorded<dyn LLMClient> {
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         self.1.lock().unwrap().extend(messages.iter().map(|message| message.content.clone()));
+        // The response schema is sent with the request, and its keys are written by code, never from a caller's name.
+        self.1.lock().unwrap().push(format!("{}{}", schema.name(), schema.json_schema()));
         self.2.fetch_add(messages.iter().map(|message| message.images.len()).sum(), Ordering::SeqCst);
         self.0.generate_value(purpose, messages, schema, ledger)
     }
@@ -1682,8 +1698,12 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
         scratch.join(format!("canary-{}-replayed.json", std::process::id())),
         scratch.join(format!("canary-{}-saved.json", std::process::id())),
     );
-    // A recording is refused without ffmpeg, which CI's rust job lacks; the other sinks are checked either way.
-    let records = fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_some();
+    // Without ffmpeg the recording is refused before any frame, and the recording's content went unchecked in CI;
+    // CI's rust job installs it, so this fails by name wherever it is missing.
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_some(),
+        "test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_frames needs ffmpeg on PATH"
+    );
     let trace = fastbrowse_core::telemetry::Trace::collecting();
     // The input is offered to Jev under a handle, so the script picks it by the handle and never by its name.
     let host = handed.host("fill Code = input:0; read", &trace);
@@ -1715,7 +1735,7 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
         )])),
         start: Some(format!("http://ops:{head}\t{tail}@127.0.0.1:{port}/")),
         save_recipe: Some(saved.clone()),
-        record: records.then(|| recording.clone()),
+        record: Some(recording.clone()),
         launch: true,
         browser: true,
         ..RunTask::default()
@@ -1756,28 +1776,6 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
     )
     .await
     .unwrap_err();
-    // Without ffmpeg the recording is refused before any frame, so the run that would have written it is checked
-    // to have been asked for one and refused by a message that holds no credential; with ffmpeg, the file is.
-    let unrecorded = if records {
-        None
-    } else {
-        let error = run_task(
-            RunTask {
-                task: "Read the canvas.".into(),
-                start: Some(format!("http://ops:{canvas_pw}@127.0.0.1:{port}/canvas")),
-                record: Some(recording.clone()),
-                launch: true,
-                browser: true,
-                ..RunTask::default()
-            },
-            handed.host("read", &trace),
-        )
-        .await
-        .map(|result| result.error.unwrap_or_default())
-        .unwrap_or_else(|error| error.to_string());
-        assert!(error.contains("ffmpeg"), "the recording was not asked for: {error}");
-        Some(error)
-    };
     let replay =
         run_task(RunTask { task: instruction, recipe: Some(replayed.clone()), ..RunTask::default() }, Host::default())
             .await
@@ -1793,7 +1791,6 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
         ("connection debug", connection),
         ("saved recipe", std::fs::read_to_string(&saved).unwrap_or_default()),
     ];
-    sinks.extend(unrecorded.map(|error| ("recording refusal", error)));
     sinks.extend(handed.checked.lock().unwrap().iter().map(|url| ("until", url.clone())));
     sinks.extend(
         result
@@ -1872,4 +1869,89 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
     // The browser itself was given the redirect's address whole and answered the 401 with its credentials.
     let sent = base64::encode(format!("ops:{redirect_pw}").as_bytes());
     assert!(reports.lock().unwrap().contains(&sent), "the browser was not given the redirect's credentials");
+}
+
+/// A token in a start address's query is not a credential by its structure, so a run learns it only when the caller
+/// declares it as a secret. Declared, it is masked from the first request on, before anything types it: no model,
+/// event, trace record, result or refusal carries it, and while the page shows it no image of the page goes out.
+#[tokio::test]
+async fn test_a_declared_secret_in_the_start_query_reaches_no_model_or_exit() {
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_some(),
+        "test_a_declared_secret_in_the_start_query_reaches_no_model_or_exit needs Chrome on PATH"
+    );
+    let token = "QueryTok9";
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        // The page writes its own address, query and all, as text.
+        let page = "<html><head><title>Shop</title></head><body><h1>Shop</h1><p id=u></p>\
+                    <script>document.getElementById('u').textContent = document.URL</script></body></html>";
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                page.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    let origin = format!("http://127.0.0.1:{port}");
+    let declared = || -> Arc<dyn fastbrowse_core::models::SecretResolver> {
+        Arc::new(ScopedSecrets::per_secret([(
+            "shop_token".to_string(),
+            (SecretValue::Plain(token.to_string()), vec![origin.clone()]),
+        )]))
+    };
+    let handed = Handed::default();
+    let trace = fastbrowse_core::telemetry::Trace::collecting();
+    let mut host = handed.host("read", &trace);
+    host.secrets = Some(declared());
+    let result = run_task(
+        RunTask {
+            task: "Read the shop page.".into(),
+            start: Some(format!("{origin}/?token={token}")),
+            launch: true,
+            browser: true,
+            ..RunTask::default()
+        },
+        host,
+    )
+    .await
+    .unwrap();
+    // A refusal quoting the DevTools address it was handed, the token in its query.
+    let refused = run_task(
+        RunTask { task: "Read it".into(), cdp_url: Some(format!("{origin}/?token={token}")), ..RunTask::default() },
+        Host { secrets: Some(declared()), ..Host::default() },
+    )
+    .await
+    .unwrap_err();
+    let mut sinks = vec![("result", serde_json::to_string(&result).unwrap()), ("refusal", refused.to_string())];
+    sinks.extend(handed.asked.lock().unwrap().iter().map(|text| ("jev", text.clone())));
+    sinks.extend(handed.written.lock().unwrap().iter().map(|text| ("llm", text.clone())));
+    sinks.extend(handed.events.lock().unwrap().iter().map(|text| ("event", text.clone())));
+    sinks.extend(handed.checked.lock().unwrap().iter().map(|url| ("until", url.clone())));
+    sinks.extend(trace.events().iter().map(|record| ("trace", record.to_string())));
+    assert!(sinks.iter().any(|(sink, text)| *sink == "jev" && text.contains("Shop")), "the page was not read");
+    let mut leaks: Vec<String> = sinks
+        .iter()
+        .filter(|(_, text)| text.contains(token))
+        .map(|(sink, _)| format!("the token in the {sink}"))
+        .collect();
+    if handed.frames.load(Ordering::SeqCst) != 0 {
+        leaks.push("a live frame went out".into());
+    }
+    if handed.images.load(Ordering::SeqCst) != 0 {
+        leaks.push(format!("{} images reached Jev or the LLM", handed.images.load(Ordering::SeqCst)));
+    }
+    if result.final_frame.is_some() {
+        leaks.push("the result carries a final frame".into());
+    }
+    let pictured =
+        handed.events.lock().unwrap().iter().filter(|text| carries_image(&serde_json::from_str(text).unwrap())).count();
+    if pictured != 0 {
+        leaks.push(format!("{pictured} events carry an image"));
+    }
+    assert!(leaks.is_empty(), "the run leaked: {leaks:#?}");
 }

@@ -1035,6 +1035,26 @@ async fn test_page_ready_is_told_once_the_opening_page_is_open_and_only_then() {
 /// Chrome keeps a start address's userinfo in its tab's address while `location.href` drops it, and the browser never
 /// draws an address on the page: matched there, the start's credentials withheld every screenshot and frame of the
 /// run (#1381). Only the page showing them holds images back.
+/// A page's own addresses are learnt from (`learn_credentials_shown`), and only an address with userinfo holds the
+/// run's images: an email, a `mailto:` link or an `@` handle has none, and holding on one would take every screenshot
+/// from a page that lists a contact (#1381).
+#[test]
+fn test_a_page_showing_emails_holds_no_image() {
+    let agent = agent();
+    let page = Observation {
+        viewport_text: "Write to sales@shop.test, mailto:help@shop.test or @shop on https://shop.test/contact. \
+                        {\"mail\":\"ops@shop.test\",\"site\":\"https://shop.test\"}"
+            .into(),
+        ..at("https://shop.test/contact", &[])
+    };
+    assert!(!agent.reveals(&page));
+    assert!(!agent.images_withheld());
+    // An address with userinfo the page shows holds every image from then on: its pixels cannot be masked.
+    let shown = Observation { viewport_text: "Sync from https://ops:sh0wn-pw@shop.test/feed".into(), ..page };
+    agent.reveals(&shown);
+    assert!(agent.images_withheld());
+}
+
 #[test]
 fn test_a_start_address_credential_in_a_tab_address_withholds_no_image() {
     const START: &str = "https://shopper:s3cr3t-pw@shop.test/orders";

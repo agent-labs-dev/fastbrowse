@@ -232,6 +232,22 @@ async fn test_authorize_is_refused_unless_the_operator_allowed_it() {
     assert!(recorder.last().task.authorization.unwrap().irreversible_actions);
 }
 
+/// serde's error quoted the value it could not read and the key it did not know, so a refused call repeated an
+/// address's password to the caller; it is masked by structure, since no run has learnt it (#1381).
+#[tokio::test]
+async fn test_a_refused_call_masks_the_credential_it_quotes() {
+    let recorder = Recorder::new(answered(Status::Complete));
+    for arguments in [
+        json!({"task": "Read it", "max_steps": "https://ops:mcp-d00r@h.test/"}),
+        json!({"task": "Read it", "https://ops:mcp-d00r@h.test/": 1}),
+    ] {
+        let (result, _) = call(ServerConfig::default(), &recorder, arguments.clone()).await;
+        assert_eq!(result["isError"], true, "{arguments}");
+        assert!(!text(&result).contains("mcp-d00r"), "{}", text(&result));
+    }
+    assert!(!recorder.called());
+}
+
 #[tokio::test]
 async fn test_needs_confirmation_says_what_the_caller_can_do() {
     let recorder = Recorder::new(answered(Status::NeedsConfirmation));

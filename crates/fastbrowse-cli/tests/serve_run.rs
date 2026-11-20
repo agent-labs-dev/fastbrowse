@@ -394,6 +394,26 @@ async fn test_a_run_id_that_holds_a_credential_is_refused_without_repeating_it()
     }
 }
 
+/// A refusal quoted what it refused: the method's name, a value serde could not read, an unknown key. Each is masked
+/// for address userinfo like everything else the run shows, by structure, since no run has learnt it yet (#1381).
+#[tokio::test]
+async fn test_a_refusal_masks_the_credential_in_what_it_quotes() {
+    let cases = [
+        ("https://ops:d00r-pw@h.test/", json!({})),
+        ("run", json!({"run_id": "r", "task": "t", "max_steps": "https://ops:d00r-pw@h.test/"})),
+        ("run", json!({"run_id": "r", "task": "t", "https://ops:d00r-pw@h.test/": 1})),
+        ("initialize", json!({"protocol_version": "https://ops:d00r-pw@h.test/"})),
+    ];
+    for (method, params) in cases {
+        let recorder = Recorder::default();
+        let mut client = serving(recorder.runner(), settings());
+        let response = client.request(method, Some(params.clone())).await;
+        let message = response["error"]["message"].as_str().unwrap_or_else(|| panic!("{response}"));
+        assert!(!message.contains("d00r-pw"), "{method} {params}: {message}");
+        assert!(recorder.calls().is_empty());
+    }
+}
+
 #[tokio::test]
 async fn test_a_profile_from_the_environment_counts_against_a_handed_over_browser() {
     let recorder = Recorder::default();

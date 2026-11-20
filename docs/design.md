@@ -528,6 +528,19 @@ pixels, so a run that knows a credential when the browser opens sends no `live_u
 learnt later cannot recall a view already given. A headed Chrome window shows the page on screen. An embedder that
 drives the browser itself, through `connect_cdp`, `Page.screenshot` or a `FrameTap`, takes images the run never sees.
 
+The credential the run recognises by its structure is an address's userinfo, in any string a caller writes, in its
+literal, percent-encoded, JSON-escaped and `Authorization: Basic` base64 forms. A query parameter, a path segment, a
+bare header value or any other string is not recognisable as a credential by its structure, so the run does not mask
+it unless the caller declares the value as a secret. A declared value the run holds (`--secret NAME=ENV_VAR@ORIGIN`, a
+secret an MCP call names, a Rust `ScopedSecrets` plain value) is masked from the run's first request, before anything
+types it, in the start, the task, a refused `cdp_url`, events, the result, the trace and every model request; frames
+are held from before the browser opens when the start holds it, and from the first reading on whenever the page shows
+it. Declaring a value masks it and nothing else: where it may be typed is unchanged, and an address the caller wrote
+with it stays theirs to open. A value a resolver gives only when asked (a serve client's `secrets/resolve`, a Python
+resolver, a computed value) is masked from when the run types it. Not covered: a token in a query, path or header that
+is not declared, a serve `run_id`, the base64 of a password alone, and a provider error that echoes a transformed
+`FASTBROWSE_LLM_API_KEY`.
+
 Every request to Jev or an LLM passes one boundary that masks every registered secret and address credential in it,
 whatever built the request, and an observation and a capture are masked field by field before any request is built;
 a field added to either does not compile until it is masked or named as one the browser layer makes (an id, a key, a
@@ -536,9 +549,12 @@ not: an address with a scheme, a scheme-relative `//user:pass@host`, and an addr
 query. Everything else that leaves a run is redacted once, at its exit, by its schema: the result (its `data` keys
 and values, `browser.profile`, recordings, artifacts and `error`), each event, the `until` check, which receives the
 address masked rather than as the page has it, the trace and the HTTP trace, every stderr warning and log line, and
-the errors a run raises, whatever caller text they repeat. A closed set's value and a model's field name are code's and
-stay whole; a key the caller chose is redacted like a value. A task, browser connection, recipe, settings or HTTP
-request printed for a log prints its addresses masked.
+the errors a run raises, whatever caller text they repeat. A refusal raised before a run exists (serve's and MCP's
+error replies, a refused tool call, the run's preflight check) masks the userinfo of every address it quotes. A closed
+set's value and a model's field name are code's and stay whole; a key the caller chose is redacted like a value, in a
+trace record as in the result. A task, browser connection, recipe, settings or HTTP request printed for a log prints
+its addresses masked; `FASTBROWSE_LLM_EXTRA_BODY` is printed, and written to the HTTP trace, with its keys kept and its
+values withheld.
 
 A string the caller writes in a field that must come back as written (a path to record or save to, an output schema,
 a profile, a selector, a desktop app, an attachment's name, a serve `run_id`, a secret's name or origin) cannot be
@@ -549,7 +565,11 @@ its keys too, so no model request body carries one. A short credential refuses a
 one-letter password refuses every path holding that letter.
 
 The userinfo of an address runs to its last `@`, as the WHATWG URL parser reads it, so a password holding `@`, `'`,
-`"`, `<`, `>`, `(`, `)`, `,`, `;`, `!`, `.`, `:` or `%20` is masked whole; prose punctuation ends only the host. The
+`(`, `)`, `,`, `;`, `!`, `.`, `:` or `%20` is masked whole; prose punctuation ends only the host. A `"`, `<`, `>` or
+`` ` `` cannot stand in a URL as written (RFC 3986), so in text it ends the address: `"https://a.test","mail":"b@c.test"`
+is two strings, not one userinfo. A whole address the caller gives, such as a start, is parsed whole, so a password
+holding one of those is still learnt and masked wherever it appears. An email address or a `mailto:` link has no
+userinfo, so a page showing one teaches the run nothing and holds no image. The
 run learns each credential it sees, from every string the caller gives, read by the run's schema with its keys, a
 recipe, the settings' text and every string a page, tab or history address shows, and masks it wherever it appears in each form a page can echo it: as
 written, percent-decoded, as the browser encodes it, and as the `Authorization: Basic` value the browser sends for it,

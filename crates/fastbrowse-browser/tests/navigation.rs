@@ -224,7 +224,11 @@ async fn test_hung_input_reports_before_the_normal_command_deadline() {
 async fn test_chrome_keeps_an_addresss_credentials_in_document_url_and_its_target_but_not_location_href() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = serve_on(listener, Arc::new(|_: &str| Reply::html("<p>Orders</p>")));
-    let Some(h) = harness().await else { return };
+    // The agent's masking is designed on what this observes, so it fails by name without Chrome rather than pass
+    // having checked nothing; CI's rust job has Chrome.
+    let h = harness().await.expect(
+        "test_chrome_keeps_an_addresss_credentials_in_document_url_and_its_target_but_not_location_href needs Chrome",
+    );
     let url = format!("http://shopper:pin-pw@127.0.0.1:{port}/orders");
     h.page.navigate(&url, None).await.expect("navigate");
     let active = h.session.active_session_id().expect("active session");
