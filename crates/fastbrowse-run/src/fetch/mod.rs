@@ -29,7 +29,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, Link, Operation, StepOutcome};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult, Tab,
+    ActResult, Action, Block, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult, Tab, Unread,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::{sha256_hex, text};
@@ -166,10 +166,12 @@ fn decoded<'a>(coding: Option<&str>, body: &'a [u8]) -> Result<Cow<'a, [u8]>, No
     Ok(Cow::Owned(out))
 }
 
-/// One document read over HTTP: what it says and the controls its markup offers.
+/// One document read over HTTP: what it says, the controls its markup offers, and whether it carries scripts a
+/// browser would run.
 pub struct Fetched {
     pub capture: Capture,
     pub controls: Vec<Control>,
+    pub scripts: bool,
 }
 
 /// One fetched document before its frames are read into it.
@@ -179,6 +181,7 @@ struct Served {
     found: Vec<Found>,
     controls: Vec<Control>,
     frames: Vec<Frame>,
+    scripts: bool,
 }
 
 /// `url` read over HTTP, or [`NotFetched`] with the reason a browser is needed.
@@ -192,18 +195,25 @@ pub async fn fetch_document(
     allowed_origins: Option<&[String]>,
     seconds: f64,
 ) -> Result<Fetched, NotFetched> {
-    let Served { url, title, mut found, controls, frames } = serve(http, url, allowed_origins, seconds).await?;
+    let Served { url, title, mut found, controls, frames, mut scripts } =
+        serve(http, url, allowed_origins, seconds).await?;
     let origin = origin_of(&url);
     let mut unread = 0;
     let mut framed = Vec::new();
     for (index, Frame { at, document, headings }) in frames.into_iter().enumerate() {
         let blocks = match document {
             _ if index >= MAX_FRAMES => None,
-            FrameDocument::Markup(markup) => Some(read(&markup, &url).1),
+            // A frame read into the page brings its scripts too: one that builds a link leaves the page no more
+            // known to lead nowhere than a script of its own would (#1380 review).
+            FrameDocument::Markup(markup) => {
+                scripts |= html::scripts(&markup) > 0;
+                Some(read(&markup, &url).1)
+            }
             FrameDocument::Address(address) if origin.is_some() && origin_of(&address) == origin => {
                 match serve(http, &address, allowed_origins, seconds).await {
                     Ok(inner) => {
                         unread += inner.frames.len();
+                        scripts |= inner.scripts;
                         Some(inner.found)
                     }
                     Err(_) => None,
@@ -234,7 +244,7 @@ pub async fn fetch_document(
         // build, and reading the shell as the page would answer from nothing.
         return Err(refused("the page renders its content with scripts, so the markup holds no readable text"));
     }
-    Ok(Fetched { capture: capture(&url, title, found, unread), controls })
+    Ok(Fetched { capture: capture(&url, title, found, unread), controls, scripts })
 }
 
 /// `url`'s own document over HTTP, its frames unread.
@@ -315,14 +325,21 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
                     fields: Vec::new(),
                 }]
             });
-        return Ok(Served { url: final_url, title: String::new(), found, controls: Vec::new(), frames: Vec::new() });
+        return Ok(Served {
+            url: final_url,
+            title: String::new(),
+            found,
+            controls: Vec::new(),
+            frames: Vec::new(),
+            scripts: false,
+        });
     }
     if !HTML_TYPES.contains(&mime.as_str()) {
         let named = if mime.is_empty() { "the response" } else { &mime };
         return Err(refused(format!("{named} is not a document read as text")));
     }
     let (title, found, controls, frames) = read(&body, &final_url);
-    Ok(Served { url: final_url, title, found, controls, frames })
+    Ok(Served { url: final_url, title, found, controls, frames, scripts: html::scripts(&body) > 0 })
 }
 
 #[derive(Default)]
@@ -331,6 +348,7 @@ struct Loaded {
     /// The address the read asked for, before the server redirected it.
     requested: Option<String>,
     controls: Vec<Control>,
+    scripts: bool,
     generation: u64,
 }
 
@@ -346,6 +364,8 @@ pub struct FetchedPage {
     check_access: Option<CheckAccess>,
     loaded: Mutex<Loaded>,
     needed_browser: AtomicBool,
+    /// Whether a step this page refuses opens a browser on it, which a run limited to fetching never does.
+    browser: bool,
 }
 
 impl FetchedPage {
@@ -356,7 +376,14 @@ impl FetchedPage {
             check_access,
             loaded: Mutex::new(Loaded::default()),
             needed_browser: AtomicBool::new(false),
+            browser: true,
         }
+    }
+
+    /// This page in a run that may not open a browser, so what a refused step needs is never there.
+    pub fn without_browser(mut self) -> FetchedPage {
+        self.browser = false;
+        self
     }
 
     /// The caller's gate, asked again: permission can be withdrawn while the run is reading.
@@ -392,6 +419,7 @@ impl FetchedPage {
         loaded.capture = Some(fetched.capture);
         loaded.requested = Some(url.to_string());
         loaded.controls = fetched.controls;
+        loaded.scripts = fetched.scripts;
         loaded.generation += 1;
         Ok(())
     }
@@ -400,6 +428,12 @@ impl FetchedPage {
 impl Page for FetchedPage {
     fn over_http(&self) -> bool {
         true
+    }
+
+    fn unread(&self) -> Option<Unread> {
+        let loaded = self.loaded.lock().unwrap();
+        let frames = loaded.capture.as_ref().map_or(0, |capture| capture.inaccessible_frames);
+        (loaded.scripts || frames > 0).then_some(Unread { scripts: loaded.scripts, frames, browser: self.browser })
     }
 
     fn needs_browser(&self, message: String) -> BrowserError {

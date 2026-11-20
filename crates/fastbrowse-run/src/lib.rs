@@ -1410,15 +1410,15 @@ async fn fetched(
     let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
     let redactor = http.trace.redactor().unwrap_or_default();
     let trace = http.trace.clone();
-    let fetched = Arc::new(fetch::FetchedPage::new(http.clone(), origins.clone(), host.check_access.clone()));
+    // A run limited to fetching ends where a step needs a browser, so its pages tell Jev none opens.
+    let fetched_page = || {
+        let page = fetch::FetchedPage::new(http.clone(), origins.clone(), host.check_access.clone());
+        if task.fetch { page.without_browser() } else { page }
+    };
+    let fetched = Arc::new(fetched_page());
     let page: Arc<dyn Page> = fetched.clone();
-    let search_page = search.map(|provider| {
-        Arc::new(fetch::search::SearchPage::new(
-            page.clone(),
-            fetch::FetchedPage::new(http.clone(), origins.clone(), host.check_access.clone()),
-            provider,
-        ))
-    });
+    let search_page =
+        search.map(|provider| Arc::new(fetch::search::SearchPage::new(page.clone(), fetched_page(), provider)));
     let page: Arc<dyn Page> = search_page.as_ref().map_or(page, |page| page.clone());
     let agent = Agent::new(page, jev, llm)
         .with_redactor(redactor)

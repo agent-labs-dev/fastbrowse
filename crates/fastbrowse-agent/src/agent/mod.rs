@@ -36,7 +36,7 @@ use fastbrowse_core::models::{
     Evidence, FailureKind, Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact,
     StepOutcome, UntilCheck, Wall, WallKind,
 };
-use fastbrowse_core::page::{BrowserError, Observation, Page};
+use fastbrowse_core::page::{BrowserError, Observation, Page, Unread};
 use fastbrowse_core::safety::{
     CredentialField, Redactor, asks_for_credentials, credential_field, origin_of, secret_allowed, wall_kind,
 };
@@ -1034,7 +1034,7 @@ impl Agent {
         check_login: bool,
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
-        let mut page_facts = Self::page_facts(state, observation);
+        let mut page_facts = Self::page_facts(state, observation, self.page.unread());
         let page_origin = origin_of(&observation.url);
         let credential_origins: BTreeSet<_> = observation
             .controls
@@ -1194,7 +1194,8 @@ impl Agent {
     }
 
     /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
-    fn page_facts(state: &RunState, observation: &Observation) -> Vec<String> {
+    /// `unread` is what a browser would show that the page did not take in, as a document fetched over HTTP leaves out.
+    fn page_facts(state: &RunState, observation: &Observation, unread: Option<Unread>) -> Vec<String> {
         let mut facts = Vec::new();
         if let Some(status) = observation.response_status.filter(|status| *status >= 400) {
             facts.push(format!("This page answered HTTP {status}."));
@@ -1203,8 +1204,16 @@ impl Agent {
             facts
                 .push("This page was read and has not changed since: the notes hold what a read takes from it.".into());
         }
-        if observation.controls.is_empty() {
-            facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into());
+        // A link a script adds, or one an unread frame holds, is missing from markup read without a browser, so a page
+        // whose markup has none is not known to lead nowhere: example.com's served page builds its one link with a
+        // script, and a run told the page led nowhere ended complete without following it (#1380). Told that the
+        // scripts did not run and that a step opens a browser, Jev picked a wait over done on the same request; told
+        // that no browser can open, done and read led again. The cost is a browser opened for a page whose scripts
+        // add nothing: on a task its markup answers, done stayed Jev's pick either way.
+        match unread {
+            _ if !observation.controls.is_empty() => {}
+            None => facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into()),
+            Some(unread) => facts.push(unread_fact(unread)),
         }
         if !crate::policy::drawn_surfaces(&observation.controls).is_empty() {
             facts.push("An element marked `drawn` is a drawn surface, such as a streamed remote browser or a canvas: what it shows is pixels, with no elements inside it for this run to fill or press. A click on it lands on the surface as one element, not on a field or button drawn inside it.".into());
@@ -1259,6 +1268,34 @@ struct Outcome {
     error: Option<String>,
     budget: Option<BudgetStop>,
     wall: Option<Wall>,
+}
+
+/// The fact a page read without a browser states when its markup has no links or controls: what it left out, and
+/// whether a step on it opens a browser that shows the rest.
+fn unread_fact(unread: Unread) -> String {
+    let frames = match unread.frames {
+        0 => String::new(),
+        1 => "1 frame in it was not read".into(),
+        n => format!("{n} frames in it were not read"),
+    };
+    let missing = match (unread.scripts, frames.is_empty()) {
+        (true, true) => "its scripts did not run".to_string(),
+        (true, false) => format!("its scripts did not run and {frames}"),
+        (false, _) => frames,
+    };
+    let (shown, unshown) = match (unread.scripts, unread.frames > 0) {
+        (true, true) => ("runs its scripts and reads its frames", "runs its scripts or reads its frames"),
+        (true, false) => ("runs them", "runs them"),
+        _ => ("reads them", "reads them"),
+    };
+    let step = if unread.browser {
+        format!(
+            "A read takes in only this markup; a wait, scroll or other step on this page opens it in a browser, which {shown}."
+        )
+    } else {
+        format!("This run cannot open a browser, so no step on this page {unshown}: a read takes in only this markup.")
+    };
+    format!("This page was read over HTTP: its markup holds no links or controls, but {missing}. {step}")
 }
 
 /// The time a run that composes its answer keeps back from its limit to write it: composing waits on one LLM call.
