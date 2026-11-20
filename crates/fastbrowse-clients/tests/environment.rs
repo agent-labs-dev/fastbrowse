@@ -603,6 +603,18 @@ async fn test_the_field_reader_reasons_at_medium_where_other_purposes_reason_at_
     }
 }
 
+/// An effort the user set is theirs for every purpose, the field reader's included.
+#[tokio::test]
+async fn test_an_effort_the_user_set_is_not_raised_for_the_field_reader() {
+    for setting in ["low", "high"] {
+        let script = Script::new([common::Step::Reply(completion(Some(0.0001)))]);
+        let env = [("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_REASONING", setting)];
+        let llm = settings(&env).llm(&script.http()).unwrap();
+        llm.generate_value(LLMPurpose::Groups, &[Message::user("?")], &answer_model(), None).await.unwrap();
+        assert_eq!(body(&script.requests()[0])["reasoning"], json!({"effort": setting}));
+    }
+}
+
 #[tokio::test]
 async fn test_openrouter_gets_reasoning_turned_off_when_asked() {
     let (seen, _) =
