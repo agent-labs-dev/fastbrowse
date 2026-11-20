@@ -354,6 +354,8 @@ class _Handoff(Protocol):
 
     def take(self) -> bool: ...
 
+    def refused(self) -> None: ...
+
 
 def _connections(client: httpx.AsyncClient, url: str) -> asyncio.Semaphore | None:
     """The connections the pool `url` goes through may open, or None when its transport sets no limit.
@@ -409,6 +411,7 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
         max_bytes: int | None,
         silence: float,
         waited: asyncio.Event,
+        handoff: _Handoff,
     ) -> _Sent:
         try:
             # The core's timeout bounds each silence, not the whole answer, as an httpx timeout does.
@@ -426,6 +429,13 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
                 content = bytes(read if max_bytes is None else read[: max_bytes + 1])
             finally:
                 await response.aclose()
+        except (httpx.PoolTimeout, httpx.ConnectTimeout, httpx.ConnectError) as exc:
+            # httpx raises these before the request has a connection: waiting for one from the pool, or opening one,
+            # which httpcore maps from its TCP connect and TLS handshake alone. No byte of the request was written, so
+            # it is not billed, as one the bridge gave up waiting for is not. A read or write failure, a protocol
+            # error or a timeout once connected may follow a sent request, and stays possibly billed.
+            handoff.refused()
+            return ("timeout" if isinstance(exc, httpx.TimeoutException) else "transient", type(exc).__name__)
         except httpx.TimeoutException as exc:
             return ("timeout", type(exc).__name__)
         except (httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError, httpx.DecodingError) as exc:
@@ -476,7 +486,7 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
                 raise asyncio.CancelledError
         waited = asyncio.Event()
         waited.set()
-        sent = asyncio.ensure_future(exchange(method, url, headers, body, max_bytes, silence, waited))
+        sent = asyncio.ensure_future(exchange(method, url, headers, body, max_bytes, silence, waited, handoff))
         _FINISHING.add(sent)
         sent.add_done_callback(_FINISHING.discard)
         sent.add_done_callback(_settled)

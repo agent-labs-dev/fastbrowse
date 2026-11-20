@@ -49,6 +49,9 @@ class Jev:
         self.held = 0
         self.unanswered = 0
         self.all_answered = asyncio.Event()
+        # A request of the caller's own that holds its connection until `released` is set.
+        self.holding = asyncio.Event()
+        self.released = asyncio.Event()
 
     async def serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
@@ -59,6 +62,10 @@ class Jev:
                 )
                 body = await reader.readexactly(length)
                 if lines[0].startswith("GET /ping"):
+                    answer = b"{}"
+                elif lines[0].startswith("GET /hold"):
+                    self.holding.set()
+                    await self.released.wait()
                     answer = b"{}"
                 else:
                     self.received += 1
@@ -219,6 +226,57 @@ async def test_the_callers_loop_runs_while_a_long_read_waits_for_connections(
     assert left.loop_lag < 1.0
 
 
+async def test_a_request_the_client_found_no_connection_for_is_not_billed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    jev = Jev()
+    jev.answer_held.set()
+    server = await asyncio.start_server(jev.serve, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    html = page(3)
+    transport = httpx.AsyncHTTPTransport(limits=httpx.Limits(max_connections=1))
+    client = httpx.AsyncClient(
+        transport=transport,
+        mounts={"https://shop.example": httpx.MockTransport(lambda _: httpx.Response(200, html=html))},
+    )
+    async with server, client:
+        # The caller's own request holds the client's one connection, which fastbrowse does not count, so the run's
+        # first request is let through to httpx and waits there until httpx gives up on it with PoolTimeout.
+        held = asyncio.ensure_future(client.get(f"http://127.0.0.1:{port}/hold", timeout=120))
+        await jev.holding.wait()
+        run = asyncio.ensure_future(
+            run_task(
+                "List every item's price",
+                start="https://shop.example/items",
+                fetch=True,
+                http=client,
+                llm=ScriptedLLM("https://shop.example/items"),
+                settings={
+                    "FASTBROWSE_DECISION_SOURCE": "custom",
+                    "FASTBROWSE_DECISION_BASE_URL": f"http://127.0.0.1:{port}",
+                    "FASTBROWSE_DECISION_MODEL": "jev-test",
+                },
+            )
+        )
+        pool = transport._pool
+        assert isinstance(pool, httpcore.AsyncConnectionPool)
+        # The run's request queues in httpcore behind the caller's, then leaves the queue when httpx gives up.
+        async with asyncio.timeout(60):
+            while len(pool._requests) < 2:
+                assert not run.done(), run.result()
+                await asyncio.sleep(0.05)
+            while len(pool._requests) > 1:
+                assert not run.done(), run.result()
+                await asyncio.sleep(0.05)
+        jev.released.set()
+        await held
+        async with asyncio.timeout(120):
+            result = await run
+    # httpx raised PoolTimeout before it had a connection to send on, so that attempt reached no provider.
+    assert sum(result.cost.jev_calls_by_purpose().values()) == jev.received
+
+
 class Handoff:
     """The core's handoff as a request to the client's own pool sees it."""
 
@@ -232,6 +290,9 @@ class Handoff:
     def take(self) -> bool:
         self.taken = True
         return True
+
+    def refused(self) -> None:
+        self.taken = False
 
 
 @contextmanager

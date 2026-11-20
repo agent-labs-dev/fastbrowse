@@ -378,6 +378,10 @@ impl PyHandoff {
     fn take(&self) -> bool {
         self.0.take()
     }
+
+    fn refused(&self) {
+        self.0.refused();
+    }
 }
 
 /// The caller's `httpx.AsyncClient`, for every request the run's clients make.

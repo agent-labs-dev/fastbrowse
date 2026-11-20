@@ -81,6 +81,17 @@ impl Handoff {
         self.0.compare_exchange(QUEUED, TAKEN, Ordering::AcqRel, Ordering::Acquire).is_ok()
     }
 
+    /// The transport could not send the request after all, as when its client had no connection to send it on: it
+    /// went out no more than a request still queued did. The caller has not settled it yet, since the transport says
+    /// so before it answers; one that was dropped meanwhile was already counted as possibly sent.
+    pub fn refused(&self) {
+        for from in [TAKEN, UNQUEUED] {
+            if self.0.compare_exchange(from, QUEUED, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                return;
+            }
+        }
+    }
+
     /// Nobody waits for the request any longer: true when the transport still held it, so it never went out.
     pub fn withdraw(&self) -> bool {
         self.0.compare_exchange(QUEUED, WITHDRAWN, Ordering::AcqRel, Ordering::Acquire).is_ok()
