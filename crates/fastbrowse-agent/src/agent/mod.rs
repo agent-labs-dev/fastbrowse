@@ -437,10 +437,18 @@ impl Agent {
         slot: &mut Option<RunState>,
     ) -> Result<RunResult, Flow> {
         // Registered before anything is asked or traced: the caller's start is in the task every model is shown, and a
-        // run resumed in another agent is shown its first run's start.
+        // run resumed in another agent is shown its first run's start. How long it lasts is the redactor's
+        // (`register_address_credentials`).
         let carried_start = resume.as_ref().and_then(|resume| resume.state.caller_start.as_deref());
+        let mut credentialed = false;
         for start in options.start.as_deref().into_iter().chain(carried_start) {
-            self.redactor().register_address_credentials(START_CREDENTIALS, start);
+            credentialed |= self.redactor().register_address_credentials(START_CREDENTIALS, start);
+        }
+        // Chrome drops the userinfo from `location.href` but keeps it in `document.URL`, so a page can draw its own
+        // address, credentials and all, before any observation has read it: live frames and the recording stay held
+        // until the first observation finds the page clean (`reveals`).
+        if credentialed {
+            self.page.withhold_frames(true);
         }
         let prepared = match resume {
             Some(Resume { state, url: Some(url) }) => {
@@ -492,7 +500,9 @@ impl Agent {
             if let Some(state) = prepared {
                 return Ok::<_, Flow>(state);
             }
-            let given = state::with_inputs(task, &options.inputs);
+            // Masked as the task every step is shown is: a task that writes the start address out carried its
+            // credentials to the task judgments and the known pages request.
+            let given = self.mask(&state::with_inputs(task, &options.inputs));
             // The known pages are asked beside the first page's open, observation and decision, and taken before the
             // run first reads for, builds or acts on a decision, or proposes a route (`known_pages_arrived`). Awaited
             // here, the text LLM's answer held every run's first step, for about a second and up to 3.4 s. A run with a

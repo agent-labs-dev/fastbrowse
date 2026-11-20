@@ -2045,7 +2045,21 @@ impl Agent {
     /// Whether a resolved secret shows on the page; live and recorded frames are held back while one does.
     pub(super) fn reveals(&self, observation: &Observation) -> bool {
         // A dialog hides the page text, so its observation cannot prove the pixels contain no secret.
-        let revealed = observation.dialog.is_some() || self.reveals_text(&observation.dump_json());
+        // The page's own address and its tabs' are not drawn on the page, so the credentials a start address carries
+        // are set aside there: Chrome keeps them in a tab's address, and every image of such a run was withheld. A
+        // typed secret in an address still counts, as it did; the page showing either one is held back.
+        let redactor = self.redactor();
+        let unshown = Observation {
+            url: redactor.mask_credentials(&observation.url),
+            tabs: observation
+                .tabs
+                .iter()
+                .map(|tab| Tab { url: redactor.mask_credentials(&tab.url), ..tab.clone() })
+                .collect(),
+            ..observation.clone()
+        };
+        let revealed = observation.dialog.is_some() || redactor.reveals(&unshown.dump_json());
+        drop(redactor);
         self.page.withhold_frames(revealed);
         revealed
     }

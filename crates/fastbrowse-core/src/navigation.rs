@@ -153,7 +153,7 @@ pub fn navigation_urls(
 
 /// Whether the authority as written carries userinfo. WHATWG cannot tell `https://@host/` from `https://host/` once
 /// parsed, and an address the caller wrote with credentials in it is never one to open.
-fn writes_userinfo(url: &str) -> bool {
+pub fn writes_userinfo(url: &str) -> bool {
     let Some((_, rest)) = url.split_once("://") else { return false };
     let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
     authority.contains('@')
