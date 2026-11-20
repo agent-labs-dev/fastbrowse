@@ -1980,12 +1980,15 @@ impl Agent {
         self.image(Shot::Frame).await
     }
 
-    /// Whether a resolved secret shows on the page; live and recorded frames are held back while one does.
     /// Learn the credentials of every address a page shows, in its text, a link or a field. Chrome can drop the
     /// userinfo of an address a redirect brought from the tab's address once it has answered the server's 401 with
     /// it, so the page's own `document.URL` and its echo of the password were the only places the run met it, and
     /// the bare echo and the `Authorization` value the page showed reached Jev unmasked (#1381). Each string is
     /// scanned on its own: a JSON dump writes a quote as `\"`, and `\` ends a special scheme's authority.
+    ///
+    /// Only an authority with userinfo after a scheme or `//` is learnt, so an email or a `mailto:` link is not. One a
+    /// page shows holds every image for the rest of the run by design: the page may draw it again on a canvas or in
+    /// a field, where no text check can find it.
     fn learn_credentials_shown(&self, shown: &Value) {
         fn strings<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
             match value {
@@ -2000,6 +2003,7 @@ impl Agent {
         self.learn_credentials(found);
     }
 
+    /// Whether a resolved secret shows on the page; live and recorded frames are held back while one does.
     pub(super) fn reveals(&self, observation: &Observation) -> bool {
         // A dialog hides the page text, so its observation cannot prove the pixels contain no secret.
         // An address a redirect or a new tab brings with credentials is learnt here, before its observation is masked

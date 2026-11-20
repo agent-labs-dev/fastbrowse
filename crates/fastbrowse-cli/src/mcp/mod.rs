@@ -618,8 +618,10 @@ fn response(id: &Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
+/// An error reply. Its message may quote what the caller sent (a resource, a prompt's name), and no run has learnt the
+/// caller's credentials, so it is masked for address userinfo by structure (#1381).
 fn error_response(id: &Value, code: i64, message: &str, data: Option<&str>) -> Value {
-    let mut error = json!({"code": code, "message": message});
+    let mut error = json!({"code": code, "message": fastbrowse_core::safety::mask_userinfo(message)});
     if let Some(data) = data {
         error["data"] = json!(data);
     }
@@ -886,6 +888,9 @@ impl McpServer {
                                 ),
                                 ToolFailure::Traced(..) => unreachable!("a failure is traced once"),
                             };
+                            // serde's refusal of the arguments quoted the value it could not read and the key it
+                            // did not know, a tool's name is the caller's, and no run has learnt either (#1381).
+                            let mut text = fastbrowse_core::safety::mask_userinfo(&text);
                             if let Some(path) = trace {
                                 text.push_str(&format!(" (trace: {})", path.display()));
                             }

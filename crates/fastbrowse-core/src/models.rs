@@ -1219,6 +1219,14 @@ pub trait SecretResolver: Send + Sync {
     fn available(&self) -> Vec<SecretRef>;
 
     fn resolve<'a>(&'a self, name: &'a str, origin: &'a str) -> BoxFuture<'a, Option<String>>;
+
+    /// `(name, value)` for each secret whose value this resolver already holds as it is, which the run masks from its
+    /// first request, before anything types it: a declared token in a start address's query reached every model and
+    /// exit, since a value was learnt only as it was typed (#1381). A value given only on request (a client's, a
+    /// callback's, a computed one) is not asked for early, and is masked from when it is typed.
+    fn held(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 pub trait ArtifactSink: Send + Sync {

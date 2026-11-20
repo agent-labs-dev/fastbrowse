@@ -108,8 +108,11 @@ pub struct Refused {
     pub data: Option<Box<CancellationReceipt>>,
 }
 
-fn refused(code: ErrorCode, message: impl Into<String>) -> Refused {
-    Refused { code, message: message.into(), data: None }
+/// A refusal of `message`, masked for address userinfo. A refusal quotes what it refused (a method's name, a value
+/// serde could not read, an unknown key), and it comes before any run has learnt the caller's credentials, so the
+/// mask is the stateless structural one (#1381).
+pub fn refused(code: ErrorCode, message: impl Into<String>) -> Refused {
+    Refused { code, message: fastbrowse_core::safety::mask_userinfo(&message.into()), data: None }
 }
 
 impl Refused {

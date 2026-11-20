@@ -258,8 +258,9 @@ pub struct Settings {
     pub profile: Option<PathBuf>,
 }
 
-/// Every field but the endpoints as derived: a key prints as `Secret`, and an endpoint's userinfo is masked, since a
-/// base address written `https://user:pass@host/v1` carries the provider's credentials. Taken apart without `..`, so
+/// Every field as derived but these: a key prints as `Secret`; an endpoint's and the Chrome command's userinfo is
+/// masked, since a base address written `https://user:pass@host/v1` carries the provider's credentials; and the extra
+/// body prints its keys with every value withheld. Taken apart without `..`, so
 /// a field added later does not compile until it is printed here.
 impl std::fmt::Debug for Settings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -315,9 +316,9 @@ impl std::fmt::Debug for Settings {
             .field("llm_api_key", llm_api_key)
             .field("llm_strict", llm_strict)
             .field("llm_strict_set", llm_strict_set)
-            .field("llm_extra_body", llm_extra_body)
+            .field("llm_extra_body", &llm_extra_body.as_deref().map(withheld_body))
             .field("llm_reasoning", llm_reasoning)
-            .field("chrome", chrome)
+            .field("chrome", &chrome.as_deref().map(mask_userinfo))
             .field("headed", headed)
             .field("profile", profile)
             .finish()
@@ -359,7 +360,7 @@ impl Default for Settings {
 }
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 25] = [
+pub const FIELDS: [(&str, &str); 25] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -1033,6 +1034,18 @@ impl Settings {
     }
 }
 
+/// The extra body as `Debug` prints it: its keys, each value withheld, since it may hold a provider's own token that
+/// nothing structural tells from any other value (#1381). A body that is not JSON prints as withheld whole.
+fn withheld_body(raw: &str) -> String {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(mut body) => {
+            crate::http::withhold(&mut body);
+            body.to_string()
+        }
+        Err(_) => "<withheld>".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1063,5 +1076,19 @@ mod tests {
         }
         let based = Settings::from_sources(&[("FASTBROWSE_LLM_BASE_URL", "https://ops:s3t-pw@h.test/v1")], None);
         assert!(based.is_ok(), "a base address may carry its provider's credentials");
+    }
+
+    /// The extra body may hold a provider's own token, which nothing structural tells from any other value, and a
+    /// Chrome command may name a proxy with its password; `Debug` printed both as given (#1381).
+    #[test]
+    fn test_settings_print_the_extra_body_withheld_and_chrome_masked() {
+        let settings = Settings {
+            llm_extra_body: Some(r#"{"routing": {"token": "xb-t0ken"}}"#.into()),
+            chrome: Some("chrome --proxy-server=http://ops:chr-pw@proxy.test:8080".into()),
+            ..Settings::default()
+        };
+        let printed = format!("{settings:?}");
+        assert!(!printed.contains("xb-t0ken") && !printed.contains("chr-pw"), "{printed}");
+        assert!(printed.contains("routing") && printed.contains("proxy.test"), "{printed}");
     }
 }

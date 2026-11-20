@@ -833,6 +833,29 @@ fn test_extra_fields_cannot_replace_the_ones_the_client_sets() {
     assert!(error.contains("model, response_format"), "{error}");
 }
 
+/// `FASTBROWSE_LLM_EXTRA_BODY` is the operator's to fill, a provider's own token included, and nothing structural tells
+/// a credential among its values. The provider gets it whole; the trace keeps its keys, each value withheld (#1381).
+#[tokio::test]
+async fn test_the_trace_keeps_the_extra_bodys_keys_and_withholds_its_values() {
+    let extra: Map<String, Value> =
+        serde_json::from_value(json!({"top_k": 20, "routing": {"token": "xb-t0ken"}})).unwrap();
+    let script = Script::new([completion(json!(r#"{"count": 1}"#), json!({}))]);
+    let trace = Trace::collecting();
+    let models = HashMap::from([(LLMPurpose::Start, "m".to_string())]);
+    let options = LLMOptions { extra_body: extra, ..LLMOptions::default() };
+    let llm = OpenAICompatibleLLM::new("key", script.traced(&trace), "https://llm.test/v1", models, options).unwrap();
+    generate(&llm, LLMPurpose::Start, &[Message::user("?")], None).await.unwrap();
+    let sent = script.bodies()[0].clone();
+    assert_eq!((sent["top_k"].clone(), sent["routing"]["token"].clone()), (json!(20), json!("xb-t0ken")));
+    let http: Vec<Value> = trace.events().into_iter().filter(|event| event["event"] == "http").collect();
+    let request = &http[0]["request"];
+    assert_eq!(
+        (request["top_k"].clone(), request["routing"].clone()),
+        (json!("<withheld>"), json!({"token": "<withheld>"}))
+    );
+    assert_eq!(request["model"], "m", "what the client wrote is traced as it was sent");
+}
+
 #[tokio::test]
 async fn test_an_error_that_echoes_a_key_from_a_custom_header_is_scrubbed() {
     let script = Script::new([Step::Reply(Response::json(400, &json!({"error": {"message": "bad key sk-custom"}})))]);
