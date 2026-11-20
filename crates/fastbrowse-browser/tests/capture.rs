@@ -30,6 +30,74 @@ async fn document_title_is_citable_without_a_body_heading() {
 
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
 
+/// An inline shadow host was left out of its sentence and its shadow text read later as a block apart, so
+/// `Price: <span>` holding `pre` in its shadow root read "Price: total" and "pre" (#1275). Its shadow text is read
+/// where the host stands, once, with what it slots and nests, and its controls are still observed.
+#[tokio::test(flavor = "multi_thread")]
+async fn inline_shadow_text_stays_in_its_sentence() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate("about:blank", None).await.expect("navigate");
+    let cases: &[(&str, &str, &str, &str)] = &[
+        ("plain", "<p>Price: <span id=host></span> total</p>", "root.textContent = 'pre'", "Price: pre total"),
+        (
+            "generated",
+            "<style>#host::after{content:'fix'}</style><p>Price: <span id=host></span> total</p>",
+            "root.textContent = 'pre'",
+            "Price: prefix total",
+        ),
+        (
+            "slotted",
+            "<p>Price: <span id=host><b>slotted</b></span> total</p>",
+            "root.innerHTML = 'pre <slot></slot>'",
+            "Price: pre slotted total",
+        ),
+        (
+            "nested",
+            "<p>Price: <span id=host></span> total</p>",
+            "root.innerHTML = 'pre <span id=inner></span>'; root.querySelector('#inner').attachShadow({mode:'open'}).textContent = 'deep'",
+            "Price: pre deep total",
+        ),
+        (
+            "control",
+            "<p>Price: <span id=host></span> total</p>",
+            "root.innerHTML = 'pre <input aria-label=Quantity>'",
+            "Price: pre total",
+        ),
+        (
+            "link",
+            "<p><a href=https://example.test/target>Before <span id=host></span></a></p>",
+            "root.textContent = 'Label'",
+            "Before Label",
+        ),
+        (
+            "cell",
+            "<table><tr><td>Price: <span id=host></span> total</td></tr></table>",
+            "root.textContent = 'pre'",
+            "| Price: pre total |",
+        ),
+    ];
+    for (name, body, shadow, expected) in cases {
+        set_body(&h.session, body).await;
+        eval_active(
+            &h.session,
+            &format!("{{ const root = document.querySelector('#host').attachShadow({{mode:'open'}}); {shadow} }}"),
+        )
+        .await;
+        let capture = h.page.capture().await.expect("capture");
+        let read: Vec<_> =
+            capture.blocks.iter().filter(|b| b.kind != BlockKind::Observation).map(|b| text_of(&capture, b)).collect();
+        assert_eq!(read, [*expected], "{name}");
+        if *name == "link" {
+            let link = capture.blocks.iter().find(|b| b.kind != BlockKind::Observation).unwrap();
+            assert_eq!(link.href.as_deref(), Some("https://example.test/target"));
+        }
+        if *name == "control" {
+            assert!(texts(&capture).contains(&"Quantity: [empty]".to_owned()), "{:?}", texts(&capture));
+        }
+    }
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn generated_separators_preserve_inline_boundaries() {
     let Some(h) = harness().await else { return };

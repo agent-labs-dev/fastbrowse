@@ -1315,10 +1315,13 @@ impl<'a> Reader<'a> {
         } else {
             clean(&raw)
         };
+        // A heading names what follows it, never itself, and ends every heading of its rank or lower before it, so
+        // its own path is the headings left above it.
+        let level = self.heading.filter(|_| closing_heading);
+        if let Some(level) = level {
+            self.headings.retain(|(higher, _)| *higher < level);
+        }
         if text.is_empty() {
-            if closing_heading && let Some(level) = self.heading {
-                self.headings.retain(|(higher, _)| *higher < level);
-            }
             return;
         }
         let kind = kind.unwrap_or(self.kind);
@@ -1332,9 +1335,7 @@ impl<'a> Reader<'a> {
             whole_record: false,
             fields: Vec::new(),
         });
-        if closing_heading && let Some(level) = self.heading {
-            // A heading names what follows it, never itself, and a lower heading ends every higher one.
-            self.headings.retain(|(higher, _)| *higher < level);
+        if let Some(level) = level {
             self.headings.push((level, text));
         }
     }
@@ -1830,6 +1831,18 @@ mod tests {
             found.last().map(|b| (b.text.as_str(), b.heading_path.clone())),
             Some(("After", vec!["Books".into()]))
         );
+    }
+
+    /// A heading's path is the headings above it. Taken before the heading ended its earlier sibling, PyPI's sidebar
+    /// "Key dates" read under "Project links", the sidebar heading before it, and a README's `h1` under the page's (#1254).
+    #[test]
+    fn a_heading_is_not_under_the_sibling_it_ends() {
+        let html = "<h1>requests 2.34.2</h1><h1>Requests</h1><h2>Project links</h2><p>Homepage</p><h2>Key dates</h2><p>Released</p>";
+        let (_, found) = blocks(html, "https://pypi.org/project/requests/");
+        let path = |text: &str| found.iter().find(|b| b.text == text).unwrap().heading_path.clone();
+        assert_eq!(path("Requests"), Vec::<String>::new());
+        assert_eq!(path("Key dates"), ["Requests"]);
+        assert_eq!(path("Released"), ["Requests", "Key dates"]);
     }
 
     #[test]

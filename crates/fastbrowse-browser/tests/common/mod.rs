@@ -162,6 +162,17 @@ fn serve_one(mut stream: TcpStream, directory: &Path, iframe_origin: Option<&str
         respond(&mut stream, if path == "/report.csv?partial" { 206 } else { 200 }, &headers, &body);
         return;
     }
+    if path == "/report.zip" {
+        // A ZIP holding a CSV, as sec.gov offers its market data (#1311).
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("orders.csv", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"name,total\nReport,139.79\nKettle,34.50\nLamp,12\n").unwrap();
+        let body = zip.finish().unwrap().into_inner();
+        let headers = [("Content-Type", "application/zip".to_owned()), ("Content-Length", body.len().to_string())];
+        respond(&mut stream, 200, &headers, &body);
+        return;
+    }
     if let Some(name) = path.strip_prefix("/package.json") {
         // A package index's JSON, served as JSON: Chrome shows it in its JSON viewer. `?broken` serves text that is
         // not all JSON under the same type.

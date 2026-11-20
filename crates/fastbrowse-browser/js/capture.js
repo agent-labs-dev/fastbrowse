@@ -282,6 +282,30 @@
     return text;
   };
   const textOf = e => titled(e, clean(dated(e, unnoted(e, renderedOf(e)))));
+  // A host whose shadow tree lays out blocks is read as those blocks, not inside a sentence.
+  const shadowBlocks = e =>
+    !!e.shadowRoot && [...e.shadowRoot.children].some(c => !SKIP.has(c.tagName) && !hidden(c) && hasBlockFlow(c));
+  // innerText stops at a shadow root, so an inline host lost its shadow text from its sentence, read later as a block
+  // apart: `Price: <span>` holding `pre` in its shadow root read "Price: total", then "pre" (#1275). Inline content is
+  // read through each host's shadow tree, a slot as what it shows, and the host is marked so its shadow root is not
+  // read as text again.
+  const composedHosts = new WeakSet();
+  // `hosts`, when given, collects each host read through, for a caller whose text is read as the host's own.
+  const composedOf = (node, hosts) => {
+    if (node.nodeType === 3) return node.textContent;
+    if (node.nodeType !== 1 || SKIP.has(node.tagName)) return '';
+    if (!visible(node) && getComputedStyle(node).display !== 'contents') return '';
+    const assigned = node.localName === 'slot' ? node.assignedNodes({ flatten: true }) : [];
+    const composes = node.shadowRoot
+      ? !shadowBlocks(node)
+      : assigned.length || [...node.querySelectorAll('*')].some(e => e.shadowRoot && !shadowBlocks(e));
+    if (!composes) return renderedOf(node);
+    if (node.shadowRoot) hosts?.add(node);
+    const [before, after] = generatedOf(node);
+    const children = node.shadowRoot?.childNodes ?? (assigned.length ? assigned : node.childNodes);
+    return before + [...children].map(child => composedOf(child, hosts)).join('') + after;
+  };
+  const composedText = (e, hosts) => titled(e, clean(dated(e, unnoted(e, composedOf(e, hosts)))));
   const isBlock = e => {
     const display = getComputedStyle(e).display;
     return !(display.startsWith('inline') || display === 'contents') || e.tagName === 'BR';
@@ -311,7 +335,7 @@
       .flatMap(e => [...(e.matches('a[href]') ? [e] : []), ...e.querySelectorAll('a[href]')])
       // An SVG link's `href` is an animated value, not an address.
       .filter(readableLink)
-      .map(a => ({ text: textOf(a), href: a.href }))
+      .map(a => ({ text: composedText(a), href: a.href }))
       .filter(link => link.text);
   const controlOf = nodes => {
     let found = null;
@@ -382,7 +406,7 @@
     }
     return '';
   };
-  const cellText = c => textOf(c) || drawn(c);
+  const cellText = c => composedText(c, composedHosts) || drawn(c);
 
   // What a form holds is in its controls' values, which no text node carries: a task that asked for dates to be
   // chosen was refused as unanswered because "the dates chosen" had nothing to quote. A filled control reads as
@@ -477,14 +501,14 @@
       (node.nodeType === 1 && !FRAMES.has(node.tagName) && (hidden(node) || SKIP.has(node.tagName))),
     );
     let text = whole ? textOf(owner) :
-      clean(before + run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, renderedOf(n)))))).join('') + after);
+      clean(before + run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, composedOf(n, composedHosts)))))).join('') + after);
     // A host's own text read in its shadow root is a block apart from its row, which may have read it without it.
     // A frame's nodes come from another realm, so the root is told by its node type rather than `instanceof`.
     const host = run[0].parentNode?.nodeType === 11 ? run[0].parentNode.host : null;
     const stamp = host ? stampOf(host) : '';
     if (text && stamp && !text.includes(stamp)) text = `${text} (${stamp})`;
     const onlyLink =
-      elements.length === 1 && elements[0].tagName === 'A' && elements[0].href && textOf(elements[0]) === text;
+      elements.length === 1 && elements[0].tagName === 'A' && elements[0].href && composedText(elements[0]) === text;
     const links = linksIn(elements);
     if (onlyLink) push('link', text, { href: hrefOf(elements[0]), links }, run);
     else push('paragraph', text, { links }, run);
@@ -579,8 +603,9 @@
         walk(node);
         continue;
       }
-      // A host's generated text surrounds its shadow content, so read both together at the host's position.
-      if (node.shadowRoot && generatedOf(node).some(Boolean)) {
+      // A host's generated text surrounds its shadow content, so read both together at the host's position. An inline
+      // host is read so in its run.
+      if (node.shadowRoot && generatedOf(node).some(Boolean) && (hasBlockFlow(node) || shadowBlocks(node))) {
         flushRun(false);
         enteredShadows.add(node);
         scope(node.shadowRoot, framePath, `${sourcePath}/shadow:${identity(node)}`, path);
@@ -681,13 +706,14 @@
     scope(inner.body, child, child, headings);
   }
 
-  function scope(root, frame, source, headings = []) {
+  // `text` false reads only what the root's elements observe: its text was read in a run around its host.
+  function scope(root, frame, source, headings = [], text = true) {
     const previous = [path, headingLevels, framePath, sourcePath];
     path = [...headings];
     headingLevels = [];
     framePath = frame;
     sourcePath = source;
-    walk(root);
+    if (text) walk(root);
     path = [...headings];
     headingLevels = [];
     for (const e of [...root.querySelectorAll(`input,select,textarea,button,${roleSelector(CONTROL_ROLES[0])}`)].filter(visible)) {
@@ -794,7 +820,7 @@
     for (const e of root.querySelectorAll('*')) {
       if (e.shadowRoot && !enteredShadows.has(e)) {
         enteredShadows.add(e);
-        scope(e.shadowRoot, frame, `${source}/shadow:${identity(e)}`);
+        scope(e.shadowRoot, frame, `${source}/shadow:${identity(e)}`, [], !composedHosts.has(e));
       }
       // A frame the walk never reached (hidden, or inside a record or table read as one block) is still read.
       if (FRAMES.has(e.tagName) && !entered.has(e)) enter(e, []);

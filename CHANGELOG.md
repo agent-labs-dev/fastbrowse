@@ -13,6 +13,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
 
+- A Reply or Post button under a comment is named by the comment's author when the author's name is a link and the author wrote more than one comment. The name was cut because the same link appeared twice, so every Reply and the open thread's Post were named by the comment's age, such as "29 days ago", and a reply could go under another commenter's thread ([#881](https://github.com/agent-labs-dev/fastbrowse/issues/881)).
+
+- A heading read over HTTP stands under the headings above it, not under the sibling heading it ends. PyPI's sidebar "Key dates" heading read under "Project links", the sidebar heading before it, and a README's top heading under the page's own ([#1254](https://github.com/agent-labs-dev/fastbrowse/issues/1254)).
+
+- Text an inline element draws in its own shadow root is read in the sentence around it. It was left out of the sentence and read after it as a block of its own, so `Price: <span>` holding `19.99` in its shadow root read "Price: total" and then "19.99" ([#1275](https://github.com/agent-labs-dev/fastbrowse/issues/1275)).
+
+- A CSV inside a downloaded ZIP is read row by row, as a downloaded CSV is, under the name `archive.zip/member.csv`. The archive's members were joined into one text, so the CSV was one block and composing from it sent the whole file: a 23 MB sec.gov market data file went to composition whole ([#1311](https://github.com/agent-labs-dev/fastbrowse/issues/1311)).
+
+- An element inside a same-origin frame that the frame's script listens on, such as a bare span with a click handler or a canvas a drawing library listens on, is offered as a control. Chrome reports such listeners only to the frame's own script context, and they were read from the top page's, so a frame's listened elements were never offered ([#1312](https://github.com/agent-labs-dev/fastbrowse/issues/1312)).
+
 ## [0.12.0] - 2026-11-19
 
 - Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.
