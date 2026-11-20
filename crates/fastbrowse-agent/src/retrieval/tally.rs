@@ -677,7 +677,7 @@ impl Schema for RecordGroups {
 
 // Membership was already judged: asked to copy a selected phone's name, the copier returned null because its quote
 // named the model without repeating its brand. Copying the field must not discard that established membership.
-const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. The records have already been selected as the kind named in the field request; do not check their kind again. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, and give null only when no text in either is that field's value, however it is labelled. The field is only the claim's word for a value the record states about itself; the source may call it something else or leave it unlabelled. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
+const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. The records have already been selected as the kind named in the field request; do not check their kind again. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, and give null only when no text in either is that field's value, however it is labelled. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\nThe field is only the claim's word for a value the record states about itself; the source may call it something else or leave it unlabelled.\n\n# Trust\n";
 
 /// A record's captured heading can name the owner whose value its quote holds. A page address and generated
 /// metadata are not source wording, and joining separate source spans would invent a value neither states.
@@ -2815,7 +2815,12 @@ mod tests {
         // The field is the claim's word, not the page's: the run that failed 4 of 8 asked for a `name` of cards that
         // say `title:` or nothing, and the reader answered null for it about one request in five (10 of 40, against 0
         // of 40 for `title`).
-        assert!(system.contains("only the claim's word for a value the record states about itself"), "{system}");
+        // As its own paragraph: tacked onto the sentence before it, the same words left `name` null for 20 of 60
+        // requests on the "Disrupted" card, against 0 of 60 here.
+        assert!(
+            system.contains("\\n\\nThe field is only the claim's word for a value the record states about itself"),
+            "{system}"
+        );
         assert!(format!("{user:?}").contains("Agnostic: A Spirited Manifesto"));
     }
 
