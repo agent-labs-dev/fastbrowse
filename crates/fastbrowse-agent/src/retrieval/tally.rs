@@ -642,7 +642,7 @@ fn field_answer(answer: Option<&Answer>, offers: &[String]) -> FieldAnswer {
 }
 
 const RECORD: &str = "The record's id, such as r0.";
-const GROUP_TEXT: &str = "The record's value for the field named, copied character for character from its quote or a captured heading. Null when neither states one.";
+const GROUP_TEXT: &str = "The record's value for the field named, copied character for character from its quote or a captured heading. Null only when no text in either is that field's value, however it is labelled.";
 
 /// One record's group as its note writes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -677,7 +677,7 @@ impl Schema for RecordGroups {
 
 // Membership was already judged: asked to copy a selected phone's name, the copier returned null because its quote
 // named the model without repeating its brand. Copying the field must not discard that established membership.
-const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. The records have already been selected as the kind named in the field request; do not check their kind again. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, or give null when neither states one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
+const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. The records have already been selected as the kind named in the field request; do not check their kind again. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, and give null only when no text in either is that field's value, however it is labelled. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
 
 /// A record's captured heading can name the owner whose value its quote holds. A page address and generated
 /// metadata are not source wording, and joining separate source spans would invent a value neither states.
@@ -2796,6 +2796,23 @@ mod tests {
             .unwrap();
             assert_eq!(result.is_ok(), accepted, "{copied}: {result:?}");
         }
+    }
+
+    /// A captured failing run: asked for the 'title' of a card reading "Agnostic: A Spirited Manifesto, price,
+    /// stock", the reader answered null in 7 of 40 identical requests, taking the missing "title:" label for a
+    /// missing title, and one null left the whole field unread. Null is for a record whose text holds no value of the
+    /// field, never for a value its quote does not label.
+    #[test]
+    fn the_reader_is_told_null_means_no_value_not_no_label() {
+        let card = json!({"quotes": [{"quote": "Agnostic: A Spirited Manifesto\n\n\u{a3}12.51\n\nIn stock", "headings": ["Nonfiction"]}]});
+        let [system, user] = groups_messages("title", "five-star-rated book", &[format!("r0: {}", dumps(&card))]);
+        let system = format!("{system:?}");
+        assert!(
+            system.contains("null only when no text in either is that field's value, however it is labelled"),
+            "{system}"
+        );
+        assert!(!system.contains("or give null when neither states one"), "{system}");
+        assert!(format!("{user:?}").contains("Agnostic: A Spirited Manifesto"));
     }
 
     impl LLMClient for ReadsGroups<'_> {
