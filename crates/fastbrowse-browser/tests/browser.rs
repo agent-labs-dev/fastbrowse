@@ -1845,6 +1845,45 @@ async fn test_reply_buttons_under_one_authors_comments_are_told_apart_by_their_t
     h.close().await;
 }
 
+/// A commenter with two comments on the page has their name link twice. Dropped as one of the page's repeated labels,
+/// it left their Reply buttons, the reply box that opened and its Post named by the comment's age, so a task that
+/// named the commenter did not read as asking for that box (#1411).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_reply_box_is_named_by_its_commenter_whose_name_shows_twice() {
+    let _turn = turn().await;
+    let comment = |author: &str, age: &str, text: &str, form: &str| {
+        format!(
+            "<li><a href=\"#{author}\">{author}</a><div>{age}</div><p>{text}</p>\
+             <button>Reply</button>{form}</li>"
+        )
+    };
+    let form = "<form><textarea aria-label=\"Comment text area\"></textarea><button>Post</button></form>";
+    let contexts = |obs: &Observation, label: &str| -> Vec<Option<String>> {
+        obs.controls.iter().filter(|c| c.label == label).map(|c| c.context.clone()).collect()
+    };
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        &format!(
+            "document.body.innerHTML = '<div><p>Keep it civil.</p>{form}</div><ul>{}{}{}</ul>'",
+            comment("Ada", "1 day ago", "Routes skip the cap.", ""),
+            comment("Grace", "2 days ago", "Works for me.", ""),
+            comment("Ada", "2 days ago", "Map pins are gone.", form),
+        ),
+    )
+    .await;
+    let obs = observe_until(&h.page, "Reply").await;
+    assert_eq!(
+        contexts(&obs, "Reply"),
+        vec![Some("Ada / 1 day ago".into()), Some("Grace".into()), Some("Ada / 2 days ago".into())]
+    );
+    for label in ["Comment text area", "Post"] {
+        assert_eq!(contexts(&obs, label), vec![Some("Keep it civil.".into()), Some("Ada".into())], "{label}");
+    }
+    h.close().await;
+}
+
 /// Options that are direct children of one list share every ancestor, and an aria-label hides the text inside
 /// them, so two "Springfield" options read as "1 of 2" and "2 of 2" and the run picked one blind.
 #[tokio::test(flavor = "multi_thread")]

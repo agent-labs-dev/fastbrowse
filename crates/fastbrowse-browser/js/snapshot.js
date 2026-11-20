@@ -1460,15 +1460,16 @@
   const repeated = new Set();
   const controlByElement = new Map();
   const labelsByRole = new Map();
-  const nameOf = (scope, element, label, nearest, own = null) => {
+  const nameOf = (scope, element, label, nearest, own = null, furniture = repeated) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    return firstLine(linesOf(scope, element, label, own).join('\n'));
+    return firstLine(linesOf(scope, element, label, own, furniture).join('\n'));
   };
-  // The lines of `scope` that can name `element`, in reading order.
-  const linesOf = (scope, element, label, own = null) => {
+  // The lines of `scope` that can name `element`, in reading order. `furniture` holds the repeated controls' labels
+  // that read the same in every repeat, so name none of them.
+  const linesOf = (scope, element, label, own = null, furniture = repeated) => {
     // A line that is another control of the same kind names that control, not the section: a calendar's day cells were
     // named "31" and "7" after their neighbours in the same week row, so a picker showing November was offered with
     // contexts that pointed at other days. A card's title keeps its line, since the control it names there is another
@@ -1482,7 +1483,7 @@
     // control's and its peers' labels names nothing but them.
     const onlyPeers = line => line.split(' ').every(word => word === label || peer(word));
     const lines = renderedLines(scope)
-      .filter(line => !repeated.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
+      .filter(line => !furniture.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
     return lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line).trim()).filter(Boolean);
   };
   const scopeOf = (element, holding) => {
@@ -1498,10 +1499,11 @@
     }
     return scope;
   };
-  const contextOf = (element, holding, label, nearest = true) => {
+  const contextOf = (element, holding, label, nearest = true, furniture = repeated) => {
     const scope = scopeOf(element, holding);
-    return scope ? nameOf(scope, element, label, nearest) : '';
+    return scope ? nameOf(scope, element, label, nearest, null, furniture) : '';
   };
+  const shownLines = memo(scope => new Set(renderedLines(scope)));
   // Content a stylesheet shows only under the pointer (`.card:hover .caption`) is out of reach of every other
   // operation. An element whose hover rule would reveal something now hidden is offered as a hover target.
   const docs = [];
@@ -1679,21 +1681,28 @@
     for (const twin of twins) {
       for (let e = twin.parentElement; e; e = e.parentElement) holding.set(e, (holding.get(e) || 0) + 1);
     }
-    const nearest = group.map(c => contextOf(registry.nodes.get(c.id), holding, c.label));
+    // A repeated control's label names none of the twins only where every twin's card shows it, as a datepicker's
+    // Prev does. A commenter with two comments on a page has their name link twice, and dropping it as one of the
+    // page's repeated labels named their Reply button, reply box and Post by the comment's age ("2 days ago"): the
+    // task named the commenter, so the reply box read as unasked for, its fill was refused, and the run turned to
+    // the page's top-level box (#1411).
+    const scopes = twins.map(twin => scopeOf(twin, holding));
+    const shown = scopes.map(scope => (scope ? shownLines(scope) : new Set()));
+    const furniture = new Set([...shown[0]].filter(line => repeated.has(line) && shown.every(lines => lines.has(line))));
+    const nearest = group.map(c => contextOf(registry.nodes.get(c.id), holding, c.label, true, furniture));
     group.forEach((c, i) => {
       // Cards that each end in an "Options" heading share their nearest title, which would name every twin
       // alike; a twin whose nearest title another twin shares is named by its card's first title instead.
       const shared = nearest.indexOf(nearest[i]) !== nearest.lastIndexOf(nearest[i]);
-      const context = shared ? contextOf(registry.nodes.get(c.id), holding, c.label, false) : nearest[i];
+      const context = shared ? contextOf(registry.nodes.get(c.id), holding, c.label, false, furniture) : nearest[i];
       if (context) c.context = context;
     });
     // Two comments by one author posted at the same time begin with the same lines, so their Reply buttons were named
     // alike and a reply went under the wrong comment (#881). A twin whose context another twin shares adds the first
     // line of its own card that none of those twins' cards shows, its own text.
     const lines = group.map((c, i) => {
-      const scope = scopeOf(twins[i], holding);
-      regions.set(c.id, scope || twins[i]);
-      return scope ? linesOf(scope, twins[i], c.label) : [];
+      regions.set(c.id, scopes[i] || twins[i]);
+      return scopes[i] ? linesOf(scopes[i], twins[i], c.label, null, furniture) : [];
     });
     const told = group.map((c, i) => {
       const alike = group.map((d, j) => j).filter(j => j !== i && c.context && group[j].context === c.context);
