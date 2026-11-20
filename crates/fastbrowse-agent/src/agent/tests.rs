@@ -7706,6 +7706,58 @@ async fn test_rejected_composition_exhausts_the_existing_recovery_budget() {
     assert_eq!(state.recoveries, agent.config.stall.max_recoveries + 1);
 }
 
+/// Drafts "Record A: 99" until told a draft was rejected, then "Record B: 34", both citing the one note.
+struct CorrectsOnFeedback(std::sync::Mutex<Vec<Vec<Message>>>);
+
+impl LLMClient for CorrectsOnFeedback {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        let told = messages.iter().any(|message| message.content.contains("# Previous composition feedback"));
+        self.0.lock().unwrap().push(messages.to_vec());
+        Box::pin(async move {
+            let text = if told { "Record B: 34" } else { "Record A: 99" };
+            let claims = json!([{"text": [{"prose": text}], "evidence_ids": ["e0"]}]);
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// A run spent its one recovery on a stall, then its first draft was rejected: the recovery that would have sent it
+/// back for a rewrite ran out, and the answer written as the run stopped was the first request again, byte for byte,
+/// without the rejection. It returned the same draft and the run ended unverified (#1377). The answer written as a run
+/// stops is told what was rejected.
+#[tokio::test]
+async fn test_the_answer_written_as_a_run_stops_is_told_the_rejected_draft() {
+    let page = observation(&[]);
+    let llm = Arc::new(CorrectsOnFeedback(Default::default()));
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(RejectsRecordA(ScriptedJev::new(Vec::new()))),
+        llm.clone(),
+    );
+    let mut state = composition_repair_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let flow = agent.finish(&mut state, &page, None, None).await.expect_err("the rejection finds recovery spent");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let calls = llm.0.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(
+        calls[1]
+            .iter()
+            .any(|m| m.content.contains("# Previous composition feedback") && m.content.contains("Record A: 99"))
+    );
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    let answer = result.answer.unwrap();
+    assert!(answer.contains("Record B: 34") && !answer.contains("Record A: 99"), "{answer}");
+}
+
 #[tokio::test]
 async fn test_recovery_exhaustion_reuses_partial_only_while_its_sources_are_unchanged() {
     for changed in [false, true] {

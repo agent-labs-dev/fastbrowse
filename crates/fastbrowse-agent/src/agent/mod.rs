@@ -51,7 +51,9 @@ use state::{Flow, RunState, Stop};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::policy::{HistoryEntry, StepContext};
-use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, noticed, partial_answer};
+use crate::retrieval::{
+    ComposedAnswer, cited_quote, compose_reviewed, draft_answer, marked_partial, noticed, partial_answer,
+};
 use crate::verification::RecordSchema;
 
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
@@ -609,9 +611,23 @@ impl Agent {
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
                 let reporting = ledger.for_answer();
                 let steps = state.executed_steps();
+                // A draft rejected as the run stopped is a rewrite's to correct: written without the rejection, after a
+                // stall had spent the recovery that would have sent it back, this was the first request byte for byte,
+                // and it returned the rejected draft again (#1377).
+                let (task, feedback) = (self.model_task(state), state.composition_feedback.clone());
                 if state.compose
-                    && let Ok(composed) =
-                        compose(&*self.jev, &*self.llm, &self.model_task(state), &notes, Some(&reporting), &steps).await
+                    && let Ok(composed) = compose_reviewed(
+                        &*self.jev,
+                        &*self.llm,
+                        &task,
+                        &notes,
+                        Some(&reporting),
+                        feedback.as_deref(),
+                        true,
+                        &steps,
+                    )
+                    .await
+                    .map(|reviewed| reviewed.answer)
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
