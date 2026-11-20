@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
+
 - Runs sharing one Python process keep their deadlines while another run reads a large page. Reading a page of megabytes held one of the module's two async workers, and a task that run had just woken, such as another run's click, waited behind it unpolled, so its input deadline and liveness probe never armed. Page reads now hand their worker and that task to the runtime before the long work starts ([#1284](https://github.com/agent-labs-dev/fastbrowse/issues/1284)).
 
 - A run with a dollar limit goes on after its first call to a model is cancelled. That call's cost could be bounded only once the model's price listing had been read, and the listing was read after the call, so a cancelled first call was recorded with an unknown cost and the run stopped because the limit could not be enforced. The listing is now read before the first call to each model under a dollar limit ([#1291](https://github.com/agent-labs-dev/fastbrowse/issues/1291)).
