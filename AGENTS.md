@@ -68,7 +68,7 @@ A reviewer rejects a change that breaks one.
 - **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE, a return to a seen page
   state with nothing read since, and any return after the first since the last new evidence are each no progress;
   `unchanged_actions` of them in a row ask Jev again without the stalled action. An unseen page state or new evidence
-  renews that budget. Rewriting a field's current value never counts as progress.
+  renews that budget. Rewriting a field's current value never counts as progress. A run sends at most three rejected drafts back to gather, progress or not.
 
 ## Prompts and models
 
