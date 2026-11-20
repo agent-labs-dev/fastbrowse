@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A task that asks for a screenshot along with what it reports, such as "tell me the version number and release date, and include a screenshot of the release page", ends `complete` once it has read what it was asked. The run attaches a screenshot of the page it ends on, but the checks that judge its answer were not told so: the check that every step was carried out held "include a screenshot" undone and sent the run back until it ended `stuck`, the answer said the screenshot was not available, and the coverage check found it missing from the written answer and ended the run `unverified`. Each of them is now told that the run attaches one screenshot, of the page it ends on, so a screenshot of another page, or of a page before a later step, is still judged not given. A run over HTTP, which has no page to picture, is not told so. A task that asks only for a screenshot also gets one when its answer is accepted as the run stops.
+
 ## [0.12.0] - 2026-11-20
 
 - A run that stops with a rejected answer writes it once more told what was rejected ([#1377](https://github.com/agent-labs-dev/fastbrowse/issues/1377)). When an earlier stall had spent the run's recovery, a rejected draft could not send the run back, and the answer written as it stopped was the first request again, byte for byte: it cited the page's title for a question about its heading a second time and ended `unverified`. That last answer is now a rewrite of the rejected draft, checked like any other, and ends `complete` when it holds; a run with an output schema then draws its `data` from that answer.
