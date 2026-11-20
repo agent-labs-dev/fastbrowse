@@ -13,6 +13,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
 
+- With `--extension`, a run that cannot get a tab says why Chrome refused it, such as `Target.createTarget failed (CDP -32000): Cannot attach to this target`. The extension's reason was dropped, so runs failed with the bare error code. A tab Chrome refuses to group or attach is now closed at once, or handed back ungrouped when it is the user's own, instead of staying with the run until it ended ([#1314](https://github.com/agent-labs-dev/fastbrowse/issues/1314)).
+
+- With `--extension`, a run that loses its tab to another extension's frame links to that extension's page only when the frame's address is an extension id. Password managers such as Bitwarden load their frames from an address that changes each session, and the `chrome://extensions/?id=` link built from it opened nothing; the error and the extension's popup now point at `chrome://extensions` instead ([#1313](https://github.com/agent-labs-dev/fastbrowse/issues/1313)).
+
 ## [0.12.0] - 2026-11-19
 
 - Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.

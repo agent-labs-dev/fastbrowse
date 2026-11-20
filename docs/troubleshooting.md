@@ -285,10 +285,15 @@ away from fastbrowse as soon as one appears. Screen recorders, password managers
 such frames to every page. The run ends `unavailable` with `Chrome detached fastbrowse from the run's tab when
 the page loaded a frame from another extension (chrome-extension://<id>)`.
 
-**Next step.** Open `chrome://extensions/?id=<id>` from the error, set **Site access** to **On click**, and run
-again. The extension then adds its frame only on pages where you click it. With `--trace FILE`, every message
-between the run and the extension is in the trace as an `extension` event, with screenshots and screencast
-frames replaced by their length, and an `extension_tab_lost` event names the frame that took the tab.
+**Next step.** When the address in the error is an extension id (32 letters from a to p), open
+`chrome://extensions/?id=<id>` from the error, set **Site access** to **On click**, and run again. The extension
+then adds its frame only on pages where you click it. Some extensions, password managers among them, load their
+frames from an address that changes each session and does not name the extension: `chrome-extension://` followed
+by a UUID such as `f4a2011c-a215-4438-99a1-3acaa81a2208`. The error then says so instead of linking to an
+extension: open `chrome://extensions` and set **Site access** to **On click** for each extension that adds frames to
+pages. With `--trace FILE`, every message between the run and the extension is in the trace as an `extension`
+event, with screenshots and screencast frames replaced by their length, and an `extension_tab_lost` event names
+the frame that took the tab.
 
 ### DevToolsActivePort and finding the DevTools address
 

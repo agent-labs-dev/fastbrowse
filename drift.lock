@@ -83,7 +83,7 @@ sig = "e555eb711d715faa"
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
 target = "crates/fastbrowse-browser/extension/background.js"
-sig = "6a1f144bd1e89019"
+sig = "d8ea60c001fde9e9"
 
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"

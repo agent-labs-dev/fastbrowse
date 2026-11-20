@@ -161,7 +161,8 @@ called focus stealing prevention.
 
 **Other extensions can take the run's tab away.** Chrome lets no extension debug a tab while the page holds a frame
 from another extension, and some extensions add one to every page: screen recorders, password managers and writing
-assistants are common ones. When that happens the run ends `unavailable` and names the extension. Open
+assistants are common ones. When that happens the run ends `unavailable` and names the address of the frame, which is the
+extension's id unless that extension loads its frames from a per-session address. Open
 `chrome://extensions`, choose **Details** on that extension, and set **Site access** to **On click**: it then adds
 its frame only where you click it, and runs work again. See
 [Another extension's frame takes the tab away](troubleshooting.md#another-extensions-frame-takes-the-tab-away).
