@@ -462,6 +462,23 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let extension = explicit_extension || (!args.cloud && !args.fetch && args.desktop.is_empty());
     // A desktop run starts no browser, so a cloud one asked for beside it was silently never started (#1337).
     let desktop = !args.desktop.is_empty();
+    if args.headed {
+        return Err(ConfigurationError("--headed is unsupported: local CLI browsing requires the extension".into()));
+    }
+    if args.profile.is_some() {
+        return Err(ConfigurationError("--profile is unsupported: use a profile with the extension installed".into()));
+    }
+    if args.cdp_url.is_some() && args.cdp_port.is_some() {
+        return Err(ConfigurationError(
+            "--cdp-url and --cdp-port are unsupported in the CLI: use the SDK for CDP connections".into(),
+        ));
+    }
+    if args.cdp_url.is_some() {
+        return Err(ConfigurationError("--cdp-url is unsupported in the CLI: use the SDK for CDP connections".into()));
+    }
+    if args.cdp_port.is_some() {
+        return Err(ConfigurationError("--cdp-port is unsupported in the CLI: use the SDK for CDP connections".into()));
+    }
     if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension || desktop) {
         return Err(ConfigurationError(
             "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch, --extension or \
@@ -520,7 +537,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         ..RunTask::default()
     };
     let secrets_given = !args.secret.is_empty() || args.bitwarden.is_some();
-    fastbrowse_run::check(&task, secrets_given).map_err(|error| ConfigurationError(error.to_string()))?;
+    fastbrowse_run::check(&task, secrets_given)
+        .map_err(|error| ConfigurationError(cli_flag_names(&error.to_string(), args)))?;
     read_attachments(&mut task.attachments, &args.file)?;
     // Check secrets before browser setup so a missing credential names what the operator needs to supply.
     let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
@@ -658,4 +676,61 @@ fn json_result(result: &fastbrowse_core::models::RunResult, build: &Build) -> se
     }
     fields.insert("build".into(), build.fields().into());
     fields.into()
+}
+
+/// Rewrite SDK parameter names in `fastbrowse_run::check` refusals as the CLI flags the user passed.
+fn cli_flag_names(message: &str, args: &Args) -> String {
+    let mut out = String::with_capacity(message.len() + 16);
+    let mut chars = message.char_indices().peekable();
+    while let Some((start, ch)) = chars.next() {
+        if ch.is_ascii_alphabetic() || ch == '_' {
+            let mut end = start + ch.len_utf8();
+            while let Some(&(idx, next)) = chars.peek() {
+                if next.is_ascii_alphanumeric() || next == '_' || next == '.' {
+                    end = idx + next.len_utf8();
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let token = &message[start..end];
+            let preceded_by_dash = start > 0 && message.as_bytes()[start - 1] == b'-';
+            let replacement = if preceded_by_dash {
+                None
+            } else {
+                match token {
+                    "chrome.headed" => Some("--headed"),
+                    "chrome.profile" => Some("--profile"),
+                    "cloud_profile" => Some("--cloud-profile"),
+                    "cdp_url" => Some("--cdp-url"),
+                    "cdp_port" => Some("--cdp-port"),
+                    "target_match" => Some("--target-match"),
+                    "proxy_country" => Some("--proxy-country"),
+                    "save_recipe" => Some("--save-recipe"),
+                    "extension" if args.extension_browser.is_some() && !args.extension => Some("--extension-browser"),
+                    "extension" => Some("--extension"),
+                    "local" => Some("--local"),
+                    "launch" => Some("--launch"),
+                    "attach" => Some("--attach"),
+                    "foreground" => Some("--foreground"),
+                    "viewport" => Some("--viewport"),
+                    "record" => Some("--record"),
+                    "recipe" => Some("--recipe"),
+                    "cursor" => Some("--cursor"),
+                    "downloads" => Some("--downloads"),
+                    "fetch" => Some("--fetch"),
+                    "desktop" => Some("--desktop"),
+                    "start" => Some("--start"),
+                    _ => None,
+                }
+            };
+            match replacement {
+                Some(flag) => out.push_str(flag),
+                None => out.push_str(token),
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
