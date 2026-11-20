@@ -434,6 +434,7 @@ pub struct OpenAICompatibleLLM {
     base_url: String,
     models: HashMap<LLMPurpose, String>,
     reasoning_effort: Option<ReasoningEffort>,
+    reasoning_default: Option<ReasoningEffort>,
     provider_routing: Option<Value>,
     cache_breakpoints: bool,
     ceilings: Mutex<HashMap<String, Ceiling>>,
@@ -442,7 +443,10 @@ pub struct OpenAICompatibleLLM {
 /// Options past the endpoint and its models, defaulting as Python's keyword arguments do.
 #[derive(Debug, Clone)]
 pub struct LLMOptions {
+    /// The effort the user set. It is sent as it is, for every purpose.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// The effort the model runs at when the user set none. A purpose may raise it, as the field reader does.
+    pub reasoning_default: Option<ReasoningEffort>,
     pub reasoning_field: ReasoningField,
     pub provider_routing: Option<Value>,
     pub strict: bool,
@@ -459,6 +463,7 @@ impl Default for LLMOptions {
     fn default() -> Self {
         LLMOptions {
             reasoning_effort: None,
+            reasoning_default: None,
             reasoning_field: ReasoningField::OpenRouter,
             provider_routing: Some(openrouter_provider_routing()),
             strict: true,
@@ -585,6 +590,7 @@ impl OpenAICompatibleLLM {
             base_url: base_url.trim_end_matches('/').to_string(),
             models,
             reasoning_effort: options.reasoning_effort,
+            reasoning_default: options.reasoning_default,
             provider_routing: options.provider_routing,
             cache_breakpoints: options.cache_breakpoints,
             ceilings: Mutex::new(HashMap::new()),
@@ -816,7 +822,15 @@ impl OpenAICompatibleLLM {
         if deepseek(model) {
             body.entry("temperature").or_insert(0.0.into());
         }
-        if let Some(effort) = self.reasoning_effort {
+        // Reading a field's value off a record is a judgment whether the text holds it, and at `low` GPT-6 Luna
+        // answered null for a title that was there in 14% of 80 replays of one captured request, against 0 of 80 at
+        // `medium`. Every other purpose passes at `low`, so only this one's default is raised; an effort the user
+        // set is theirs.
+        let default = match (purpose, self.reasoning_default) {
+            (LLMPurpose::Groups, Some(ReasoningEffort::Low)) => Some(ReasoningEffort::Medium),
+            (_, default) => default,
+        };
+        if let Some(effort) = self.reasoning_effort.or(default) {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
         self.billed(body, purpose, schema, ledger, model).await
