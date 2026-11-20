@@ -92,6 +92,10 @@ the candidate schema that `evals/` and the site share.
 
 ## Changes and prose
 
+- A PR that adds a feature or an eval carries a video of it working: a real run recorded with
+  `fastbrowse --record clip.mp4` (for an eval, one of its tasks run the same way), kept short and under 10 MB, and
+  attached with `ghp pr edit <n> --attach clip.mp4`, which GitHub plays inline. Never a mock; when no run is
+  possible, the body says why.
 - PR titles are Conventional Commits and become the squash subject. Update a branch by rebasing on `origin/main` and
   `git push --force-with-lease`, never `gh pr update-branch`.
 - A user-visible change updates `README.md`, `docs/`, `skills/fastbrowse/`, `packages/sdk/README.md`,
