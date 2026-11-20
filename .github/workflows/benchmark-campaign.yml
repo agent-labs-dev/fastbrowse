@@ -34,7 +34,8 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # `refresh_competitors` or name them in `head_to_head_arms` to measure them in the current campaign.
 #
 # `refresh_competitors` adds all three to the head-to-head group for one full dispatch. Browser Harness drives a Browser
-# Use Cloud browser through the Codex CLI on gpt-6-luna, installed only for a dispatch that runs it.
+# Use Cloud browser through the Codex CLI on gpt-6-luna, which Parallax installs with npm at its pinned version and
+# reaches OpenRouter through its own relay, so a dispatch that runs it needs only Node and OPENROUTER_API_KEY below.
 #
 # `head_to_head_arms` runs exactly the arms it names in the head-to-head group, fastbrowse included only if named, to
 # re-measure some arms alone. The candidate takes every other arm's rows from the campaign's earlier runs (below), each
@@ -326,6 +327,12 @@ jobs:
           need FASTBROWSE_OPENROUTER_API_KEY "$FASTBROWSE_OPENROUTER_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
+          # Claude Opus never judges: it costs many times our chosen judge, so a run that needs a comparison judges
+          # every arm, ours and other products', with the panel in PARALLAX_JUDGE_MODELS instead.
+          # Parallax trims each model of the panel, so spaces around a comma must not hide one.
+          case ",${PARALLAX_JUDGE_MODELS//[[:space:]]/}," in
+            *,anthropic/claude-opus*) echo "::error::Claude Opus is not allowed as a judge: $PARALLAX_JUDGE_MODELS"; exit 1 ;;
+          esac
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
           need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
           need LANGFUSE_SECRET_KEY "$LANGFUSE_SECRET_KEY"
@@ -422,6 +429,10 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
+      # Parallax installs browser-harness's pinned CLI and its Codex agent itself, the agent with npm.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ contains(matrix.arms, 'browser-harness') }}
+        with: {node-version: "24"}
       - name: Check out the harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -480,6 +491,8 @@ jobs:
           FASTBROWSE_HOSTED_API_KEY: ${{ secrets.FASTBROWSE_HOSTED_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          # The browser-harness agent's model calls, relayed so each trial records what OpenRouter billed.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
@@ -580,10 +593,9 @@ jobs:
             uv run --no-sync parallax run "${selection[@]}" "${args[@]}"
             status=$?
             set -e
-            if test "$status" -eq 0; then
-              run_id="$(jq -r .run_id "$mirror/manifest.json")"
-              jq -n --arg run_id "$run_id" '{verified: true, run_id: $run_id}' > "$mirror/parallax-verify.json"
-            fi
+            # Parallax writes this receipt once Langfuse holds the whole run, before it judges the run's quality, so a
+            # run it then failed keeps both facts: the receipt here, the exit status below.
+            test ! -f "$run_out.verified.json" || cp "$run_out.verified.json" "$mirror/parallax-verify.json"
             kill "$mirror_pid" 2> /dev/null || true
             wait "$mirror_pid" 2> /dev/null || true
             # The arms share one journal outside their run directories; each mirror keeps a copy as its arm ended.
