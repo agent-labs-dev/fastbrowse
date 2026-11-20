@@ -25,11 +25,26 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - A run that ends unfinished after sending a commit, such as posting a reply, names that commit with what it entered in the commit's own form, and says when the run ended before the page showed the commit taken. Its answer listed every field it had typed into as one that may still hold what it entered, so two replies the run had posted read as unsent ([#1317](https://github.com/agent-labs-dev/fastbrowse/issues/1317)).
 
+- A step that shows pictures counts each picture's tokens against Jev's input limit before it is sent, as Jev counts them: two for each 28 pixel square and 15 more, for every place the picture is used. Counting only the text, a step showing eight cards on an ee.co.uk phone gallery was sent past the limit and refused with `max_tokens_exceeded`, one refused call each time. The oldest cards are now left out first, so the first request sent fits ([#1303](https://github.com/agent-labs-dev/fastbrowse/issues/1303)).
+
+## [0.12.0] - 2026-11-19
+
+- Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.
+
+- A `--record` clip (and live frames) now stop at the last clean frame once a secret is typed and stay stopped for the rest of the run. A page that echoed the secret on the next page, such as a form's result, was recorded in clear: a reading of the page text that came back clean released the hold, and frames arrived before the next reading. Closes #1347.
+- A run in your own Chrome opens a link's new tab behind your current tab. Chrome raised and activated its window for a tab the page opened, so on a desktop that gives focus to an activated window, such as Hyprland with `misc:focus_on_activate = true`, each link the run followed to a new tab took your keyboard focus. A tab a page script opens still activates the window; [Your own Chrome](docs/cli.md#your-own-chrome) names those cases and the desktop setting ([#1348](https://github.com/agent-labs-dev/fastbrowse/issues/1348)).
+
+- A desktop run can use more than one app. Repeat `--desktop` to start each one (`desktop_apps` in the SDKs and `serve`), and every window on the run's hidden workspace is a tab: the apps' windows and the dialogs they open. The run moves between them as between browser tabs, without focusing anything, follows a window an action opens, and goes back to the previous window when the one it reads closes. Before, a run stayed in one window, and a dialog the app opened was out of its reach.
+
+- A desktop run closes the apps it started when it ends, whether it finishes, fails or is cancelled. It killed deskpilot before deskpilot could close them, so they stayed open, and a later run of the same app could fail because deskpilot could not tell its window from the old one with the same title. That failure is now reported as a failed read naming the cause, not as deskpilot being unavailable ([#1345](https://github.com/agent-labs-dev/fastbrowse/issues/1345)).
+
+- A desktop run that reads the answer and then ends returns it. Each window was keyed by its app alone, so a read of one window could retire notes from another, and an answer derived from quotes read after the last step was dropped, so the run ended `complete` with no answer. A run that asked a question and has no answer now ends `unverified`, saying nothing read answers the task ([#1343](https://github.com/agent-labs-dev/fastbrowse/issues/1343)).
+
+- `--record` works with `--desktop`. A desktop run was refused before its app started ("desktop drives an app, not a browser, so drop record"), and `--help` did not say so ([#1334](https://github.com/agent-labs-dev/fastbrowse/issues/1334)). The run now films the app's window from deskpilot's shots, taken when the app opens and after each action settles, captions each step, draws the cursor gliding to each click, fill, hover and choice, and ends on the result card, so a hidden desktop run leaves a video of what it did. As with a browser recording, no frame is filmed while the window may show a resolved secret. `--help` and the docs now also say that `--record` cannot be combined with `--fetch`, which starts no browser.
+
 - A downloaded file read again from a later page is one note. Each read after a download stored the whole file as another note, so composing the answer sent every copy: one sec.gov task stored a 23 MB file ten times and spent $30.90 composing ([#1299](https://github.com/agent-labs-dev/fastbrowse/issues/1299)).
 
 - A step on a page with pictured controls stays under Jev's 32 MiB request limit. Each click on a canvas that filled the viewport kept a viewport-sized card, and thirteen of them took every request on a Google Maps Street View page over the limit. Each refused request was resent with the same pictures, so one decision took about two minutes. A control that fills the viewport now has no card beside the screenshot, which already shows it. A request is fitted to the limit before it is sent, leaving out the oldest cards first. A refused request is asked again with fewer pictures ([#1301](https://github.com/agent-labs-dev/fastbrowse/issues/1301)).
-
-- A step that shows pictures counts each picture's tokens against Jev's input limit before it is sent, as Jev counts them: two for each 28 pixel square and 15 more, for every place the picture is used. Counting only the text, a step showing eight cards on an ee.co.uk phone gallery was sent past the limit and refused with `max_tokens_exceeded`, one refused call each time. The oldest cards are now left out first, so the first request sent fits ([#1303](https://github.com/agent-labs-dev/fastbrowse/issues/1303)).
 
 - An LLM call cancelled before its reply, or answered without a cost or receipt, is charged at most what its own request could bill: its text and its output cap, at the model's dearest listed price. A request that carries an image keeps the whole window, since an image can bill prompt tokens at an unpublished rate. It was charged as if it had filled the model's whole context window, so a one-field prompt cancelled when the page redrew was recorded as $1.66 ([#1287](https://github.com/agent-labs-dev/fastbrowse/issues/1287)).
 
@@ -2288,7 +2303,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.11.2...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.12.0
 [0.11.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.2
 [0.11.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.1
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
