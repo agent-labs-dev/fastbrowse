@@ -308,7 +308,9 @@ pub(crate) struct RunState {
     pub history: Vec<HistoryEntry>,
     /// The run's own opening of its first page, made before any step and kept out of `history`, which counts the
     /// steps. Asked to open example.com, follow its link and report the heading there, a run that had read the heading
-    /// was judged never to have opened example.com, shown only the click and the read, and ended stuck (#1373).
+    /// was judged never to have opened example.com, shown only the click and the read, and ended stuck (#1373). It
+    /// holds the addresses as they were, and is masked where a model is shown it: a value typed as a secret later in
+    /// the run can sit in either address, and masked at the opening it would not yet have been known.
     pub opened: Option<HistoryEntry>,
     pub site_failure: Option<SiteFailure>,
     /// A failure on the address the run started at, kept after the run leaves it until that address loads. A run

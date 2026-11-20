@@ -537,8 +537,8 @@ impl Agent {
         if let Some(opening) = state.started_url.clone() {
             let landed = self.page.address().await?;
             state.opened = Some(HistoryEntry {
-                effect: Some(self.mask(&format!("went to {landed}"))),
-                ..HistoryEntry::new(Some(Operation::Navigate), Some(&self.mask(&opening)), StepOutcome::Executed, true)
+                effect: Some(format!("went to {landed}")),
+                ..HistoryEntry::new(Some(Operation::Navigate), Some(&opening), StepOutcome::Executed, true)
             });
             if start.is_some() {
                 state.start_landing_url = Some(landed);
