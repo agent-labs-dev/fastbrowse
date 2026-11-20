@@ -512,7 +512,9 @@ timeout if it has one (`MCP_TOOL_TIMEOUT` in Claude Code).
   irreversible action stops at `needs_confirmation`. This is a
   classifier, not a guarantee: a page can word a harmful control to look harmless.
 - **Secrets.** Models see names only. A value is resolved at the moment it is typed, only on its declared origin,
-  and redacted from everything the run returns. A password field is typed only from a stored secret.
+  and redacted from everything the run returns. A password field is typed only from a stored secret. A start
+  address's user name and password (`https://user:pass@host/`) are a secret too: the browser opens the address as
+  given, and models are shown it with them blanked. A token in its path or query is shown as written.
 - **Page content is data.** Every prompt says so, and what a run reports is copied from quotes on the page.
 
 ## Evals and development

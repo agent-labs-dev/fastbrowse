@@ -536,7 +536,7 @@ in the task: `fastbrowse "Search Wikipedia for the person named in input person"
 with each value it names shown beside the name ("input person (Ada Lovelace)"), and a fill that types an input's
 value is saved as the input's name, so the replay types the new value. The recipe keeps the task as written. Pages after it, such as the article, have a different address
 and are decided live.
-If the task or start URL contains a resolved secret, no recipe is saved: a redacted task would fail the exact task match required for replay, and a redacted start URL would not open the original page.
+If the task or start URL contains a resolved secret, or the start URL carries a user name and password, no recipe is saved: a redacted task would fail the exact task match required for replay, and a redacted start URL would not open the original page.
 
 Reading, answering and the check for `complete` always run live. Replay searches the remaining saved steps without
 an arbitrary lookahead or miss cutoff, so a non-replayable step does not discard later reusable actions. A recipe is not evidence that the present task

@@ -60,6 +60,8 @@ use crate::verification::RecordSchema;
 const ENDING_FRAME_SECONDS: f64 = 6.0;
 /// Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one.
 const REDRAW_WATCH_SECONDS: f64 = 10.0;
+/// The secret a caller's start address carries in its userinfo is named this in traces and text results.
+const START_CREDENTIALS: &str = "start_credentials";
 
 /// What one run is asked to do, beyond its task.
 #[derive(Default)]
@@ -434,6 +436,12 @@ impl Agent {
         ledger: &Arc<Ledger>,
         slot: &mut Option<RunState>,
     ) -> Result<RunResult, Flow> {
+        // Registered before anything is asked or traced: the caller's start is in the task every model is shown, and a
+        // run resumed in another agent is shown its first run's start.
+        let carried_start = resume.as_ref().and_then(|resume| resume.state.caller_start.as_deref());
+        for start in options.start.as_deref().into_iter().chain(carried_start) {
+            self.redactor().register_address_credentials(START_CREDENTIALS, start);
+        }
         let prepared = match resume {
             Some(Resume { state, url: Some(url) }) => {
                 self.trace.phase("open", self.page.navigate(&url, None)).await?;
@@ -445,6 +453,7 @@ impl Agent {
             None => None,
         };
         let start = options.start.as_deref();
+        let shown_start = start.map(|start| self.mask(start));
         let mut opening = prepared.as_ref().and_then(|state| state.started_url.clone());
         // `start=None` leaves the browser where it is, which is what a caller stepping a run on from a page it opened
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first
@@ -487,7 +496,7 @@ impl Agent {
                 ledger.limits.max_dollars.is_none().then(|| tokio::runtime::Handle::try_current().ok()).flatten().map(
                     |runtime| {
                         let (llm, given, start, ledger) =
-                            (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
+                            (self.llm.clone(), given.clone(), shown_start.clone(), ledger.clone());
                         state::KnownAsked::new(runtime.spawn(async move {
                             crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await
                         }))
@@ -499,7 +508,10 @@ impl Agent {
                 tokio::task::yield_now().await;
                 (self.task_judgments(&given, ledger).await, Ok(Vec::new()))
             } else {
-                tokio::join!(self.task_judgments(&given, ledger), self.known_pages(&given, start, ledger))
+                tokio::join!(
+                    self.task_judgments(&given, ledger),
+                    self.known_pages(&given, shown_start.as_deref(), ledger)
+                )
             };
             // Dropped on an error, the request is aborted and records what it was billed so far.
             let (judgments, known) = (judgments?, known?);

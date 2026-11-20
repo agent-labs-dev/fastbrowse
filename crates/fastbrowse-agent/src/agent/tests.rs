@@ -2268,6 +2268,63 @@ async fn test_the_done_check_is_shown_where_the_opening_landed_and_the_browser_r
     }
 }
 
+/// Every Jev request a run sends, its state and questions written out, answered as `DoneCheckJev` answers.
+struct SentToJev(DoneCheckJev, Mutex<Vec<String>>);
+
+impl DecisionClient for SentToJev {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.1.lock().unwrap().push(format!("{state} {questions:?}"));
+        self.0.evaluate(state, questions)
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// Every LLM request a run sends, written out, answered as `ScriptedLLM` answers.
+#[derive(Default)]
+struct SentToLLM(Mutex<Vec<String>>);
+
+impl LLMClient for SentToLLM {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        self.0.lock().unwrap().push(format!("{purpose:?} {messages:?}"));
+        ScriptedLLM.generate_value(purpose, messages, schema, ledger)
+    }
+}
+
+/// A caller's start address carrying a user and password was shown to Jev and the LLM as given, on every step and in
+/// the done check (#1381): only typed secrets were masked. The browser still opens the address as given, and the
+/// browser's own report of it, credentials and all, is masked too.
+#[tokio::test]
+async fn test_a_start_address_with_credentials_reaches_no_model_unmasked() {
+    const START: &str = "https://shopper:s3cr3t-pw@shop.test/orders";
+    let page = Arc::new(Redirecting { landed: START, navigated: Mutex::default() });
+    let jev = Arc::new(SentToJev(DoneCheckJev::new(Default::default(), 0.0, "done"), Mutex::default()));
+    let llm = Arc::new(SentToLLM::default());
+    let agent = Agent::new(page.clone(), jev.clone(), llm.clone());
+    let options = super::RunOptions { start: Some(START.into()), ..Default::default() };
+    let _ = agent.run("Tell me what the orders page says", options).await;
+    assert_eq!(page.navigated.lock().unwrap().first().map(String::as_str), Some(START));
+    let jev_sent = jev.1.lock().unwrap();
+    let llm_sent = llm.0.lock().unwrap();
+    assert!(jev_sent.iter().any(|sent| sent.contains("@shop.test/orders")), "the address is shown: {jev_sent:?}");
+    assert!(llm_sent.iter().any(|sent| sent.contains("@shop.test/orders")), "the address is shown: {llm_sent:?}");
+    for sent in jev_sent.iter().chain(llm_sent.iter()) {
+        assert!(!sent.contains("s3cr3t-pw") && !sent.contains("shopper"), "{sent}");
+    }
+}
+
 /// Asked to add a variant the page showed out of stock, the done check rightly found the step undone, and every DONE
 /// was turned back until recovery ran out, so a correct answer ended `stuck` (#779). A step the site refuses ends the
 /// run with its answer, unverified.
