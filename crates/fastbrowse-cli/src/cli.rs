@@ -721,6 +721,11 @@ fn cli_flag_names(message: &str, args: &Args) -> String {
                     "fetch" => Some("--fetch"),
                     "desktop" => Some("--desktop"),
                     "start" => Some("--start"),
+                    "inputs" => Some("--input"),
+                    "attachments" => Some("--file"),
+                    "authorization" => Some("--authorize"),
+                    "secrets" if args.bitwarden.is_some() && args.secret.is_empty() => Some("--bitwarden"),
+                    "secrets" => Some("--secret"),
                     _ => None,
                 }
             };
