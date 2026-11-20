@@ -193,26 +193,30 @@ async fn each_desktop_flag_starts_one_more_app() {
 
 #[tokio::test]
 async fn test_fetch_refuses_flags_that_shape_a_browser() {
-    for (flag, field) in [
-        (&["--local"][..], "local"),
-        (&["--headed"], "chrome"),
-        (&["--cdp-port", "9222"], "cdp_port"),
-        (&["--cursor"], "cursor"),
-        (&["--downloads", "/tmp/d"], "downloads"),
+    for (flag, expected) in [
+        (&["--local"][..], "--local"),
+        (&["--save-recipe", "f.json"], "--save-recipe"),
+        (&["--target-match", "x"], "--target-match"),
+        (&["--extension-browser", "Work"], "--extension-browser"),
+        (&["--cursor"], "--cursor"),
+        (&["--downloads", "/tmp/d"], "--downloads"),
         // A fetched page can only follow links, so nothing it is given is ever typed, attached or submitted (#1337).
-        (&["--input", "name=Ada"], "inputs"),
+        (&["--input", "name=Ada"], "--input"),
         // A file that does not exist: read before the check, its read error was reported in place of the conflict.
-        (&["--file", "/nonexistent/upload.pdf"], "attachments"),
-        (&["--authorize"], "authorization"),
+        (&["--file", "/nonexistent/upload.pdf"], "--file"),
+        (&["--authorize"], "--authorize"),
         // Refused before either is resolved: an unset variable or a vault lookup was reported in its place.
-        (&["--secret", "p=NOT_SET"], "secrets"),
-        (&["--bitwarden", "vault-item"], "secrets"),
+        (&["--secret", "p=NOT_SET"], "--secret"),
+        (&["--bitwarden", "vault-item"], "--bitwarden"),
     ] {
         let mut argv = vec!["t", "--start", "https://example.com", "--fetch"];
         argv.extend_from_slice(flag);
         let ran = cli(&argv).await;
         assert!(ran.call.is_none());
-        assert_eq!(ran.err, format!("fastbrowse: fetch starts no browser, so it cannot be combined with {field}\n"));
+        assert_eq!(
+            ran.err,
+            format!("fastbrowse: --fetch starts no browser, so it cannot be combined with {expected}\n")
+        );
     }
 }
 
@@ -235,22 +239,39 @@ async fn test_browser_skips_the_read_first_and_refuses_fetch() {
 }
 
 #[tokio::test]
-async fn local_browser_launch_and_cdp_options_cannot_bypass_the_extension() {
-    for (flags, field) in [
-        (&["--headed"][..], "chrome.headed"),
-        (&["--profile", "/tmp/kept"], "chrome.profile"),
-        (&["--cdp-url", "ws://browser.test/devtools"], "cdp_url"),
-        (&["--cdp-port", "9222"], "cdp_port"),
-        (&["--cloud-profile", "prof_1"], "cloud_profile"),
-        (&["--proxy-country", "uk"], "proxy_country"),
-        (&["--viewport", "800x600"], "viewport"),
+async fn unsupported_cli_flags_use_help_wording() {
+    for (flags, expected) in [
+        (&["--headed"][..], "--headed is unsupported: local CLI browsing requires the extension"),
+        (&["--profile", "/tmp/kept"], "--profile is unsupported: use a profile with the extension installed"),
+        (
+            &["--cdp-url", "ws://browser.test/devtools"],
+            "--cdp-url is unsupported in the CLI: use the SDK for CDP connections",
+        ),
+        (&["--cdp-port", "9222"], "--cdp-port is unsupported in the CLI: use the SDK for CDP connections"),
     ] {
         let mut argv = vec!["task", "--json"];
         argv.extend_from_slice(flags);
         let ran = cli(&argv).await;
         assert!(ran.call.is_none());
         let error = ran.json()["error"].as_str().unwrap().to_string();
-        assert!(error.contains("extension") && error.contains(field), "{error}");
+        assert_eq!(error, expected);
+    }
+}
+
+#[tokio::test]
+async fn extension_and_cloud_refusal_messages_name_cli_flags() {
+    for (flags, expected) in [
+        (&["--cloud-profile", "prof_1"][..], "--extension drives the browser it is connected in; drop --cloud-profile"),
+        (&["--proxy-country", "uk"], "--extension drives the browser it is connected in; drop --proxy-country"),
+        (&["--viewport", "800x600"], "--extension drives the browser it is connected in; drop --viewport"),
+        (&["--cloud", "--attach"], "--attach and --target-match need --cdp-url, --cdp-port or --extension"),
+    ] {
+        let mut argv = vec!["task", "--json"];
+        argv.extend_from_slice(flags);
+        let ran = cli(&argv).await;
+        assert!(ran.call.is_none());
+        let error = ran.json()["error"].as_str().unwrap().to_string();
+        assert_eq!(error, expected);
     }
 }
 
@@ -361,7 +382,12 @@ async fn test_cannot_combine_cdp_url_and_cdp_port() {
         "ws://browser.test/devtools",
     ];
     let ran = cli(&argv).await;
-    assert!(ran.json()["error"].as_str().unwrap().contains("cdp_url and cdp_port both name"));
+    assert!(
+        ran.json()["error"]
+            .as_str()
+            .unwrap()
+            .contains("--cdp-url and --cdp-port are unsupported in the CLI: use the SDK for CDP connections")
+    );
 }
 
 #[tokio::test]
