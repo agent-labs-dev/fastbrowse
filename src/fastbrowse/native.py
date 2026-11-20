@@ -15,10 +15,12 @@ import json
 import signal
 import sys
 import time
+import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any, ClassVar, NoReturn
 
+import httpcore
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
@@ -338,8 +340,37 @@ def _llm(client: LLMClient) -> Callable[..., Awaitable[str]]:
 type _Sent = tuple[str, int, list[tuple[str, str]], bytes] | tuple[str, str]
 
 
+# One per connection pool, shared by every run on its client: two runs each held to the limit would queue twice it.
+_CONNECTIONS: weakref.WeakKeyDictionary[httpcore.AsyncConnectionPool, asyncio.Semaphore] = weakref.WeakKeyDictionary()
+# Requests left to finish after their run stopped waiting; the loop holds a task only weakly.
+_FINISHING: set[asyncio.Task[_Sent]] = set()
+
+
+def _connections(client: httpx.AsyncClient, url: str) -> asyncio.Semaphore | None:
+    """The connections the pool `url` goes through may open, or None when its transport sets no limit.
+
+    The core sends a pass's batches together, hundreds on a long page. In an httpx pool that queues past its
+    `max_connections`, and httpcore's queue bookkeeping redoes every queued request on each change, so dropping a
+    thousand of them held the event loop for seconds. A request beyond the limit waits here instead, where dropping it
+    holds nothing. The limit is the pool's own: an HTTP/2 connection carries more streams, but the pool learns that
+    only once it has connected, and queues until then. A transport other than httpx's own pool, such as a mock, has no
+    limit to read.
+    """
+    transport = client._transport_for_url(httpx.URL(url))
+    if not isinstance(transport, httpx.AsyncHTTPTransport):
+        return None
+    pool = transport._pool
+    # httpcore stores an unlimited pool as sys.maxsize.
+    if not isinstance(pool, httpcore.AsyncConnectionPool) or pool._max_connections == sys.maxsize:
+        return None
+    free = _CONNECTIONS.get(pool)
+    if free is None:
+        free = _CONNECTIONS[pool] = asyncio.Semaphore(pool._max_connections)
+    return free
+
+
 def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
-    async def send(
+    async def exchange(
         method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None, silence: float
     ) -> _Sent:
         try:
@@ -372,6 +403,30 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
             (name, value) for name, value in response.headers.multi_items() if name.lower() != "content-encoding"
         ]
         return ("ok", response.status_code, headers, content)
+
+    async def send(
+        method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None, silence: float
+    ) -> _Sent:
+        """Send a request for the core, which drops it when the run stops or a batch beside it fails.
+
+        A request dropped while it waits for a connection is cancelled; one httpx has been handed is left to finish,
+        and its answer goes unread. httpcore 1.0.9, the latest release, strands a connection when a task is cancelled
+        inside it: just after the pool assigns it a new connection, which stays CONNECTING with no request
+        (encode/httpcore#1093), between connecting and sending, which leaves it NEW, or while it closes a response,
+        whose shield holds against anyio's cancellation but not asyncio's, which leaves it ACTIVE. Each holds a slot of
+        the pool for good, until every later request on the client raises PoolTimeout. A request httpx has been handed
+        is sent as soon as it connects, and billed whether or not its answer is read, and it holds its connection no
+        longer than its own timeout allows.
+        """
+        connections = _connections(client, url)
+        if connections is not None:
+            await connections.acquire()
+        sent = asyncio.ensure_future(exchange(method, url, headers, body, max_bytes, silence))
+        _FINISHING.add(sent)
+        sent.add_done_callback(_FINISHING.discard)
+        if connections is not None:
+            sent.add_done_callback(lambda _: connections.release())
+        return await asyncio.shield(sent)
 
     return send
 

@@ -332,6 +332,12 @@ No frame or screenshot is sent while a resolved secret may show on the page.
 `run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; a `jev` client is asked at
 Jev's limits and thresholds. See [Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
 
+`run_task(http=...)` sends the run's requests through your own `httpx.AsyncClient`. The run keeps no more of them
+in flight than the client's `max_connections`, and the rest wait in fastbrowse. When the run stops waiting for a
+request the client already has, because it was cancelled or a batch beside it failed, the request finishes and its
+answer goes unread. Cancelling a request inside httpx's pool can leave the connection stuck, until every later
+request on the client fails with `PoolTimeout`.
+
 **Choosing the model backend without the environment.** New in 0.9.1.
 `run_task(settings={...})` takes the same names as the
 environment variables (`OPENROUTER_API_KEY`, `AI_GATEWAY_API_KEY`, `TYPESAFE_API_KEY`, `FASTBROWSE_DECISION_SOURCE`,

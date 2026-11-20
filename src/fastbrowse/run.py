@@ -172,6 +172,10 @@ async def run_task(
     rather than losing its browser. The other cloud options mean nothing for the other two browsers. `jev` and
     `llm` default to clients the Rust core builds from the environment, then `.env`, so an embedder that
     resolves its own credentials, or serves Jev from somewhere else, passes them instead.
+    `http` is an `httpx.AsyncClient` the run's requests go through instead of the core's own. The run keeps no more
+    of them in flight than its `max_connections`, and a request it drops once the client has it, when the run is
+    cancelled or a batch beside it fails, finishes unread: cancelling one inside httpx's pool can leave a connection
+    stuck, and then every later request on the client raises `PoolTimeout`.
 
     `allowed_origins` limits the documents the run may inspect and control to those exact `http(s)://host[:port]`
     origins (no wildcards, paths or userinfo; an empty list is an error, and `None` is unscoped). A navigation,
