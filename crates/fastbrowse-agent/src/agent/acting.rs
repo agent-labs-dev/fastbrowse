@@ -2025,7 +2025,7 @@ impl Agent {
             ),
             Some("Nothing shown says the site refuses a step the task asks for."),
         );
-        let history = state.history.iter().map(HistoryEntry::seen).collect();
+        let history = state.actions_taken().map(HistoryEntry::seen).collect();
         let mut context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
         // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
         // fields left empty once the run stalled on a task to carry out (#812).
