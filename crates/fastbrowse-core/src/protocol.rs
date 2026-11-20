@@ -266,7 +266,7 @@ fn run_id<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
 
 /// One run's arguments: what the CLI's flags, a `run` request, the MCP `browse` tool and the Python and Node `run_task`
 /// all describe. The caller's own objects (its callbacks, its model clients, a browser key) are not among them.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunTask {
     pub task: String,
@@ -348,6 +348,13 @@ pub struct RunTask {
     /// `extension`.
     #[serde(default)]
     pub extension_browser: Option<String>,
+}
+
+/// A task's start and DevTools endpoint can carry credentials, so it prints masked (`debug_masked`).
+impl std::fmt::Debug for RunTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::safety::debug_masked("RunTask", self, f)
+    }
 }
 
 impl RunTask {
@@ -869,6 +876,23 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A task printed for a log shows no credential its addresses carry: `Debug` was derived and printed them raw.
+    #[test]
+    fn test_a_task_and_a_browser_connection_print_their_addresses_masked() {
+        let task = RunTask {
+            task: "Read it".into(),
+            start: Some("https://ops:Pr1nt9w@shop.test/".into()),
+            cdp_url: Some("wss://ops:Cdp9w@browser.test/devtools".into()),
+            ..RunTask::default()
+        };
+        let printed = format!("{task:?}");
+        assert!(printed.contains("shop.test") && !printed.contains("9w"), "{printed}");
+        let connection: crate::models::BrowserConnection =
+            serde_json::from_value(serde_json::json!({"cdp_url": "wss://ops:Cdp9w@browser.test/", "remote": false}))
+                .unwrap();
+        assert!(!format!("{connection:?}").contains("9w"));
+    }
     use crate::py::dump::Dump;
     use serde_json::json;
 

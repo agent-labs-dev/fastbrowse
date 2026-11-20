@@ -146,7 +146,8 @@ impl Agent {
             return Ok(None);
         };
         let reached = match until {
-            Some(until) => until(self.raw().map_or_else(|| observation.url.clone(), |raw| raw.url)).await,
+            // The embedder is shown the address as events show it: its credentials and secrets masked (#1381).
+            Some(until) => until(observation.url.clone()).await,
             None => true,
         };
         if reached {

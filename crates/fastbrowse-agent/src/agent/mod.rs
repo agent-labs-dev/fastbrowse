@@ -10,6 +10,7 @@ mod batching;
 mod driving;
 mod finishing;
 pub mod helpers;
+mod masking;
 mod reading;
 mod recovery;
 mod replay;
@@ -125,6 +126,8 @@ pub struct Agent {
     page: Arc<dyn Page>,
     jev: Arc<dyn DecisionClient>,
     llm: Arc<dyn LLMClient>,
+    /// The clients as given, for `with_redactor` to wrap again around another redactor.
+    clients: (Arc<dyn DecisionClient>, Arc<dyn LLMClient>),
     config: Config,
     secrets: Option<Arc<dyn SecretResolver>>,
     on_event: Option<EventHandler>,
@@ -138,11 +141,12 @@ pub struct Agent {
 impl Agent {
     pub fn new(page: Arc<dyn Page>, jev: Arc<dyn DecisionClient>, llm: Arc<dyn LLMClient>) -> Agent {
         let config = jev.profile().fit(None);
-        let redactor = Arc::default();
+        let redactor: Arc<Mutex<Redactor>> = Arc::default();
         Agent {
             page,
-            jev: Arc::new(superseding::Decisions(jev)),
-            llm: Arc::new(superseding::Generations(llm)),
+            jev: superseding::decisions(&jev, &redactor),
+            llm: superseding::generations(&llm, &redactor),
+            clients: (jev, llm),
             config,
             secrets: None,
             on_event: None,
@@ -178,6 +182,8 @@ impl Agent {
     /// Keep the run's secrets in `redactor`, so a trace the run's clients write through is redacted too.
     pub fn with_redactor(mut self, redactor: Arc<Mutex<Redactor>>) -> Agent {
         self.trace = self.trace.redacting(Arc::clone(&redactor));
+        self.jev = superseding::decisions(&self.clients.0, &redactor);
+        self.llm = superseding::generations(&self.clients.1, &redactor);
         self.redactor = redactor;
         self
     }
@@ -249,14 +255,15 @@ impl Agent {
         self.mask(&state.raw_task)
     }
 
-    /// Register the credentials of every address in `texts` (`Redactor::register_credentials_in`), and from the first,
+    /// Register the credentials of every address in `texts` (`Redactor::register_address`: a text that is one address
+    /// is parsed as the browser parses it, and every address in prose is found by scanning), and from the first,
     /// hold live frames and the recording to the end of the run: Chrome drops the userinfo from `location.href` but
     /// keeps it in `document.URL`, so a page can draw its own address, credentials and all, where no reading of its
     /// text looks, and a page can echo it after the reading that last found it clean.
     fn learn_credentials<'a>(&self, texts: impl IntoIterator<Item = &'a str>) {
         let mut redactor = self.redactor();
         for text in texts {
-            redactor.register_credentials_in(text);
+            redactor.register_address(text);
         }
         let held = redactor.holds_credentials();
         drop(redactor);

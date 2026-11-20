@@ -1652,7 +1652,8 @@ impl CdpPage {
         // A timeout says nothing about the page's content; a caller with no step of its own yet needs the distinct
         // type, not this message, to tell a slow site or session from its own broken navigation. The address is the
         // caller's own, and a run that failed before its first step has no other record of where it was going.
-        let message = format!("Page.navigate failed ({failure}) for {url}");
+        // Its credentials stay out: the error reaches the result and an embedder's logs before any redactor sees it.
+        let message = format!("Page.navigate failed ({failure}) for {}", fastbrowse_core::safety::mask_userinfo(url));
         if timed_out {
             return Err(BrowserError::NavigationTimeout(Failure::new(format!("Page.navigate/{failure}"), message)));
         }

@@ -38,6 +38,7 @@ use fastbrowse_core::decision::{DecisionClient, JEV_MODEL, OpenRouterDecisionCat
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{LLMPurpose, LocalChrome};
 use fastbrowse_core::py::lax::bool_of;
+use fastbrowse_core::safety::mask_userinfo;
 use serde_json::{Map, Value};
 
 use crate::action_picker::{ActionPicker, LlmDecisionClient};
@@ -212,7 +213,7 @@ fn set(key: &Option<Secret>) -> bool {
     key.as_ref().is_some_and(Secret::is_set)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Settings {
     pub typesafe_api_key: Option<Secret>,
     pub ai_gateway_api_key: Option<Secret>,
@@ -255,6 +256,72 @@ pub struct Settings {
     pub chrome: Option<String>,
     pub headed: bool,
     pub profile: Option<PathBuf>,
+}
+
+/// Every field but the endpoints as derived: a key prints as `Secret`, and an endpoint's userinfo is masked, since a
+/// base address written `https://user:pass@host/v1` carries the provider's credentials. Taken apart without `..`, so
+/// a field added later does not compile until it is printed here.
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Settings {
+            typesafe_api_key,
+            ai_gateway_api_key,
+            openrouter_api_key,
+            browser_use_api_key,
+            exa_api_key,
+            mcp_token,
+            decision_source,
+            decision_base_url,
+            decision_model,
+            decision_api_key,
+            action_picker,
+            telnyx_api_key,
+            openai_api_key,
+            aimlapi_api_key,
+            perplexity_api_key,
+            llm_provider,
+            llm_provider_api_key,
+            llm_model,
+            llm_base_url,
+            llm_api_key,
+            llm_strict,
+            llm_strict_set,
+            llm_extra_body,
+            llm_reasoning,
+            chrome,
+            headed,
+            profile,
+        } = self;
+        f.debug_struct("Settings")
+            .field("typesafe_api_key", typesafe_api_key)
+            .field("ai_gateway_api_key", ai_gateway_api_key)
+            .field("openrouter_api_key", openrouter_api_key)
+            .field("browser_use_api_key", browser_use_api_key)
+            .field("exa_api_key", exa_api_key)
+            .field("mcp_token", mcp_token)
+            .field("decision_source", decision_source)
+            .field("decision_base_url", &decision_base_url.as_deref().map(mask_userinfo))
+            .field("decision_model", decision_model)
+            .field("decision_api_key", decision_api_key)
+            .field("action_picker", action_picker)
+            .field("telnyx_api_key", telnyx_api_key)
+            .field("openai_api_key", openai_api_key)
+            .field("aimlapi_api_key", aimlapi_api_key)
+            .field("perplexity_api_key", perplexity_api_key)
+            .field("llm_provider", llm_provider)
+            .field("llm_provider_api_key", llm_provider_api_key)
+            .field("llm_model", llm_model)
+            .field("llm_base_url", &llm_base_url.as_deref().map(mask_userinfo))
+            .field("llm_api_key", llm_api_key)
+            .field("llm_strict", llm_strict)
+            .field("llm_strict_set", llm_strict_set)
+            .field("llm_extra_body", llm_extra_body)
+            .field("llm_reasoning", llm_reasoning)
+            .field("chrome", chrome)
+            .field("headed", headed)
+            .field("profile", profile)
+            .finish()
+    }
 }
 
 impl Default for Settings {

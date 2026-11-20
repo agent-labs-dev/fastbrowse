@@ -1,5 +1,6 @@
 //! run_task decisions, including one owned-local browser initialization check.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -1611,4 +1612,214 @@ async fn test_a_save_over_another_cards_caption_is_not_taken() {
             "{question}"
         );
     }
+}
+
+/// Every request to a client, as the client was handed it, around the client that answers it.
+struct Recorded<C: ?Sized>(Arc<C>, Arc<Mutex<Vec<String>>>);
+
+impl DecisionClient for Recorded<dyn DecisionClient> {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.0.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.1.lock().unwrap().push(format!("{state}{}", serde_json::to_string(questions).unwrap()));
+        self.0.evaluate(state, questions)
+    }
+
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a fastbrowse_core::decision::Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.1.lock().unwrap().push(format!("{state}{}", serde_json::to_string(questions).unwrap()));
+        self.0.evaluate_images(state, questions, images)
+    }
+}
+
+impl LLMClient for Recorded<dyn LLMClient> {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        self.1.lock().unwrap().extend(messages.iter().map(|message| message.content.clone()));
+        self.0.generate_value(purpose, messages, schema, ledger)
+    }
+}
+
+/// A run given credentials in its start (with a tab the browser strips), its task (a password-less token), its
+/// JSON context (an escaped `@`) and a redirect, on a page that echoes each of them plain, percent-encoded and as the
+/// `Authorization: Basic` the browser sent, shows none of them to any model, event, trace record, result, `until`
+/// check, recording or frame, while the browser is given every address whole (#1381). The run's only stderr writes
+/// (`fastbrowse_browser::warn` and the recipe warning) carry no page text or address.
+#[tokio::test]
+async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_frames() {
+    use fastbrowse_core::py::base64;
+    if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
+        return;
+    }
+    // Each password holds characters a prose cut once ended an authority at.
+    let (start_pw, redirect_pw, task_pw) = ("St@rt 9'pw", "R3dir<\"x", "T4sk(pw);");
+    let (token, context_pw) = ("Tok3n9pw", "J5on9pw");
+    let encode =
+        |text: &str| percent_encoding::utf8_percent_encode(text, percent_encoding::NON_ALPHANUMERIC).to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let reports = Arc::new(Mutex::new(Vec::<String>::new()));
+    let reported = reports.clone();
+    let echoes = [start_pw, redirect_pw, task_pw, context_pw]
+        .map(|pw| format!("{pw} {} {}", encode(pw), base64::encode(format!("ops:{pw}").as_bytes())))
+        .join(" ")
+        + &format!(" {token} {}", base64::encode(format!("{token}:").as_bytes()));
+    // The address the run ends on carries the token in its query, as an `until` check would be shown it raw.
+    let redirect = format!("http://ops:{}@127.0.0.1:{port}/orders?ref={token}", encode(redirect_pw));
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = vec![0u8; 16384];
+            let read = socket.read(&mut buffer).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let authorization = request
+                .lines()
+                .find_map(|line| line.strip_prefix("Authorization: Basic "))
+                .map(str::trim)
+                .map(str::to_string);
+            reported.lock().unwrap().extend(authorization.clone());
+            let reply = if path == "/" {
+                format!("HTTP/1.1 302 Found\r\nlocation: {redirect}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+            } else if path.starts_with("/orders") && authorization.is_none() {
+                "HTTP/1.1 401 Unauthorized\r\nwww-authenticate: Basic realm=\"orders\"\r\ncontent-length: 0\r\n\
+                 connection: close\r\n\r\n"
+                    .to_string()
+            } else {
+                let sent = authorization.unwrap_or_default();
+                let page = format!(
+                    "<html><head><title>Orders {sent}</title></head><body><h1>Orders</h1><p id=u></p>\
+                     <p>Authorization: Basic {sent}</p><p>{echoes}</p><a href=\"{redirect}\">again</a>\
+                     <script>document.getElementById('u').textContent = document.URL</script></body></html>"
+                );
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                    page.len()
+                )
+            };
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    let (asked, written) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (frames, noted) = (Arc::new(AtomicUsize::new(0)), events.clone());
+    let counter = frames.clone();
+    let checked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let until_seen = checked.clone();
+    let recording = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("canary-{}.mp4", std::process::id()));
+    let trace = fastbrowse_core::telemetry::Trace::collecting();
+    let jev: Arc<dyn DecisionClient> =
+        Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(vec![fastbrowse_agent::scripted::Step {
+            operation: fastbrowse_core::models::Operation::Read,
+            label: String::new(),
+            pick: None,
+        }]));
+    let llm: Arc<dyn LLMClient> = Arc::new(fastbrowse_agent::scripted::ScriptedLLM);
+    let host = Host {
+        jev: Some(Arc::new(Recorded(jev, asked.clone()))),
+        llm: Some(Arc::new(Recorded(llm, written.clone()))),
+        settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
+        http: Some(Http::hyper().with_trace(trace.clone())),
+        on_frame: Some(Arc::new(move |_: Vec<u8>| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
+        })),
+        on_event: Some(Arc::new(move |event: Event| {
+            noted.lock().unwrap().push(serde_json::to_string(&event).unwrap());
+            Box::pin(async {})
+        })),
+        until: Some(Arc::new(move |url: String| {
+            until_seen.lock().unwrap().push(url);
+            Box::pin(async { true })
+        })),
+        ..Host::default()
+    };
+    // The browser strips the tab, so it opens with the password as written without it.
+    let encoded = encode(start_pw);
+    let (head, tail) = encoded.split_at(4);
+    let task = RunTask {
+        task: format!(
+            "Read the orders. The key page is http://ops:{task_pw}@127.0.0.1:{port}/key, and the repository \
+             http://{token}@127.0.0.1:{port}/repo, neither needed now."
+        ),
+        start: Some(format!("http://ops:{head}\t{tail}@127.0.0.1:{port}/")),
+        context: Some(format!(r#"{{"crm": "http://ops:{context_pw}@127.0.0.1:{port}/crm"}}"#)),
+        record: Some(recording.clone()),
+        launch: true,
+        browser: true,
+        ..RunTask::default()
+    };
+    // A JSON caller's escaped `@` is decoded before the run reads it.
+    let escaped =
+        serde_json::to_string(&task).unwrap().replace(&format!("{context_pw}@"), &format!("{context_pw}\\u0040"));
+    assert!(escaped.contains("\\u0040"));
+    let task: RunTask = serde_json::from_str(&escaped).unwrap();
+    let result = run_task(task, host).await.unwrap();
+    // A refusal names the DevTools address it refused, raised to an embedder before any redactor exists.
+    let refused = run_task(
+        RunTask {
+            task: "Read it".into(),
+            cdp_url: Some(format!("http://ops:{context_pw}@127.0.0.1:{port}/")),
+            ..RunTask::default()
+        },
+        Host::default(),
+    )
+    .await
+    .unwrap_err();
+    let mut sinks = vec![("result", serde_json::to_string(&result).unwrap()), ("refusal", refused.to_string())];
+    sinks.extend(checked.lock().unwrap().iter().map(|url| ("until", url.clone())));
+    sinks.extend(
+        result
+            .recordings
+            .iter()
+            .map(|path| ("recording", String::from_utf8_lossy(&std::fs::read(path).unwrap_or_default()).to_string())),
+    );
+    sinks.extend(asked.lock().unwrap().iter().map(|text| ("jev", text.clone())));
+    sinks.extend(written.lock().unwrap().iter().map(|text| ("llm", text.clone())));
+    sinks.extend(events.lock().unwrap().iter().map(|text| ("event", text.clone())));
+    sinks.extend(trace.events().iter().map(|record| ("trace", record.to_string())));
+    assert!(sinks.iter().any(|(sink, text)| *sink == "jev" && text.contains("Orders")), "the page was not read");
+    assert!(!checked.lock().unwrap().is_empty(), "until was not asked");
+    // Every frame of the run is held, so its recording has no clean frame to keep and is not written.
+    assert!(result.recordings.is_empty() && !recording.exists(), "a recording was written");
+    let written_start = format!("{head}\t{tail}");
+    for (user, pw) in [("ops", start_pw), ("ops", redirect_pw), ("ops", task_pw), ("ops", context_pw), (token, "")] {
+        let secret = if pw.is_empty() { user } else { pw };
+        let basic = if pw.is_empty() { format!("{user}:") } else { format!("{user}:{pw}") };
+        // JSON writes a quote as `\"`, so each form is looked for as written and as JSON writes it.
+        let forms = [
+            secret.to_string(),
+            encode(secret),
+            written_start.clone(),
+            base64::encode(basic.as_bytes()),
+            base64::encode(basic.as_bytes()).replace('+', "-").replace('/', "_"),
+        ];
+        for form in forms
+            .iter()
+            .flat_map(|form| [form.clone(), serde_json::to_string(form).unwrap().trim_matches('"').to_string()])
+        {
+            for (sink, text) in &sinks {
+                assert!(!text.contains(&form), "a credential's form {form:?} reached the {sink}");
+            }
+        }
+    }
+    assert_eq!(frames.load(Ordering::SeqCst), 0, "a frame went out");
+    let _ = std::fs::remove_file(&recording);
+    // The browser itself was given the redirect's address whole and answered the 401 with its credentials.
+    let sent = base64::encode(format!("ops:{redirect_pw}").as_bytes());
+    assert!(reports.lock().unwrap().contains(&sent), "the browser was not given the redirect's credentials");
 }

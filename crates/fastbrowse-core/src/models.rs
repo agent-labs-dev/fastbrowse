@@ -988,7 +988,7 @@ fn origins_field<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserConnection {
     /// Browser-level DevTools WebSocket URL (`ws://` or `wss://`).
@@ -1013,6 +1013,13 @@ pub struct BrowserConnection {
     /// Exact `http(s)://host[:port]` origins whose documents the run may inspect and control, else unscoped.
     #[serde(default, deserialize_with = "origins_field")]
     pub allowed_origins: Option<Vec<String>>,
+}
+
+/// A DevTools or live address can carry credentials, so it prints masked (`debug_masked`).
+impl std::fmt::Debug for BrowserConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::safety::debug_masked("BrowserConnection", self, f)
+    }
 }
 
 impl BrowserConnection {
