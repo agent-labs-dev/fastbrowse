@@ -410,6 +410,64 @@ async fn test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_f
     }
 }
 
+#[cfg(feature = "recording")]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_fed_recording_writes_both_videos_with_the_cursor_and_the_drawn_card() {
+    // A desktop run has no tab: it feeds window shots, and the card is drawn over the last one.
+    use fastbrowse_browser::pointer::PointerMark;
+    use fastbrowse_browser::recording::{Recording, ResultCard};
+    use fastbrowse_core::models::Operation;
+
+    if fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_none() {
+        eprintln!("recording needs ffmpeg; skipping");
+        return;
+    }
+    let dir = temp_dir("fed-recording");
+    let still = dir.join("window.png");
+    let made = tokio::process::Command::new("ffmpeg")
+        .args(["-loglevel", "error", "-f", "lavfi", "-i", "color=c=white:s=320x240", "-frames:v", "1"])
+        .arg(&still)
+        .status()
+        .await
+        .unwrap();
+    assert!(made.success());
+    let path = dir.join("clip.mp4");
+    let (mut recording, feed) = Recording::start_fed(&path).unwrap();
+    feed.show(std::fs::read(&still).unwrap());
+    feed.mark(PointerMark {
+        at: std::time::Instant::now(),
+        x: 160.0,
+        y: 120.0,
+        operation: Operation::Click,
+        pressed: true,
+        width: 320.0,
+        height: 240.0,
+    });
+    tokio::time::sleep(Duration::from_secs_f64(0.5)).await;
+    let card = ResultCard {
+        status: "complete".into(),
+        answer: Some("hello".into()),
+        error: None,
+        citations: vec![],
+        steps: 1,
+        known_dollars: 0.0,
+    };
+    recording.show_result("write hello", &card).await.unwrap();
+    let outputs = recording.finish().await;
+    assert_eq!(outputs, [path.clone(), dir.join("clip.plain.mp4")]);
+    // The last frame is the card's dark background, not the white window it covers.
+    let last = tokio::process::Command::new("ffmpeg")
+        .args(["-loglevel", "error", "-sseof", "-0.5", "-i"])
+        .arg(&path)
+        .args(["-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+        .output()
+        .await
+        .unwrap();
+    assert!(last.status.success());
+    assert!(last.stdout.first().is_some_and(|&luma| luma < 64), "{:?}", last.stdout);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // -- test_frame_callback.py ------------------------------------------------------------------------------------------
 //
 // Python runs these on a real Chrome and sets the frame handler on the open session. The Rust session takes its

@@ -744,6 +744,7 @@ impl Settings {
         }
         let options = LLMOptions {
             reasoning_effort: self.llm_reasoning,
+            reasoning_default: None,
             reasoning_field: preset.reasoning.unwrap_or(ReasoningField::OpenRouter),
             provider_routing: None,
             strict: if self.llm_strict_set { self.llm_strict } else { preset.strict },
@@ -801,7 +802,8 @@ impl Settings {
         http: &Http,
     ) -> Result<Box<dyn LLMClient>, ConfigurationError> {
         let options = LLMOptions {
-            reasoning_effort: self.llm_reasoning.or_else(|| default_reasoning(&self.model())),
+            reasoning_effort: self.llm_reasoning,
+            reasoning_default: default_reasoning(&self.model()),
             provider_routing: Some(routing),
             ..LLMOptions::default()
         };

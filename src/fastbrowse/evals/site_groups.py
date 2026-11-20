@@ -106,6 +106,11 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
     digest = hashlib.sha256(content).hexdigest()
     held = {group.id: group for group in candidate.groups}
     files = {rows: content}
+    # The site compares a release with the one before it, from the solo group file as that release left it. This
+    # candidate replaces the file, so an earlier campaign's copy is kept before it goes; republishing one keeps it.
+    solo = current.get("live-suite-fastbrowse", {})
+    if (solo.get("measured") or {}).get("campaign_id") not in (None, candidate.campaign_id):
+        files["data/previous-release.json"] = (json.dumps(solo, indent=2) + "\n").encode()
     for site_group, sources in SOURCES.items():
         source = next((held[g] for g in sources if g in held), None)
         if source is None:

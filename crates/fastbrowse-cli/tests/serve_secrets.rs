@@ -293,6 +293,18 @@ async fn test_secrets_that_are_not_refs_are_refused_without_repeating_them() {
     }
 }
 
+#[tokio::test]
+async fn test_a_fetch_run_with_secrets_is_refused_before_the_runner_or_the_client_is_asked() {
+    // Refused only inside the run, a stand-in runner got secrets for a run that has no field to type them into (#1337).
+    let typist = Typist::new(&[]);
+    let mut client = serving(typist.runner(), settings());
+    let response =
+        client.request("run", Some(run_params("run-1", json!({"fetch": true, "secrets": [password()]})))).await;
+    assert_eq!(response["error"]["code"], -32602);
+    assert_eq!(response["error"]["message"], "fetch starts no browser, so it cannot be combined with secrets");
+    assert!(typist.got_resolver.lock().unwrap().is_none());
+}
+
 #[test]
 fn test_the_served_command_keeps_the_value_out_of_stdout_and_stderr() {
     let params = run_params(

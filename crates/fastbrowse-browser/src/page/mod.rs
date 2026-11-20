@@ -362,6 +362,8 @@ pub(crate) struct PageState {
     /// same address: a dialog a page opened as it loaded after a navigation is not the action's, and accepting it
     /// moved nothing.
     pub(crate) marked: Option<(u32, String)>,
+    /// Where the running action's pointer mark sits in the recording's marks, until a press is sent at it.
+    pub(crate) mark_index: Option<usize>,
     pub(crate) back_to: HashMap<String, String>,
     /// Child frame session -> when its last read missed the full deadline.
     pub(crate) unanswered: HashMap<String, Instant>,
@@ -375,6 +377,9 @@ pub(crate) struct PageState {
     /// `<shape>|<slot>|<frame>` -> the read last kept for that frame. A frame answers "unchanged" only about the
     /// read it kept, so this is what such an answer is served from.
     pub(crate) kept: HashMap<String, Arc<KeptRead>>,
+    /// The frame session whose new-tab link a background run's click held when a dialog the click opened blocked
+    /// reading it back. The dialog step reads it once the dialog is answered.
+    pub(crate) held_link: Option<String>,
 }
 
 pub struct CdpPage {

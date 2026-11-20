@@ -434,6 +434,7 @@ pub struct OpenAICompatibleLLM {
     base_url: String,
     models: HashMap<LLMPurpose, String>,
     reasoning_effort: Option<ReasoningEffort>,
+    reasoning_default: Option<ReasoningEffort>,
     provider_routing: Option<Value>,
     cache_breakpoints: bool,
     ceilings: Mutex<HashMap<String, Ceiling>>,
@@ -442,7 +443,10 @@ pub struct OpenAICompatibleLLM {
 /// Options past the endpoint and its models, defaulting as Python's keyword arguments do.
 #[derive(Debug, Clone)]
 pub struct LLMOptions {
+    /// The effort the user set. It is sent as it is, for every purpose.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// The effort the model runs at when the user set none. A purpose may raise it, as the field reader does.
+    pub reasoning_default: Option<ReasoningEffort>,
     pub reasoning_field: ReasoningField,
     pub provider_routing: Option<Value>,
     pub strict: bool,
@@ -459,6 +463,7 @@ impl Default for LLMOptions {
     fn default() -> Self {
         LLMOptions {
             reasoning_effort: None,
+            reasoning_default: None,
             reasoning_field: ReasoningField::OpenRouter,
             provider_routing: Some(openrouter_provider_routing()),
             strict: true,
@@ -517,9 +522,9 @@ impl Drop for Billing<'_> {
         }
         if let Some(usage) = self.in_flight.take() {
             let offset = self.charge_unanswered(&usage);
-            // Drop cannot wait on a price lookup, so only a ceiling already read bounds what was dropped.
-            let cached = self.llm.cached_ceiling(&self.model);
-            if let Some(ceiling) = cached {
+            // Drop cannot wait on a price lookup, so only a ceiling already read bounds what was dropped: a capped call
+            // reads it before it sends.
+            if let Some(ceiling) = self.llm.cached_ceiling(&self.model) {
                 for line in &mut self.costs[offset..] {
                     if line.dollars.is_none() {
                         *line = bound(line.clone(), ceiling, self.sent.as_ref().unwrap_or(&Map::new()));
@@ -585,6 +590,7 @@ impl OpenAICompatibleLLM {
             base_url: base_url.trim_end_matches('/').to_string(),
             models,
             reasoning_effort: options.reasoning_effort,
+            reasoning_default: options.reasoning_default,
             provider_routing: options.provider_routing,
             cache_breakpoints: options.cache_breakpoints,
             ceilings: Mutex::new(HashMap::new()),
@@ -816,7 +822,15 @@ impl OpenAICompatibleLLM {
         if deepseek(model) {
             body.entry("temperature").or_insert(0.0.into());
         }
-        if let Some(effort) = self.reasoning_effort {
+        // Reading a field's value off a record is a judgment whether the text holds it, and at `low` GPT-6 Luna
+        // answered null for a title that was there in 14% of 80 replays of one captured request, against 0 of 80 at
+        // `medium`. Every other purpose passes at `low`, so only this one's default is raised; an effort the user
+        // set is theirs.
+        let default = match (purpose, self.reasoning_default) {
+            (LLMPurpose::Groups, Some(ReasoningEffort::Low)) => Some(ReasoningEffort::Medium),
+            (_, default) => default,
+        };
+        if let Some(effort) = self.reasoning_effort.or(default) {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
         self.billed(body, purpose, schema, ledger, model).await
@@ -831,6 +845,12 @@ impl OpenAICompatibleLLM {
         ledger: Option<&Ledger>,
         model: &str,
     ) -> Result<Generation<Value>, LLMError> {
+        if ledger.is_some_and(|ledger| ledger.limits.max_dollars.is_some()) {
+            // A call dropped in flight is bounded only by a ceiling already read, since Drop cannot wait on a lookup.
+            // Unbounded, it stopped a capped run whose first call to a model was cancelled before any listing was read
+            // (#1291). The listing is read once per model, before anything is sent.
+            self.listed_ceiling(model).await;
+        }
         let mut billing = Billing {
             llm: self,
             ledger,
@@ -886,7 +906,15 @@ impl OpenAICompatibleLLM {
             // would let an unaccounted request pass a dollar cap. A request sent but never delivered carried the same
             // prompt, so it is charged as the answer was; charging it as unknown instead made every run with one slow
             // call stop at its dollar cap.
-            billing.costs.push(with_discarded(cost(&payload, purpose), &usage));
+            //
+            // The receipt lookup below may be dropped, and Drop cannot wait on a price, so the line it would leave is
+            // bounded now from the ceiling a capped call read before it sent: per request, before the requests it stands
+            // for are counted in.
+            let unsettled = match (cost(&payload, purpose), self.cached_ceiling(&billing.model)) {
+                (line, Some(ceiling)) if line.dollars.is_none() => bound(line, ceiling, body),
+                (line, _) => line,
+            };
+            billing.costs.push(with_discarded(unsettled, &usage));
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
             if truncated(&payload).map_err(LLMError::Failed)? {

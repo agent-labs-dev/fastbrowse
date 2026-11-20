@@ -504,9 +504,10 @@ impl Notes {
         self.retired.contains(key)
     }
 
-    /// Keep only the facts `keep` accepts; the pages and tables read stay, since other facts may cite them.
-    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&Fact) -> bool) {
-        self.facts.retain(|_, fact| keep(fact));
+    /// Keep only the facts `keep` accepts, by key and fact; the pages and tables read stay, since other facts may cite
+    /// them.
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&str, &Fact) -> bool) {
+        self.facts.retain(|key, fact| keep(key, fact));
         let facts = &self.facts;
         self.answering.retain(|key| facts.contains_key(key));
         self.retired.retain(|key| facts.contains_key(key));

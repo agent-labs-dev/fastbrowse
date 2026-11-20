@@ -44,6 +44,11 @@ switching to another browser. With the extension in more than one browser, the e
 the one the user chooses with `--extension-browser LABEL`. A run the user stops in the browser ends `cancelled`:
 report that it was stopped and do not retry it.
 
+A run works behind the window's current tab and opens a link's new tab there too. A tab the page opens by
+script, from a `javascript:` link or into a form's submission makes Chrome activate its window, as do `--foreground`
+and `--cursor`. If the user reports Chrome taking their keyboard focus on Hyprland, point them to
+`misc:focus_on_activate = false`; do not change their desktop settings for them.
+
 `--attach` drives a window the user has open instead of a tab of its own; `--target-match TEXT` selects a window
 by title or URL and implies attach. The window stays open after the run, but actions can change it. Treat
 cookies and other browser state as belonging to the user.
@@ -76,3 +81,11 @@ automatically a local file the user can open.
 For the CLI, pass each file the page needs as `--file PATH` and name it in the task by its file name ("upload
 shrike_lid.stl"). A path in the task text alone gives the run nothing to attach. The MCP `browse` tool cannot
 attach files.
+
+## Desktop apps
+
+On Linux with Hyprland and [deskpilot](https://github.com/cjber/deskpilot), `--desktop APP` starts a native app and
+runs the task in its window instead of a browser, without moving the user's pointer or focus. Repeat it for each
+app to start in one run (`--desktop "gnome-text-editor -s" --desktop gnome-calculator`); each window the apps open
+is a tab the run can move between. The run closes every app it started when it ends. A desktop run refuses
+`--start`, recipes and the browser options, `--cursor` included; `--record FILE` films its windows.

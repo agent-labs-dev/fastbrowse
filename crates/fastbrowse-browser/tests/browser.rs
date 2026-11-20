@@ -2100,6 +2100,77 @@ async fn test_a_background_run_drives_its_tab_without_bringing_it_forward() {
     assert_eq!(created, vec![&json!({"url": "about:blank", "background": true})]);
 }
 
+/// Chrome raises and focuses the window of a tab its page opens, so a background run opens a link's new tab itself,
+/// behind the window's current tab. A link whose own handler cancels the click is left to the page.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_background_run_opens_a_new_tab_link_behind_the_current_tab() {
+    let _turn = turn().await;
+    let Some(chrome_connection) = chrome().cloned() else { return };
+    let sent = Arc::new(Mutex::new(vec![]));
+    let background = BrowserConnection { foreground: false, ..chrome_connection };
+    let Some(h) = proxied(background, recording(sent.clone())).await else { return };
+    h.goto("/").await;
+    eval_active(
+        &h,
+        "document.body.insertAdjacentHTML('beforeend', '<a href=\"/popup.html\" target=\"_blank\">New tab link</a><a \
+         href=\"/popup.html\" target=\"_blank\" onclick=\"event.preventDefault(); document.title = \\'Handled\\'\">Handled \
+         link</a>')",
+    )
+    .await;
+    let opener = active(&h);
+    let opener_target = h.session.active_target_id();
+    let obs = h.observe().await;
+    let handled = act(&h.page, click(find(&obs, "Handled link")), &obs).await;
+    assert_eq!(handled.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.title").await, json!("Handled"));
+    let result = act(&h.page, click(find(&obs, "New tab link")), &obs).await;
+    assert!(
+        result.outcome == StepOutcome::Executed && result.detail.as_deref() == Some("opened a new tab, now active"),
+        "{result:?}"
+    );
+    assert_ne!(active(&h), opener);
+    let tab = h.session.tabs().into_iter().find(|t| t.active).expect("active tab");
+    assert_eq!(tab.opener_id, Some(opener_target), "the new tab is the clicked page's, as a tab it opened would be");
+    find(&h.observe().await, "Popup button");
+    assert!(h.session.popups().is_empty(), "the page opened a tab of its own");
+    h.close().await;
+    let sent = sent.lock().unwrap();
+    assert!(!sent.iter().any(|(m, _)| m == "Target.activateTarget" || m == "Page.bringToFront"));
+    let created: Vec<&Value> = sent.iter().filter(|(m, _)| m == "Target.createTarget").map(|(_, p)| p).collect();
+    assert_eq!(created, vec![&json!({"url": "about:blank", "background": true}); 2]);
+}
+
+/// A link that asks before it leaves the site opens its tab once the run answers the question, without waiting on the
+/// page while the question holds it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_background_run_opens_a_new_tab_link_once_its_confirm_is_answered() {
+    let _turn = turn().await;
+    let Some(chrome_connection) = chrome().cloned() else { return };
+    let background = BrowserConnection { foreground: false, ..chrome_connection };
+    let Some(h) = proxied(background, recording(Arc::default())).await else { return };
+    h.goto("/").await;
+    eval_active(
+        &h,
+        "document.body.insertAdjacentHTML('beforeend', '<a href=\"/popup.html\" target=\"_blank\" \
+         onclick=\"confirm(\\'Leave?\\')\">Leaving link</a>')",
+    )
+    .await;
+    let obs = h.observe().await;
+    let clicked = timeout(Duration::from_secs(10), act(&h.page, click(find(&obs, "Leaving link")), &obs)).await;
+    assert_eq!(clicked.expect("in time").outcome, StepOutcome::Executed);
+    let asked = h.observe().await;
+    assert!(asked.dialog.as_ref().is_some_and(|d| d.message == "Leave?"));
+    let accept = Action { accept_dialog: Some(true), ..Action::new(Operation::Dialog) };
+    let result = timeout(Duration::from_secs(10), act(&h.page, accept, &asked)).await.expect("in time");
+    assert!(
+        result.outcome == StepOutcome::Executed && result.detail.as_deref() == Some("opened a new tab, now active"),
+        "{result:?}"
+    );
+    find(&h.observe().await, "Popup button");
+    assert!(h.session.popups().is_empty(), "the page opened a tab of its own");
+    h.close().await;
+}
+
 /// A native dialog holds its renderer, so setup sent to a page behind one, focus emulation included, waits
 /// for the answer. The run must still be able to answer it, and setup must then finish rather than hang.
 #[tokio::test(flavor = "multi_thread")]
