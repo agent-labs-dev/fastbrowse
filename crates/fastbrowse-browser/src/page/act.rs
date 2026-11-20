@@ -349,7 +349,7 @@ const INPUT_REPLY_SECONDS: f64 = 10.0;
 
 type Outcome = (StepOutcome, Option<String>, Option<StepFailure>);
 
-fn bad(shape: &str) -> BrowserError {
+pub(super) fn bad(shape: &str) -> BrowserError {
     BrowserError::Failed(format!("page script returned an unexpected {shape}"))
 }
 

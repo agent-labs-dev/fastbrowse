@@ -371,6 +371,8 @@ pub(crate) struct State {
     pub(crate) ad_frames: HashSet<String>,
     /// session -> how many documents its top frame has committed, for `document_mark`.
     pub(crate) documents: HashMap<String, u64>,
+    /// session -> the address Chrome's own error page in its top frame stands for, beside the error page's own address.
+    pub(crate) error_pages: HashMap<String, (String, String)>,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
     pub(crate) denials: u32,
     /// Requests paused and not yet released, so closing can release what a stopped task left paused.
@@ -1024,6 +1026,18 @@ impl BrowserSession {
         self.0.state.lock().unwrap().documents.get(session_id).copied().unwrap_or_default()
     }
 
+    /// The address `href` stands for in `session_id`'s top frame: the one that answered when `href` is Chrome's own
+    /// error page for it, else `href` itself.
+    ///
+    /// An error status with no body commits Chrome's error page at an address of its own, which held no grant and
+    /// named no site, so the run lost the page it had asked for and the status it got (#1371).
+    pub fn page_address(&self, session_id: &str, href: String) -> String {
+        match self.0.state.lock().unwrap().error_pages.get(session_id) {
+            Some((shown, unreachable)) if *shown == href => unreachable.clone(),
+            _ => href,
+        }
+    }
+
     /// The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it.
     pub fn status_context(&self, session_id: &str, context_id: i64) -> Option<String> {
         self.0.state.lock().unwrap().status_contexts.remove(&(session_id.to_owned(), context_id))
@@ -1625,7 +1639,19 @@ impl Shared {
                 if let Some(session) = session
                     && params["frame"]["parentId"].is_null()
                 {
-                    *self.state.lock().unwrap().documents.entry(session.to_owned()).or_default() += 1;
+                    let mut state = self.state.lock().unwrap();
+                    *state.documents.entry(session.to_owned()).or_default() += 1;
+                    // Chrome commits its own error page, at an address of its own, for a response it will not show,
+                    // such as an error status with no body; the frame names the address that answered.
+                    match params["frame"]["unreachableUrl"].as_str().filter(|url| !url.is_empty()) {
+                        Some(unreachable) => {
+                            let shown = str_of(&params["frame"]["url"]);
+                            state.error_pages.insert(session.to_owned(), (shown, unreachable.to_owned()));
+                        }
+                        None => {
+                            state.error_pages.remove(session);
+                        }
+                    }
                 }
             }
             "Page.frameRequestedNavigation" | "Page.frameStartedLoading" => {
@@ -1734,6 +1760,7 @@ impl Shared {
                 state.requests_open.retain(|(sid, _), _| *sid != child);
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
                 state.documents.remove(&child);
+                state.error_pages.remove(&child);
                 state.navigating.retain(|(sid, _), _| *sid != child);
                 state.frames_loading.retain(|(sid, _), _| *sid != child);
                 state.clicked.remove(&child);

@@ -806,3 +806,54 @@ async fn test_an_onclick_property_keeps_its_target_when_a_child_gains_a_hover_cu
     );
     h.close().await;
 }
+
+/// A server that answers each status in `STATUSES` at `/<status>`, with an empty body at `/<status>/empty`.
+fn error_statuses() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("port").port();
+    serve_on(
+        listener,
+        Arc::new(|path: &str| {
+            let mut parts = path.trim_start_matches('/').split('/');
+            let status = parts.next().and_then(|status| status.parse().ok()).unwrap_or(200);
+            let body = if parts.next() == Some("empty") { "" } else { "<p>The server could not answer.</p>" };
+            Reply { status, ..Reply::html(body) }
+        }),
+    );
+    port
+}
+
+const STATUSES: [u16; 3] = [500, 429, 404];
+
+/// Chrome fails `Page.navigate` with ERR_HTTP_RESPONSE_CODE_FAILURE and shows its own page when an error status comes
+/// with no body; a run that met one at its first page ended `error` before its first step (#1371). The tab is the
+/// address it asked for and the status it got either way.
+async fn an_error_status_loads_as_its_address(allowed: bool) {
+    let port = error_statuses();
+    let origin = format!("http://127.0.0.1:{port}");
+    let Some(connection) = chrome() else { return };
+    let connection = BrowserConnection { allowed_origins: allowed.then(|| vec![origin.clone()]), ..connection.clone() };
+    let Some(h) = harness_on(connection, Config::default(), SessionOptions::default()).await else { return };
+    for status in STATUSES {
+        for path in [format!("/{status}"), format!("/{status}/empty")] {
+            let url = format!("{origin}{path}");
+            h.page.navigate(&url, None).await.unwrap_or_else(|error| panic!("{path}: {error:?}"));
+            let observation = h.page.observe().await.unwrap_or_else(|error| panic!("{path}: {error:?}"));
+            assert_eq!(observation.url, url, "{path}");
+            assert_eq!(observation.response_status, Some(i64::from(status)), "{path}");
+            assert_eq!(h.page.address().await.unwrap(), url, "{path}");
+            assert!(!h.page.document_changed(&observation).await.unwrap(), "{path}");
+        }
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_error_status_without_a_body_loads_as_its_address() {
+    an_error_status_loads_as_its_address(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_error_status_without_a_body_stays_inside_an_origin_grant() {
+    an_error_status_loads_as_its_address(true).await;
+}
