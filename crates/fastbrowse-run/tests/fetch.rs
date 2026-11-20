@@ -699,6 +699,26 @@ async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
     assert_eq!(capture.inaccessible_frames, 1);
 }
 
+/// A script in a frame read into the page, or an event handler a load fires, can build a link as a `<script>` of the
+/// page's own can, so the fetched page records unrun scripts for each (#1380).
+#[tokio::test]
+async fn test_scripts_a_frame_or_handler_carries_are_unrun_scripts_of_the_page() {
+    let http = serving(|request| {
+        let body = match request.url.rsplit('/').next().unwrap() {
+            "inner" => "<p>Inner note</p><script src=/links.js></script>",
+            "framed" => "<p>Outer text</p><iframe src=/inner></iframe>",
+            "inline" => "<p>Outer text</p><iframe srcdoc='<p>Note</p><script>add()</script>'></iframe>",
+            "handler" => "<body onload=addLink()><p>Outer text</p></body>",
+            _ => "<p>Outer text</p><iframe srcdoc='<p>Note</p>'></iframe>",
+        };
+        Response::new(200, body.to_string()).with_header("content-type", "text/html")
+    });
+    for (path, scripts) in [("framed", true), ("inline", true), ("handler", true), ("plain", false)] {
+        let fetched = fetch_document(&http, &format!("https://docs.example.test/{path}"), None, 15.0).await;
+        assert_eq!(fetched.expect("read").scripts, scripts, "{path}");
+    }
+}
+
 #[tokio::test]
 async fn a_fetched_document_title_is_citable_separately_from_its_heading() {
     let capture =

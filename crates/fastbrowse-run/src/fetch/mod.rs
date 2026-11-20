@@ -195,7 +195,7 @@ pub async fn fetch_document(
     allowed_origins: Option<&[String]>,
     seconds: f64,
 ) -> Result<Fetched, NotFetched> {
-    let Served { url, title, mut found, controls, frames, scripts } =
+    let Served { url, title, mut found, controls, frames, mut scripts } =
         serve(http, url, allowed_origins, seconds).await?;
     let origin = origin_of(&url);
     let mut unread = 0;
@@ -203,11 +203,17 @@ pub async fn fetch_document(
     for (index, Frame { at, document, headings }) in frames.into_iter().enumerate() {
         let blocks = match document {
             _ if index >= MAX_FRAMES => None,
-            FrameDocument::Markup(markup) => Some(read(&markup, &url).1),
+            // A frame read into the page brings its scripts too: one that builds a link leaves the page no more
+            // known to lead nowhere than a script of its own would (#1380 review).
+            FrameDocument::Markup(markup) => {
+                scripts |= html::scripts(&markup) > 0;
+                Some(read(&markup, &url).1)
+            }
             FrameDocument::Address(address) if origin.is_some() && origin_of(&address) == origin => {
                 match serve(http, &address, allowed_origins, seconds).await {
                     Ok(inner) => {
                         unread += inner.frames.len();
+                        scripts |= inner.scripts;
                         Some(inner.found)
                     }
                     Err(_) => None,

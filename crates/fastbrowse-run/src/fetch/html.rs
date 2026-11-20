@@ -1450,7 +1450,8 @@ const JAVASCRIPT_TYPES: [&str; 16] = [
 ///
 /// Counted as the HTML standard's "prepare the script element" decides: a script with neither a `src` nor any text
 /// does nothing, a type string that is not JavaScript or `module` is a data block, a classic script marked
-/// `nomodule` is skipped by a browser that runs modules, and a script inside a `<template>` is inert.
+/// `nomodule` is skipped by a browser that runs modules, and a script inside a `<template>` is inert. An element with
+/// an event handler attribute counts as one more script.
 pub fn scripts(html: &str) -> usize {
     #[derive(Default)]
     struct Scripts {
@@ -1478,6 +1479,14 @@ pub fn scripts(html: &str) -> usize {
                 "script" if self.templates == 0 => {
                     self.open = Some(runs(tag));
                     self.text = false;
+                }
+                // Every event handler content attribute the HTML standard defines is named `on` and its event, and
+                // one a load or an error fires, such as `<body onload>`, runs with no step taken: a page whose only
+                // script is a handler was still said to lead nowhere (#1380 review).
+                _ if self.templates == 0
+                    && tag.attrs.iter().any(|a| a.name.local.starts_with("on") && !a.value.is_empty()) =>
+                {
+                    self.count += 1;
                 }
                 _ => {}
             }
@@ -1535,6 +1544,8 @@ mod tests {
         assert_eq!(scripts("<script nomodule src=legacy.js></script>"), 0);
         assert_eq!(scripts("<template><script src=t.js></script></template>"), 0, "a template's content is inert");
         assert_eq!(scripts("<noscript><script src=n.js></script></noscript>"), 0);
+        assert_eq!(scripts("<body onload=addLink()><p>Text</p><img src=x onerror=more()></body>"), 2, "handlers");
+        assert_eq!(scripts("<body onload=''><p>Text</p><template><img onerror=x()></template></body>"), 0);
     }
 
     #[test]
