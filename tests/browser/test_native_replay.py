@@ -1,11 +1,13 @@
 """Every bench cassette replays in this process at zero latency without a model request it did not record.
 
 The `replay` CI job runs this module (`-m cassette_replay`), which installs Chrome so it cannot skip. A replay
-miss means the agent now asks something its cassette lacks: refresh that task with `python -m fastbrowse.evals.bench
-fill --only TASK`. Whether a task passes depends on timing and is a benchmark measurement, so only the three tasks
-below, which have no race, must also pass.
+miss means the agent now asks something its cassette lacks: the automatic refill (`cassette-refill.yml`) fills it
+on the pull request, and `python -m fastbrowse.evals.bench fill --only TASK` does the same by hand. Whether a task
+passes depends on timing and is a benchmark measurement, so only the tasks in PASSING, which have no race, must also
+pass.
 """
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ import pytest
 from fastbrowse.evals.bench import CASSETTES, IN_PROCESS, BenchTask, bench_task, corpus
 from fastbrowse.evals.harness import find_chrome
 from fastbrowse.evals.replay import Cassette, Latency, Proxy
+from scripts.cassette_refill import record_misses
 
 pytestmark = [
     pytest.mark.skipif(find_chrome() is None, reason="Chrome is not installed"),
@@ -36,7 +39,7 @@ STALE: dict[str, str] = {}
 def recorded_tasks() -> list[Any]:
     """The corpus task of every cassette; a cassette no task owns is an error, not a skip."""
     tasks = {task.id: task for task in corpus()}
-    ids = sorted(path.name.removesuffix(".jsonl.gz") for path in CASSETTES.glob("*.jsonl.gz"))
+    ids = sorted(path.name.removesuffix(".jsonl") for path in CASSETTES.glob("*.jsonl"))
     orphans = [task_id for task_id in ids if task_id not in tasks]
     if orphans:
         raise LookupError(f"cassettes with no corpus task: {', '.join(orphans)}")
@@ -49,20 +52,28 @@ def recorded_tasks() -> list[Any]:
 
 
 async def replayed(task: BenchTask, logs: Path) -> dict[str, Any]:
-    proxy = Proxy(Cassette.load(CASSETTES / f"{task.id}.jsonl.gz"), forward=None, replay=True, latency=Latency.ZERO)
+    proxy = Proxy(Cassette.load(CASSETTES / f"{task.id}.jsonl"), forward=None, replay=True, latency=Latency.ZERO)
     return await bench_task(task, agent_argv=[IN_PROCESS], proxy=proxy, logs=logs)
 
 
 def _misses(entry: dict[str, Any]) -> str:
     misses = entry["misses"]
     listed = "\n".join(f"- {miss['purpose']} ({miss['model']})" for miss in misses)
-    return f"{len(misses)} replay misses; refresh with bench fill --only {entry['task']}\n{listed}\n{misses[0]['diff']}"
+    return (
+        f"{len(misses)} replay misses in {entry['task']}: the agent now asks a question its cassette has no answer "
+        "for. On a pull request from this repository CI refills it and commits the cassette, then runs again "
+        "(see CONTRIBUTING.md). To do it by hand: "
+        f"uv run python -m fastbrowse.evals.bench fill --only {entry['task']}\n{listed}\n{misses[0]['diff']}"
+    )
 
 
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("task", recorded_tasks(), ids=lambda task: task.id)
 async def test_a_recorded_task_replays_without_a_miss(task: BenchTask, tmp_path: Path) -> None:
     entry = await replayed(task, tmp_path)
+    if "FASTBROWSE_REPLAY_MISSES" in os.environ:
+        # The refill workflow reads the missed task ids from these files, never from this output.
+        record_misses(Path(os.environ["FASTBROWSE_REPLAY_MISSES"]), task.id, entry["misses"])
     assert entry["fixture_port_fallback"] is None, "fixture port taken, environmental, rerun"
     assert entry["misses"] == [], _misses(entry)
     if task.id in PASSING:

@@ -19,7 +19,6 @@ unified diff against the nearest body recorded on the same path.
 
 import contextlib
 import difflib
-import gzip
 import hashlib
 import json
 import math
@@ -293,7 +292,9 @@ def nearest_body(body: Any, candidates: Iterable[Any]) -> Any | None:
 class Exchange:
     """One recorded request, as the agent sent it, and the response it got.
 
-    The key is worked out again from the request on load, so a change to the canonical rules rekeys old cassettes.
+    The key is worked out again from the request on load, so a change to the canonical rules rekeys old cassettes. It
+    is not stored: a stored hash is stale after such a change, and a secret scanner reads a `key` beside a hash as a
+    credential.
     """
 
     key: str
@@ -309,18 +310,20 @@ class Exchange:
     fixture_origin: str | None = None
 
     def to_json(self) -> dict[str, Any]:
+        """The exchange as one line of a cassette: what a reviewer reads first (the question's purpose and model)
+        comes first. The request keeps its keys as the agent wrote them: a request's key numbers its target ids by first
+        appearance, so sorting them would rekey it."""
         return {
-            "key": self.key,
-            "path": self.path,
             "purpose": self.purpose,
             "model": self.model,
+            "path": self.path,
             "status": self.status,
             "content_type": self.content_type,
             "latency": round(self.latency, 4),
             "cost": self.cost,
+            "fixture_origin": self.fixture_origin,
             "request": self.request,
             "body": self.body,
-            "fixture_origin": self.fixture_origin,
         }
 
     @classmethod
@@ -354,7 +357,12 @@ class Miss:
 
 @dataclass
 class Cassette:
-    """Every exchange of one task, in the order the responses arrived."""
+    """Every exchange of one task, in the order the responses arrived.
+
+    A cassette file is plain JSONL, so a diff shows which exchanges a change added or dropped. The order is kept, not
+    sorted: the same request is served its responses in recorded order, and the newest exchange names the port the
+    fixture is served on (`fixture_port`).
+    """
 
     task: str
     exchanges: list[Exchange] = field(default_factory=list[Exchange])
@@ -365,12 +373,7 @@ class Cassette:
         head = {"cassette": CASSETTE_VERSION, "task": self.task, **self.meta}
         lines = [json.dumps(head, sort_keys=True)]
         lines.extend(json.dumps(exchange.to_json(), ensure_ascii=False) for exchange in self.exchanges)
-        # mtime 0 and no file name, so recording the same exchanges twice writes the same bytes.
-        with (
-            path.open("wb") as raw,
-            gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0, compresslevel=9) as out,
-        ):
-            out.write(("\n".join(lines) + "\n").encode())
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def fixture_port(self) -> int | None:
         """The port to serve the fixture on so a replay sends the requests this cassette recorded.
@@ -386,9 +389,16 @@ class Cassette:
         port = self.meta.get("recorded_port", self.meta.get("port"))
         return port if isinstance(port, int) and 0 < port <= 65535 else None
 
+    @staticmethod
+    def is_cassette(path: Path) -> bool:
+        """Whether a JSONL file is a cassette, which opens with a head line naming its version, and not a run trace."""
+        with path.open(encoding="utf-8") as lines:
+            head = json.loads(next(lines, "null"))
+        return isinstance(head, dict) and "cassette" in head
+
     @classmethod
     def load(cls, path: Path) -> Self:
-        with gzip.open(path, "rt", encoding="utf-8") as lines:
+        with path.open(encoding="utf-8") as lines:
             head = json.loads(next(lines))
             if head.get("cassette") != CASSETTE_VERSION:
                 raise ValueError(f"{path}: cassette version {head.get('cassette')!r}, expected {CASSETTE_VERSION}")
@@ -416,6 +426,37 @@ def response_cost(body: str) -> float | None:
 
 type Forward = Callable[[str, bytes], tuple[int, str, str]]
 """Send a request upstream: (path, body) to (status, content type, body)."""
+
+BUDGET_STATUS = 402
+"""The status a fill gets for a request it may no longer pay for: not one the clients retry."""
+
+
+class Spend:
+    """The dollars a record or fill may still spend, shared by every task it runs.
+
+    It is checked before each request goes upstream, not only between tasks: one task's passes can cost more than
+    the whole budget. A request's price is known only from its response, so the requests it pays for go upstream
+    one at a time (`turn`), each checked against the price of every one before it; concurrent checks would each
+    pass on a total that left out the others in flight. One response without a price ends the spending, since the
+    total is then unknown. The limit is where spending stops, not a ceiling no request can cross: the provider takes
+    no price cap per request, so the last one sent can take the total past it, by that one request's price.
+    """
+
+    def __init__(self, limit: float) -> None:
+        self.limit = limit
+        self.spent = 0.0
+        self.unpriced = False
+        self.turn = threading.Lock()
+        """Held from the check before a paid request until its price is added."""
+
+    def reached(self) -> bool:
+        return self.unpriced or self.spent >= self.limit
+
+    def add(self, dollars: float | None) -> None:
+        if dollars is None:
+            self.unpriced = True
+        else:
+            self.spent += dollars
 
 
 def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
@@ -452,8 +493,10 @@ class Proxy:
 
     With `forward` and not `replay` it records: every request goes upstream. With `replay` and no `forward` it
     replays, and a request it has no response for is a miss. With both it fills: what it has is served, and a miss
-    is sent upstream and added to the cassette. Filling at zero latency records the path a run takes when every
-    answer is instant, which a live recording cannot (see `bench.py` on the plan race).
+    is sent upstream and added to the cassette, unless upstream refused it (`upstream_errors`): an error response is
+    never recorded. With `spend`, a request is sent upstream only while the budget lasts (`budget_refusals`). Filling
+    at zero latency records the path a run takes when every answer is instant, which a live recording cannot (see
+    `bench.py` on the plan race).
     """
 
     def __init__(
@@ -463,11 +506,13 @@ class Proxy:
         forward: Forward | None = None,
         replay: bool = True,
         latency: Latency = Latency.ZERO,
+        spend: Spend | None = None,
     ) -> None:
         if forward is None and not replay:
             raise ValueError("a proxy that neither replays nor forwards has nothing to answer with")
         self.cassette = cassette
         self._forward = forward
+        self._spend = spend
         self._replay = replay
         self._latency = latency
         self._lock = threading.Lock()
@@ -482,6 +527,8 @@ class Proxy:
         self.sent: list[dict[str, Any]] = []
         self.requests = 0
         self.forwarded = 0
+        self.upstream_errors: list[int] = []
+        self.budget_refusals = 0
         self._server: ThreadingHTTPServer | None = None
         self._fixture_origin: tuple[str, str] | None = None
         self._requested_origin: str | None = None
@@ -551,8 +598,26 @@ class Proxy:
         if self._forward is None:
             message = f"replay miss: no recorded response for {purpose} ({model}) on {path}"
             return MISS_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
-        started = time.monotonic()
-        status, content_type, text = self._forward(path, raw)
+        spend = self._spend
+        with spend.turn if spend is not None else contextlib.nullcontext():
+            if spend is not None and spend.reached():
+                with self._lock:
+                    self.budget_refusals += 1
+                why = "a response had no price" if spend.unpriced else f"${spend.spent:.4f} of ${spend.limit:.2f} spent"
+                message = f"budget reached: {why}, so {purpose} ({model}) was not sent"
+                return BUDGET_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
+            started = time.monotonic()
+            status, content_type, text = self._forward(path, raw)
+            latency = time.monotonic() - started
+            cost = response_cost(text)
+            if spend is not None and 200 <= status < 300:
+                spend.add(cost)
+        if not 200 <= status < 300:
+            # A provider's refusal (a 429, a 5xx) says nothing about what the model answers. Kept, a later replay
+            # would serve it as the answer and never ask again (#1198); the agent still sees it, as it would live.
+            with self._lock:
+                self.upstream_errors.append(status)
+            return status, content_type, text, 0.0
         exchange = Exchange(
             key=key,
             path=path,
@@ -562,8 +627,8 @@ class Proxy:
             status=status,
             content_type=content_type,
             body=text,
-            latency=time.monotonic() - started,
-            cost=response_cost(text),
+            latency=latency,
+            cost=cost,
             fixture_origin=self._requested_origin,
         )
         with self._lock:
