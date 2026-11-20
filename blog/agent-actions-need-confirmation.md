@@ -4,7 +4,7 @@ description: fastbrowse stops before actions classified as irreversible, ending 
 topic: How the agent acts
 published: 2026-11-14
 updated: 2026-11-19
-verifiedAgainst: v0.11.1
+verifiedAgainst: v0.11.2
 verifiedOn: 2026-11-19
 ---
 

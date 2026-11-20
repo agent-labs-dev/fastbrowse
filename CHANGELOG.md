@@ -13,6 +13,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
 
+- A reply's Post is no longer refused as already done after the run pressed another, empty form's Post that changed nothing. The check before a repeated submission was told only "click Post", so it read the earlier press as the reply. It is now told which form each earlier submission sent, beside the one about to be sent, and what that form held ([#881](https://github.com/agent-labs-dev/fastbrowse/issues/881)).
+
+- Reading a page the run navigated to, Jev is told the action that led there and the page it was taken on. Asked for the title of the page a start page's link opens, it read that page alone, took it for a list and answered with a heading inside it; told it was reached by clicking the link, it answers with the page's title ([#1174](https://github.com/agent-labs-dev/fastbrowse/issues/1174)).
+
+- A page that shows a fact the task's steps need, such as the link to follow, is read as holding no answer rather than made to pick one. A run asked for the title of the page a link opens no longer reports the link's text as that title, and no longer ends complete with no answer on the start page ([#1174](https://github.com/agent-labs-dev/fastbrowse/issues/1174)).
+
 ## [0.12.0] - 2026-11-19
 
 - Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.

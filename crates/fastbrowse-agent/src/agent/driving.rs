@@ -26,7 +26,7 @@ use super::state::{
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
+use crate::policy::{Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, Submitted, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -1259,6 +1259,12 @@ impl Agent {
             setting: setting.then_some(true),
             set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
+            // A step that dispatched nothing submitted nothing.
+            submitted: decision
+                .target
+                .as_ref()
+                .filter(|_| act.outcome == StepOutcome::Executed)
+                .and_then(|target| Submitted::of(decision.operation, target, observation)),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {
@@ -1512,6 +1518,15 @@ impl Agent {
             && state.history.last().is_some_and(|last| last.operation != Some(Operation::SwitchTab))
         {
             state.navigation_from = Some((landed.clone(), before.clone()));
+            // A step that dispatched nothing did not lead the run here: the page changed by itself.
+            state.navigated_by =
+                state.history.last().filter(|last| last.outcome == StepOutcome::Executed).and_then(|last| {
+                    let operation = last.operation?;
+                    Some(match &last.target {
+                        Some(target) => format!("{operation} {}", text::repr(target)),
+                        None => operation.to_string(),
+                    })
+                });
         }
         if let Some(href) = state.followed.take()
             && landed != read_key(&before)

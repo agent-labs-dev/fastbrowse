@@ -195,7 +195,9 @@ and where fastbrowse follows it:
 - **Narrow, explicit judgments, with true/false descriptions that match the instruction.** Every Noul
   question in `crates/fastbrowse-agent/src/verification/` and `crates/fastbrowse-core/src/safety.rs` carries both descriptions.
 - **Concrete option boundaries, plus an escape option when coverage is incomplete.** The read offers
-  `synthesis` for an answer composed from more than one fact and `absent` for no relevant evidence. Scalar field
+  `synthesis` for an answer composed from more than one fact and `absent` for no relevant evidence. A page the step
+  judged to show what the task needs is offered `steps` instead of `absent`: it holds a fact the steps need, such as a
+  link to follow, and nothing that answers. Scalar field
   extraction offers `none`. Repeated short values from the same page and frame share one option
   with every source context, so identical answers do not compete as separate choices.
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.

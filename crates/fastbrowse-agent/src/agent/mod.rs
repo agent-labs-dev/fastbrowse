@@ -1045,6 +1045,14 @@ impl Agent {
         })
     }
 
+    /// How the run reached the page `observation` shows, as the action and the page it was taken on; None for a page it
+    /// did not navigate to.
+    fn reached_by(&self, state: &RunState, observation: &Observation) -> Option<String> {
+        let (destination, source) = state.navigation_from.as_ref()?;
+        let action = state.navigated_by.as_deref().filter(|_| *destination == state::read_key(observation))?;
+        Some(self.mask(&format!("{action} on {}", source.url)))
+    }
+
     /// A wall on the route just opened does not describe the alternatives observed before it.
     ///
     /// The source page's text and controls are given only while a wall is suspected on the destination: the sign-in

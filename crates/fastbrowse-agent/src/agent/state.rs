@@ -326,6 +326,8 @@ pub(crate) struct RunState {
     pub surface_judged: Option<((String, String), f64)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
+    /// The action that made the latest navigation, as "click 'Learn more'".
+    pub navigated_by: Option<String>,
     /// Jev's sign-in readings stay with the document they described, not with every later route.
     pub login_readings: HashMap<(String, String), f64>,
     /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
@@ -381,6 +383,9 @@ pub(crate) struct RunState {
     pub read_tries: HashMap<(String, String), u8>,
     /// Screenshots that a successful image read found held no answer for this run's task.
     pub unanswered_images: HashSet<String>,
+    /// The captures, by digest, a read kept for the steps: they hold a fact a step needs, such as a code to enter, and
+    /// nothing that answers the task.
+    pub step_pages: HashSet<String>,
     /// The page the last action changed, until the next observation shows it is still the page in view.
     pub changed_page: Option<(String, String)>,
     /// Jev's latest word is that this page reports the site failed, so nothing on it is read as evidence.
@@ -769,6 +774,7 @@ impl RunState {
             last_page: None,
             surface_judged: None,
             navigation_from: None,
+            navigated_by: None,
             ..self
         }
     }
@@ -816,6 +822,7 @@ impl RunState {
             last_page: None,
             surface_judged: None,
             navigation_from: None,
+            navigated_by: None,
             login_readings: HashMap::new(),
             reached: HashMap::new(),
             shown: HashMap::new(),
@@ -835,6 +842,7 @@ impl RunState {
             read_documents: HashMap::new(),
             read_tries: HashMap::new(),
             unanswered_images: HashSet::new(),
+            step_pages: HashSet::new(),
             changed_page: None,
             page_failed: false,
             compose: false,

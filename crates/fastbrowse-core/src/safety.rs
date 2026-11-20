@@ -90,23 +90,33 @@ fn describe_control(
     {
         instructions.push_str(&format!("The target currently holds {}.\n", text::repr(value)));
     }
-    // A key chord such as ctrl+Enter can submit the form its field is in, as Enter does.
-    let submits = matches!(operation, Operation::Enter | Operation::Press)
-        || (operation == Operation::Click && control.role == "button");
-    if submits && control.form_id.is_some() {
-        let held: Vec<String> = controls
-            .iter()
-            .filter(|c| c.id != control.id && !c.sensitive)
-            .filter(|c| (&c.frame_id, &c.form_id) == (&control.frame_id, &control.form_id))
-            .filter_map(|c| {
-                let value = c.value.as_deref().filter(|v| !v.is_empty())?;
-                Some(format!("{} holds {}", text::repr(&c.label), text::repr(value)))
-            })
-            .collect();
+    if submits(operation, control) {
+        let held = form_held(control, controls);
         if !held.is_empty() {
             instructions.push_str(&format!("In the form, {}.\n", held.join("; ")));
         }
     }
+}
+
+/// Whether `operation` on `control` submits the form it is in. A key chord such as ctrl+Enter can, as Enter does.
+pub fn submits(operation: Operation, control: &Control) -> bool {
+    control.form_id.is_some()
+        && (matches!(operation, Operation::Enter | Operation::Press)
+            || (operation == Operation::Click && control.role == "button"))
+}
+
+/// What the other fields of `control`'s form hold among `controls`, each as "'label' holds 'value'". An empty or
+/// masked field is left out.
+pub fn form_held(control: &Control, controls: &[Control]) -> Vec<String> {
+    controls
+        .iter()
+        .filter(|c| c.id != control.id && !c.sensitive)
+        .filter(|c| (&c.frame_id, &c.form_id) == (&control.frame_id, &control.form_id))
+        .filter_map(|c| {
+            let value = c.value.as_deref().filter(|v| !v.is_empty())?;
+            Some(format!("{} holds {}", text::repr(&c.label), text::repr(value)))
+        })
+        .collect()
 }
 
 pub fn irreversible_question(

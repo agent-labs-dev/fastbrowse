@@ -266,7 +266,10 @@ the page fingerprint, so a scroll that exposes content counts as progress even w
 without a target retains viewport scrolling.
 
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
-answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
+answer, or the answer must be composed from more than one fact. On a page the step judged to show what the task needs,
+the first is replaced by a third: the page holds a fact the steps need, such as a link to follow or a code to enter, and
+nothing that answers. Its blocks are kept as notes the steps see, none of them an answer, and DONE on notes that answer
+nothing is a step short of the answer. On a page with more spans than one choice can offer, a
 relevance pass narrows them first. If no value choice fits, a page that fits Jev's input limit can still supply
 facts for synthesis. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
 writes page text. A span Jev picks becomes a fact, and identical values from the same page and frame share one choice
