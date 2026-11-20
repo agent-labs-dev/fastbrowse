@@ -14,7 +14,7 @@ use std::time::Duration;
 use fastbrowse_browser::session::{AccessRefused, CheckAccess};
 use fastbrowse_cli::embed::{HostCall, HostResolve};
 use fastbrowse_cli::runner::Cancel;
-use fastbrowse_clients::http::{Request, Response, Transport, TransportError};
+use fastbrowse_clients::http::{Handoff, Request, Response, Transport, TransportError};
 use fastbrowse_clients::validation::current_jev_purpose;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, JevCause, Question, RetriesExhausted};
@@ -361,6 +361,27 @@ impl LLMClient for HostLlm {
 pub enum Sent {
     Response(Response),
     Failed(String, String),
+}
+
+/// A request's [`Handoff`], for the caller's client to say it holds the request until a connection frees, and then
+/// that it sends it.
+#[pyclass(frozen, name = "Handoff")]
+pub struct PyHandoff(pub Handoff);
+
+#[pymethods]
+impl PyHandoff {
+    fn queue(&self) {
+        self.0.queue();
+    }
+
+    /// False when the run withdrew the request while it was queued, so it must not be sent.
+    fn take(&self) -> bool {
+        self.0.take()
+    }
+
+    fn refused(&self) {
+        self.0.refused();
+    }
 }
 
 /// The caller's `httpx.AsyncClient`, for every request the run's clients make.

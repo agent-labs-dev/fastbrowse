@@ -17,7 +17,7 @@ PACKAGE = PYPROJECT.parent / "src" / "fastbrowse"
 IMPORT_NAMES = {"pyyaml": "yaml", "pillow": "pil", "beautifulsoup4": "bs4"}
 
 # Modules a declared distribution always installs, so declaring the parent covers importing the child.
-ARRIVES_WITH = {"pydantic_core": "pydantic"}
+ARRIVES_WITH = {"pydantic_core": "pydantic", "httpcore": "httpx"}
 
 
 def import_name(requirement: str) -> str:
