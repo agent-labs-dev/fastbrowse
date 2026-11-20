@@ -4,6 +4,7 @@ idleDays: 90
 secretPatterns: []
 ignore:
   - LANGFUSE_PUBLIC_KEY
+  - PARALLAX_REPORT_WEBHOOK_URL
 credentialNames: []
 ignorePaths:
   - .env.example
@@ -46,10 +47,12 @@ keys:
     owner: cjber
     locations:
       - github: OPENROUTER_JUDGE_API_KEY
+      - github: PARALLAX_UPSTREAM_OPENAI_KEY
       - pass: openrouter/fastbrowse-judge
     expires: 2027-02-11
     expiresNote: "expires_at from the OpenRouter key endpoint, read 2026-11-13"
     limit: $50/day
+    note: official-benchmarks.yml reads PARALLAX_UPSTREAM_OPENAI_KEY first and falls back to this key for the pinned upstream judge; that secret is not set, so this key serves it
   - id: aur-ssh-private-key
     service: aur
     group: release
@@ -137,6 +140,16 @@ keys:
     expires: unknown
     limit: "none: Langfuse Cloud offers soft spend alerts only"
     expiresNote: "set 2026-10-29. Langfuse added optional key expiry on 2026-10-07, and keys made before then have none (langfuse.com changelog, checked 2026-11-13), so read this key's expiry under Project Settings, API Keys"
+  - id: parallax-report-webhook-secret
+    service: webhook
+    group: benchmarks
+    owner: cjber
+    locations:
+      - github: PARALLAX_REPORT_WEBHOOK_SECRET
+    expires: none
+    expiresNote: a shared HMAC secret we generate; it has no vendor expiry
+    limit: none
+    note: not set yet; benchmark-campaign.yml signs the optional group report webhook with it (HMAC-SHA256 in X-Webhook-Signature)
   - id: site-deploy-hook
     service: vercel
     group: release
