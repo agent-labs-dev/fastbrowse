@@ -235,6 +235,9 @@ impl Page for SearchPage {
     fn withhold_frames(&self, withheld: bool) {
         self.inner.withhold_frames(withheld || self.active.load(Ordering::Relaxed));
     }
+    fn hold_images(&self) {
+        self.inner.hold_images();
+    }
     fn hand_over_tab(&self) {
         self.inner.hand_over_tab();
     }

@@ -1408,6 +1408,11 @@ impl CdpPage {
                 "screenshots are unavailable for scoped documents".into(),
             ));
         }
+        if self.session.images_held() {
+            return Err(BrowserError::ScreenshotsUnavailable(
+                "screenshots are withheld: the run holds an address credential, which a page can paint".into(),
+            ));
+        }
         // The model reads the page, not the agent's own cursor drawn over it.
         match &self.cursor {
             Some(cursor) => cursor.hidden(self.capture_screenshot()).await.unwrap_or_else(|| {
@@ -2089,6 +2094,10 @@ impl Page for CdpPage {
 
     fn withhold_frames(&self, withheld: bool) {
         CdpPage::withhold_frames(self, withheld);
+    }
+
+    fn hold_images(&self) {
+        self.session.hold_images();
     }
 
     fn hand_over_tab(&self) {

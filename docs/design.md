@@ -105,8 +105,8 @@ page and beside what its text answered, and the reader describes what the image 
 quoting text. A page styled only by CSS states its colours nowhere in its text, so the image is the evidence.
 A successful screenshot reading that finds no answer is reused for identical pixels within one run.
 A changed screenshot is read again; failed model calls are not cached.
-Model screenshots check fresh page text for resolved secrets before capture. Image readings mask resolved
-secret values before they enter notes and evidence. A filled form that requires confirmation stops before
+Model screenshots check fresh page text for resolved secrets before capture, and none is taken once the run knows an
+address credential (see below). Image readings mask resolved secret values before they enter notes and evidence. A filled form that requires confirmation stops before
 optional image reading.
 
 Content shown only under the pointer is reached by a hover target, which moves the real pointer there. An
@@ -518,7 +518,8 @@ their reader and source links in `StepResult.facts`, and any available explanati
 it, including a disconnected target reported as `stale`. A changed or covered control without a known cause
 has no failure value. Policy refusals and an unmet caller condition also leave it unset, because the browser
 has reported no fault. Older results without the field still parse; `note` remains diagnostic text.
-`Config(step_frames=True)` attaches a PNG to each step unless a fresh observation shows a resolved secret.
+`Config(step_frames=True)` attaches a PNG to each step unless a fresh observation shows a resolved secret or the run
+knows an address credential.
 This safety reading preserves the pending action's guards and leaves download notices for the next decision.
 
 Jev identifies whether the task requests a final image, text, both, or an action without a report. A requested
@@ -526,8 +527,9 @@ final screenshot does not require step frames. Image-only output skips answer co
 requirements; a request for both keeps the text evidence checks. An HTTP-first run opens a browser when
 its requested output needs pixels. When the run has a browser page, the done check, the composer and the coverage
 check are told that code attaches one screenshot, of the page the run ends on: a requested screenshot is given when
-that page is the one the task asks to have pictured, and the answer need not say whether one is attached. A fresh secret check can withhold the image; a completed task without
-its requested image becomes `unverified`. Python and Rust expose the PNG as `RunResult.final_frame`.
+that page is the one the task asks to have pictured, and the answer need not say whether one is attached. A fresh secret check or a known address credential can withhold the image, and the
+three checks are then told no screenshot is attached and why; a completed task without its requested image becomes
+`unverified`. Python and Rust expose the PNG as `RunResult.final_frame`.
 JSON clients receive a `screenshot` artifact with an `image/png` MIME type, SHA-256 digest and a base64 data URI.
 `Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried
 out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, the destination too).
@@ -536,14 +538,19 @@ out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, th
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from
 the agent, and handler failures are logged. A handler must honour cancellation: it runs on the caller's event
 loop, so one that swallows `CancelledError` keeps that loop alive and `asyncio.run` waits for it at shutdown. Live images and MP4 recordings are held back from the moment a secret is typed until the run ends, and whenever the page is read showing one;
-a recording holds its last clean frame meanwhile. A run whose start, recipe start, task, context or inputs write an
+a recording holds its last clean frame meanwhile. A run whose start, task, context or inputs (names or values) write an
 address with a user name or password holds them from before the browser opens to the end of the run: Chrome keeps the
 credentials in `document.URL` and in the tab's address, so a page can draw them from its first paint, and pixels cannot
 be checked as a frame arrives. A credential first seen mid-run, in a redirect, a tab or history address or any text a
 page shows, starts the hold then, to the end of the run. That is the one case no hold covers: a frame sent before the
-run first saw a credential that arrives mid-run may already show it. PNG step frames and the final screenshot are
-checked against the page as it is when each is taken, and withheld while it shows a resolved secret. A model
-screenshot is not held for address credentials: a page or tab address is not page text.
+run first saw a credential that arrives mid-run may already show it. The same hold stops every other image of the
+page: a model screenshot for Jev or the LLM, a PNG step frame, a screenshot artifact and `RunResult.final_frame`. A
+page can paint `document.URL` on a canvas, where no text check sees it, so every image path asks one gate, the one live
+frames and recordings ask, and the boundary every Jev and LLM request passes refuses a request carrying an image while
+the run holds. The page state tells Jev that screenshots are withheld because the run holds an address credential, and
+the done check, the composer and the coverage check are told no screenshot is attached. Without a credential, PNG step
+frames and the final screenshot are checked against the page as it is when each is taken, and withheld while it shows
+a resolved secret.
 
 Every request to Jev or an LLM passes one boundary that masks every registered secret and address credential in it,
 whatever built the request, and an observation and a capture are masked field by field before any request is built;
@@ -556,14 +563,15 @@ prints its addresses masked.
 
 The userinfo of an address runs to its last `@`, as the WHATWG URL parser reads it, so a password holding `@`, `'`,
 `"`, `<`, `>`, `(`, `)`, `,`, `;`, `!`, `.`, `:` or `%20` is masked whole; prose punctuation ends only the host. The
-run learns each credential it sees, from the start, the recipe start, the task, the context, the inputs and every
+run learns each credential it sees, from the start, the task, the context, the inputs' names and values, the names of
+secrets and attachments, a recipe's steps and every
 string a page, tab or history address shows, and masks it wherever it appears in each form a page can echo it: as
 written, percent-decoded, as the browser encodes it, and as the `Authorization: Basic` value the browser sends for it,
 in standard and URL-safe base64. The secret of an address is its password when one is written, else its user name,
 which is how an access token is written (`https://TOKEN@host/`); a user name beside a password is an identifier and
 stays readable outside an address, and masked inside one. A learned value is matched as text with no minimum length,
 as a resolved secret is, so a short one also blanks the same letters inside other words. A whole address with a tab or
-newline inside it (a start, a recipe start) registers its credential both as written and as the browser reads it, with
+newline inside it (a start) registers its credential both as written and as the browser reads it, with
 the tab or newline removed.
 
 Masking covers these forms and no others, and these are its limits: a tab or newline inside an address in free prose

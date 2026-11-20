@@ -893,6 +893,27 @@ mod tests {
                 .unwrap();
         assert!(!format!("{connection:?}").contains("9w"));
     }
+
+    /// Masked after serializing, a password holding a quote, a tab or a newline was written escaped (`pa\"ss`), the
+    /// escape ended the address, and the password printed whole; an input's name is printed masked as its value is.
+    #[test]
+    fn test_a_task_and_a_connection_print_masked_whatever_their_password_holds() {
+        for password in ["Pa\"ss9w", "Pa\tss9w", "Pa\nss9w"] {
+            let address = format!("https://ops:{password}@shop.test/");
+            let task = RunTask {
+                task: "Read it".into(),
+                start: Some(address.clone()),
+                inputs: Some(IndexMap::from([(address.clone(), address.clone())])),
+                ..RunTask::default()
+            };
+            let printed = format!("{task:?}");
+            assert!(printed.contains("shop.test") && !printed.contains("ss9w"), "{password:?}: {printed}");
+            let connection =
+                crate::models::BrowserConnection::new(format!("wss://ops:{password}@browser.test/"), false);
+            let printed = format!("{connection:?}");
+            assert!(printed.contains("browser.test") && !printed.contains("ss9w"), "{password:?}: {printed}");
+        }
+    }
     use crate::py::dump::Dump;
     use serde_json::json;
 

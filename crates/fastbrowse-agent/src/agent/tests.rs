@@ -3091,6 +3091,9 @@ async fn test_an_address_with_credentials_in_the_callers_context_reaches_no_mode
     };
     let result = sent.agent(page.clone()).run("Tell me what the page says", options).await.expect("a result");
     assert!(sent.jev.1.lock().unwrap().iter().any(|state| state.contains("@crm.test/")), "the background was shown");
+    // A rule that overrides what Jev is shown is stated to it.
+    let told = sent.jev.1.lock().unwrap().iter().any(|state| state.contains(super::IMAGES_WITHHELD));
+    assert!(told, "Jev was not told no screenshot is shown");
     for written in sent.written(&result) {
         assert!(!written.contains("c0ntext-pw") && !written.contains("ana:"), "{written}");
     }
@@ -3142,6 +3145,63 @@ async fn test_a_path_on_a_credentialed_start_opens_with_its_credentials() {
     for sent in jev.1.lock().unwrap().iter() {
         assert!(!sent.contains("s3cr3t") && !sent.contains("shopper"), "{sent}");
     }
+}
+
+/// A page can paint `document.URL` on a canvas, which puts a credential in pixels no text reading finds: once the run
+/// holds one, no image of the page is taken for a model, a step frame or the final frame, the cards of controls taken
+/// before are dropped, and a requested final screenshot ends the run unverified with the reason.
+#[tokio::test]
+async fn test_no_image_of_the_page_leaves_a_run_that_holds_an_address_credential() {
+    let page = Arc::new(Screenshots::default());
+    let config = fastbrowse_core::config::Config { step_frames: true, ..Default::default() };
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None, zoomed: None });
+    let agent = Agent::new(page.clone(), jev, Arc::new(ScriptedLLM)).with_config(config.clone());
+    assert!(agent.viewport().await.unwrap().is_some() && agent.frame().await.unwrap().is_some(), "no image to hold");
+    agent.redactor().register_address("https://ops:Pixel9w@shop.test/");
+    assert!(agent.images_withheld());
+    assert!(agent.viewport().await.unwrap().is_none(), "a model screenshot was taken");
+    assert!(agent.frame().await.unwrap().is_none(), "a frame was taken");
+    let mut state = run_state();
+    let look = || Some(crate::policy::Look { before: png(10, 10), after: None });
+    state.look = look();
+    let mut entry = HistoryEntry::new(Some(Operation::Click), Some("e1"), StepOutcome::Executed, true);
+    entry.look = look();
+    state.history.push(entry);
+    agent.forget_looks(&mut state);
+    assert!(state.look.is_none() && state.history.iter().all(|entry| entry.look.is_none()), "a card was kept");
+    let agent = Agent::new(page, Arc::new(IntentJev::new("image")), Arc::new(ScriptedLLM)).with_config(config);
+    agent.redactor().register_address("https://ops:Pixel9w@shop.test/");
+    let mut state = run_state();
+    state.raw_task = "Take a screenshot of the page and return it.".into();
+    let result = agent.conclude(&mut state, &observation(&[]), None).await.expect("completion");
+    assert!(result.final_frame.is_none(), "the final frame was taken");
+    assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("FinalFrame/withheld"));
+}
+
+/// Told a screenshot is attached when none can be, the done check and the composer judged a run as if one were: once
+/// the run holds an address credential they are told none is taken, and why.
+#[tokio::test]
+async fn test_the_done_check_is_told_no_screenshot_is_taken_once_the_run_holds_a_credential() {
+    let page = observation(&[]);
+    let mut state = run_state();
+    state.raw_task =
+        "Open the latest release and tell me its version. Include a screenshot of the release page.".into();
+    state.output_intent = super::state::OutputIntent::TextAndImage;
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register_address("https://ops:Pixel9w@shop.test/");
+    assert_eq!(agent.screenshot(state.output_intent), crate::retrieval::Screenshot::Withheld);
+    agent.actions_done(&mut state, &page).await.unwrap();
+    let asked = jev.5.lock().unwrap();
+    let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
+    assert!(carried.contains(crate::retrieval::SCREENSHOT_UNTAKEN), "{carried}");
+    assert!(!carried.contains(crate::retrieval::SCREENSHOT_PICTURED), "{carried}");
+    assert_eq!(
+        crate::retrieval::Screenshot::Withheld.written(),
+        Some(crate::retrieval::SCREENSHOT_WITHHELD),
+        "the composer and coverage are told none is attached"
+    );
 }
 
 /// Asked to add a variant the page showed out of stock, the done check rightly found the step undone, and every DONE
@@ -11470,6 +11530,93 @@ async fn test_an_option_click_no_field_reports_is_named_as_clicked() {
     let result = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
     let answer = result.answer.expect("an answer");
     assert!(answer.contains(&format!("- One way: {}", super::finishing::UNREPORTED)), "{answer}");
+}
+
+/// A page whose one button, `e1`, is clicked once, the click recorded.
+struct OneButton {
+    url: String,
+    clicked: Mutex<Vec<String>>,
+}
+
+impl Page for OneButton {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let button = Control::new("e1", "button", "Go", [Operation::Click]);
+        let now = at(&self.url, &[button]);
+        Box::pin(async move { Ok(now) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Go")])) })
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.clicked.lock().unwrap().extend(action.target_id.clone());
+        Box::pin(async {
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: true,
+                detail: None,
+                moved: false,
+            })
+        })
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("a scripted page draws nothing".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        let url = self.url.clone();
+        Box::pin(async move { Ok(url) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(Some(200)) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+/// The boundary masked map keys and kept ids with the values: a start's password `p` turned the state's keys into
+/// bullets, and `e1` turned the button's id into one, so the choice named nothing and the run stalled. A whole run
+/// with each such password clicks the button and completes.
+#[tokio::test]
+async fn test_a_run_whose_password_is_one_letter_or_a_control_id_still_completes() {
+    for password in ["p", "e1"] {
+        let url = format!("https://ops:{password}@shop.test/");
+        let page = Arc::new(OneButton { url: url.clone(), clicked: Mutex::default() });
+        let scripted = Arc::new(ScriptedJev::new(crate::scripted::steps("click Go").unwrap()));
+        let agent = Agent::new(page.clone(), scripted, Arc::new(ScriptedLLM));
+        let options = super::RunOptions { start: Some(url), ..Default::default() };
+        let result = agent.run("Press Go.", options).await.unwrap();
+        assert_eq!(result.status, Status::Complete, "{password}: {:?}", result.error);
+        assert_eq!(*page.clicked.lock().unwrap(), ["e1"], "{password}");
+    }
 }
 
 /// The done check finding the task's remaining step refused by the site.

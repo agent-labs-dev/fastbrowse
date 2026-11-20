@@ -4,8 +4,14 @@
 //! Every Jev and LLM request of a run passes through here, so this is where masking cannot be missed: each request
 //! builder masked what it took from the page, and one that took a raw value (a control's value in the history of what
 //! was typed, an input's value offered as a source) sent it to the model unmasked (#1381). Masking keeps lengths, so
-//! an answer's offsets into what was sent stay valid. Option and question keys are code-made and kept: an answer names
-//! them.
+//! an answer's offsets into what was sent stay valid. Only string values are masked: map keys, question and option
+//! keys, and the ids the run keeps (`Redactor::keep`) are code-made, and an answer names them, so a password that is
+//! one letter of a key or equal to a control id left a choice that no longer resolved. A name a caller chose is never
+//! a key here: it reaches a model as a value under a numbered handle that maps back to it.
+//!
+//! No image goes out once the run holds an address credential (`Redactor::holds_credentials`): a page can paint its
+//! own address on a canvas, and pixels cannot be masked. The agent takes no image then (`Agent::image`); a request
+//! that carries one anyway is refused here, so an image path added later cannot send one.
 
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +20,7 @@ use fastbrowse_core::decision::{
     BoxQuestion, ChoiceQuestion, DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, NoulQuestion,
     Question, ScoreQuestion,
 };
-use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
+use fastbrowse_core::llm::{FaultClass, Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostComponent, JevPurpose, LLMPurpose};
 use fastbrowse_core::safety::Redactor;
 use fastbrowse_core::superseding::superseded;
@@ -30,6 +36,14 @@ pub(super) fn decisions(client: &Arc<dyn DecisionClient>, redactor: &Arc<Mutex<R
 /// `client` as the run's, masking with `redactor`.
 pub(super) fn generations(client: &Arc<dyn LLMClient>, redactor: &Arc<Mutex<Redactor>>) -> Arc<dyn LLMClient> {
     Arc::new(Generations { client: Arc::clone(client), redactor: Arc::clone(redactor) })
+}
+
+/// Why a request carrying an image is refused once the run holds an address credential.
+const WITHHELD: &str =
+    "an image of the page was sent after the run learnt an address credential, which pixels cannot mask";
+
+fn held(redactor: &Mutex<Redactor>) -> bool {
+    redactor.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).holds_credentials()
 }
 
 /// The run's decision client, sending nothing for a superseded decision.
@@ -102,6 +116,9 @@ impl DecisionClient for Decisions {
             if superseded() {
                 return Err(DecisionError::Superseded);
             }
+            if !images.is_empty() && held(&self.redactor) {
+                return Err(DecisionError::failed(WITHHELD));
+            }
             let (state, questions) = self.masked(state, questions);
             self.client.evaluate_images(&state, &questions, images).await
         })
@@ -137,6 +154,9 @@ impl LLMClient for Generations {
         Box::pin(async move {
             if superseded() {
                 return Err(LLMError::Superseded);
+            }
+            if messages.iter().any(|message| !message.images.is_empty()) && held(&self.redactor) {
+                return Err(LLMError::failed(FaultClass::Request, WITHHELD));
             }
             let messages: Vec<Message> = {
                 let redactor = self.redactor.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -229,7 +249,7 @@ mod tests {
         let jev = decisions(&(sent.clone() as Arc<dyn DecisionClient>), &redactor);
         let llm = generations(&(sent.clone() as Arc<dyn LLMClient>), &redactor);
         let raw = format!("typed {CANARY} into Password");
-        let state = json!({"history": [raw], "sources": {raw.clone(): raw}});
+        let state = json!({"history": [raw], "sources": {"input:0": raw}});
         let questions = IndexMap::from([(
             "next".to_string(),
             Question::Noul(NoulQuestion::new(format!("Was {CANARY} typed?"), Some(&raw), None)),
@@ -239,5 +259,49 @@ mod tests {
         let sent = sent.0.lock().unwrap();
         assert_eq!(sent.len(), 2);
         assert!(sent.iter().all(|request| !request.contains(CANARY)), "{sent:?}");
+    }
+
+    /// A password that is one letter, or equal to a control id, bulleted the keys and ids an answer names, so the
+    /// choice no longer resolved and the run stalled: only values are masked, and kept ids are left whole.
+    #[tokio::test]
+    async fn test_keys_and_kept_ids_reach_jev_whole_whatever_the_password() {
+        for password in ["p", "e1"] {
+            let redactor = Arc::new(Mutex::new(Redactor::new()));
+            redactor.lock().unwrap().register_address(&format!("https://ops:{password}@shop.test/"));
+            redactor.lock().unwrap().keep("e1");
+            let sent = Arc::new(Sent::default());
+            let jev = decisions(&(sent.clone() as Arc<dyn DecisionClient>), &redactor);
+            let state = json!({"page": {"controls": [{"id": "e1", "label": "Open"}]}});
+            let criteria = IndexMap::from([("e1".to_string(), json!("the control labelled Open"))]);
+            let choice = ChoiceQuestion::new("Which control?", criteria);
+            let questions = IndexMap::from([("pick".to_string(), Question::Choice(choice))]);
+            let _ = jev.evaluate(&state, &questions).await;
+            let sent = sent.0.lock().unwrap();
+            assert!(sent[0].contains(r#"{"page":{"controls":[{"id":"e1","#), "{password}: {sent:?}");
+            assert!(sent[0].contains(r#""criteria":{"e1":"#), "{password}: {sent:?}");
+        }
+    }
+
+    /// A page can paint its address, credentials and all, on a canvas: once the run holds one, a request carrying an
+    /// image is refused, whichever path built it.
+    #[tokio::test]
+    async fn test_no_image_reaches_jev_or_the_llm_once_the_run_holds_a_credential() {
+        let redactor = Arc::new(Mutex::new(Redactor::new()));
+        let sent = Arc::new(Sent::default());
+        let jev = decisions(&(sent.clone() as Arc<dyn DecisionClient>), &redactor);
+        let llm = generations(&(sent.clone() as Arc<dyn LLMClient>), &redactor);
+        let images: Images = IndexMap::from([("page".to_string(), b"png".to_vec())]);
+        let message =
+            Message { images: vec![fastbrowse_core::models::Bytes(b"png".to_vec())], ..Message::user("Read it") };
+        let questions = IndexMap::new();
+        let _ = jev.evaluate_images(&json!({}), &questions, &images).await;
+        let _ = llm.generate_value(LLMPurpose::ImageRead, std::slice::from_ref(&message), &Anything, None).await;
+        assert_eq!(sent.0.lock().unwrap().len(), 2, "refused before any credential");
+        redactor.lock().unwrap().register_address(&format!("https://ops:{CANARY}@shop.test/"));
+        let refused = jev.evaluate_images(&json!({}), &questions, &images).await.unwrap_err();
+        assert!(refused.to_string().contains("pixels cannot mask"), "{refused}");
+        let refused = llm.generate_value(LLMPurpose::ImageRead, &[message], &Anything, None).await.unwrap_err();
+        assert!(refused.to_string().contains("pixels cannot mask"), "{refused}");
+        assert_eq!(sent.0.lock().unwrap().len(), 2, "an image went out");
     }
 }

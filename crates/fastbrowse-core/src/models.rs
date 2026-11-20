@@ -868,7 +868,8 @@ pub struct RunResult {
     /// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
     #[serde(default)]
     pub final_url: Option<String>,
-    /// A safe final PNG requested by the task or enabled with step frames; kept out of text results.
+    /// A safe final PNG requested by the task or enabled with step frames; kept out of text results. None once the run
+    /// knew an address credential, as every image of the page is.
     #[serde(skip)]
     pub final_frame: Option<Vec<u8>>,
     /// The videos this run finished writing, captioned then plain.
@@ -1294,7 +1295,8 @@ pub struct StepEvent {
     pub kind: StepTag,
     pub step: StepResult,
     /// A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not, and also
-    /// when a resolved secret was showing as page text: pixels cannot be masked the way text is.
+    /// when a resolved secret was showing as page text or the run knew an address credential: pixels cannot be masked the
+    /// way text is, and a page can paint its address where no text check sees it.
     #[serde(default)]
     pub frame: Option<Image>,
 }
@@ -1307,7 +1309,7 @@ impl Schema for StepEvent {
                 Field::default("type", StepTag::ty(), "step"),
                 Field::required("step", StepResult::ty()),
                 Field::default("frame", Ty::optional(Ty::Image), Value::Null).doc(
-                    "A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\nand also when a resolved secret was showing as page text: pixels cannot be masked the way text is.",
+                    "A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\nand also when a resolved secret was showing as page text or the run knew an address credential: pixels\ncannot be masked the way text is, and a page can paint its address where no text check sees it.",
                 ),
             ],
         )
