@@ -13,6 +13,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
 
+- A list read for an answer composed across its pages no longer reads a next page that asks for a sign-in as one more page of the list when the run holds the credentials to pass it: the run signs in first, and the wall's text is not cited.
+
+- A count over a whole list that the list states itself ends on the page that states it. A filtered GitHub issue list showing "59 results" was read as the answer and the run chose to finish, but it still opened the list's next two pages and cited each page's navigation ([#1331](https://github.com/agent-labs-dev/fastbrowse/issues/1331)).
+
+- A field the task does not give a value for word for word is written knowing what the field is: its label, the section it sits in and its name. An unlabelled search box read only as `textbox`, so a research run typed its whole cited answer into a site's search box and submitted it; told the field sat under Advanced Search and was named `q`, the writer wrote a search query ([#1339](https://github.com/agent-labs-dev/fastbrowse/issues/1339)).
+
 ## [0.12.0] - 2026-11-19
 
 - Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.
