@@ -13,12 +13,12 @@ sig = "6ebea0f029ef1cc0"
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-cli/src/mcp/mod.rs"
-sig = "0b8636a01d265bb0"
+sig = "b24caa14f2aa9bf1"
 
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-core/src/safety.rs"
-sig = "c0bf454b4aa87867"
+sig = "25c151aa77407f09"
 
 [[bindings]]
 doc = "blog/agent-credentials-scoped.md"
@@ -48,7 +48,7 @@ sig = "f739511953505e3f"
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"
 target = "crates/fastbrowse-core/src/models.rs"
-sig = "8b70c9ce7cf32d65"
+sig = "f4bc11301729c16b"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
@@ -73,12 +73,12 @@ sig = "6ebea0f029ef1cc0"
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
 target = "crates/fastbrowse-core/src/models.rs"
-sig = "8b70c9ce7cf32d65"
+sig = "f4bc11301729c16b"
 
 [[bindings]]
 doc = "blog/mcp-browser-tool.md"
 target = "crates/fastbrowse-cli/src/mcp/mod.rs"
-sig = "0b8636a01d265bb0"
+sig = "b24caa14f2aa9bf1"
 
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
@@ -103,4 +103,4 @@ sig = "6ebea0f029ef1cc0"
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"
 target = "crates/fastbrowse-core/src/models.rs"
-sig = "8b70c9ce7cf32d65"
+sig = "f4bc11301729c16b"
