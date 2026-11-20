@@ -318,6 +318,10 @@ impl Server {
     /// Everything up to the run's first wait happens here, before the next line is read: a
     /// `run/cancel` or the end of input on the next line finds the run under way.
     async fn start_run(&self, id: Option<RequestId>, params: RunParams) {
+        if holds_credential(&params) {
+            let message = "run_id holds a credential; choose an id that holds none";
+            return self.refuse(id.as_ref(), refused(ErrorCode::InvalidParams, message)).await;
+        }
         let cancel = Cancel::default();
         let busy = {
             let mut state = self.state();
@@ -526,6 +530,25 @@ pub struct Callbacks {
 pub type Resolve = Arc<dyn Fn(String, String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
 
 /// A method's params as its model, or the refusal that names the method, the field at fault and the fault.
+/// Whether the run's id holds an address's credentials, or a credential written anywhere else in the request. The id
+/// goes back as written in every message about the run (`run/event`, `run/frame`, `run/until`, `secrets/resolve`, the
+/// reply) and in the server's log, and masked, no client could match those to its run, so the run is refused instead
+/// (#1381).
+fn holds_credential(params: &RunParams) -> bool {
+    let mut redactor = fastbrowse_core::safety::Redactor::default();
+    if let Ok(run) = serde_json::to_value(&params.run) {
+        redactor.register_tree(&run);
+    }
+    params
+        .secrets
+        .iter()
+        .filter_map(|secret| serde_json::to_value(secret).ok())
+        .for_each(|secret| redactor.register_tree(&secret));
+    let run_id = Value::from(params.run_id.as_str());
+    redactor.register_tree(&run_id);
+    redactor.holds_typed(&fastbrowse_core::schema::Ty::Str, &run_id)
+}
+
 pub fn read<T: DeserializeOwned>(method: Method, params: Value) -> Result<T, Refused> {
     serde_path_to_error::deserialize(params).map_err(|error| {
         let message = match error.path().to_string() {

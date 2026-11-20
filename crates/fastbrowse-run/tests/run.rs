@@ -366,9 +366,11 @@ impl DecisionClient for StopsAfterASecond {
 /// none of the run's frames goes out; without, the same page sends them.
 #[tokio::test]
 async fn test_no_frame_goes_out_of_a_run_whose_start_has_credentials() {
-    if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
-        return;
-    }
+    // A silent pass without Chrome would look like no frame going out.
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_some(),
+        "test_no_frame_goes_out_of_a_run_whose_start_has_credentials needs Chrome on PATH"
+    );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -1615,7 +1617,8 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
     // Each password holds characters a prose cut once ended an authority at, or a JSON or Debug print escapes.
     let (start_pw, redirect_pw, task_pw) = ("St@rt 9'pw", "R3dir<\"x", "T4sk(pw);");
     let (token, context_pw) = ("Tok3n9pw", "J5on9pw");
-    let (name_pw, value_pw, canvas_pw) = ("Na\"m\te\n9pw", "p", "C4nvas9pw");
+    // The one-letter password is a letter no path of the run holds: a path a credential's letters spell is refused.
+    let (name_pw, value_pw, canvas_pw) = ("Na\"m\te\n9pw", "Z", "C4nvas9pw");
     let encode =
         |text: &str| percent_encoding::utf8_percent_encode(text, percent_encoding::NON_ALPHANUMERIC).to_string();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1753,6 +1756,28 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
     )
     .await
     .unwrap_err();
+    // Without ffmpeg the recording is refused before any frame, so the run that would have written it is checked
+    // to have been asked for one and refused by a message that holds no credential; with ffmpeg, the file is.
+    let unrecorded = if records {
+        None
+    } else {
+        let error = run_task(
+            RunTask {
+                task: "Read the canvas.".into(),
+                start: Some(format!("http://ops:{canvas_pw}@127.0.0.1:{port}/canvas")),
+                record: Some(recording.clone()),
+                launch: true,
+                browser: true,
+                ..RunTask::default()
+            },
+            handed.host("read", &trace),
+        )
+        .await
+        .map(|result| result.error.unwrap_or_default())
+        .unwrap_or_else(|error| error.to_string());
+        assert!(error.contains("ffmpeg"), "the recording was not asked for: {error}");
+        Some(error)
+    };
     let replay =
         run_task(RunTask { task: instruction, recipe: Some(replayed.clone()), ..RunTask::default() }, Host::default())
             .await
@@ -1768,6 +1793,7 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
         ("connection debug", connection),
         ("saved recipe", std::fs::read_to_string(&saved).unwrap_or_default()),
     ];
+    sinks.extend(unrecorded.map(|error| ("recording refusal", error)));
     sinks.extend(handed.checked.lock().unwrap().iter().map(|url| ("until", url.clone())));
     sinks.extend(
         result

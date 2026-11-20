@@ -11,8 +11,8 @@ pub mod fetch;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::agent::{Agent, RecipeSink, Resume, RunOptions};
 use fastbrowse_agent::verification::RecordSchema;
@@ -34,14 +34,16 @@ use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BrowserUsed, BrowserVia, BrowserWarningEvent,
     BudgetResource, BudgetStop, Bytes, CostBasis, CostBreakdown, CostComponent, CostLine, Event, EventHandler,
-    FailureKind, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status, StepResult, UntilCheck,
-    WallKind,
+    FailureKind, FrameHandler, Limits, LocalChrome, RunResult, SecretRef, SecretResolver, Status, StepResult,
+    UntilCheck, WallKind,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::Page;
+use fastbrowse_core::protocol::run_task_fields;
 use fastbrowse_core::py::text::repr;
-use fastbrowse_core::safety::mask_userinfo;
+use fastbrowse_core::safety::{Redactor, mask_userinfo};
+use fastbrowse_core::schema::Schema;
 use fastbrowse_core::telemetry::{Ledger, LedgerState, Trace};
 use serde_json::{Map, Value};
 use tokio::sync::Notify;
@@ -950,33 +952,114 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
     }
 }
 
-/// Open `start`, pursue `task`, and return what the run could prove.
-/// Register the credentials in every address the caller wrote, so each is masked wherever the task or context is shown
-/// to a model, a trace or a frame, and say whether there were any.
-/// A recipe is the caller's too: its start is refused at load when it carries credentials, but a step's link, label or
-/// text can write an address that a replay shows a model (#1381).
-fn learn_credentials(
-    trace: &Trace,
-    task: &RunTask,
-    recipe: Option<&fastbrowse_core::recipe::Recipe>,
-    secrets: &[String],
-) -> bool {
-    let Some(redactor) = trace.redactor() else { return false };
-    // Every string the caller chose that a model, a trace or a saved recipe can be shown, names as much as values: an
-    // input named with an address reached Jev as a question key (#1381).
-    let given = serde_json::json!({
-        "task": task.task,
-        "start": task.start,
-        "context": task.context,
-        "inputs": task.inputs,
-        "attachments": task.attachments.iter().map(|attachment| &attachment.name).collect::<Vec<_>>(),
-        "output_schema": task.output_schema,
-        "recipe": recipe,
-        "secrets": secrets,
-    });
-    let mut redactor = redactor.lock().unwrap();
+/// The fields of a run's arguments that may carry an address's credentials: what a model reads as the task, where it
+/// starts, its background and its inputs, which are masked wherever they are shown, and the DevTools address, which is
+/// only connected to. Every other field is used or handed back as written (a path the caller looks up, an id a reply
+/// is matched by, a selector, a schema key the data comes back under), so masking one would break the caller's own
+/// use of it, and left raw it reached results, events, errors and model requests (#1381).
+const CREDENTIAL_FIELDS: [&str; 5] = ["task", "start", "context", "inputs", "cdp_url"];
+
+/// Learn every credential in everything the caller handed the run, then refuse the run when any field outside
+/// `CREDENTIAL_FIELDS` holds one: an address's userinfo, or text a credential written elsewhere in the request
+/// repeats. Each field is read by its type (`run_task_fields`), so a field added later is learnt and checked with the
+/// rest, and a closed set's value is never mistaken for text. The refusal names the field, never its value.
+fn admit(redactor: &Mutex<Redactor>, task: &RunTask, secrets: &[SecretRef]) -> Result<(), RunError> {
+    let mut redactor = redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let given =
+        serde_json::to_value(task).map_err(|_| RunError::Invalid("the run's arguments cannot be read".into()))?;
+    let secrets: Vec<Value> = secrets.iter().filter_map(|secret| serde_json::to_value(secret).ok()).collect();
     redactor.register_tree(&given);
+    secrets.iter().for_each(|secret| redactor.register_tree(secret));
+    let held = run_task_fields().into_iter().find(|field| {
+        !CREDENTIAL_FIELDS.contains(&field.key())
+            && given.get(field.key()).is_some_and(|value| redactor.holds_typed(&field.ty, value))
+    });
+    if let Some(field) = held {
+        return Err(RunError::Invalid(format!(
+            "{} holds a credential; only task, start, context, inputs and cdp_url may carry an address's credentials",
+            field.key()
+        )));
+    }
+    // A secret's name and origins are sent back to the caller to resolve it, so neither can be masked on the way.
+    if secrets.iter().any(|secret| redactor.holds_typed(&SecretRef::ty(), secret)) {
+        return Err(RunError::Invalid(
+            "a secret's name or origin holds a credential; only task, start, context, inputs and cdp_url may carry an address's credentials".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// What else the run reads that the caller wrote, learnt before anything is shown: a recipe, whose start is refused at
+/// load when it carries credentials but whose steps' links, labels and text can write an address a replay shows a
+/// model, and the settings' text, whose base addresses may carry the provider's credentials (#1381).
+fn learn_credentials(
+    redactor: &Mutex<Redactor>,
+    recipe: Option<&fastbrowse_core::recipe::Recipe>,
+    settings: &Settings,
+) -> bool {
+    let mut redactor = redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(recipe) = recipe.and_then(|recipe| serde_json::to_value(recipe).ok()) {
+        redactor.register_tree(&recipe);
+    }
+    settings.text().iter().for_each(|(_, value)| redactor.register_tree(value));
     redactor.holds_credentials()
+}
+
+/// `on_event` with every event redacted on its way out (`Redactor::redacted`), the browser's warnings and the steps
+/// alike: an event is built from what the run holds, and a field read straight from the caller or a page reached the
+/// caller's handler, a serve client's `run/event` and the MCP log raw.
+fn redacting(on_event: EventHandler, redactor: Arc<Mutex<Redactor>>) -> EventHandler {
+    Arc::new(move |event| {
+        let redacted = redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).redacted(&event);
+        match redacted {
+            Some(event) => on_event(event),
+            None => {
+                fastbrowse_browser::warn("an event that could not be redacted was not sent");
+                Box::pin(async {})
+            }
+        }
+    })
+}
+
+/// The run's one way out: its result or error, every string the caller, a page or a model wrote redacted, map keys
+/// included, so a path, a profile, a data key, an artifact's name or an error built from any of them is redacted
+/// without a sink of its own (#1381).
+fn exited(outcome: Result<RunResult, RunError>, redactor: &Mutex<Redactor>) -> Result<RunResult, RunError> {
+    let redactor = redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match outcome {
+        Ok(mut result) => {
+            let frame = result.final_frame.take();
+            let mut redacted = redactor.redacted(&result).ok_or_else(|| {
+                RunError::Invalid("the run's result could not be redacted, so it was withheld".into())
+            })?;
+            redacted.final_frame = frame;
+            Ok(redacted)
+        }
+        Err(error) => Err(redacted_error(error, &redactor)),
+    }
+}
+
+fn redacted_error(error: RunError, redactor: &Redactor) -> RunError {
+    match error {
+        RunError::Invalid(message) => RunError::Invalid(redactor.redact(&message)),
+        RunError::UnsupportedSchema(message) => RunError::UnsupportedSchema(redactor.redact(&message)),
+        RunError::Configuration(message) => RunError::Configuration(redactor.redact(&message)),
+        RunError::Recording(message) => RunError::Recording(redactor.redact(&message)),
+        RunError::Cancelled(receipt) => RunError::Cancelled(redacted_receipt(receipt, redactor)),
+        RunError::AfterSpending { error, receipt } => RunError::AfterSpending {
+            error: Box::new(redacted_error(*error, redactor)),
+            receipt: redacted_receipt(receipt, redactor),
+        },
+    }
+}
+
+fn redacted_receipt(receipt: CancellationReceipt, redactor: &Redactor) -> CancellationReceipt {
+    let reason = receipt.reason.as_deref().map(|reason| redactor.redact(reason).into_boxed_str());
+    // Unreadable once redacted, the receipt keeps only its charges, which name models and purposes, never text.
+    let redacted = redactor
+        .redacted(&receipt)
+        .unwrap_or_else(|| CancellationReceipt { cost: receipt.cost.clone(), ..Default::default() });
+    CancellationReceipt { reason, ..redacted }
 }
 
 /// The extension's address for the host at `record`, the task after `#` naming the run's tab group. The name is shown
@@ -992,13 +1075,26 @@ fn redacted(trace: &Trace, text: &str) -> String {
         .map_or_else(|| fastbrowse_core::safety::Redactor::default().redact(text), |r| r.lock().unwrap().redact(text))
 }
 
-pub async fn run_task(task: RunTask, host: Host) -> Result<RunResult, RunError> {
+/// Open `start`, pursue `task`, and return what the run could prove.
+///
+/// The run learns every credential the caller handed it before anything else (`admit`), and everything it hands
+/// back, its result, its error and each event, passes one redaction on the way (`exited`, `redacting`).
+pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
+    let redactor: Arc<Mutex<Redactor>> = Arc::default();
+    fastbrowse_core::safety::live(&redactor);
+    let secrets: Vec<SecretRef> = host.secrets.iter().flat_map(|secrets| secrets.available()).collect();
+    let admitted = admit(&redactor, &task, &secrets);
+    if let Err(refusal) = admitted {
+        return exited(Err(refusal), &redactor);
+    }
+    host.on_event = host.on_event.take().map(|on_event| redacting(on_event, redactor.clone()));
     // Boxed so a caller holds a pointer rather than the whole run, which an unoptimized build copies into each
     // caller's frame: inline, a run on a 2 MB thread stack overflowed it before the browser started.
-    Box::pin(run_unboxed(task, host)).await
+    let outcome = Box::pin(run_unboxed(task, host, redactor.clone())).await;
+    exited(outcome, &redactor)
 }
 
-async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
+async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Redactor>>) -> Result<RunResult, RunError> {
     // A resolver that declares no secret gives the run none to type, as an empty list to `serve` does; counting the
     // resolver itself refused a fetch run for an empty `ScopedSecrets` that serve and the CLI accept.
     let secrets = host.secrets.as_ref().is_some_and(|secrets| !secrets.available().is_empty());
@@ -1027,13 +1123,11 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     };
     let http = host.http.take().unwrap_or_else(Http::hyper);
     // The agent learns each secret, and its clients write the requests that may carry one, so they share a redactor.
-    let trace = http.trace.clone().redacting(Arc::default());
+    let trace = http.trace.clone().redacting(redactor.clone());
     let http = http.with_trace(trace);
     // Learned before anything reads the task: the consent check, the extension's tab group and the first frame all
     // come before the agent, and each took an address's credentials as the caller wrote them (#1381).
-    let secret_names: Vec<String> =
-        host.secrets.iter().flat_map(|secrets| secrets.available()).map(|secret| secret.name).collect();
-    let credentialed = learn_credentials(&http.trace, &task, recipe.as_ref(), &secret_names);
+    let credentialed = learn_credentials(&redactor, recipe.as_ref(), &settings);
     let (warning_task, warning_tx, warning_stop_tx) = host
         .on_event
         .clone()
@@ -1153,9 +1247,11 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         owned = Some(started);
         let connection = BrowserConnection { allowed_origins: origins.clone(), ..connection };
         if let Some(on_event) = &host.on_event {
+            // A live view shows the page's pixels, which no reading can check, so a run that knows a credential from
+            // its start withholds it as it withholds every image. One learnt later cannot recall a view already given.
             let event = BrowserEvent {
                 kind: Default::default(),
-                live_url: connection.live_url.clone(),
+                live_url: connection.live_url.clone().filter(|_| !credentialed),
                 browser_id: connection.browser_id.clone(),
             };
             on_event(Event::Browser(event)).await;
@@ -1654,13 +1750,15 @@ mod tests {
     /// an address's credentials included, before the agent had masked anything (#1381).
     #[test]
     fn test_the_tab_group_and_the_result_card_show_the_task_with_its_credentials_masked() {
-        let trace = Trace::collecting().redacting(Arc::default());
+        let redactor: Arc<Mutex<Redactor>> = Arc::default();
+        let trace = Trace::collecting().redacting(redactor.clone());
         let task = RunTask {
             task: "Read https://shopper:t4sk-pw@shop.test/orders".into(),
             context: Some("The CRM is https://ana:c0ntext-pw@crm.test/".into()),
             ..RunTask::default()
         };
-        assert!(learn_credentials(&trace, &task, None, &[]));
+        admit(&redactor, &task, &[]).unwrap();
+        assert!(redactor.lock().unwrap().holds_credentials());
         let group = extension_address(Path::new("/hosts/a"), &task.task, &trace);
         assert_eq!(
             group.split_once('#').map(|(_, name)| name),
@@ -1678,53 +1776,142 @@ mod tests {
             assert!(!shown.contains("ana:"), "{shown}");
         }
         let clean = RunTask { task: "Read https://shop.test/orders".into(), ..RunTask::default() };
-        assert!(!learn_credentials(&Trace::collecting().redacting(Arc::default()), &clean, None, &[]));
+        let fresh: Arc<Mutex<Redactor>> = Arc::default();
+        admit(&fresh, &clean, &[]).unwrap();
+        assert!(!learn_credentials(&fresh, None, &Settings::default()));
         // A caller's JSON is decoded before anything reads it, so an `@` it escaped is an `@` here, and a context
         // that is itself JSON keeps its addresses masked within it.
         let decoded: RunTask = serde_json::from_str(
             r#"{"task": "Read it", "context": "{\"crm\": \"https://ana:J5on9w\u0040crm.test/\"}"}"#,
         )
         .unwrap();
-        let json = Trace::collecting().redacting(Arc::default());
-        assert!(learn_credentials(&json, &decoded, None, &[]));
-        let context = redacted(&json, decoded.context.as_deref().unwrap_or_default());
+        let json: Arc<Mutex<Redactor>> = Arc::default();
+        admit(&json, &decoded, &[]).unwrap();
+        let context = json.lock().unwrap().redact(decoded.context.as_deref().unwrap_or_default());
         assert_eq!(context, r#"{"crm": "https://[secret:address_credentials]@crm.test/"}"#);
         // A replayed recipe's start opens the run as a caller's start does.
-        let replayed = Trace::collecting().redacting(Arc::default());
+        let replayed: Arc<Mutex<Redactor>> = Arc::default();
         let recipe = fastbrowse_core::recipe::Recipe {
             version: fastbrowse_core::recipe::RECIPE_VERSION,
             task: clean.task.clone(),
             start: Some("https://ops:r3cipe-pw@shop.test/".into()),
             steps: Vec::new(),
         };
-        assert!(learn_credentials(&replayed, &clean, Some(&recipe), &[]));
-        assert!(!redacted(&replayed, "it said r3cipe-pw").contains("r3cipe-pw"));
+        assert!(learn_credentials(&replayed, Some(&recipe), &Settings::default()));
+        assert!(!replayed.lock().unwrap().redact("it said r3cipe-pw").contains("r3cipe-pw"));
+        // So do the settings' base addresses, which a provider's error can repeat.
+        let settings = Settings { llm_base_url: Some("https://ops:ba5e-pw@llm.test/v1".into()), ..Settings::default() };
+        let based: Arc<Mutex<Redactor>> = Arc::default();
+        assert!(learn_credentials(&based, None, &settings));
+        assert!(!based.lock().unwrap().redact("401 for ba5e-pw").contains("ba5e-pw"));
     }
 
-    /// A name the caller chose is its text as much as a value: an input named with an address reached Jev as an
-    /// unmasked question key, and an output field, an attachment or a secret named so would too (#1381).
-    #[test]
-    fn test_every_name_a_caller_chooses_is_learnt_from() {
-        let names = [
-            ("input", r#"{"task": "Sign up", "inputs": {"https://ops:1nput-pw@h.test/": "alice"}}"#),
-            (
-                "attachment",
-                r#"{"task": "Send it", "attachments": [{"name": "https://ops:1nput-pw@h.test/", "mime_type": "text/plain", "content": ""}]}"#,
+    /// A sample of `ty` with each string and each chosen key a distinct marker, `leaf-0`, `leaf-1` and so on.
+    fn populated(ty: &fastbrowse_core::schema::Ty, next: &mut usize) -> Value {
+        use fastbrowse_core::schema::Ty;
+        let marker = |next: &mut usize| {
+            *next += 1;
+            Value::from(format!("leaf-{next}"))
+        };
+        match ty {
+            Ty::Str | Ty::Path => marker(next),
+            Ty::Any | Ty::JsonValue | Ty::Map(_) => {
+                let key = marker(next).as_str().unwrap_or_default().to_string();
+                let value = match ty {
+                    Ty::Map(item) => populated(item, next),
+                    _ => marker(next),
+                };
+                Value::Object(Map::from_iter([(key, value)]))
+            }
+            Ty::Int => Value::from(1),
+            Ty::Float => Value::from(1.0),
+            Ty::Bool => Value::from(true),
+            Ty::Null => Value::Null,
+            Ty::Base64 | Ty::Bytes | Ty::Image => Value::from(""),
+            Ty::DateTime => Value::from("2026-01-01T00:00:00Z"),
+            Ty::List(item) | Ty::Set(item) => Value::Array(vec![populated(item, next)]),
+            Ty::Tuple(items) => Value::Array(items.iter().map(|item| populated(item, next)).collect()),
+            Ty::Optional(inner) | Ty::Alias(_, inner) | Ty::Constrained(inner, _) => populated(inner, next),
+            Ty::Literal(values) => values[0].clone(),
+            Ty::Enum(closed) => closed.values[0].clone(),
+            Ty::Union(variants) => populated(&variants[0], next),
+            Ty::Tagged { variants, .. } => populated(&variants[0].1, next),
+            Ty::Model(model) => Value::Object(
+                model
+                    .fields
+                    .iter()
+                    .filter(|field| !field.exclude)
+                    .map(|field| (field.key().to_string(), populated(&field.ty, next)))
+                    .collect(),
             ),
-            (
-                "output field",
-                r#"{"task": "Read it", "output_schema": {"type": "object", "properties": {"https://ops:1nput-pw@h.test/": {"type": "string"}}}}"#,
-            ),
-        ];
-        for (named, written) in names {
-            let trace = Trace::collecting().redacting(Arc::default());
-            let task: RunTask = serde_json::from_str(written).unwrap();
-            assert!(learn_credentials(&trace, &task, None, &[]), "{named}");
-            assert!(!redacted(&trace, "1nput-pw").contains("1nput-pw"), "{named}");
         }
-        let trace = Trace::collecting().redacting(Arc::default());
+    }
+
+    /// Every string a caller writes into a run's arguments, a key or a value, is learnt or refused. The arguments
+    /// are built from `RunTask`'s own schema, so a field added later is covered without being named: one field at a
+    /// time was found unlearnt by review (a run id, a profile, a schema description, a path), each reaching a
+    /// result, an error, an event or a model request raw (#1381).
+    #[test]
+    fn test_every_string_a_caller_writes_is_learnt_or_refused() {
+        let mut next = 0;
+        let fields = run_task_fields();
+        let sample = Value::Object(
+            fields.iter().map(|field| (field.key().to_string(), populated(&field.ty, &mut next))).collect(),
+        );
+        let written = sample.to_string();
+        let mut refused = std::collections::BTreeSet::new();
+        for leaf in 1..=next {
+            let marker = format!("\"leaf-{leaf}\"");
+            let field = fields
+                .iter()
+                .map(|field| field.key())
+                .find(|key| sample[*key].to_string().contains(&marker))
+                .expect("every marker is under a field");
+            let password = format!("pw-{leaf}x");
+            let task: RunTask =
+                serde_json::from_str(&written.replace(&marker, &format!("\"https://ops:{password}@h.test/\"")))
+                    .unwrap_or_else(|error| panic!("{field}: {error}"));
+            let redactor: Arc<Mutex<Redactor>> = Arc::default();
+            match admit(&redactor, &task, &[]) {
+                Ok(()) => {
+                    assert!(CREDENTIAL_FIELDS.contains(&field), "{field} carried a credential and was admitted");
+                    let redactor = redactor.lock().unwrap();
+                    assert!(!redactor.redact(&format!("said {password}")).contains(&password), "{field} unlearnt");
+                }
+                Err(error) => {
+                    assert!(!CREDENTIAL_FIELDS.contains(&field), "{field} is the caller's to write: {error}");
+                    let error = error.to_string();
+                    assert!(error.starts_with(&format!("{field} holds a credential")), "{error}");
+                    assert!(!error.contains(&password), "{error}");
+                    refused.insert(field);
+                }
+            }
+        }
+        // Nothing is refused for holding no credential, and every field with text was tried.
+        let plain: RunTask = serde_json::from_str(&written).unwrap();
+        admit(&Arc::default(), &plain, &[]).unwrap();
+        for field in
+            ["record", "output_schema", "chrome", "cloud_profile", "target_match", "desktop_apps", "attachments"]
+        {
+            assert!(refused.contains(field), "{field} was never tried");
+        }
+        // A credential written once in the task is refused where it repeats outside an address, as in a path.
+        let repeated = RunTask {
+            task: "Read https://ops:r3peat-pw@h.test/".into(),
+            record: Some("/tmp/r3peat-pw.mp4".into()),
+            ..RunTask::default()
+        };
+        let error = admit(&Arc::default(), &repeated, &[]).unwrap_err().to_string();
+        assert!(error.starts_with("record holds a credential"), "{error}");
+        // A secret's name and origins are sent back to resolve it, so a credential in either is refused too.
         let clean = RunTask { task: "Sign in".into(), ..RunTask::default() };
-        assert!(learn_credentials(&trace, &clean, None, &["https://ops:1nput-pw@h.test/".into()]), "secret");
+        for secret in [
+            SecretRef { name: "https://ops:s3cret-pw@h.test/".into(), origins: vec!["https://h.test".into()] },
+            SecretRef { name: "password".into(), origins: vec!["https://ops:s3cret-pw@h.test".into()] },
+        ] {
+            let error = admit(&Arc::default(), &clean, &[secret]).unwrap_err().to_string();
+            assert!(error.starts_with("a secret's name or origin holds a credential") && !error.contains("s3cret"));
+        }
     }
 
     #[tokio::test]

@@ -672,6 +672,33 @@ pub fn mask_userinfo(text: &str) -> String {
     Redactor::default().mask(text)
 }
 
+/// The redactors of the runs this process has going, for what it writes to its own log.
+static LIVE: std::sync::Mutex<Vec<std::sync::Weak<std::sync::Mutex<Redactor>>>> = std::sync::Mutex::new(Vec::new());
+
+/// Count `redactor` among the process's live runs until the run drops it, so `logged` redacts what it learns. A log
+/// line has no run to ask: a warning written from deep in a browser or a client named the path, the address or the
+/// error a caller handed one run, credentials and all.
+pub fn live(redactor: &std::sync::Arc<std::sync::Mutex<Redactor>>) {
+    let mut live = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    live.retain(|known| known.strong_count() > 0);
+    live.push(std::sync::Arc::downgrade(redactor));
+}
+
+/// `message` as this process may write it to stderr or a logger: every address's userinfo, and each credential and
+/// secret any live run knows, redacted. A run's credentials are redacted from another run's lines too, which hides
+/// nothing either run may show. Never call it holding a run's redactor.
+pub fn logged(message: &str) -> String {
+    let live: Vec<_> = LIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter_map(std::sync::Weak::upgrade)
+        .collect();
+    live.iter().fold(Redactor::default().redact(message), |text, redactor| {
+        redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).redact(&text)
+    })
+}
+
 /// `value` written for `Debug` from its serialized form, every address's credential masked. A struct holding an
 /// address the caller wrote (a start, a DevTools endpoint, an input's name) prints this way, so a field added later is
 /// printed and masked with the rest rather than derived raw.
@@ -1040,6 +1067,144 @@ impl Redactor {
             Value::Null | Value::Bool(_) | Value::Number(_) => {}
         }
     }
+
+    /// `value` with every string its type says is free text redacted (`redact`), map keys included, by a round trip
+    /// through its serialized form: what a run hands back, a result or an event, passes this one way out, so a field
+    /// added later is redacted with the rest. None only when the redacted form no longer reads as `T`, which a type
+    /// whose `Schema` names every closed set it holds never gives.
+    pub fn redacted<T: crate::schema::Schema + serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        value: &T,
+    ) -> Option<T> {
+        let mut written = serde_json::to_value(value).ok()?;
+        self.redact_typed(&T::ty(), &mut written);
+        serde_json::from_value(written).ok()
+    }
+
+    /// Redact every string of `value` that `ty` says is free text: a string, a path, any JSON, and each key of a map
+    /// whose keys someone chose. A closed set's value (an enum, a literal), a model's field names, a date and bytes
+    /// are code's and stay whole, as does an id code made (`keep`): blanked, a short credential such as `e` turned the
+    /// status `complete` into one no reader parses, and a model's field name into a key no reader looks up.
+    pub fn redact_typed(&self, ty: &crate::schema::Ty, value: &mut Value) {
+        self.rewrite_typed(ty, value, &|text| self.redact(text));
+    }
+
+    /// Whether a string `redact_typed` would rewrite holds a credential this redactor knows or an address's userinfo.
+    pub fn holds_typed(&self, ty: &crate::schema::Ty, value: &Value) -> bool {
+        let mut written = value.clone();
+        self.redact_typed(ty, &mut written);
+        written != *value
+    }
+
+    fn rewrite_typed(&self, ty: &crate::schema::Ty, value: &mut Value, rewrite: &dyn Fn(&str) -> String) {
+        use crate::schema::Ty;
+        match (ty, value) {
+            (_, Value::Null) => {}
+            (Ty::Str | Ty::Path, Value::String(text)) => self.rewrite_text(text, rewrite),
+            (Ty::Any | Ty::JsonValue, value) => self.rewrite_tree(value, rewrite),
+            (Ty::List(item) | Ty::Set(item), Value::Array(items)) => {
+                items.iter_mut().for_each(|value| self.rewrite_typed(item, value, rewrite));
+            }
+            (Ty::Tuple(types), Value::Array(items)) if types.len() == items.len() => {
+                types.iter().zip(items.iter_mut()).for_each(|(ty, value)| self.rewrite_typed(ty, value, rewrite));
+            }
+            (Ty::Map(item), Value::Object(fields)) => {
+                for (key, mut value) in std::mem::take(fields) {
+                    self.rewrite_typed(item, &mut value, rewrite);
+                    let mut key = key;
+                    self.rewrite_text(&mut key, rewrite);
+                    fields.insert(key, value);
+                }
+            }
+            (Ty::Optional(inner) | Ty::Alias(_, inner) | Ty::Constrained(inner, _), value) => {
+                self.rewrite_typed(inner, value, rewrite);
+            }
+            (Ty::Model(model), Value::Object(fields)) => {
+                for (key, value) in fields.iter_mut() {
+                    match model.fields.iter().find(|field| field.key() == key) {
+                        Some(field) => self.rewrite_typed(&field.ty, value, rewrite),
+                        None => self.rewrite_tree(value, rewrite),
+                    }
+                }
+            }
+            (Ty::Tagged { .. } | Ty::Union(_), value) => match fitting(ty, value) {
+                Some(variant) => self.rewrite_typed(variant, value, rewrite),
+                None => self.rewrite_tree(value, rewrite),
+            },
+            (
+                Ty::Enum(_)
+                | Ty::Literal(_)
+                | Ty::Int
+                | Ty::Float
+                | Ty::Bool
+                | Ty::Null
+                | Ty::DateTime
+                | Ty::Bytes
+                | Ty::Base64
+                | Ty::Image,
+                _,
+            ) => {}
+            // A value the type does not describe is read as free text, so nothing it holds is written raw.
+            (_, value) => self.rewrite_tree(value, rewrite),
+        }
+    }
+
+    fn rewrite_text(&self, text: &mut String, rewrite: &dyn Fn(&str) -> String) {
+        if !self.kept.contains(text.as_str()) {
+            *text = rewrite(text);
+        }
+    }
+
+    fn rewrite_tree(&self, value: &mut Value, rewrite: &dyn Fn(&str) -> String) {
+        match value {
+            Value::String(text) => self.rewrite_text(text, rewrite),
+            Value::Array(items) => items.iter_mut().for_each(|item| self.rewrite_tree(item, rewrite)),
+            Value::Object(fields) => {
+                for (mut key, mut item) in std::mem::take(fields) {
+                    self.rewrite_tree(&mut item, rewrite);
+                    self.rewrite_text(&mut key, rewrite);
+                    fields.insert(key, item);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+    }
+}
+
+/// The variant of a union that `value` is: the first whose shape it has, a model by its field names and literals.
+fn fitting<'a>(ty: &'a crate::schema::Ty, value: &Value) -> Option<&'a crate::schema::Ty> {
+    variants_of(ty).into_iter().find(|variant| fits(variant, value))
+}
+
+fn variants_of(ty: &crate::schema::Ty) -> Vec<&crate::schema::Ty> {
+    use crate::schema::Ty;
+    match ty {
+        Ty::Union(variants) => variants.iter().collect(),
+        Ty::Tagged { variants, .. } => variants.iter().map(|(_, ty)| ty).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn fits(ty: &crate::schema::Ty, value: &Value) -> bool {
+    use crate::schema::Ty;
+    match (ty, value) {
+        (Ty::Any | Ty::JsonValue, _) | (Ty::Null | Ty::Optional(_), Value::Null) => true,
+        (Ty::Optional(inner) | Ty::Alias(_, inner) | Ty::Constrained(inner, _), value) => fits(inner, value),
+        (Ty::Str | Ty::Path | Ty::DateTime | Ty::Bytes | Ty::Base64 | Ty::Image, Value::String(_)) => true,
+        (Ty::Literal(values), value) => values.contains(value),
+        (Ty::Enum(closed), value) => closed.values.contains(value),
+        (Ty::Int, Value::Number(number)) => number.is_i64() || number.is_u64(),
+        (Ty::Float, Value::Number(_)) | (Ty::Bool, Value::Bool(_)) => true,
+        (Ty::List(_) | Ty::Set(_) | Ty::Tuple(_), Value::Array(_)) | (Ty::Map(_), Value::Object(_)) => true,
+        (Ty::Model(model), Value::Object(fields)) => fields.iter().all(|(key, value)| {
+            model.fields.iter().find(|field| field.key() == key).is_some_and(|field| match &field.ty {
+                Ty::Literal(_) => fits(&field.ty, value),
+                _ => true,
+            })
+        }),
+        (Ty::Union(_) | Ty::Tagged { .. }, value) => fitting(ty, value).is_some(),
+        _ => false,
+    }
 }
 
 fn decoded(value: &str) -> String {
@@ -1215,6 +1380,56 @@ mod tests {
     //! The behavior WHATWG changes, pinned.
     use super::*;
     use crate::testing::block_on;
+
+    /// A warning a run writes to stderr names what the browser said, which can repeat a credential the run learnt
+    /// outside any address; every live run's credentials are redacted from it, and a finished run's are not kept.
+    #[test]
+    fn test_a_logged_line_is_redacted_for_every_live_run() {
+        let run = std::sync::Arc::new(std::sync::Mutex::new(Redactor::default()));
+        assert!(run.lock().unwrap().register_address("https://ops:l0gged-pw@h.test/"));
+        live(&run);
+        let line = logged("page said l0gged-pw at https://ana:0ther-pw@h.test/");
+        assert!(!line.contains("l0gged-pw") && !line.contains("0ther-pw"), "{line}");
+        drop(run);
+        assert_eq!(logged("page said l0gged-pw"), "page said l0gged-pw");
+    }
+
+    /// What a run hands back is redacted by its type in one pass: free text and chosen keys, never a closed set's
+    /// value or a model's field name, which a short credential's letters spell as readily as any word (#1381).
+    #[test]
+    fn test_a_result_and_an_event_are_redacted_by_their_type() {
+        use crate::models::{Event, RunResult, Status};
+        let mut redactor = Redactor::default();
+        assert!(redactor.register_address("https://ops:e@h.test/"));
+        let result: RunResult = serde_json::from_value(serde_json::json!({
+            "status": "complete",
+            "answer": "the password is e",
+            "data": {"https://ops:pw@h.test/": "x", "page": ["https://ops:pw@h.test/"]},
+            "evidence": [],
+            "steps": [],
+            "cost": {"lines": []},
+            "artifacts": [],
+            "error": "could not open /tmp/https://ops:pw@h.test/rec.mp4",
+            "recordings": ["/tmp/https://ops:pw@h.test/rec.mp4"],
+            "browser": {"via": "cloud", "profile": "https://ops:pw@h.test/"},
+        }))
+        .unwrap();
+        let redacted = redactor.redacted(&result).unwrap();
+        assert_eq!(redacted.status, Status::Complete);
+        let written = serde_json::to_string(&redacted).unwrap();
+        assert!(!written.contains(":pw@") && !written.contains("is e\""), "{written}");
+        assert!(written.contains(r#""via":"cloud""#) && written.contains(r#""status":"complete""#), "{written}");
+        let data = redacted.data.as_object().unwrap();
+        assert!(data.keys().all(|key| !key.contains(":pw@")) && !data.contains_key("page"), "{data:?}");
+        let event: Event = serde_json::from_value(serde_json::json!({
+            "type": "browser",
+            "live_url": "https://live.test/?view=https://ops:pw@h.test/",
+            "browser_id": "b-1",
+        }))
+        .unwrap();
+        let Some(Event::Browser(browser)) = redactor.redacted(&event) else { panic!("the event changed kind") };
+        assert!(!browser.live_url.unwrap().contains(":pw@"));
+    }
 
     fn control(label: &str, role: &str, href: Option<&str>, input_type: Option<&str>) -> Control {
         let mut c = Control::new("c", role, label, [Operation::Click]);
