@@ -315,6 +315,9 @@ pub(crate) struct RunState {
     /// its fields new.
     pub written: HashMap<String, Written>,
     pub recoveries: i64,
+    /// Rewrites of a rejected answer draft, counted apart from `recoveries` and never renewed by progress: a stall
+    /// on the way to the notes left a Books run no rewrite, and a draft that swapped two prices ended unverified (#1176).
+    pub rewrites: i64,
     pub blank_opening_checked: bool,
     /// Blank states waited out during this loading episode, cleared once a readable page appears.
     pub blank_waited: HashSet<(String, String)>,
@@ -514,13 +517,11 @@ impl RunState {
 
     /// What one read leaves in the notes: its facts, the page kept whole when one fact was picked from it, and the
     /// earlier reads of that address it supersedes.
-    pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) {
+    /// Record a read in the notes, returning the steps that could change the site taken before it.
+    pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) -> usize {
         let added = facts.len();
         let steps_taken = self.history.iter().filter(|entry| entry.changed_site()).count();
-        self.notes.remember_capture(capture, steps_taken);
-        for fact in facts {
-            self.notes.add(fact);
-        }
+        self.notes.record(capture, steps_taken, facts);
         // A fragment names a view of the same page: an earlier view kept whole would come back as current notes when
         // composing, beside the read that superseded it.
         let page = address(&capture.url);
@@ -528,10 +529,7 @@ impl RunState {
         if !compose && added > 0 {
             self.read_whole.push(capture.clone());
         }
-        // An absent read must not mistake a stored quote from a revisited capture for fresh evidence.
-        if added > 0 {
-            self.notes.supersede(&capture.url, &capture.sha256, &capture.text);
-        }
+        steps_taken
     }
 
     /// The notes with the pages read for one fact whole. A task over some pages of a list leaves out what was read on
@@ -698,14 +696,24 @@ impl RunState {
         self.unread_list_pages().find(|page| !self.pager_followed.contains(page.as_str()))
     }
 
-    /// Mark each link that leads to a page already read. A mark on the link itself tells apart links that share a
-    /// label, as every quote's "(about)" does, where a list of labels could not.
-    pub fn mark_read_links(&self, observation: &mut Observation) {
+    /// Mark each link that leads to a page already read, and each that leads to another site than the one the browser
+    /// opened for the task. A mark on the link itself tells apart links that share a label, as every quote's "(about)"
+    /// does, where a list of labels could not. Shown only hrefs, a run checking a page followed its store button off
+    /// the site and ended at that store's security check (#1137).
+    pub fn mark_links(&self, observation: &mut Observation) {
         let here = url::Url::parse(&observation.url).ok();
+        let start = self.start_landing_url.as_deref().or(self.caller_start.as_deref());
+        let home = start.and_then(fastbrowse_core::origins::site_of);
         for control in &mut observation.controls {
-            let leads_to = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok());
-            if leads_to.is_some_and(|url| self.read_urls.contains(url.as_str())) {
+            let Some(leads_to) = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok()) else {
+                continue;
+            };
+            if self.read_urls.contains(leads_to.as_str()) {
                 control.already_read = Some(true);
+            }
+            let site = fastbrowse_core::origins::site_of(leads_to.as_str());
+            if home.is_some() && site.is_some() && site != home {
+                control.other_site = Some(true);
             }
         }
     }
@@ -810,6 +818,7 @@ impl RunState {
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
+            rewrites: 0,
             blank_opening_checked: false,
             blank_waited: HashSet::new(),
             hung_page_reopened: false,

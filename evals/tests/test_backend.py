@@ -196,7 +196,15 @@ def test_a_page_read_over_http_is_the_evidence_its_read_step_points_at() -> None
     pages, seen_at = backend.read_pages(
         [
             {"event": "route", "providers": {}},
-            {"event": "read", "step": 0, "url": url, "title": "Frames", "sha256": "a", "text": text, "chars": 30},
+            {
+                "event": "read",
+                "step": 0,
+                "url": url,
+                "title": "Frames",
+                "sha256": "a",
+                "chars": 30,
+                "capture": {"url": url, "title": "Frames", "sha256": "a", "text": text, "blocks": []},
+            },
             {"event": "page", "step": 1, "url": url, "title": "Frames", "status": 200, "text": text},
         ]
     )

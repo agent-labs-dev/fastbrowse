@@ -13,6 +13,22 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
 
+- A trace's `read` event carries the typed capture it read, with its blocks and their sources, and each fact read from it with its evidence, so a run's notes rebuild from its trace. It held only the page text, so a composition could not be replayed faithfully from a trajectory: identical text in two tables could not say which block a fact came from ([#1273](https://github.com/agent-labs-dev/fastbrowse/issues/1273)).
+
+- A value read off a screenshot gets its own `image_read` trace event, with the fact and the screenshot it cites, so a drawn page's answer rebuilds from the trace too. Such a read made no event, so a trace lost every answer read from pixels ([#1273](https://github.com/agent-labs-dev/fastbrowse/issues/1273)).
+
+- A step request sends each control's context and operations once, in the state every question reads. A target option names its element by id and keeps what tells it apart as a target: its label, role, address and state. Repeated in each target option as well, they made step requests 45% larger and 18% dearer ([#1286](https://github.com/agent-labs-dev/fastbrowse/issues/1286)).
+
+- A run that began on a site is told which links lead to a different site, and that it follows one only when the task asks for that link or for what that site holds. Shown only each link's address, a run checking a page on a Pages preview followed its store button to the store and ended at the store's security check ([#1137](https://github.com/agent-labs-dev/fastbrowse/issues/1137)).
+
+- A rejected answer draft is written again even after the run recovered from a stall on its way to the notes. Rewrites shared the one stall recovery, so a Books run whose draft swapped two prices, with the check naming both corrections, ended unverified without writing the answer again. Rewrites now have a budget of their own the size of `max_recoveries` ([#1176](https://github.com/agent-labs-dev/fastbrowse/issues/1176)).
+
+- An authorized run that has carried out a commit its task asked for, such as posting a reply, refuses a further irreversible action the task does not ask for as a failed step and goes on to finish, instead of stopping at `needs_confirmation`. A run that had posted its replies stopped there on one more click, so a caller trusting the status would post them again ([#1317](https://github.com/agent-labs-dev/fastbrowse/issues/1317)).
+
+- A run that ends unfinished after sending a commit, such as posting a reply, names that commit with what it entered in the commit's own form, and says when the run ended before the page showed the commit taken. Its answer listed every field it had typed into as one that may still hold what it entered, so two replies the run had posted read as unsent ([#1317](https://github.com/agent-labs-dev/fastbrowse/issues/1317)).
+
+- A step that shows pictures counts each picture's tokens against Jev's input limit before it is sent, as Jev counts them: two for each 28 pixel square and 15 more, for every place the picture is used. Counting only the text, a step showing eight cards on an ee.co.uk phone gallery was sent past the limit and refused with `max_tokens_exceeded`, one refused call each time. The oldest cards are now left out first, so the first request sent fits ([#1303](https://github.com/agent-labs-dev/fastbrowse/issues/1303)).
+
 ## [0.12.0] - 2026-11-19
 
 - Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.

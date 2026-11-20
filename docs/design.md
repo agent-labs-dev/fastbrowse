@@ -31,7 +31,9 @@ declare the task complete. `plan_ahead=false` disables list reads and planned fi
 Jev judges every model-selected click, drag or key chord, including links, navigation to a caller-supplied address, every Enter press and acceptance of
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
-for it; otherwise the run stops at `needs_confirmation`. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
+for it; otherwise the run stops at `needs_confirmation`, unless it has already carried out a commit the task asked
+for: then the action is refused as a failed step and the run picks again, so a run that posted what it was asked to
+is not reported as waiting for confirmation. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
 
 A submission of a form that holds more than one password field changes an account's credentials whatever
 the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at
@@ -273,7 +275,9 @@ writes page text. A span Jev picks becomes a fact, and identical values from the
 with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
 answer is composed when the run tries to finish, with recovery for a rejected draft. The recovery decision is told
 which claim failed which check, and a draft rejected for leaving out something the task asks for is shown to it whole,
-since no one claim is to blame and only the draft says what it lacks.
+since no one claim is to blame and only the draft says what it lacks. Rewrites of a rejected draft have a budget of
+their own, the size of `max_recoveries`, that stall recoveries do not spend and progress does not renew; past it the
+run ends `unverified`.
 
 A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
 quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.

@@ -3,9 +3,9 @@ title: Why an AI agent clicks the wrong button
 description: An agent that clicks screen coordinates can hit a control that is not there. How an indexed control set bounds what fastbrowse can click.
 topic: How the agent acts
 published: 2026-10-31
-updated: 2026-11-17
+updated: 2026-11-19
 verifiedAgainst: v0.11.2
-verifiedOn: 2026-11-17
+verifiedOn: 2026-11-19
 ---
 
 An agent that clicks screen coordinates can hit a control that is not there. The click lands on something real, just not the button the task meant, and the run reports a wrong answer.
