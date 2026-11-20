@@ -17,7 +17,9 @@ use super::{Agent, Outcome};
 use std::collections::HashSet;
 
 use crate::memory::Notes;
-use crate::retrieval::{ComposedAnswer, Draft, compose_reviewed, draft_answer, draft_reviewed, noticed, page_quotes};
+use crate::retrieval::{
+    ComposedAnswer, Draft, Screenshot, compose_reviewed, draft_answer, draft_reviewed, noticed, page_quotes,
+};
 use crate::support::generate;
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
@@ -26,6 +28,13 @@ use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 const MAX_REWRITES: i64 = 3;
 
 impl Agent {
+    /// Whether the answer goes out with a screenshot of the page the run ends on, which the checks that judge it are
+    /// told: the task asks for one and there is a browser page to picture. A run over HTTP has no rendered page, and
+    /// one stopped there on a screenshot task was told a screenshot came with its answer when none could.
+    pub(super) fn screenshot(&self, intent: OutputIntent) -> Screenshot {
+        if intent.attaches_screenshot() && !self.page.over_http() { Screenshot::Attached } else { Screenshot::Absent }
+    }
+
     async fn observe_if_changed(&self, observation: &Observation) -> Step<Observation> {
         let raw = self.raw().unwrap_or_else(|| observation.clone());
         if self.page.document_changed(&raw).await? {
@@ -321,7 +330,7 @@ impl Agent {
                         Some(&ledger),
                         state.composition_feedback.as_deref(),
                         intent != OutputIntent::CarriedOut,
-                        intent.attaches_screenshot(),
+                        self.screenshot(intent),
                         &steps,
                     ),
                 )
@@ -332,10 +341,7 @@ impl Agent {
             let (notes, task, ledger) = (state.notes.clone(), self.model_task(state), state.ledger.clone());
             let reviewed = match self
                 .trace
-                .phase(
-                    "coverage",
-                    draft_reviewed(&*self.jev, &task, intent.attaches_screenshot(), &notes, Some(&ledger)),
-                )
+                .phase("coverage", draft_reviewed(&*self.jev, &task, self.screenshot(intent), &notes, Some(&ledger)))
                 .await?
             {
                 Some(Draft::Reviewed(reviewed)) => Some(reviewed),
@@ -351,7 +357,7 @@ impl Agent {
                         Some(&ledger),
                         Some(&feedback),
                         true,
-                        intent.attaches_screenshot(),
+                        self.screenshot(intent),
                         &steps,
                     );
                     Some(self.trace.phase("compose", written).await?)

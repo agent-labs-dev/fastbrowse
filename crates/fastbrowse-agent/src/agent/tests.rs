@@ -1917,7 +1917,7 @@ impl Page for FinishPage {
     }
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
-        unreachable!("the finish-path test does not take a screenshot")
+        Box::pin(async { Ok(png(8, 8)) })
     }
 
     fn withhold_frames(&self, _: bool) {}
@@ -2336,11 +2336,26 @@ async fn test_the_done_check_is_told_the_run_attaches_its_screenshot() {
         let asked = jev.5.lock().unwrap();
         let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
         assert_eq!(
-            carried.contains(&format!("been carried out? {}", crate::retrieval::SCREENSHOT_ATTACHED)),
+            carried.contains(&format!("been carried out? {}", crate::retrieval::SCREENSHOT_PICTURED)),
             told,
             "{intent:?}: {carried}"
         );
     }
+}
+
+/// A run over HTTP has no rendered page to picture, so its done check is not told a screenshot comes with the answer.
+#[tokio::test]
+async fn test_the_done_check_over_http_is_not_told_of_a_screenshot() {
+    let page = observation(&[]);
+    let mut state = run_state();
+    state.task = "Open the latest release and tell me its version. Include a screenshot of the release page.".into();
+    state.output_intent = super::state::OutputIntent::Image;
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(Unfetchable::default()), jev.clone(), Arc::new(ScriptedLLM));
+    agent.actions_done(&mut state, &page).await.unwrap();
+    let asked = jev.5.lock().unwrap();
+    let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
+    assert!(!carried.contains(crate::retrieval::SCREENSHOT_PICTURED), "{carried}");
 }
 
 /// The caller's start address is where the run began, before any step, so the done check judges the task without it:
@@ -7785,6 +7800,54 @@ async fn test_the_answer_written_as_a_run_stops_is_told_the_rejected_draft() {
     assert_eq!(result.status, Status::Complete, "{:?}", result.error);
     let answer = result.answer.unwrap();
     assert!(answer.contains("Record B: 34") && !answer.contains("Record A: 99"), "{answer}");
+}
+
+/// A run asking only for a screenshot, stopped stuck or unverified with an answer that then held, ended complete without
+/// the screenshot: only a task asking for text and a screenshot requested the ending frame there.
+#[tokio::test]
+async fn test_an_image_run_answered_as_it_stops_returns_its_ending_frame() {
+    let page = observation(&[]);
+    for status in [Status::Unverified, Status::Stuck] {
+        let agent = Agent::new(
+            Arc::new(FinishPage(page.clone())),
+            Arc::new(RejectsRecordA(ScriptedJev::new(Vec::new()))),
+            Arc::new(GrowingComposer(Default::default())),
+        );
+        let mut state = composition_repair_state();
+        state.output_intent = super::state::OutputIntent::Image;
+        let ledger = state.ledger.clone();
+        let stop = Flow::Stop(super::state::Stop::new(status, "test/stopped", "stopped"));
+        let result = agent.stopped(stop, Some(&mut state), &ledger, None).await;
+        assert_eq!(result.status, Status::Complete, "{status:?}: {:?}", result.error);
+        assert!(result.final_frame.is_some(), "{status:?}");
+    }
+}
+
+/// A run over HTTP has no rendered page to picture: one stopped on a screenshot task was told as its answer was written
+/// that a screenshot came with it, when none could.
+#[tokio::test]
+async fn test_the_answer_written_as_a_run_stops_is_told_of_a_screenshot_only_with_a_browser_page() {
+    for (over_http, told) in [(false, true), (true, false)] {
+        let llm = Arc::new(CorrectsOnFeedback(Default::default()));
+        let jev = Arc::new(ScriptedJev::new(Vec::new()));
+        let agent = if over_http {
+            Agent::new(Arc::new(Unfetchable::default()), jev, llm.clone())
+        } else {
+            Agent::new(Arc::new(FinishPage(observation(&[]))), jev, llm.clone())
+        };
+        let mut state = composition_repair_state();
+        state.output_intent = super::state::OutputIntent::TextAndImage;
+        let ledger = state.ledger.clone();
+        let stop = Flow::Stop(super::state::Stop::new(Status::Unverified, "test/stopped", "stopped"));
+        agent.stopped(stop, Some(&mut state), &ledger, None).await;
+        let calls = llm.0.lock().unwrap();
+        let screenshot = format!("# Screenshot\n{}", crate::retrieval::SCREENSHOT_ATTACHED);
+        assert_eq!(
+            calls[0].iter().any(|message| message.content.contains(&screenshot)),
+            told,
+            "over HTTP: {over_http}"
+        );
+    }
 }
 
 /// Rejects Record A's claims as `RejectsRecordA` does, and fills a schema field only with a candidate the answer it is

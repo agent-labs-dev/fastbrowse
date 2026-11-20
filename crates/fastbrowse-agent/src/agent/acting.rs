@@ -28,8 +28,8 @@ use super::seeing::cards;
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry, screenshot_reference};
-use crate::retrieval::SCREENSHOT_ATTACHED;
 use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
+use crate::retrieval::{SCREENSHOT_PICTURED, Screenshot};
 use crate::verification::{page_state, page_verdict_state};
 use crate::writing::write_value;
 
@@ -2002,12 +2002,13 @@ impl Agent {
         // out, the start address held a signed-in run that had read its orders page below 0.5 on every ask, where the
         // task alone scored 0.98.
         let task = self.caller_task(state);
-        // A screenshot is code's to attach, not a step: not told so, this question held "Include a screenshot of the
-        // release page." undone on every ask, and a run that had read every value ended stuck. Told as a task suffix
-        // or a page fact, it still did; told beside the question, it held at 0.87 and still found a star left undone.
+        // Code, not an action, takes the screenshot a task asks for, of the page the run ends on: not told so, this
+        // question held a screenshot of the release page undone on the release page itself, and a run that had read
+        // every value ended stuck. It is part of the question because it is code's own fact about the run, not page
+        // content.
         let mut question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?".to_string();
-        if state.output_intent.attaches_screenshot() {
-            question.push_str(&format!(" {SCREENSHOT_ATTACHED}"));
+        if self.screenshot(state.output_intent) == Screenshot::Attached {
+            question.push_str(&format!(" {SCREENSHOT_PICTURED}"));
         }
         let carried = NoulQuestion::new(
             format!("{UNTRUSTED}\n\n# Task\n{task}\n\n{}", HistoryEntry::told(&question, &state.history)),

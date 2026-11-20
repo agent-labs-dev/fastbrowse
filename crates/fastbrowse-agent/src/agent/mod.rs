@@ -638,7 +638,7 @@ impl Agent {
                         Some(&reporting),
                         feedback.as_deref(),
                         true,
-                        state.output_intent.attaches_screenshot(),
+                        self.screenshot(state.output_intent),
                         &steps,
                     )
                     .await
