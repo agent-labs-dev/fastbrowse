@@ -111,8 +111,8 @@ Refused together: --fetch starts no browser, so it refuses --browser, --cloud,
 an app, not a browser, so it refuses --start, --fetch, --browser, --local,
 --extension, --extension-browser, --headed, --profile, --cloud-profile,
 --cdp-url, --cdp-port, --attach, --target-match, --foreground,
---proxy-country, --viewport, --record, --recipe, --save-recipe, --downloads
-and --cursor.
+--proxy-country, --viewport, --recipe, --save-recipe, --downloads and
+--cursor.
 
 Update: fastbrowse self-update names how this copy was installed and the
 command that upgrades it.

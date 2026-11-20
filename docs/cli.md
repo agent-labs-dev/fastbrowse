@@ -51,8 +51,10 @@ can only follow links, so it refuses every browser flag (`--browser`, `--cloud`,
 `--target-match`, `--foreground`, `--proxy-country`, `--viewport`, `--record`, `--recipe`, `--save-recipe`,
 `--downloads`, `--cursor`) and every flag that types, attaches or submits (`--secret`, `--bitwarden`, `--input`,
 `--file`, `--authorize`). `--cloud` refuses `--headed`, `--profile`, `--cdp-url`, `--cdp-port`, `--extension`,
-`--extension-browser`, `--attach`, `--target-match` and `--desktop`. `--desktop` refuses `--start`, `--fetch` and the
-browser flags. `fastbrowse --help` ends with the same list.
+`--extension-browser`, `--attach`, `--target-match` and `--desktop`. `--desktop` drives an app, not a browser, so it refuses `--start`, `--fetch`, `--browser`, `--local`, `--extension`,
+`--extension-browser`, `--headed`, `--profile`, `--cloud-profile`, `--cdp-url`, `--cdp-port`, `--attach`,
+`--target-match`, `--foreground`, `--proxy-country`, `--viewport`, `--recipe`, `--save-recipe`, `--downloads` and
+`--cursor`; `--record` is accepted and films its window. `fastbrowse --help` ends with the same list.
 
 Trace events also record code state: `decision_context` and `list_continuation` describe read scope,
 known page ordinals and unread pages; `authorization_gate` records the authorization flag, thresholds and
