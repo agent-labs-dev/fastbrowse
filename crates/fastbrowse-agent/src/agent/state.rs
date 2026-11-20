@@ -315,6 +315,8 @@ pub(crate) struct RunState {
     /// its fields new.
     pub written: HashMap<String, Written>,
     pub recoveries: i64,
+    /// Rejected drafts sent back to the navigator. Unlike `recoveries`, no new page or read renews it.
+    pub rewrites: i64,
     pub blank_opening_checked: bool,
     /// Blank states waited out during this loading episode, cleared once a readable page appears.
     pub blank_waited: HashSet<(String, String)>,
@@ -542,7 +544,7 @@ impl RunState {
             notes.add(fact);
         }
         if let Extent::Pages(Some(_)) = self.extent {
-            notes.retain(|fact| {
+            notes.retain(|_, fact| {
                 fact.evidence.as_ref().is_none_or(|evidence| {
                     !self.pager_ordinals.contains_key(&crate::memory::address(&evidence.url))
                         || self.in_range(&evidence.url)
@@ -593,6 +595,15 @@ impl RunState {
             *read = true;
         }
         self.read_tries.remove(&page);
+    }
+
+    /// A step or read moved the run on, so the stall budget starts again and nothing done before is stalled. A read that
+    /// found new evidence reset the count but kept the stalled actions, so a route left out before it stayed hidden
+    /// after it, though the one stall rule renews the budget on new evidence.
+    pub fn renew_stall(&mut self) {
+        self.unchanged = 0;
+        self.hint = None;
+        self.idle.clear();
     }
 
     /// Count a read begun on this page, returning how many have begun since its last finished read.
@@ -810,6 +821,7 @@ impl RunState {
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
+            rewrites: 0,
             blank_opening_checked: false,
             blank_waited: HashSet::new(),
             hung_page_reopened: false,

@@ -1,21 +1,30 @@
 //! A native desktop app as a `Page`, driven through deskpilot (<https://github.com/cjber/deskpilot>).
 //!
-//! The run starts the app itself with deskpilot's `launch`, as a deskpilot agent of its own, so the window opens on
-//! that agent's hidden workspace and closes when the run's `deskpilot mcp` ends. deskpilot reads the window's
+//! The run starts its apps itself with deskpilot's `launch`, as a deskpilot agent of its own, so their windows open on
+//! that agent's hidden workspace and close when the run closes its `deskpilot mcp`. Every window on that workspace,
+//! the apps' first windows and the dialogs and windows they open later, is a tab of the page; one is active, and the
+//! page reads and acts on that one. deskpilot reads the window's
 //! accessibility tree and sends its input in hidden mode, which it allows only on a window its agent launched: to the
 //! window wherever it is, without moving the user's pointer or keyboard focus. Each observation is one deskpilot
 //! snapshot, whose element ids deskpilot itself refuses once a newer snapshot replaces it or the element changed, so
 //! `act` needs no guard of its own beyond naming the snapshot it was offered.
+//!
+//! A filmed page shoots its window with deskpilot's `shot` when the app opens and after each action settles, and
+//! hands each frame to the run's recording: deskpilot casts no live frames, and a shot is the one picture of a hidden
+//! window it can take without bringing the window on screen. deskpilot's own agent cursor is never in a window shot,
+//! so the page also tells the recording where each click, fill and hover landed, for it to draw the cursor there.
 
 mod mcp;
 pub mod tree;
 
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use fastbrowse_browser::pointer::PointerMark;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Observation, Page, PageResult};
@@ -38,6 +47,24 @@ struct Shot {
     height: f64,
 }
 
+/// Where a filmed page sends what its recording shows.
+pub trait Film: Send + Sync {
+    /// A PNG of the window, in the order taken.
+    fn frame(&self, png: Vec<u8>);
+    /// Where an action is about to land, in the pixels of a window `mark.width` by `mark.height`.
+    fn point(&self, mark: PointerMark);
+}
+
+impl Film for fastbrowse_browser::recording::FrameFeed {
+    fn frame(&self, png: Vec<u8>) {
+        self.show(png);
+    }
+
+    fn point(&self, mark: PointerMark) {
+        self.mark(mark);
+    }
+}
+
 /// Why a desktop page could not be opened: an app the caller has to fix, or a deskpilot that cannot run.
 #[derive(Debug)]
 pub enum OpenError {
@@ -46,12 +73,28 @@ pub enum OpenError {
 }
 
 pub struct DeskpilotPage {
-    client: Deskpilot,
+    client: Arc<Deskpilot>,
+    /// The agent's hidden workspace, where every window of the run is.
+    workspace: String,
+    /// The active window, which the page reads and acts on.
     window: Mutex<Window>,
+    /// The windows made active, last the latest: when one closes, the one before it is active again, as a dialog's
+    /// window is once the dialog is dismissed.
+    visited: Mutex<Vec<String>>,
+    /// Every window seen on the workspace, so a window an action opened is told from one already there.
+    seen: Mutex<HashSet<String>>,
     /// The snapshot the latest observation took, the only one whose ids may be acted on.
     latest: Mutex<Option<String>>,
     shot: Mutex<Option<Shot>>,
     generation: AtomicU64,
+    film: Option<Arc<dyn Film>>,
+    /// The tree the latest observation read, where its ids' elements are.
+    observed: Mutex<Option<Element>>,
+    /// Set while the window may show a resolved secret, which a frame cannot mask: no frame is filmed then.
+    withheld: AtomicBool,
+    /// The latest frame, taken when the app opens or after an action, held until the next observation shows no
+    /// secret: the action may be what put one on screen, and only that reading can tell.
+    pending: Mutex<Option<Vec<u8>>>,
 }
 
 fn unavailable(error: ToolError) -> BrowserError {
@@ -63,16 +106,25 @@ fn read_window(value: &Value) -> Option<Window> {
     Some(Window { address: field("address")?, class: field("class")?, title: field("title").unwrap_or_default() })
 }
 
+/// Starts `program mcp` as a deskpilot agent of the run's own: two runs in one `fastbrowse serve` never share a hidden
+/// workspace or a cursor.
+pub async fn connect(program: &str, view: View) -> Result<Arc<Deskpilot>, OpenError> {
+    let agent = fastbrowse_browser::cursor::deskpilot_agent();
+    let client = Deskpilot::start(program, &agent, view)
+        .await
+        .map_err(|error| OpenError::Unavailable(error.message().into()))?;
+    Ok(Arc::new(client))
+}
+
 impl DeskpilotPage {
-    /// Starts deskpilot as an agent of this page's own and launches `command` (a program and its arguments, run
-    /// without a shell) through it, driving the window `launch` returns. A command deskpilot cannot start, that exits
-    /// before it opens a window, or opens none in time is refused here, before any step.
-    pub async fn open(program: &str, command: &[String], view: View) -> Result<DeskpilotPage, OpenError> {
-        // An agent of its own, so two runs in one `fastbrowse serve` never share a hidden workspace or a cursor.
-        let agent = fastbrowse_browser::cursor::deskpilot_agent();
-        let client = Deskpilot::start(program, &agent, view)
-            .await
-            .map_err(|error| OpenError::Unavailable(error.message().into()))?;
+    /// Launches each of `commands` (a program and its arguments, run without a shell) through `client`, in order, and
+    /// makes the first one's window active. A command deskpilot cannot start, that exits before it opens a window, or
+    /// opens none in time is refused here, before any step.
+    pub async fn open(
+        client: Arc<Deskpilot>,
+        commands: &[Vec<String>],
+        view: View,
+    ) -> Result<DeskpilotPage, OpenError> {
         if !client.offers("launch") {
             return Err(OpenError::Unavailable(
                 "this deskpilot has no launch tool; a desktop run needs a deskpilot with launch \
@@ -80,49 +132,174 @@ impl DeskpilotPage {
                     .into(),
             ));
         }
-        let shown = command.join(" ");
-        let found = client.call_json("launch", json!({"command": command})).await.map_err(|error| {
-            let message = format!("could not start {shown}: {}", error.message());
-            match error {
-                // deskpilot's codes for a command it cannot start, that exits before a window, or opens none in time:
-                // the caller's to fix.
-                ToolError::Refused { code, .. } if matches!(code.as_str(), "invalid" | "refused" | "timeout") => {
-                    OpenError::Invalid(message)
+        let mut launched = Vec::new();
+        let mut workspace = None;
+        for command in commands {
+            let shown = command.join(" ");
+            let found = client.call_json("launch", json!({"command": command})).await.map_err(|error| {
+                let message = format!("could not start {shown}: {}", error.message());
+                match error {
+                    // deskpilot's codes for a command it cannot start, that exits before a window, or opens none in
+                    // time: the caller's to fix.
+                    ToolError::Refused { code, .. } if matches!(code.as_str(), "invalid" | "refused" | "timeout") => {
+                        OpenError::Invalid(message)
+                    }
+                    _ => OpenError::Unavailable(message),
                 }
-                _ => OpenError::Unavailable(message),
+            })?;
+            if view == View::Hidden && found.get("xwayland").and_then(Value::as_bool) == Some(true) {
+                return Err(OpenError::Invalid(format!(
+                    "{shown} opened an XWayland window; fastbrowse drives desktop windows in deskpilot's hidden mode, \
+                     which needs a native Wayland window"
+                )));
             }
-        })?;
-        if view == View::Hidden && found.get("xwayland").and_then(Value::as_bool) == Some(true) {
-            return Err(OpenError::Invalid(format!(
-                "{shown} opened an XWayland window; fastbrowse drives desktop windows in deskpilot's hidden mode, \
-                 which needs a native Wayland window"
-            )));
+            let window = read_window(&found).ok_or_else(|| {
+                OpenError::Unavailable(format!("deskpilot described the window of {shown} without an address"))
+            })?;
+            // Every app of the agent opens on its one workspace, the one the page lists windows from.
+            workspace = workspace.or_else(|| found.get("workspace").and_then(Value::as_str).map(str::to_string));
+            launched.push(window);
         }
-        let window = read_window(&found).ok_or_else(|| {
-            OpenError::Unavailable(format!("deskpilot described the window of {shown} without an address"))
+        let Some(window) = launched.first().cloned() else {
+            return Err(OpenError::Invalid("a desktop run needs an app command".into()));
+        };
+        let workspace = workspace.ok_or_else(|| {
+            OpenError::Unavailable("deskpilot did not say which workspace its launched window is on".into())
         })?;
         Ok(DeskpilotPage {
             client,
+            workspace,
+            visited: Mutex::new(vec![window.address.clone()]),
+            seen: Mutex::new(launched.into_iter().map(|window| window.address).collect()),
             window: Mutex::new(window),
             latest: Mutex::new(None),
             shot: Mutex::new(None),
             generation: AtomicU64::new(0),
+            film: None,
+            observed: Mutex::new(None),
+            withheld: AtomicBool::new(false),
+            pending: Mutex::new(None),
         })
+    }
+
+    /// Films the window to `film` from now on, starting with the window as the app opened it.
+    pub async fn filmed(mut self, film: Arc<dyn Film>) -> Self {
+        self.film = Some(film);
+        // An app can open on a secret it already shows, so its first frame waits for the first observation too.
+        self.hold_frame().await;
+        self
+    }
+
+    /// Takes a frame of the window as it is now, for the next observation to film or drop.
+    async fn hold_frame(&self) {
+        let png = self.frame().await;
+        *self.pending.lock().unwrap() = png;
+    }
+
+    /// One frame of the window for a filmed page, unless frames are withheld. A shot that fails costs the video a
+    /// frame, never the run a step.
+    async fn frame(&self) -> Option<Vec<u8>> {
+        if self.film.is_none() || self.withheld.load(Ordering::SeqCst) {
+            return None;
+        }
+        let (_, png, path) = self.shoot().await.ok()?;
+        // The frame is only film: its PNG must not outlive the bytes, whether the next observation films or drops it.
+        let _ = tokio::fs::remove_file(&path).await;
+        // Withheld while the shot was taken: a secret fill may have just begun.
+        (!self.withheld.load(Ordering::SeqCst)).then_some(png)
+    }
+
+    /// Tells the film where `operation` lands: window pixels in a window `width` by `height`. Only a click is drawn
+    /// as a press: deskpilot fills, hovers and selects through the element, not a press at this point.
+    fn point(&self, operation: Operation, (x, y, width, height): (f64, f64, f64, f64)) {
+        if let Some(film) = &self.film {
+            let pressed = matches!(operation, Operation::Click);
+            film.point(PointerMark { at: Instant::now(), x, y, operation, pressed, width, height });
+        }
+    }
+
+    /// A shot of the window, as deskpilot binds later points to it, its PNG and the file deskpilot wrote it to.
+    async fn shoot(&self) -> PageResult<(Shot, Vec<u8>, String)> {
+        let window = self.address();
+        let content = self
+            .client
+            .call("shot", self.client.placed("shot", json!({"window": window})))
+            .await
+            .map_err(|error| BrowserError::ScreenshotsUnavailable(error.message().to_string()))?;
+        let taken = mcp::json_block(&content)
+            .ok_or_else(|| BrowserError::ScreenshotsUnavailable("deskpilot described no shot".into()))?;
+        let field = |name: &str| taken.get(name).cloned().unwrap_or(Value::Null);
+        let (Some(id), Some(path), Some(width), Some(height)) = (
+            field("shot").as_str().map(str::to_string),
+            field("path").as_str().map(str::to_string),
+            field("width").as_f64(),
+            field("height").as_f64(),
+        ) else {
+            return Err(BrowserError::ScreenshotsUnavailable("deskpilot described its shot without a file".into()));
+        };
+        // From here the file is ours to remove however this ends: a read that fails, or a run cancelled mid-read.
+        let mut cleanup = RemoveOnDrop(Some(path.clone()));
+        let png = tokio::fs::read(&path)
+            .await
+            .map_err(|error| BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")))?;
+        cleanup.0 = None;
+        Ok((Shot { id, width, height }, png, path))
     }
 
     fn address(&self) -> String {
         self.window.lock().unwrap().address.clone()
     }
 
-    /// The window as it is now: its title follows the app's state. A window that closed ends the run's page.
+    /// The windows on the run's workspace, in deskpilot's order.
+    async fn windows(&self) -> PageResult<Vec<Window>> {
+        let listed = self.client.call_list("windows", json!({})).await.map_err(unavailable)?;
+        let here = |value: &&Value| value.get("workspace").and_then(Value::as_str) == Some(self.workspace.as_str());
+        Ok(listed.iter().filter(here).filter_map(read_window).collect())
+    }
+
+    /// Makes `window` the active one.
+    fn activate(&self, window: Window) {
+        let mut visited = self.visited.lock().unwrap();
+        visited.retain(|address| *address != window.address);
+        visited.push(window.address.clone());
+        self.seen.lock().unwrap().insert(window.address.clone());
+        *self.window.lock().unwrap() = window;
+    }
+
+    /// The window a new one an action opened, the latest to appear, made active as a browser follows the tab a click
+    /// opens: a dialog the app opened is where the run goes on. None when no window opened.
+    async fn follow_opened(&self) -> PageResult<Option<Window>> {
+        let windows = self.windows().await?;
+        let opened = {
+            let mut seen = self.seen.lock().unwrap();
+            windows.into_iter().filter(|window| seen.insert(window.address.clone())).last()
+        };
+        if let Some(window) = &opened {
+            self.activate(window.clone());
+        }
+        Ok(opened)
+    }
+
+    /// The active window as it is now: its title follows the app's state. When it closed, the window active before
+    /// it is active again, or another window of the run; the run's page ends only when every window closed.
     async fn refresh(&self) -> PageResult<Window> {
         let address = self.address();
-        let found =
-            self.client.call_json("wait_for", json!({"window": address, "timeout": 0})).await.map_err(|error| {
-                BrowserError::Unavailable(format!("the desktop window {address} is gone: {}", error.message()))
-            })?;
-        let window = read_window(&found).ok_or_else(|| BrowserError::Failed("deskpilot described no window".into()))?;
-        *self.window.lock().unwrap() = window.clone();
+        if let Ok(found) = self.client.call_json("wait_for", json!({"window": address, "timeout": 0})).await {
+            let window =
+                read_window(&found).ok_or_else(|| BrowserError::Failed("deskpilot described no window".into()))?;
+            *self.window.lock().unwrap() = window.clone();
+            return Ok(window);
+        }
+        let windows = self.windows().await?;
+        let visited = self.visited.lock().unwrap().clone();
+        let back = visited.iter().rev().find_map(|address| windows.iter().find(|window| window.address == *address));
+        let Some(window) = back.or(windows.first()).cloned() else {
+            return Err(BrowserError::Unavailable(format!(
+                "the desktop window {address} is gone, and no other window of the run is open"
+            )));
+        };
+        self.visited.lock().unwrap().retain(|visited| *visited != address);
+        self.activate(window.clone());
         Ok(window)
     }
 
@@ -135,6 +312,12 @@ impl DeskpilotPage {
             .await
             .map_err(|error| match error {
                 ToolError::Refused { code, message } if code == "no_tree" => BrowserError::Failed(message),
+                // Two windows share the title deskpilot finds the window's tree by: a run's own windows, or an app
+                // left open by an earlier one. deskpilot works, so this is not an outage (#1345).
+                ToolError::Refused { code, message } if code == "ambiguous" => BrowserError::Failed(format!(
+                    "deskpilot cannot tell the window {} from another window with the same title: {message}",
+                    window.address
+                )),
                 error => unavailable(error),
             })?;
         let root: Element = serde_json::from_value(value)
@@ -146,8 +329,17 @@ impl DeskpilotPage {
     /// replacing its snapshot. Ids are numbered by the tree's order, so a tree that changed shape renumbers them and
     /// counts as changed.
     async fn differs(&self, observation: &Observation, target_id: Option<&str>) -> PageResult<bool> {
+        // A window the app opened is a change even where the active window's tree stays as it was.
+        let opened = {
+            let windows = self.windows().await?;
+            let seen = self.seen.lock().unwrap();
+            windows.iter().any(|window| !seen.contains(&window.address))
+        };
+        if opened {
+            return Ok(true);
+        }
         let (window, root) = self.tree(true).await?;
-        let now = tree::observation(&window, &root);
+        let now = tree::observation(&window, &root, &[]);
         Ok(match target_id {
             Some(id) => {
                 let find = |o: &Observation| o.controls.iter().find(|c| c.id == id).cloned();
@@ -205,6 +397,14 @@ impl DeskpilotPage {
 
     async fn dispatch(&self, action: &Action, observation: &Observation) -> Result<Option<String>, ToolError> {
         let window = self.address();
+        // The pointer actions a browser recording marks; a secret field stays unmarked, as it does there.
+        if matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover | Operation::Select)
+            && !action.secret
+            && let Some(id) = action.target_id.as_deref()
+            && let Some(aim) = self.observed.lock().unwrap().as_ref().and_then(|root| tree::aim(root, id))
+        {
+            self.point(action.operation, aim);
+        }
         // The id as the observation's snapshot numbered it: deskpilot refuses it if that snapshot was replaced or the
         // element changed since.
         let bound = action.target_id.as_deref().map(|id| format!("{}:{id}", observation.page_key));
@@ -282,6 +482,21 @@ impl DeskpilotPage {
                 return self.choose(&window, id, wanted, offered).await;
             }
             Operation::Wait => {}
+            Operation::SwitchTab => {
+                let Some(id) = action.tab_id.as_deref() else { return Ok(Some("switch_tab requires tab_id".into())) };
+                let windows = self.client.call_list("windows", json!({})).await?;
+                // Only a window on the run's own workspace is a tab: it is driven without the user's focus or view.
+                let Some(window) = windows
+                    .iter()
+                    .filter(|value| value.get("workspace").and_then(Value::as_str) == Some(self.workspace.as_str()))
+                    .filter_map(read_window)
+                    .find(|window| window.address == id)
+                else {
+                    return Ok(Some(format!("no open window {id}")));
+                };
+                // The page acts on the window it makes active; nothing on the desktop moves.
+                self.activate(window);
+            }
             other => return Ok(Some(format!("{} is not something a desktop window can do", other.as_str()))),
         }
         Ok(None)
@@ -406,7 +621,41 @@ impl DeskpilotPage {
             });
         }
         let sent = self.dispatch(action, observation).await;
-        self.measured(sent, observation, seconds).await
+        let measured = if action.operation == Operation::SwitchTab && matches!(sent, Ok(None)) {
+            // Another window is read next, so the step changed what the run sees whatever that window shows.
+            self.generation.fetch_add(1, Ordering::Relaxed);
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: true,
+                detail: None,
+                moved: false,
+            })
+        } else {
+            self.followed(self.measured(sent, observation, seconds).await).await
+        };
+        self.hold_frame().await;
+        measured
+    }
+
+    /// `measured`, moved to a window the action opened: the step changed what the run sees.
+    async fn followed(&self, measured: PageResult<ActResult>) -> PageResult<ActResult> {
+        let measured = measured?;
+        if measured.outcome != StepOutcome::Executed || self.follow_opened().await?.is_none() {
+            return Ok(measured);
+        }
+        Ok(ActResult { page_changed: true, detail: None, ..measured })
+    }
+
+    /// The observation of the active window with every window of the run as a tab.
+    async fn observed(&self, peek: bool) -> PageResult<(Element, Observation)> {
+        let (window, root) = self.tree(peek).await?;
+        let windows = self.windows().await?;
+        // A window that appeared without an action, such as a second window an app opens as it starts, is listed
+        // and is not an action's later.
+        self.seen.lock().unwrap().extend(windows.iter().map(|window| window.address.clone()));
+        let observation = tree::observation(&window, &root, &windows);
+        Ok((root, observation))
     }
 }
 
@@ -418,23 +667,25 @@ impl Page for DeskpilotPage {
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         Box::pin(async move {
-            let (window, root) = self.tree(false).await?;
+            let (root, observation) = self.observed(false).await?;
             *self.latest.lock().unwrap() = root.snapshot.clone();
-            Ok(tree::observation(&window, &root))
+            *self.observed.lock().unwrap() = Some(root);
+            Ok(observation)
         })
     }
 
     /// A peek: it binds no ids and leaves the latest observation's snapshot standing.
     fn glance(&self) -> BoxFuture<'_, PageResult<Observation>> {
-        Box::pin(async move {
-            let (window, root) = self.tree(true).await?;
-            Ok(tree::observation(&window, &root))
-        })
+        Box::pin(async move { Ok(self.observed(true).await?.1) })
     }
 
-    /// The window's title names its document, as an editor's names the file it holds.
+    /// The window's title names its document, as an editor's names the file it holds; another window is another
+    /// document.
     fn document_changed<'a>(&'a self, observation: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
-        Box::pin(async move { Ok(self.refresh().await?.title != observation.title) })
+        Box::pin(async move {
+            let window = self.refresh().await?;
+            Ok(window.address != observation.document_key || window.title != observation.title)
+        })
     }
 
     fn navigate<'a>(&'a self, _url: &'a str, _back_to: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
@@ -475,27 +726,9 @@ impl Page for DeskpilotPage {
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         Box::pin(async move {
-            let window = self.address();
-            let content = self
-                .client
-                .call("shot", self.client.placed("shot", json!({"window": window})))
-                .await
-                .map_err(|error| BrowserError::ScreenshotsUnavailable(error.message().to_string()))?;
-            let taken = mcp::json_block(&content)
-                .ok_or_else(|| BrowserError::ScreenshotsUnavailable("deskpilot described no shot".into()))?;
-            let field = |name: &str| taken.get(name).cloned().unwrap_or(Value::Null);
-            let (Some(id), Some(path), Some(width), Some(height)) = (
-                field("shot").as_str().map(str::to_string),
-                field("path").as_str().map(str::to_string),
-                field("width").as_f64(),
-                field("height").as_f64(),
-            ) else {
-                return Err(BrowserError::ScreenshotsUnavailable("deskpilot described its shot without a file".into()));
-            };
-            let png = tokio::fs::read(&path)
-                .await
-                .map_err(|error| BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")))?;
-            *self.shot.lock().unwrap() = Some(Shot { id, width, height });
+            // Only the model's shots bind its points: a film frame taken since does not move them to another shot.
+            let (shot, png, _) = self.shoot().await?;
+            *self.shot.lock().unwrap() = Some(shot);
             Ok(png)
         })
     }
@@ -519,13 +752,23 @@ impl Page for DeskpilotPage {
             let point = json!({
                 "window": self.address(), "x": x * shot.width, "y": y * shot.height, "shot": shot.id,
             });
+            self.point(Operation::Click, (x * shot.width, y * shot.height, shot.width, shot.height));
             let sent = self.tool("click", point).await.map(|()| None);
-            self.measured(sent, &before, SETTLE_SECONDS).await
+            let measured = self.followed(self.measured(sent, &before, SETTLE_SECONDS).await).await;
+            self.hold_frame().await;
+            measured
         })
     }
 
-    /// deskpilot films nothing, so there are no frames to hold back.
-    fn withhold_frames(&self, _withheld: bool) {}
+    /// Holds back the film's frames while the window may show a secret; the recording keeps its last clean frame.
+    /// Each observation says whether it shows one, which films or drops the frame taken after the action before it.
+    fn withhold_frames(&self, withheld: bool) {
+        self.withheld.store(withheld, Ordering::SeqCst);
+        let pending = self.pending.lock().unwrap().take();
+        if let (false, Some(png), Some(film)) = (withheld, pending, &self.film) {
+            film.frame(png);
+        }
+    }
 
     fn address(&self) -> BoxFuture<'_, PageResult<String>> {
         Box::pin(async move { Ok(self.refresh().await?.url()) })
@@ -545,5 +788,16 @@ impl Page for DeskpilotPage {
             tokio::task::yield_now().await;
             false
         })
+    }
+}
+
+/// Removes a shot's file when dropped, unless the caller took it over.
+struct RemoveOnDrop(Option<String>);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

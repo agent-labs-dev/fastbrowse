@@ -143,7 +143,9 @@ impl Parser {
     ) -> Result<Parsed, Exit> {
         let mut parsed = Parsed::default();
         let mut extras: Vec<String> = Vec::new();
-        let mut seen_exclusive: Option<&'static str> = None;
+        // One per pair, as argparse keeps one per mutually exclusive group: a single slot shared by every pair refused
+        // `--cloud --cursor`, two flags from different pairs, as if they excluded each other.
+        let mut seen_exclusive: Vec<Option<&'static str>> = vec![None; self.exclusive.len()];
         let mut only_positionals = false;
         let mut index = 0;
         while index < args.len() {
@@ -169,15 +171,15 @@ impl Parser {
                 extras.push(arg.clone());
                 continue;
             };
-            for (a, b) in &self.exclusive {
+            for ((a, b), seen) in self.exclusive.iter().zip(&mut seen_exclusive) {
                 if opt.flag == *a || opt.flag == *b {
-                    match seen_exclusive {
+                    match *seen {
                         Some(other) if other != opt.flag => {
                             return Err(
                                 self.error(&format!("argument {}: not allowed with argument {other}", opt.flag))
                             );
                         }
-                        _ => seen_exclusive = Some(opt.flag),
+                        _ => *seen = Some(opt.flag),
                     }
                 }
             }
@@ -265,11 +267,13 @@ mod tests {
                 Opt::flag("--json"),
                 Opt::flag("--cloud"),
                 Opt::flag("--local"),
+                Opt::flag("--cursor"),
+                Opt::flag("--no-cursor"),
                 Opt::append("--secret"),
                 Opt::version(),
             ],
             positional: Some("task"),
-            exclusive: vec![("--cloud", "--local")],
+            exclusive: vec![("--cloud", "--local"), ("--cursor", "--no-cursor")],
         }
     }
 
@@ -290,6 +294,20 @@ mod tests {
         assert_eq!(
             run(&["t", "--max"]).unwrap_err(),
             usage("ambiguous option: --max could match --max-steps, --max-dollars")
+        );
+    }
+
+    #[test]
+    fn exclusive_pairs_refuse_only_their_own_partner() {
+        assert!(run(&["t", "--cloud", "--cursor"]).is_ok());
+        assert!(run(&["t", "--no-cursor", "--local"]).is_ok());
+        assert_eq!(
+            run(&["t", "--cloud", "--cursor", "--local"]).unwrap_err(),
+            usage("argument --local: not allowed with argument --cloud")
+        );
+        assert_eq!(
+            run(&["t", "--no-cursor", "--cloud", "--cursor"]).unwrap_err(),
+            usage("argument --cursor: not allowed with argument --no-cursor")
         );
     }
 

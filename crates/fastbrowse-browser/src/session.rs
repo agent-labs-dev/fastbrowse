@@ -319,6 +319,9 @@ pub(crate) struct State {
     pub(crate) active_target_id: String,
     /// Set while the page may show a secret: frames are still acked, so the cast keeps pace, but not delivered.
     pub(crate) frames_withheld: bool,
+    /// Set once a secret has been typed, and never cleared: a page can echo it as pixels no reading of its text
+    /// shows, and between one reading and the next frames arrive that nothing has checked.
+    pub(crate) frames_sealed: bool,
     pub(crate) screencast_session_id: Option<String>,
     pub(crate) pending_frame: Option<Frame>,
     pub(crate) frame_scheduled: bool,
@@ -670,11 +673,17 @@ impl BrowserSession {
 
     /// Always true in a scoped run, which delivers and records no frames at all.
     pub fn frames_withheld(&self) -> bool {
-        self.0.state.lock().unwrap().frames_withheld || self.0.grant.is_some()
+        let state = self.0.state.lock().unwrap();
+        state.frames_withheld || state.frames_sealed || self.0.grant.is_some()
     }
 
     pub fn set_frames_withheld(&self, withheld: bool) {
         self.0.state.lock().unwrap().frames_withheld = withheld;
+    }
+
+    /// Withhold every later frame of this session: a secret is being typed.
+    pub fn seal_frames(&self) {
+        self.0.state.lock().unwrap().frames_sealed = true;
     }
 
     pub fn grant(&self) -> Option<&OriginGrant> {
@@ -1274,6 +1283,11 @@ impl BrowserSession {
     }
 
     pub(crate) async fn open_owned_tab(&self, url: &str) -> Result<(), BrowserError> {
+        self.open_owned_tab_from(url, None).await
+    }
+
+    /// `open_owned_tab` for a tab the run opens in place of one a page would have, named as that page's tab's.
+    pub(crate) async fn open_owned_tab_from(&self, url: &str, opener_id: Option<String>) -> Result<(), BrowserError> {
         // A tab that is neither in front nor focus-emulated does not render: animation frames never fire, so menus
         // that animate open never become visible, screenshots hang and clicks read as covered. A foreground run
         // activates its tab. A background run opens it behind the window's current tab, because Chrome focuses the
@@ -1295,7 +1309,7 @@ impl BrowserSession {
             session_id,
             url: url.to_owned(),
             title: String::new(),
-            opener_id: None,
+            opener_id,
         });
         Shared::set_active_target(&self.0, &target_id);
         Ok(())
@@ -2297,7 +2311,7 @@ pub(crate) async fn deliver_frames(shared: &Arc<Shared>) {
             }
             let Some(frame) = state.pending_frame.take() else { break };
             let active = state.active_session_id().ok();
-            let withheld = state.frames_withheld || shared.grant.is_some();
+            let withheld = state.frames_withheld || state.frames_sealed || shared.grant.is_some();
             let deliver = shared.on_frame.is_some() && !withheld && active.is_some() && frame.session_id == active;
             (frame, deliver)
         };

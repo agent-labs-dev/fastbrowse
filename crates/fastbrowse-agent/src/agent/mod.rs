@@ -101,6 +101,8 @@ pub struct Resume {
 #[derive(Default)]
 struct Seen {
     secret_on_screen: bool,
+    /// A secret has been typed this run: no step or final frame is taken after it, whatever a reading shows.
+    secret_typed: bool,
     raw: Option<Observation>,
     /// The last observation `observe` returned, which the finish judges again only if the page changed since.
     observed: Option<Observation>,

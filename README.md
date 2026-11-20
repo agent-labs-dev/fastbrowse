@@ -33,8 +33,8 @@ credentials, irreversible actions and spending under the control of code.
   [fastbrowse extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop),
   or in a Browser Use Cloud browser with `--cloud`. The SDKs also drive local Chrome and any Chromium browser or
   Electron app that is already running.
-- **Desktop apps too.** On Linux with Hyprland, `--desktop` starts a native app and drives it through its
-  accessibility tree, in the background, with [deskpilot](https://github.com/cjber/deskpilot).
+- **Desktop apps too.** On Linux with Hyprland, `--desktop` starts native apps, one per flag, and drives their
+  windows through their accessibility trees, in the background, with [deskpilot](https://github.com/cjber/deskpilot).
 - **One agent, every interface.** A CLI, a Python library, Node and Go SDKs that need no Python, an MCP
   server, and a skill for coding agents.
 
@@ -456,7 +456,8 @@ harness, with Bitwarden or 1Password logins scoped to authorized websites.
 
 `fastbrowse-mcp` serves one `browse` tool over [MCP](https://modelcontextprotocol.io) to Claude Code, Claude
 Desktop, Cursor or any MCP client. It returns the answer with numbered citation links, typed `fields` if asked
-for, the quotes behind them, the status and what to do next, and reports progress every step.
+for, the quotes behind them, the status and what to do next, its cost and the browser it ran in, and reports
+progress every step.
 
 ```sh
 claude mcp add fastbrowse -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \

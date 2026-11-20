@@ -1542,6 +1542,14 @@
           ],
           "default": null,
           "title": "Desktop"
+        },
+        "desktop_apps": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Desktop Apps",
+          "type": "array"
         }
       },
       "required": [

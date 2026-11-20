@@ -36,7 +36,7 @@ on:
         description: The judge panel (OpenRouter ids, comma separated), independent of every arm
         required: true
         type: string
-        default: openai/gpt-6.1-terra
+        default: deepseek/deepseek-v4.1-flash-1017
       repeat:
         description: Runs per task
         required: true
@@ -67,6 +67,16 @@ on:
         required: false
         type: string
         default: ""
+      sample:
+        description: Run this many tasks of the source, drawn with seed (empty runs every task; needs smoke off and task_ids empty)
+        required: false
+        type: string
+        default: ""
+      seed:
+        description: Seed of the sample draw, so the same draw reruns
+        required: false
+        type: string
+        default: "0"
 
 permissions: {}
 
@@ -140,11 +150,13 @@ jobs:
           SHARDS: ${{ inputs.shards }}
           REPEAT: ${{ inputs.repeat }}
           TASK_IDS: ${{ inputs.task_ids }}
+          SAMPLE: ${{ inputs.sample }}
+          SEED: ${{ inputs.seed }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           cd evals
           uv run --no-sync python - <<'PY'
-          import json, os, re
+          import json, os, random, re
 
           from parallax.task import source_tasks
 
@@ -167,6 +179,17 @@ jobs:
           unknown = sorted(set(named) - set(known))
           if unknown:
               raise SystemExit(f"::error::not tasks of {source}: {' '.join(unknown)}")
+          if os.environ["SAMPLE"]:
+              if named or smoke:
+                  raise SystemExit("::error::sample draws from the whole source: leave task_ids empty and smoke off")
+              if not re.fullmatch(r"[1-9][0-9]*", os.environ["SAMPLE"]) or not re.fullmatch(r"[0-9]+", os.environ["SEED"]):
+                  raise SystemExit("::error::sample must be a positive integer and seed a whole number")
+              count = int(os.environ["SAMPLE"])
+              if count > len(known):
+                  raise SystemExit(f"::error::sample {count} is more than the source's {len(known)} tasks")
+              drawn = set(random.Random(int(os.environ["SEED"])).sample(known, count))
+              named = [task for task in known if task in drawn]
+              print(f"sample of {count} with seed {os.environ['SEED']}: {' '.join(named)}")
           tasks = named or (known[:10] if smoke else known)
           shards = 1 if smoke else min(int(os.environ["SHARDS"]), len(tasks))
           matrix = []
@@ -267,8 +290,15 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           cd evals
+          # Claude Opus never judges: it costs many times our chosen judge, so a run that needs a comparison judges
+          # every arm, ours and other products', with the panel in PARALLAX_JUDGE_MODELS instead.
+          # Parallax trims each model of the panel, so spaces around a comma must not hide one.
+          case ",${PARALLAX_JUDGE_MODELS//[[:space:]]/}," in
+            *,anthropic/claude-opus*) echo "::error::Claude Opus is not allowed as a judge: $PARALLAX_JUDGE_MODELS"; exit 1 ;;
+          esac
           # The upstream Online-Mind2Web judge asks the panel's first model, and the run's judge identity names it.
-          export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL="${PARALLAX_JUDGE_MODELS%%,*}"
+          judges="${PARALLAX_JUDGE_MODELS//[[:space:]]/}"
+          export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL="${judges%%,*}"
           read -ra tasks <<< "$TASKS"
           mkdir -p "$(dirname "$OUT")" "$PRIVATE_RUN"
           # `parallax run` uploads and removes a finished local run, so hard links keep the evidence while it runs.
