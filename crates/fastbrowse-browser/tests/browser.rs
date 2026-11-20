@@ -1851,10 +1851,11 @@ async fn test_reply_buttons_under_one_authors_comments_are_told_apart_by_their_t
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_reply_box_is_named_by_its_commenter_whose_name_shows_twice() {
     let _turn = turn().await;
-    let comment = |author: &str, age: &str, text: &str, form: &str| {
+    // Reply opens the form under its comment, as the page's own script would.
+    let comment = |author: &str, age: &str, text: &str| {
         format!(
             "<li><a href=\"#{author}\">{author}</a><div>{age}</div><p>{text}</p>\
-             <button>Reply</button>{form}</li>"
+             <button onclick=\"this.after(reply.content.cloneNode(true))\">Reply</button></li>"
         )
     };
     let form = "<form><textarea aria-label=\"Comment text area\"></textarea><button>Post</button></form>";
@@ -1866,10 +1867,11 @@ async fn test_a_reply_box_is_named_by_its_commenter_whose_name_shows_twice() {
     eval_active(
         &h,
         &format!(
-            "document.body.innerHTML = '<div><p>Keep it civil.</p>{form}</div><ul>{}{}{}</ul>'",
-            comment("Ada", "1 day ago", "Routes skip the cap.", ""),
-            comment("Grace", "2 days ago", "Works for me.", ""),
-            comment("Ada", "2 days ago", "Map pins are gone.", form),
+            "document.body.innerHTML = '<template id=\"reply\">{form}</template><div><p>Keep it civil.</p>{form}</div>\
+             <ul>{}{}{}</ul>'",
+            comment("Ada", "1 day ago", "Routes skip the cap."),
+            comment("Grace", "2 days ago", "Works for me."),
+            comment("Ada", "2 days ago", "Map pins are gone."),
         ),
     )
     .await;
@@ -1878,8 +1880,11 @@ async fn test_a_reply_box_is_named_by_its_commenter_whose_name_shows_twice() {
         contexts(&obs, "Reply"),
         vec![Some("Ada / 1 day ago".into()), Some("Grace".into()), Some("Ada / 2 days ago".into())]
     );
+    let reply = obs.controls.iter().filter(|c| c.label == "Reply").nth(2).expect("Ada's second Reply").clone();
+    act(&h.page, click(&reply), &obs).await;
+    let opened = h.page.observe().await.expect("observe");
     for label in ["Comment text area", "Post"] {
-        assert_eq!(contexts(&obs, label), vec![Some("Keep it civil.".into()), Some("Ada".into())], "{label}");
+        assert_eq!(contexts(&opened, label), vec![Some("Keep it civil.".into()), Some("Ada".into())], "{label}");
     }
     h.close().await;
 }
