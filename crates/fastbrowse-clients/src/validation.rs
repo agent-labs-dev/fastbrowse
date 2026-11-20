@@ -13,9 +13,10 @@ use std::time::Duration;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{
-    Answer, BoxAnswer, ChoiceAnswer, DecisionError, Edges, Evaluation, NoulAnswer, Question, RetriesExhausted,
-    ScoreAnswer,
+    Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
+    JevCause, NoulAnswer, Question, RetriesExhausted, ScoreAnswer,
 };
+use fastbrowse_core::llm::FaultClass;
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, JevPurpose};
 use fastbrowse_core::py::json::{dumps, float_str};
 use fastbrowse_core::py::lax::float_of;
@@ -167,7 +168,7 @@ pub fn describe(response: &Response) -> String {
 
 pub fn response_error(response: &Response, detail: &str) -> DecisionError {
     // `detail` can quote the body, as a validation error's input does.
-    DecisionError::Failed(format!("{}; {}", text::prefix(&response.scrub(detail), 300), describe(response)))
+    DecisionError::failed(format!("{}; {}", text::prefix(&response.scrub(detail), 300), describe(response)))
 }
 
 /// About 22s in all. With 6s, a Jev 503 ended 5 of 311 eval runs, and each time the next run, started 0 to 15s later,
@@ -460,7 +461,7 @@ impl AskError {
         match self {
             AskError::Jev(error) => error,
             // Only a batch asked with `split_batch` splits, and asking_split catches that one.
-            AskError::Split { .. } => DecisionError::Failed("Jev batch split outside asking_split".into()),
+            AskError::Split { .. } => DecisionError::failed("Jev batch split outside asking_split"),
         }
     }
 }
@@ -551,7 +552,8 @@ pub(crate) async fn post(
         Ok(response) => response,
         Err(RetryStop::Budget(error)) => return Err(DecisionError::Budget(error).into()),
         Err(RetryStop::Fatal(name)) => {
-            return Err(DecisionError::Failed(format!("Jev request could not be sent ({name})")).into());
+            let error = DecisionError::failed(format!("Jev request could not be sent ({name})"));
+            return Err(error.classed(FaultClass::Transport).into());
         }
         Err(RetryStop::Split { start_attempt, usage }) => return Err(AskError::Split { start_attempt, usage }),
     };
@@ -568,10 +570,11 @@ pub(crate) async fn post(
     let usage = usage.snapshot();
     let Some(response) = response else {
         let last = usage.failures.last().cloned().unwrap_or_default();
-        return Err(DecisionError::TransportFailed(format!(
+        return Err(DecisionError::transport_failed(format!(
             "Jev transport failed after {}; last: {last}",
             usage.history(seconds)
         ))
+        .classed(FaultClass::Transport)
         .into());
     };
     if retryable(&response) {
@@ -584,6 +587,7 @@ pub(crate) async fn post(
             requests: usage.requests,
             answered: Vec::new(),
             last,
+            cause: JevCause { class: Some(FaultClass::Http(response.status)), ..JevCause::default() },
         }))
         .into());
     }
@@ -591,16 +595,16 @@ pub(crate) async fn post(
     // Telnyx answers an oversized body with 413 where TypeSafe answers 400.
     let too_large = ["max_tokens_exceeded", "request body too large"].iter().any(|r| text.contains(r));
     if response.status == 413 || (response.status == 400 && too_large) {
-        return Err(DecisionError::InputTooLarge(format!("Jev input too large; {}", describe(&response))).into());
+        let error = DecisionError::input_too_large(format!("Jev input too large; {}", describe(&response)));
+        return Err(error.classed(FaultClass::Http(response.status)).into());
     }
     if matches!(response.status, 401 | 403) {
         let host = url::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_string)).unwrap_or_default();
-        return Err(
-            DecisionError::Rejected(format!("Jev {} ({host} rejected the API key)", describe(&response))).into()
-        );
+        let error = DecisionError::rejected(format!("Jev {} ({host} rejected the API key)", describe(&response)));
+        return Err(error.classed(FaultClass::Http(response.status)).into());
     }
     if !response.is_success() {
-        return Err(response_error(&response, "Jev request failed").into());
+        return Err(response_error(&response, "Jev request failed").classed(FaultClass::Http(response.status)).into());
     }
     Ok(response)
 }
@@ -749,8 +753,48 @@ tokio::task_local! {
     static PURPOSE: JevPurpose;
 }
 
-pub(crate) fn current_jev_purpose() -> Option<JevPurpose> {
+pub fn current_jev_purpose() -> Option<JevPurpose> {
     PURPOSE.try_with(|purpose| *purpose).ok()
+}
+
+/// A decision client whose failures name the source that served it and the purpose of the call, as an LLM's do.
+pub(crate) struct Sourced {
+    pub(crate) client: Box<dyn DecisionClient>,
+    /// The decision source, as `FASTBROWSE_DECISION_SOURCE` spells it.
+    pub(crate) source: &'static str,
+}
+
+impl Sourced {
+    fn named(&self, result: Result<Evaluation, DecisionError>) -> Result<Evaluation, DecisionError> {
+        result.map_err(|error| error.from_call(self.source, current_jev_purpose()))
+    }
+}
+
+impl DecisionClient for Sourced {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move { self.named(self.client.evaluate(state, questions).await) })
+    }
+
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move { self.named(self.client.evaluate_images(state, questions, images).await) })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.client.profile()
+    }
+
+    fn reserves(&self, purpose: JevPurpose) -> Option<CostComponent> {
+        self.client.reserves(purpose)
+    }
 }
 
 pub(crate) fn jev_trace_fields() -> Map<String, Value> {
@@ -1073,6 +1117,7 @@ pub(crate) async fn asking_split(
                 requests,
                 answered,
                 last: exhausted_error.last.clone(),
+                cause: exhausted_error.cause.clone(),
             })));
         }
         return Err(error);
@@ -1199,7 +1244,7 @@ pub fn estimated_cost(price: Option<f64>, input_tokens: i64, output_tokens: i64)
 
 /// The parse of a Jev response: a value error's text, or pydantic's for a body that is not a JSON object.
 pub(crate) fn invalid_response(response: &Response, what: &str, detail: &str) -> AskError {
-    AskError::Jev(response_error(response, &format!("{what} ({detail})")))
+    AskError::Jev(response_error(response, &format!("{what} ({detail})")).classed(FaultClass::Schema))
 }
 
 /// A Jev response's `cost.seconds`: the call's wall time.

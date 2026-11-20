@@ -36,7 +36,7 @@ impl DecisionClient for RecordingDecision {
         _: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         self.0.lock().unwrap().push(state.clone());
-        Box::pin(async { Err(DecisionError::Failed("stop after recording observation".into())) })
+        Box::pin(async { Err(DecisionError::failed("stop after recording observation")) })
     }
 }
 
@@ -50,7 +50,7 @@ impl DecisionClient for Silent {
         _: &'a Value,
         _: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        Box::pin(async { Err(DecisionError::Failed("not scripted".into())) })
+        Box::pin(async { Err(DecisionError::failed("not scripted")) })
     }
 }
 
@@ -62,7 +62,7 @@ impl LLMClient for Silent {
         _: &'a dyn ResponseSchema,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
-        Box::pin(async { Err(LLMError::Failed("not scripted".into())) })
+        Box::pin(async { Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "not scripted")) })
     }
 }
 
@@ -140,7 +140,7 @@ impl DecisionClient for HandoffDecision {
         }
         if state.get("page").is_some() {
             self.seen.lock().unwrap().push(state.clone());
-            return Box::pin(async { Err(DecisionError::Failed("stop on the rendered page".into())) });
+            return Box::pin(async { Err(DecisionError::failed("stop on the rendered page")) });
         }
         self.scripted.evaluate(state, questions)
     }
@@ -222,7 +222,7 @@ impl DecisionClient for ConsentDecision {
                 };
                 // The assertion needs this observation, not an unlimited wait on the static banner that follows it.
                 if recorded {
-                    return Err(DecisionError::Failed("consent observation recorded".into()));
+                    return Err(DecisionError::failed("consent observation recorded"));
                 }
                 if first {
                     // Time for the browser to refuse the banner before the next page is read.
@@ -1203,10 +1203,10 @@ impl LLMClient for SearchEntry {
                 LLMPurpose::Start => r#"{"url":null,"queries":["returns policy"]}"#,
                 LLMPurpose::KnownPages => r#"{"urls":[]}"#,
                 LLMPurpose::Dates => r#"{"dates":[]}"#,
-                _ => return Err(LLMError::Failed("stop after search entry".into())),
+                _ => return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "stop after search entry")),
             };
             Ok(Generation {
-                data: schema.validate_json(value).map_err(LLMError::Failed)?,
+                data: schema.validate_json(value).map_err(LLMError::schema)?,
                 cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)),
             })
         })
@@ -1224,7 +1224,7 @@ impl DecisionClient for SearchEntry {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         Box::pin(async move {
             if !questions.contains_key("entry") {
-                return Err(DecisionError::Failed("stop after search entry".into()));
+                return Err(DecisionError::failed("stop after search entry"));
             }
             Ok(Evaluation {
                 model: "jev".into(),

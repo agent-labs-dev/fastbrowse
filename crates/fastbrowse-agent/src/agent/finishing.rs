@@ -46,7 +46,7 @@ impl Agent {
         if let Some(unsent) = unsent_fact(&state.history, observation)
             && self.stops_to_confirm(state, observation).await?
         {
-            return Err(Stop::new(Status::NeedsConfirmation, unsent).into());
+            return Err(Stop::new(Status::NeedsConfirmation, "Confirm/unsent-form", unsent).into());
         }
         let intent = self.output_intent(state).await?;
         if matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage) && self.page.over_http() {
@@ -428,6 +428,8 @@ impl Agent {
         }
         let mut data = Value::Null;
         let mut status = if answer_problem.is_some() { Status::Unverified } else { Status::Complete };
+        // Each check that leaves the answer unverified names itself, and the first, as with `error`, is the kind.
+        let mut kind = answer_problem.is_some().then_some("Done/answer-problem");
         // A problem can quote a withheld claim, which can hold what the run typed.
         let mut error = answer_problem.map(|problem| self.redact(&problem));
         // A whole-list answer from part of the list is not the whole: a limit or a refused page left one unread. The same
@@ -445,14 +447,17 @@ impl Agent {
                 ),
             };
             error.get_or_insert_with(|| self.redact(&message));
+            kind.get_or_insert("Done/list-unread");
         }
         if unanswered {
             status = Status::Unverified;
             error.get_or_insert_with(|| UNANSWERED.to_string());
+            kind.get_or_insert("Done/unanswered");
         }
         if state.refused {
             status = Status::Unverified;
             error.get_or_insert_with(|| self.redact(REFUSED));
+            kind.get_or_insert("Done/refused");
         }
         if let Some(extraction) = extraction {
             data = extraction.data.unwrap_or(Value::Null);
@@ -461,6 +466,7 @@ impl Agent {
                 status = Status::Unverified;
                 // An unverified result says what could not be verified, never `error: null`.
                 error.get_or_insert_with(|| self.redact(problem));
+                kind.get_or_insert("Done/extraction-problem");
             }
         }
         // The answer's notes and each schema field cite independently; the same words on the same page are one
@@ -480,7 +486,8 @@ impl Agent {
         if let Some(observed) = self.observed() {
             self.observe_if_changed(&observed).await?;
         }
-        let result = self.result(Some(state), &state.ledger.clone(), status, outcome);
+        let mut result = self.result(Some(state), &state.ledger.clone(), status, outcome);
+        result.failure_kind = kind.map(Into::into);
         Ok(Some(self.ending_frame(result, matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage)).await))
     }
 
@@ -512,13 +519,16 @@ impl Agent {
         let url = &observation.url;
         let Some((named, evidence)) = cited else {
             let error = format!("{url} says an item the task requires cannot be bought.");
-            return Ok(Stop::new(Status::Unavailable, self.redact(&error)));
+            return Ok(Stop::new(Status::Unavailable, UNOBTAINABLE, self.redact(&error)));
         };
         let (item, reason) = (named.item.trim(), named.reason.trim().trim_end_matches('.'));
         let error = format!("The task needs {item}, which {url} says cannot be bought: {reason}.");
-        Ok(Stop { status: Status::Unavailable, error: Some(self.redact(&error)), evidence, wall: None })
+        Ok(Stop { evidence, ..Stop::new(Status::Unavailable, UNOBTAINABLE, self.redact(&error)) })
     }
 }
+
+/// The rule of a stop Jev's judgement that a required item cannot be bought decided.
+const UNOBTAINABLE: &str = "Unobtainable";
 
 pub(super) const UNANSWERED: &str = "Nothing read so far answers the task, so it is not done.";
 

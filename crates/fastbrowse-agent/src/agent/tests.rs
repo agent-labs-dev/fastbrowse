@@ -15,7 +15,8 @@ use fastbrowse_core::models::{
     Event, EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
-    ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Media, Observation, Page, PageResult,
+    ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Failure, Media, Observation, Page,
+    PageResult,
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -959,9 +960,10 @@ async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason()
 #[tokio::test]
 async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
     for max_jev_calls in [None, Some(0)] {
-        for failure in
-            [BrowserError::NavigationTimeout("timed out".into()), BrowserError::SiteUnreachable("offline".into())]
-        {
+        for failure in [
+            BrowserError::NavigationTimeout(Failure::new("Page.navigate/TimeoutError", "timed out")),
+            BrowserError::SiteUnreachable(Failure::new("Page.navigate/net::ERR_CONNECTION_REFUSED", "offline")),
+        ] {
             let agent = Agent::new(
                 Arc::new(Unfetchable { failure: Some(failure.clone()), ..Default::default() }),
                 Arc::new(ScriptedJev::new(Vec::new())),
@@ -979,8 +981,8 @@ async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
             assert_eq!(
                 result.failure_kind.as_deref(),
                 Some(match failure {
-                    BrowserError::NavigationTimeout(_) => "NavigationTimeout",
-                    BrowserError::SiteUnreachable(_) => "SiteUnreachable",
+                    BrowserError::NavigationTimeout(_) => "NavigationTimeout/Page.navigate/TimeoutError",
+                    BrowserError::SiteUnreachable(_) => "SiteUnreachable/Page.navigate/net::ERR_CONNECTION_REFUSED",
                     _ => unreachable!(),
                 })
             );
@@ -1047,7 +1049,7 @@ fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
     code.autocomplete = Some("one-time-code".into());
     let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
     password.input_type = Some("password".into());
-    let stop = |status: Status, wall: Option<WallKind>| Stop { wall, ..Stop::new(status, "stopped") };
+    let stop = |status: Status, wall: Option<WallKind>| Stop { wall, ..Stop::new(status, "test/stopped", "stopped") };
     for (controls, status, hint, expected) in [
         (vec![code.clone()], Status::NeedsLogin, None, Some(WallKind::OneTimeCode)),
         (vec![code.clone(), password.clone()], Status::NeedsLogin, None, Some(WallKind::Password)),
@@ -2150,6 +2152,7 @@ async fn test_a_done_whose_remaining_step_the_site_refuses_ends_unverified_with_
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await.expect("finish").expect("a result");
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/refused"));
     assert!(result.answer.is_some());
     assert!(result.error.as_deref().is_some_and(|error| error.contains("does not allow")), "{:?}", result.error);
     assert_eq!(state.recoveries, 0);
@@ -2438,7 +2441,7 @@ async fn test_a_stopped_task_carried_out_answers_only_with_what_it_read_after_it
         let jev = Arc::new(IntentJev::new(intent));
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let ledger = state.ledger.clone();
-        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
         let result = agent.stopped(stop, Some(&mut state), &ledger).await;
         assert_eq!(result.status, Status::Stuck);
         assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the task's output is asked once");
@@ -3288,7 +3291,7 @@ impl Page for Screenshots {
                 std::future::pending::<()>().await;
             }
             if storage.fail {
-                return Err(BrowserError::Failed("private-token /private/path".into()));
+                return Err(BrowserError::failed("test/private", "private-token /private/path"));
             }
             Ok(Some(Artifact {
                 kind: ArtifactKind::Screenshot,
@@ -3463,7 +3466,7 @@ impl LLMClient for ImageLLM {
                 LLMPurpose::ImageRead => json!({"text": "premium 3.459 per gallon"}),
                 _ => json!(null),
             };
-            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
             let cost = CostLine {
                 purpose: Some(purpose),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
@@ -3495,7 +3498,7 @@ impl LLMClient for CoverageComposer {
                 }),
                 _ => json!(null),
             };
-            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -3550,7 +3553,9 @@ impl LLMClient for EmptyImageLLM {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         if purpose == LLMPurpose::RecoveryPages {
-            return Box::pin(async { Err(LLMError::Failed("no route provider".into())) });
+            return Box::pin(async {
+                Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "no route provider"))
+            });
         }
         assert_eq!(serde_json::to_value(purpose).unwrap(), json!("image_read"));
         assert_eq!(schema.name(), "ImageReading");
@@ -3558,9 +3563,9 @@ impl LLMClient for EmptyImageLLM {
         let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             if self.1 && call == 0 {
-                return Err(LLMError::Failed("temporary image read failure".into()));
+                return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "temporary image read failure"));
             }
-            let data = schema.validate_json("{\"text\":null}").map_err(LLMError::Failed)?;
+            let data = schema.validate_json("{\"text\":null}").map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -3582,6 +3587,7 @@ async fn test_a_screenshot_read_checks_coverage_before_complete() {
     *evidence_id.lock().unwrap() = Some(crate::memory::fact_id(state.notes.facts()[0]));
     let result = agent.conclude(&mut state, &page, None).await.expect("conclusion");
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/answer-problem"));
     assert_eq!(result.error.as_deref(), Some("The answer does not establish every requested fact or value."));
 }
 
@@ -3598,7 +3604,7 @@ impl LLMClient for ListingImageLLM {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             assert_eq!(serde_json::to_value(purpose).unwrap(), json!("image_read"));
-            let data = schema.validate_json(&json!({"text": self.0}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"text": self.0}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -3913,7 +3919,7 @@ impl LLMClient for PopulationWriter {
             _ => json!(null),
         };
         Box::pin(async move {
-            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -4003,7 +4009,7 @@ impl DecisionClient for OversizedStartup {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         self.calls.lock().unwrap().push(questions.keys().cloned().collect());
         if questions.contains_key("dates") && questions.len() > 1 {
-            return Box::pin(async { Err(DecisionError::InputTooLarge("provider input limit".into())) });
+            return Box::pin(async { Err(DecisionError::input_too_large("provider input limit")) });
         }
         Box::pin(async move {
             let mut result = self.fallback.evaluate(state, questions).await?;
@@ -4029,7 +4035,7 @@ impl LLMClient for Tomorrow {
         Box::pin(async move {
             let reply = json!({"dates": [{"text": "tomorrow", "year": null, "month": null, "day": null,
                 "weekday": null, "nth": null, "days_from_today": 1, "months_from_now": null}]});
-            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -4165,6 +4171,7 @@ async fn test_required_screenshot_withheld_for_a_fresh_secret_is_unverified() {
     assert_eq!(result.status, Status::Unverified);
     assert!(result.final_frame.is_none());
     assert_eq!(result.error.as_deref(), Some("The requested final screenshot could not be captured."));
+    assert_eq!(result.failure_kind.as_deref(), Some("FinalFrame/uncaptured"));
     let trace = Trace::collecting();
     let agent = agent.with_trace(trace.clone());
     let result = agent.with_changes(result, None);
@@ -4216,7 +4223,7 @@ impl LLMClient for DateWriter {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
-            let data = schema.validate_json(r#"{"value":"2026-11-04"}"#).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(r#"{"value":"2026-11-04"}"#).map_err(LLMError::schema)?;
             let cost = CostLine {
                 purpose: Some(purpose),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
@@ -5333,7 +5340,7 @@ impl LLMClient for WritesRecord {
             }
             let data = schema
                 .validate_json(&json!({"claims": [{"text": [{"prose": self.0}], "evidence_ids": ["e0"]}]}).to_string())
-                .map_err(LLMError::Failed)?;
+                .map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -5353,10 +5360,12 @@ async fn test_rejected_composed_claims_cannot_end_complete() {
     assert!(result.citations.is_empty());
     assert!(result.error.unwrap().contains("unsupported"));
     let ledger = state.ledger.clone();
-    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
     let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
     assert_eq!(stopped.status, Status::Stuck);
     assert_eq!(stopped.error.as_deref(), Some("no_progress (3)"));
+    // The stop's rule is the result's kind, so a stuck run says which rule ended it (#1372).
+    assert_eq!(stopped.failure_kind.as_deref(), Some("Recovery/exhausted"));
     assert!(!stopped.answer.unwrap_or_default().contains("Record A: 99"));
     assert!(!stopped.evidence.is_empty());
 }
@@ -5405,7 +5414,7 @@ async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
         let page = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
         state.notes.add(Fact::read("Record B: 34", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
         let ledger = state.ledger.clone();
-        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
         agent.stopped(stop, Some(&mut state), &ledger).await
     };
     let text = super::state::OutputIntent::Text;
@@ -5435,7 +5444,7 @@ impl LLMClient for Writes {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             let draft = json!({"claims": [{"text": [{"prose": self.0}], "evidence_ids": ["e0"]}]});
-            let data = schema.validate_json(&draft.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&draft.to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -5531,21 +5540,43 @@ fn test_a_field_the_task_gives_no_value_for_is_not_called_empty() {
 
 #[test]
 fn a_failure_kind_names_the_error_and_none_of_its_text() {
-    use super::failure_kind;
+    use fastbrowse_core::llm::{Fault, FaultClass, LLMError};
+    use fastbrowse_core::models::{BudgetResource, FailureKind, LLMPurpose};
+
     use crate::AgentError;
     let invalid = AgentError::Invalid("the page said secret".into());
-    assert_eq!(failure_kind(&invalid), "Invalid");
-    let llm = fastbrowse_core::llm::LLMError::Rejected("the page said secret".into());
-    assert_eq!(failure_kind(&AgentError::Llm(llm)), "Llm.Rejected");
-    let outage = fastbrowse_core::llm::LLMError::RetriesExhausted("provider offline".into());
-    assert_eq!(failure_kind(&AgentError::Llm(outage)), "Llm.RetriesExhausted");
-    let navigation =
-        BrowserError::Failed("Page.navigate failed (net::ERR_ABORTED) for https://a.test/?q=secret".into());
-    assert_eq!(super::browser_failure_kind(&navigation), "Failed/Page.navigate/net::ERR_ABORTED");
-    let hung = BrowserError::Failed("Runtime.evaluate exceeded its command deadline; the page did not answer".into());
-    assert_eq!(super::browser_failure_kind(&hung), "Failed/Runtime.evaluate/exceeded");
-    let script = BrowserError::Failed("page script returned an unexpected tuple".into());
-    assert_eq!(super::browser_failure_kind(&script), "Failed");
+    assert_eq!(invalid.failure_kind(), "Invalid");
+    // A model failure names its provider, the purpose of the call and the status or class it met (#1372).
+    let rejected = LLMError::Rejected(Fault::new(FaultClass::Http(401), "the page said secret"))
+        .from_call("openrouter", LLMPurpose::Action);
+    assert_eq!(AgentError::Llm(rejected).failure_kind(), "Llm.Rejected/openrouter/action/http-401");
+    let outage = LLMError::RetriesExhausted(Fault::new(FaultClass::Transport, "provider offline"));
+    assert_eq!(AgentError::Llm(outage).failure_kind(), "Llm.RetriesExhausted/unknown/unknown/transport");
+    let invalid_answer = LLMError::schema("sk-secret did not match").from_call("anthropic", LLMPurpose::Compose);
+    assert_eq!(AgentError::Llm(invalid_answer).failure_kind(), "Llm.Failed/anthropic/compose/schema");
+    // The maker's provider and purpose win over the client that relayed the error.
+    let relayed =
+        LLMError::schema("x").from_call("gateway", LLMPurpose::Compose).from_call("openrouter", LLMPurpose::Action);
+    assert_eq!(relayed.failure_kind(), "Failed/gateway/compose/schema");
+    let budget = AgentError::Budget(fastbrowse_core::telemetry::BudgetExceeded {
+        reason: "spent".into(),
+        budget: fastbrowse_core::models::BudgetStop { resource: BudgetResource::Dollars, limit: 1.0 },
+    });
+    assert_eq!(budget.failure_kind(), "Budget/dollars");
+    let jev = AgentError::Jev(fastbrowse_core::decision::DecisionError::transport_failed("the page said secret"));
+    assert_eq!(jev.failure_kind(), "Jev.TransportFailed");
+    // A browser failure names the reason its maker set, never the address its message carries.
+    let navigation = BrowserError::failed(
+        "Page.navigate/net::ERR_ABORTED",
+        "Page.navigate failed (net::ERR_ABORTED) for https://a.test/?q=secret",
+    );
+    assert_eq!(navigation.failure_kind(), "Failed/Page.navigate/net::ERR_ABORTED");
+    let hung = BrowserError::PageUnresponsive(Failure::new("Runtime.evaluate/deadline", "secret"));
+    assert_eq!(hung.failure_kind(), "PageUnresponsive/Runtime.evaluate/deadline");
+    let unreachable =
+        BrowserError::SiteUnreachable(Failure::new("Page.navigate/net::ERR_CONNECTION_REFUSED", "secret"));
+    assert_eq!(unreachable.failure_kind(), "SiteUnreachable/Page.navigate/net::ERR_CONNECTION_REFUSED");
+    assert_eq!(BrowserError::ContextLost("secret".into()).failure_kind(), "ContextLost");
 }
 
 /// A run 100 seconds long whose clock has run for `elapsed`.
@@ -5690,6 +5721,7 @@ async fn test_partial_composition_obeys_the_run_deadline() {
     assert_eq!(ledger.state().llm_calls, 1);
     assert_eq!(result.status, Status::BudgetExceeded);
     assert_eq!(result.budget.unwrap().resource, fastbrowse_core::models::BudgetResource::Seconds);
+    assert_eq!(result.failure_kind.as_deref(), Some("Budget/seconds"));
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record A: 99")));
     assert!(!result.evidence.is_empty());
 }
@@ -7252,7 +7284,7 @@ impl LLMClient for RepairComposer {
                 .validate_json(
                     &json!({"claims": [{"text": [{"prose": text}], "evidence_ids": evidence_ids}]}).to_string(),
                 )
-                .map_err(LLMError::Failed)?;
+                .map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -7284,7 +7316,7 @@ impl LLMClient for GrowingComposer {
             if second {
                 claims.push(json!({"text": [{"prose": "Record C: 57"}], "evidence_ids": ["e1"]}));
             }
-            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -7325,7 +7357,7 @@ impl LLMClient for TwoClaimComposer {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             let claims = json!([{"text": [{"prose": "Record B: 34"}], "evidence_ids": ["e0"]}, {"text": [{"prose": "Record A: 99"}], "evidence_ids": ["e0"]}]);
-            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -7691,7 +7723,9 @@ async fn test_a_failed_repair_or_hard_deadline_keeps_the_verified_partial() {
         let result = if provider_failed {
             agent
                 .stopped(
-                    Flow::Agent(LLMError::Failed("repair provider failed".into()).into()),
+                    Flow::Agent(
+                        LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "repair provider failed").into(),
+                    ),
                     Some(&mut state),
                     &ledger,
                 )
@@ -7787,7 +7821,7 @@ async fn test_checked_partial_preserves_non_composition_stop_statuses_and_wall_m
             code.autocomplete = Some("one-time-code".into());
             agent.seen().raw = Some(at("https://shop.test/login", &[code]));
         }
-        let stop = super::state::Stop::new(status, "stopped");
+        let stop = super::state::Stop::new(status, "test/stopped", "stopped");
         let ledger = state.ledger.clone();
         let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
         assert_eq!(result.status, status);
@@ -7968,7 +8002,7 @@ impl Page for HungPage {
         let hang = self.hangs.try_update(SeqCst, SeqCst, |left| left.checked_sub(1)).is_ok();
         Box::pin(async move {
             if hang {
-                Err(BrowserError::PageUnresponsive("the renderer stopped answering".into()))
+                Err(BrowserError::PageUnresponsive(Failure::new("test/hung", "the renderer stopped answering")))
             } else {
                 Ok(ActResult {
                     outcome: StepOutcome::Executed,
@@ -8139,6 +8173,29 @@ fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
     assert_eq!(unavailable.status, Status::Unavailable);
     assert_eq!(unavailable.wall, None);
     assert!(unavailable.error.unwrap().contains(recorded));
+}
+
+/// Five runs ended `unavailable` after steps with no `failure_kind`, so their logs could not tell a 503 from a page that
+/// reported its own failure (#1372). A site-failure stop names its cause by status or kind, never by address.
+#[test]
+fn a_site_failure_stop_names_its_rule_and_not_its_address() {
+    let url = "https://shop.test/cart?token=abc";
+    let cases = [
+        (SiteFailure::http(url, 503, 0), "SiteFailure/http-503"),
+        (SiteFailure::http(url, 404, 0), "SiteFailure/http-404"),
+        (
+            SiteFailure {
+                url: url.into(),
+                cause: FailureCause::Navigation("net::ERR_ABORTED at shop.test".into()),
+                since: 0,
+            },
+            "SiteFailure/navigation",
+        ),
+        (SiteFailure { url: url.into(), cause: FailureCause::Reported, since: 0 }, "SiteFailure/reported"),
+    ];
+    for (failure, rule) in cases {
+        assert_eq!(failure.stop().rule, rule);
+    }
 }
 
 /// A CurseForge project page awaiting moderation answers 404, and three runs on it ended `stuck` with "the cause is
@@ -8370,7 +8427,7 @@ impl LLMClient for ProposesRoute {
         assert!(messages[1].content.contains("# Walled addresses\nhttps://pypi.org/search/?q=httpx"));
         self.1.lock().unwrap().push(messages[1].content.clone());
         Box::pin(async move {
-            let data = schema.validate_json(&json!({"url": self.0}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"url": self.0}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -8446,6 +8503,7 @@ async fn test_a_whole_list_answer_with_a_next_page_still_unread_is_not_complete(
 
     let result = agent.conclude(&mut state, &first, None).await.expect("a conclusion");
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/list-unread"));
     let error = result.error.expect("the unread page is named");
     assert!(error.contains("https://list.test/page/2/"), "{error}");
 }
@@ -8746,9 +8804,11 @@ impl LLMClient for PageRangeLLM {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             assert_eq!(purpose, LLMPurpose::Pages);
-            let Some(last) = self.0 else { return Err(LLMError::Failed("no reply".into())) };
+            let Some(last) = self.0 else {
+                return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "no reply"));
+            };
             let data =
-                schema.validate_json(&json!({"first": null, "last": last}).to_string()).map_err(LLMError::Failed)?;
+                schema.validate_json(&json!({"first": null, "last": last}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -8831,7 +8891,7 @@ impl LLMClient for AlreadyExists {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             let claims = json!([{"text": [{"prose": "The project already exists, so no new project was created."}], "evidence_ids": ["e0"]}]);
-            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -8854,7 +8914,7 @@ async fn test_a_stopped_run_never_answers_against_its_own_step() {
         ..executed(Some(Operation::Click), Some("Create project"), true)
     });
     let ledger = state.ledger.clone();
-    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
     let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
     assert_eq!(stopped.status, Status::Stuck);
     assert!(!stopped.answer.unwrap_or_default().contains("already exists"));
@@ -9356,6 +9416,23 @@ impl DecisionClient for Noul {
     }
 }
 
+/// A run that finished `complete` and was then found over its spend limit became `budget_exceeded` with no kind, so a
+/// caller could not tell the limit from any other cause.
+#[test]
+fn test_a_run_found_over_its_spend_limit_after_it_finished_names_the_limit() {
+    let ledger = Ledger::new(Limits { max_dollars: Some(0.001), ..Limits::default() });
+    let _ = ledger.record([CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.01))]);
+    let mut result: fastbrowse_core::models::RunResult = serde_json::from_value(json!({
+        "status": "complete", "answer": "42", "data": null, "evidence": [], "steps": [], "cost": {"lines": []},
+        "artifacts": [],
+    }))
+    .unwrap();
+    assert!(super::over_spend(&mut result, &ledger));
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert_eq!(result.failure_kind.as_deref(), Some("Budget/dollars"));
+    assert_eq!(result.error.as_deref(), Some("spend limit $0.001 reached"));
+}
+
 /// The scripted Jev, refusing the step decision the way the real client does when its estimate breaks the run's spend
 /// limit: a `DecisionError::Budget` from the run's own ledger.
 struct OverSpend(ScriptedJev, Arc<Ledger>);
@@ -9396,6 +9473,7 @@ async fn test_a_jev_spend_stop_ends_budget_exceeded_naming_the_limit_as_set() {
     assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
     assert_eq!(result.budget, Some(BudgetStop { resource: BudgetResource::Dollars, limit: 0.001 }));
     assert_eq!(result.error.as_deref(), Some("spend limit $0.001 reached"));
+    assert_eq!(result.failure_kind.as_deref(), Some("Budget/dollars"));
 }
 
 /// The scripted Jev, answering the question of what the task asks to be told with `intent`, and counting the reads
@@ -9777,7 +9855,7 @@ async fn test_recovery_does_not_reopen_an_address_reached_through_a_link() {
             Box::pin(async move {
                 assert_eq!(purpose, LLMPurpose::RecoveryPages);
                 let data =
-                    schema.validate_json(r#"{"urls":["HTTPS://PREVIOUS.TEST:443"]}"#).map_err(LLMError::Failed)?;
+                    schema.validate_json(r#"{"urls":["HTTPS://PREVIOUS.TEST:443"]}"#).map_err(LLMError::schema)?;
                 Ok(Generation { data, cost: free() })
             })
         }
@@ -9933,6 +10011,7 @@ async fn test_image_storage_obeys_public_run_deadline() {
         assert_eq!(storage.writes.lock().unwrap().len(), attempt, "{result:?}");
         assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
         assert_eq!(result.budget.unwrap().resource, BudgetResource::Seconds);
+        assert_eq!(result.failure_kind.as_deref(), Some("Budget/seconds"));
         assert!(result.artifacts.is_empty());
     }
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -10118,7 +10197,7 @@ impl DecisionClient for Counted {
             self.0.fetch_add(1, Ordering::SeqCst);
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             self.1.fetch_add(1, Ordering::SeqCst);
-            Err(DecisionError::Failed("a counted request has no answer".into()))
+            Err(DecisionError::failed("a counted request has no answer"))
         })
     }
 
@@ -10203,6 +10282,20 @@ async fn a_text_task_done_on_nothing_read_ends_unverified_once_recovery_runs_out
     );
 }
 
+/// A run whose requested fields the page cannot fill is unverified, and its kind names the extraction, not the answer.
+#[tokio::test]
+async fn a_conclusion_whose_schema_fields_the_page_lacks_names_the_extraction() {
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let model = fastbrowse_core::output_schema::output_model(&json!({
+        "type": "object", "properties": {"seats": {"type": "integer"}}, "required": ["seats"],
+    }))
+    .unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+    let result = agent.conclude(&mut run_state(), &observation(&[]), Some(&schema)).await.unwrap();
+    assert_eq!(result.status, Status::Unverified, "{:?} {:?}", result.error, result.data);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/extraction-problem"));
+}
+
 /// #1343: a task that wants to be told something and ends with nothing answering it is not `complete`.
 #[tokio::test]
 async fn a_text_task_concluded_with_no_answer_is_not_complete() {
@@ -10210,5 +10303,6 @@ async fn a_text_task_concluded_with_no_answer_is_not_complete() {
     let result = agent.conclude(&mut run_state(), &observation(&[]), None).await.unwrap();
     assert_eq!(result.answer, None);
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/unanswered"));
     assert_eq!(result.error.as_deref(), Some(super::finishing::UNANSWERED));
 }

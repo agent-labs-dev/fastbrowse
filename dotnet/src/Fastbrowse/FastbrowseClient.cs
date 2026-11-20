@@ -42,6 +42,8 @@ public sealed class FastbrowseClient : IAsyncDisposable
         public CancellationToken Cancellation { get; } = cancellation;
         /// <summary>What ended the run from this side: the first OnEvent or OnFrame that threw.</summary>
         public volatile string? Failure;
+        /// <summary>The callback that threw, as the result's FailureKind names it, never with what it threw.</summary>
+        public volatile string? FailureKind;
     }
 
     private FastbrowseClient(Process process, BrowserOptions browser, TimeSpan gracePeriod)
@@ -168,7 +170,7 @@ public sealed class FastbrowseClient : IAsyncDisposable
                     if (served.Failure is { } failed)
                     {
                         // A run can finish before the cancellation reaches it, and its callback failed all the same.
-                        return EndedBy(failed, new CancellationReceipt
+                        return EndedBy(failed, served.FailureKind, new CancellationReceipt
                         {
                             Steps = result.Steps,
                             Cost = result.Cost,
@@ -182,7 +184,7 @@ public sealed class FastbrowseClient : IAsyncDisposable
                 {
                     if (served.Failure is { } failed)
                     {
-                        return EndedBy(failed, refused.Receipt);
+                        return EndedBy(failed, served.FailureKind, refused.Receipt);
                     }
                     if (cancellationToken.IsCancellationRequested)
                     {
@@ -251,6 +253,8 @@ public sealed class FastbrowseClient : IAsyncDisposable
         }
         catch (Exception e)
         {
+            // Named as the core names a request callback that threw, so a kind reads the same whichever callback failed.
+            run.FailureKind = $"Callback/{method}/error/{ProtocolConstants.ErrorInternalError}";
             run.Failure = $"{method}: {e.Message}";
             Cancel(run.RunId);
         }
@@ -336,7 +340,7 @@ public sealed class FastbrowseClient : IAsyncDisposable
     /// The result of a run that a throwing callback ended, in the shape the server gives one, with the steps, cost and
     /// videos of what it did when the reply carried them.
     /// </summary>
-    private static RunResult EndedBy(string failure, CancellationReceipt? spent) => new()
+    private static RunResult EndedBy(string failure, string? kind, CancellationReceipt? spent) => new()
     {
         Status = Status.Error,
         Evidence = [],
@@ -345,6 +349,7 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Artifacts = [],
         Citations = [],
         Error = failure,
+        FailureKind = kind,
         Recordings = spent?.Recordings ?? [],
         Browser = spent?.Browser,
     };

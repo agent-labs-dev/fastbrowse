@@ -33,7 +33,8 @@ use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     Artifact, Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler,
-    Evidence, Limits, MaybeUnavailable, RunResult, SecretResolver, Status, StepFact, UntilCheck, Wall, WallKind,
+    Evidence, FailureKind, Limits, MaybeUnavailable, RunResult, SecretResolver, Status, StepFact, UntilCheck, Wall,
+    WallKind,
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
 use fastbrowse_core::safety::{
@@ -304,7 +305,7 @@ impl Agent {
                 None => {
                     let limit = ledger.stated().max_seconds.unwrap_or_default();
                     let notes = slot.as_ref().map(|state| state.notes.clone()).unwrap_or_default();
-                    let result = self.partial_result(
+                    let mut result = self.partial_result(
                         &notes,
                         slot.as_ref(),
                         &ledger,
@@ -312,6 +313,7 @@ impl Agent {
                         Some(time_limit(limit)),
                         Some(BudgetStop { resource: BudgetResource::Seconds, limit }),
                     );
+                    result.failure_kind = Some(BROWSING_TIME.into());
                     (result, false, false)
                 }
             };
@@ -347,16 +349,7 @@ impl Agent {
             result
         } else {
             self.keep_captures(&mut result).await;
-            // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a
-            // spend limit instead of naming the key.
-            if let Err(error) = ledger.check_spend(0.0) {
-                if result.status != Status::Error
-                    && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
-                {
-                    result.status = Status::BudgetExceeded;
-                    result.error = Some(error.to_string());
-                    result.budget = Some(error.budget);
-                }
+            if over_spend(&mut result, &ledger) {
                 loop_returned = false;
             }
             if result.status.waits_on_person() {
@@ -550,7 +543,17 @@ impl Agent {
     /// The result of a run a step stopped: the error the loop raised, as the status it means.
     async fn stopped(&self, flow: Flow, mut state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
         let schema = state.as_deref_mut().and_then(|state| state.schema_partial.take());
+        // Browser and other agent errors name their kind where `failed` reports them; a stop names its rule.
+        let kind = match &flow {
+            Flow::Stop(stop) => Some(stop.rule.clone()),
+            Flow::Agent(error) => Some(error.failure_kind()),
+            Flow::Browser(_) | Flow::Unsure(_) => None,
+        };
         let mut result = self.stopped_result(flow, state, ledger).await;
+        // A stop whose evidence answers the task after all ends complete, and a complete run names no failure.
+        if result.status != Status::Complete && result.failure_kind.is_none() {
+            result.failure_kind = kind;
+        }
         // The schema was filled before the draft was sent back; a rewrite that fails too does not unfill it.
         if let Some(extraction) = schema
             && result.data.is_null()
@@ -563,9 +566,10 @@ impl Agent {
 
     async fn stopped_result(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
         let (flow, exhausted) = match flow {
-            Flow::Agent(AgentError::Budget(error)) => {
-                (Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.to_string())), Some(error.budget))
-            }
+            Flow::Agent(AgentError::Budget(error)) => (
+                Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.failure_kind(), error.to_string())),
+                Some(error.budget),
+            ),
             flow => (flow, None),
         };
         if let Flow::Stop(stop) = &flow
@@ -683,12 +687,12 @@ impl Agent {
                     || matches!(error, BrowserError::PageUnresponsive(_))
                     || (state.is_none()
                         && matches!(error, BrowserError::NavigationTimeout(_) | BrowserError::SiteUnreachable(_)));
-                let kind = browser_failure_kind(&error);
+                let kind = error.failure_kind();
                 self.failed(kind, error.to_string(), unavailable, state, ledger)
             }
             Flow::Agent(error) => {
                 let unavailable = error.is_unavailable();
-                self.failed(failure_kind(&error), error.to_string(), unavailable, state, ledger)
+                self.failed(error.failure_kind(), error.to_string(), unavailable, state, ledger)
             }
             Flow::Unsure(unsure) => self.failed("Unsure".into(), unsure.reason, false, state, ledger),
         }
@@ -740,8 +744,11 @@ impl Agent {
                 _ => None,
             };
         if requested && result.final_frame.is_none() && result.status == Status::Complete {
-            result.status = Status::Unverified;
-            result.error = Some("The requested final screenshot could not be captured.".into());
+            result.end_as(
+                Status::Unverified,
+                "FinalFrame/uncaptured".into(),
+                "The requested final screenshot could not be captured.".into(),
+            );
         }
         result
     }
@@ -1219,7 +1226,25 @@ pub(super) fn out_of_browsing_time(state: &RunState) -> Option<Stop> {
     }
     let deadline = browsing_deadline(&state.ledger, true)?;
     let stated = state.ledger.stated().max_seconds.or(state.ledger.limits.max_seconds)?;
-    (deadline <= tokio::time::Instant::now()).then(|| Stop::new(Status::BudgetExceeded, time_limit(stated)))
+    (deadline <= tokio::time::Instant::now())
+        .then(|| Stop::new(Status::BudgetExceeded, BROWSING_TIME, time_limit(stated)))
+}
+
+/// The kind of a stop the run's clock made, named as a ledger's `BudgetExceeded` on seconds names its own.
+const BROWSING_TIME: &str = "Budget/seconds";
+
+/// Whether the run's ledger is over a spend limit once the run is over, ending `result` on that limit if so.
+fn over_spend(result: &mut RunResult, ledger: &Ledger) -> bool {
+    let Err(error) = ledger.check_spend(0.0) else { return false };
+    // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a spend
+    // limit instead of naming the key.
+    if result.status != Status::Error
+        && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
+    {
+        result.end_as(Status::BudgetExceeded, error.failure_kind(), error.to_string());
+        result.budget = Some(error.budget);
+    }
+    true
 }
 
 fn time_limit(limit: f64) -> String {
@@ -1233,35 +1258,6 @@ pub fn breakdown(lines: Vec<CostLine>) -> CostBreakdown {
 
 /// A run whose page has no browser behind it reached a step only a browser can take. The document was never the
 /// problem and a second attempt cannot help, so it ends `blocked` with the reason, carrying nothing it read.
-/// The variant names of an error and no text it carries, so a public log can say what failed without quoting a page.
-pub fn failure_kind(error: &impl std::fmt::Debug) -> String {
-    let debug = format!("{error:?}");
-    let names: String = debug.chars().take_while(|c| c.is_alphanumeric() || *c == '(').collect();
-    names.trim_end_matches('(').replace('(', ".")
-}
-
-/// `failure_kind`, then the CDP call a browser message opens with and the code in `failed (code)`. The rest of such a
-/// message can be an address, so nothing else of it is kept.
-fn browser_failure_kind(error: &BrowserError) -> String {
-    let kind = failure_kind(error);
-    let message = error.to_string();
-    let method = message.split_whitespace().next().unwrap_or_default();
-    let is_call = method.split_once('.').is_some_and(|(domain, name)| {
-        domain.chars().next().is_some_and(char::is_uppercase)
-            && !name.is_empty()
-            && name.chars().all(char::is_alphanumeric)
-    });
-    if !is_call {
-        return kind;
-    }
-    let (_, rest) = message.split_once(method).unwrap_or_default();
-    let code: String = match rest.split_once(" failed (") {
-        Some((_, code)) => code.chars().take_while(|c| c.is_alphanumeric() || matches!(c, ':' | '_' | '-')).collect(),
-        None => rest.split_whitespace().next().unwrap_or_default().into(),
-    };
-    format!("{kind}/{method}/{code}")
-}
-
 fn blocked_without_browser(message: String) -> RunResult {
     RunResult {
         browser: None,
@@ -1275,7 +1271,7 @@ fn blocked_without_browser(message: String) -> RunResult {
         artifacts: Vec::new(),
         citations: Vec::new(),
         error: Some(message),
-        failure_kind: None,
+        failure_kind: Some("NeedsBrowser".into()),
         final_url: None,
         final_frame: None,
         recordings: Vec::new(),

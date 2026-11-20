@@ -281,7 +281,7 @@ async fn test_explicit_cloud_overrides_environment_profile() {
         &["task", "--cloud", "--cloud-profile", "signed-in", "--viewport", "800x600", "--proxy-country", "uk"],
         settings,
         &[],
-        fastbrowse_cli::options::error_result("test"),
+        fastbrowse_cli::options::error_result("test", "test"),
     )
     .await;
     let call = ran.call.unwrap();
@@ -293,7 +293,7 @@ async fn test_explicit_cloud_overrides_environment_profile() {
 async fn test_cli_login_and_blocked_have_distinct_exit_codes() {
     let mut codes = Vec::new();
     for status in [Status::NeedsLogin, Status::Blocked] {
-        let answer = RunResult { status, ..fastbrowse_cli::options::error_result("test") };
+        let answer = RunResult { status, ..fastbrowse_cli::options::error_result("test", "test") };
         codes.push(cli_with(&["task", "--local"], model_settings(), &[], answer).await.code);
     }
     assert_eq!(codes, [4, 6]);
@@ -301,7 +301,8 @@ async fn test_cli_login_and_blocked_have_distinct_exit_codes() {
 
 #[tokio::test]
 async fn test_login_advice_is_added_only_to_cli_output() {
-    let answer = RunResult { status: Status::NeedsLogin, ..fastbrowse_cli::options::error_result("Sign-in required") };
+    let answer =
+        RunResult { status: Status::NeedsLogin, ..fastbrowse_cli::options::error_result("test", "Sign-in required") };
     let ran = cli_with(&["task", "--local", "--json"], model_settings(), &[], answer).await;
     assert_eq!(ran.code, 4);
     assert!(ran.json()["error"].as_str().unwrap().contains("--secret NAME=ENV_VAR@https://host"));
@@ -394,7 +395,8 @@ async fn test_the_summary_line_says_when_some_calls_reported_no_cost() {
             CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.002)),
             CostLine::new(CostComponent::Llm, basis, if basis == CostBasis::Unknown { None } else { Some(0.0) }),
         ];
-        let answer = RunResult { cost: CostBreakdown { lines }, ..fastbrowse_cli::options::error_result("test") };
+        let answer =
+            RunResult { cost: CostBreakdown { lines }, ..fastbrowse_cli::options::error_result("test", "test") };
         let ran = cli_with(&["task", "--local"], model_settings(), &[], answer).await;
         assert!(ran.out.contains(expected), "{}", ran.out);
     }

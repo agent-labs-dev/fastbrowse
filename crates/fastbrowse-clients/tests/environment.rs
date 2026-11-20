@@ -9,9 +9,10 @@ use std::sync::{Arc, Mutex};
 use common::{Script, answer_model, answering, body, config_error, one, settings};
 use fastbrowse_clients::environment::{DEFAULT_LLM, DecisionSource, LLMProvider, Settings};
 use fastbrowse_clients::http::{Http, Request, Response};
+use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::DecisionError;
 use fastbrowse_core::llm::{Generation, Message};
-use fastbrowse_core::models::{CostBasis, CostBreakdown, LLMPurpose};
+use fastbrowse_core::models::{CostBasis, CostBreakdown, FailureKind, JevPurpose, LLMPurpose};
 use serde_json::{Value, json};
 
 /// Every request's URL, each answered with `status`.
@@ -692,4 +693,25 @@ fn an_invalid_setting_is_named_without_its_value() {
     assert_eq!(error, "invalid settings: llm_reasoning, headed");
     let loaded = settings(&[("FASTBROWSE_HEADED", "yes"), ("FASTBROWSE_PROFILE", "/tmp/profile")]);
     assert!(loaded.local_chrome().headed);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_failed_jev_call_names_its_source_purpose_and_status() {
+    // The hosted worker logs the kind alone, and `Jev.Failed` said neither which provider failed nor how.
+    for (status, body, kind) in [
+        (500, json!({"error": "stop"}), "RetriesExhausted/openrouter/read/http-500"),
+        (401, json!({"error": "stop"}), "Rejected/openrouter/read/http-401"),
+        (422, json!({"error": "stop"}), "Failed/openrouter/read/http-422"),
+        (200, json!({"nothing": "here"}), "Failed/openrouter/read/schema"),
+    ] {
+        let http = answering(move |_| {
+            let body = body.clone();
+            Box::pin(async move { Ok(Response::json(status, &body)) })
+        });
+        let jev = settings(&[("OPENROUTER_API_KEY", "o")]).decision(&http).unwrap();
+        let state = json!("page");
+        let questions = one();
+        let error = jev_purpose(JevPurpose::Read, jev.evaluate(&state, &questions)).await.unwrap_err();
+        assert_eq!(error.failure_kind(), kind, "{status}: {error}");
+    }
 }

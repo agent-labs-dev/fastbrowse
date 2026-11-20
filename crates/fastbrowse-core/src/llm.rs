@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::BoxFuture;
-use crate::models::{Bytes, CostLine, LLMPurpose, MaybeUnavailable};
+use crate::models::{Bytes, CostLine, FailureKind, LLMPurpose, MaybeUnavailable};
 use crate::schema::{Schema, Ty, json_schema};
 use crate::telemetry::{BudgetExceeded, Ledger};
 
@@ -60,23 +60,130 @@ pub struct Generation<T> {
     pub cost: CostLine,
 }
 
+/// What kind of failure a model call met, named without anything it carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaultClass {
+    /// The provider answered this HTTP status.
+    Http(u16),
+    /// No answer came: a connection, timeout or proxy failure.
+    Transport,
+    /// The answer did not match the schema it was asked for.
+    Schema,
+    /// The answer was cut off before its JSON ended.
+    Truncated,
+    /// The answer held no completion the client could read.
+    Envelope,
+    /// The request could not be made as asked: no model for the purpose, an image type or schema the wire cannot
+    /// carry, or a context window that cannot hold the request.
+    Request,
+    /// An embedder's own client failed and said no more.
+    Client,
+}
+
+impl std::fmt::Display for FaultClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FaultClass::Http(status) => write!(f, "http-{status}"),
+            FaultClass::Transport => f.write_str("transport"),
+            FaultClass::Schema => f.write_str("schema"),
+            FaultClass::Truncated => f.write_str("truncated"),
+            FaultClass::Envelope => f.write_str("envelope"),
+            FaultClass::Request => f.write_str("request"),
+            FaultClass::Client => f.write_str("client"),
+        }
+    }
+}
+
+/// A failed model call: its message, and the provider, purpose and class of the failure, which hold no content.
+///
+/// The hosted worker logs only `RunResult::failure_kind`, never the message, which can quote a response; a failure
+/// named only `Llm.Failed` said neither which provider failed nor how (#1372). The class is set where the error is
+/// made, the provider and purpose by the client that made the call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fault {
+    pub message: String,
+    pub class: FaultClass,
+    /// The provider `FASTBROWSE_LLM_PROVIDER` names, as `LLMProvider::as_str` spells it.
+    pub provider: Option<String>,
+    pub purpose: Option<LLMPurpose>,
+}
+
+impl std::fmt::Display for Fault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl Fault {
+    pub fn new(class: FaultClass, message: impl Into<String>) -> Fault {
+        Fault { message: message.into(), class, provider: None, purpose: None }
+    }
+
+    /// `provider/purpose/class`, with `unknown` for a part no one set.
+    pub fn cause(&self) -> String {
+        let purpose = self.purpose.map(|purpose| purpose.as_str().to_owned());
+        let provider = self.provider.as_deref().unwrap_or("unknown");
+        format!("{provider}/{}/{}", purpose.as_deref().unwrap_or("unknown"), self.class)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum LLMError {
     /// The model failed to return data matching the schema, or the transport failed.
-    #[error("{0}")]
-    Failed(String),
+    #[error("{}", .0.message)]
+    Failed(Fault),
     /// A retryable HTTP status or a transport failure outlasted the provider's retry budget.
-    #[error("{0}")]
-    RetriesExhausted(String),
+    #[error("{}", .0.message)]
+    RetriesExhausted(Fault),
     /// The provider refused the key (HTTP 401 or 403), which no retry on that provider can change.
-    #[error("{0}")]
-    Rejected(String),
+    #[error("{}", .0.message)]
+    Rejected(Fault),
     /// The client's reservation, or the receipt it recorded, broke a limit.
     #[error(transparent)]
     Budget(#[from] BudgetExceeded),
     /// The page redrew under the decision that would have sent this request, so it was not sent.
     #[error("the page redrew, so the decision it was for is discarded")]
     Superseded,
+}
+
+impl LLMError {
+    pub fn failed(class: FaultClass, message: impl Into<String>) -> LLMError {
+        LLMError::Failed(Fault::new(class, message))
+    }
+
+    /// An answer that did not match its schema, the error every `ResponseSchema::validate_json` failure becomes.
+    pub fn schema(message: impl Into<String>) -> LLMError {
+        LLMError::failed(FaultClass::Schema, message)
+    }
+
+    /// The fault this error carries, if it is one a model call met.
+    pub fn fault(&self) -> Option<&Fault> {
+        match self {
+            LLMError::Failed(fault) | LLMError::RetriesExhausted(fault) | LLMError::Rejected(fault) => Some(fault),
+            LLMError::Budget(_) | LLMError::Superseded => None,
+        }
+    }
+
+    /// The error with the provider and purpose of the call it came from, where the maker did not set them.
+    pub fn from_call(mut self, provider: &str, purpose: LLMPurpose) -> LLMError {
+        if let LLMError::Failed(fault) | LLMError::RetriesExhausted(fault) | LLMError::Rejected(fault) = &mut self {
+            fault.provider.get_or_insert_with(|| provider.to_owned());
+            fault.purpose.get_or_insert(purpose);
+        }
+        self
+    }
+}
+
+impl FailureKind for LLMError {
+    fn failure_kind(&self) -> String {
+        match self {
+            LLMError::Failed(fault) => format!("Failed/{}", fault.cause()),
+            LLMError::RetriesExhausted(fault) => format!("RetriesExhausted/{}", fault.cause()),
+            LLMError::Rejected(fault) => format!("Rejected/{}", fault.cause()),
+            LLMError::Budget(exceeded) => exceeded.failure_kind(),
+            LLMError::Superseded => "Superseded".into(),
+        }
+    }
 }
 
 impl MaybeUnavailable for LLMError {
@@ -161,7 +268,9 @@ pub trait LLMClientExt: LLMClient {
         async move {
             let schema = Typed::<T>::default();
             let generated = self.generate_value(purpose, messages, &schema, ledger).await?;
-            let data = serde_json::from_value(generated.data).map_err(|e| LLMError::Failed(e.to_string()))?;
+            let data = serde_json::from_value(generated.data).map_err(|e| {
+                LLMError::Failed(Fault { purpose: Some(purpose), ..Fault::new(FaultClass::Schema, e.to_string()) })
+            })?;
             Ok(Generation { data, cost: generated.cost })
         }
     }
@@ -173,6 +282,32 @@ impl<C: LLMClient + ?Sized> LLMClientExt for C {}
 mod tests {
     use super::*;
     use crate::py::dump::Dump;
+
+    /// A client that hands back data without validating it against the schema it was given.
+    struct Unvalidated;
+
+    impl LLMClient for Unvalidated {
+        fn generate_value<'a>(
+            &'a self,
+            _purpose: LLMPurpose,
+            _messages: &'a [Message],
+            _schema: &'a dyn ResponseSchema,
+            _ledger: Option<&'a Ledger>,
+        ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+            let cost = CostLine::new(crate::models::CostComponent::Llm, crate::models::CostBasis::Metered, Some(0.0));
+            Box::pin(async move { Ok(Generation { data: serde_json::json!({}), cost }) })
+        }
+    }
+
+    #[test]
+    fn data_that_is_not_the_type_asked_for_names_the_purpose_and_no_provider() {
+        // A client validates its answer against this schema, so only one that skipped it reaches here: no provider
+        // answered wrong, and none is named.
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let generated = runtime.block_on(Unvalidated.generate::<crate::models::Link>(LLMPurpose::Compose, &[], None));
+        let Err(LLMError::Failed(fault)) = generated else { panic!("expected a failed generation") };
+        assert_eq!(fault.cause(), "unknown/compose/schema");
+    }
 
     #[test]
     fn a_message_dumps_as_pydantic_does() {

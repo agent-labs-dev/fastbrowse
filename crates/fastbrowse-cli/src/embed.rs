@@ -132,7 +132,10 @@ struct Failed {
 
 impl Failed {
     fn fail<T: Default>(&self, method: ServerMethod, message: String) -> T {
-        let failure = ClientError { method, message, code: None };
+        // A host function's `Err` is a callback that raised or threw, which a client of `serve` answers with the
+        // internal error code. Without that code the embedded run was named an unusable reply, unlike the same
+        // failure over stdio.
+        let failure = ClientError { method, message, code: Some(ErrorCode::InternalError.code()) };
         self.failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get_or_insert(failure);
         self.cancel.trip();
         T::default()

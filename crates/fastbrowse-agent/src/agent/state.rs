@@ -54,6 +54,10 @@ pub(crate) enum OutputIntent {
 #[derive(Debug, Clone)]
 pub(crate) struct Stop {
     pub status: Status,
+    /// The rule that ended the run, as `RunResult::failure_kind` names it: a fixed name and typed values only, since
+    /// the hosted worker logs it where it never logs `error`. Five runs ended `unavailable` after steps with no kind
+    /// at all, so none of them could be told apart in the logs (#1372).
+    pub rule: String,
     pub error: Option<String>,
     pub evidence: Vec<Evidence>,
     /// The wall this stop names when the page alone cannot say: a bot check reads like any other page.
@@ -61,8 +65,8 @@ pub(crate) struct Stop {
 }
 
 impl Stop {
-    pub fn new(status: Status, error: impl Into<String>) -> Stop {
-        Stop { status, error: Some(error.into()), evidence: Vec::new(), wall: None }
+    pub fn new(status: Status, rule: impl Into<String>, error: impl Into<String>) -> Stop {
+        Stop { status, rule: rule.into(), error: Some(error.into()), evidence: Vec::new(), wall: None }
     }
 }
 
@@ -238,7 +242,12 @@ impl SiteFailure {
             FailureCause::Http(_) => Status::Stuck,
             FailureCause::Navigation(_) | FailureCause::Reported => Status::Unavailable,
         };
-        Stop::new(status, format!("Could not complete the task after {}", self.message()))
+        let rule = match &self.cause {
+            FailureCause::Http(status) => format!("SiteFailure/http-{status}"),
+            FailureCause::Navigation(_) => "SiteFailure/navigation".into(),
+            FailureCause::Reported => "SiteFailure/reported".into(),
+        };
+        Stop::new(status, rule, format!("Could not complete the task after {}", self.message()))
     }
 }
 
