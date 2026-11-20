@@ -1375,6 +1375,11 @@ impl CdpPage {
                 "screenshots are unavailable for scoped documents".into(),
             ));
         }
+        if self.session.images_held() {
+            return Err(BrowserError::ScreenshotsUnavailable(
+                "screenshots are withheld: the run holds an address credential, which a page can paint".into(),
+            ));
+        }
         let client = self.session.client()?;
         let session_id = self.session.active_session_id()?;
         let metrics = client.send("Page.getLayoutMetrics", json!({}), Some(&session_id)).await?;
@@ -2006,6 +2011,10 @@ impl Page for CdpPage {
 
     fn withhold_frames(&self, withheld: bool) {
         CdpPage::withhold_frames(self, withheld);
+    }
+
+    fn hold_images(&self) {
+        self.session.hold_images();
     }
 
     fn hand_over_tab(&self) {

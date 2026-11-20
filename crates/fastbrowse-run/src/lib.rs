@@ -953,15 +953,29 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
 /// Open `start`, pursue `task`, and return what the run could prove.
 /// Register the credentials in every address the caller wrote, so each is masked wherever the task or context is shown
 /// to a model, a trace or a frame, and say whether there were any.
-/// A recipe's start is the caller's too: a run replaying one opens it, and it was never registered (#1381).
-fn learn_credentials(trace: &Trace, task: &RunTask, recipe: Option<&str>) -> bool {
+/// A recipe is the caller's too: its start is refused at load when it carries credentials, but a step's link, label or
+/// text can write an address that a replay shows a model (#1381).
+fn learn_credentials(
+    trace: &Trace,
+    task: &RunTask,
+    recipe: Option<&fastbrowse_core::recipe::Recipe>,
+    secrets: &[String],
+) -> bool {
     let Some(redactor) = trace.redactor() else { return false };
+    // Every string the caller chose that a model, a trace or a saved recipe can be shown, names as much as values: an
+    // input named with an address reached Jev as a question key (#1381).
+    let given = serde_json::json!({
+        "task": task.task,
+        "start": task.start,
+        "context": task.context,
+        "inputs": task.inputs,
+        "attachments": task.attachments.iter().map(|attachment| &attachment.name).collect::<Vec<_>>(),
+        "output_schema": task.output_schema,
+        "recipe": recipe,
+        "secrets": secrets,
+    });
     let mut redactor = redactor.lock().unwrap();
-    let inputs = task.inputs.iter().flat_map(|inputs| inputs.values());
-    let texts = [task.start.as_deref(), recipe, Some(task.task.as_str()), task.context.as_deref()];
-    for text in texts.into_iter().flatten().chain(inputs.map(String::as_str)) {
-        redactor.register_address(text);
-    }
+    redactor.register_tree(&given);
     redactor.holds_credentials()
 }
 
@@ -1017,8 +1031,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     let http = http.with_trace(trace);
     // Learned before anything reads the task: the consent check, the extension's tab group and the first frame all
     // come before the agent, and each took an address's credentials as the caller wrote them (#1381).
-    let credentialed =
-        learn_credentials(&http.trace, &task, recipe.as_ref().and_then(|recipe| recipe.start.as_deref()));
+    let secret_names: Vec<String> =
+        host.secrets.iter().flat_map(|secrets| secrets.available()).map(|secret| secret.name).collect();
+    let credentialed = learn_credentials(&http.trace, &task, recipe.as_ref(), &secret_names);
     let (warning_task, warning_tx, warning_stop_tx) = host
         .on_event
         .clone()
@@ -1175,7 +1190,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         // Held from the first frame to the end of the run: a frame cannot be checked for a value as it arrives, and
         // the start page's address bar and content can show the credentials it was opened with.
         if credentialed {
-            opened.seal_frames();
+            opened.hold_images();
         }
         opened.open().await?;
         // A cloud or headless browser has no window on this machine to draw over.
@@ -1645,7 +1660,7 @@ mod tests {
             context: Some("The CRM is https://ana:c0ntext-pw@crm.test/".into()),
             ..RunTask::default()
         };
-        assert!(learn_credentials(&trace, &task, None));
+        assert!(learn_credentials(&trace, &task, None, &[]));
         let group = extension_address(Path::new("/hosts/a"), &task.task, &trace);
         assert_eq!(
             group.split_once('#').map(|(_, name)| name),
@@ -1663,7 +1678,7 @@ mod tests {
             assert!(!shown.contains("ana:"), "{shown}");
         }
         let clean = RunTask { task: "Read https://shop.test/orders".into(), ..RunTask::default() };
-        assert!(!learn_credentials(&Trace::collecting().redacting(Arc::default()), &clean, None));
+        assert!(!learn_credentials(&Trace::collecting().redacting(Arc::default()), &clean, None, &[]));
         // A caller's JSON is decoded before anything reads it, so an `@` it escaped is an `@` here, and a context
         // that is itself JSON keeps its addresses masked within it.
         let decoded: RunTask = serde_json::from_str(
@@ -1671,13 +1686,45 @@ mod tests {
         )
         .unwrap();
         let json = Trace::collecting().redacting(Arc::default());
-        assert!(learn_credentials(&json, &decoded, None));
+        assert!(learn_credentials(&json, &decoded, None, &[]));
         let context = redacted(&json, decoded.context.as_deref().unwrap_or_default());
         assert_eq!(context, r#"{"crm": "https://[secret:address_credentials]@crm.test/"}"#);
         // A replayed recipe's start opens the run as a caller's start does.
         let replayed = Trace::collecting().redacting(Arc::default());
-        assert!(learn_credentials(&replayed, &clean, Some("https://ops:r3cipe-pw@shop.test/")));
+        let recipe = fastbrowse_core::recipe::Recipe {
+            version: fastbrowse_core::recipe::RECIPE_VERSION,
+            task: clean.task.clone(),
+            start: Some("https://ops:r3cipe-pw@shop.test/".into()),
+            steps: Vec::new(),
+        };
+        assert!(learn_credentials(&replayed, &clean, Some(&recipe), &[]));
         assert!(!redacted(&replayed, "it said r3cipe-pw").contains("r3cipe-pw"));
+    }
+
+    /// A name the caller chose is its text as much as a value: an input named with an address reached Jev as an
+    /// unmasked question key, and an output field, an attachment or a secret named so would too (#1381).
+    #[test]
+    fn test_every_name_a_caller_chooses_is_learnt_from() {
+        let names = [
+            ("input", r#"{"task": "Sign up", "inputs": {"https://ops:1nput-pw@h.test/": "alice"}}"#),
+            (
+                "attachment",
+                r#"{"task": "Send it", "attachments": [{"name": "https://ops:1nput-pw@h.test/", "mime_type": "text/plain", "content": ""}]}"#,
+            ),
+            (
+                "output field",
+                r#"{"task": "Read it", "output_schema": {"type": "object", "properties": {"https://ops:1nput-pw@h.test/": {"type": "string"}}}}"#,
+            ),
+        ];
+        for (named, written) in names {
+            let trace = Trace::collecting().redacting(Arc::default());
+            let task: RunTask = serde_json::from_str(written).unwrap();
+            assert!(learn_credentials(&trace, &task, None, &[]), "{named}");
+            assert!(!redacted(&trace, "1nput-pw").contains("1nput-pw"), "{named}");
+        }
+        let trace = Trace::collecting().redacting(Arc::default());
+        let clean = RunTask { task: "Sign in".into(), ..RunTask::default() };
+        assert!(learn_credentials(&trace, &clean, None, &["https://ops:1nput-pw@h.test/".into()]), "secret");
     }
 
     #[tokio::test]

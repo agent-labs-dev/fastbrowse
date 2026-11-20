@@ -12,6 +12,35 @@ use fastbrowse_core::page::{Block, Capture, Control, Dialog, Media, Observation,
 use fastbrowse_core::py::sha256_hex;
 use fastbrowse_core::safety::Redactor;
 
+/// The observation's code-made names, kept whole by the run's model boundary (`Redactor::keep`) as they are here: the
+/// boundary masks every string a request holds, and a password `e1` or `p` masked inside a control's id there left
+/// Jev picking an option no control has.
+pub(super) fn keep_code_made(redactor: &mut Redactor, observation: &Observation) {
+    let mut kept = vec![&observation.page_key, &observation.document_key];
+    for control in &observation.controls {
+        kept.push(&control.id);
+        kept.extend(
+            [&control.frame_id, &control.form_id, &control.shown_by, &control.input_type].into_iter().flatten(),
+        );
+        kept.push(&control.role);
+    }
+    for tab in &observation.tabs {
+        kept.push(&tab.id);
+        kept.extend(&tab.opener_id);
+    }
+    kept.extend(observation.media.iter().map(|media| &media.kind));
+    kept.extend(observation.dialog.iter().map(|dialog| &dialog.kind));
+    kept.into_iter().for_each(|id| redactor.keep(id));
+}
+
+/// A capture's code-made names, kept as an observation's are (`keep_code_made`).
+pub(super) fn keep_capture_ids(redactor: &mut Redactor, capture: &Capture) {
+    for block in &capture.blocks {
+        redactor.keep(&block.source_id);
+        block.frame_id.iter().for_each(|id| redactor.keep(id));
+    }
+}
+
 pub(super) fn observation(redactor: &Redactor, observation: &Observation) -> Observation {
     let mask = |value: &str| redactor.mask(value);
     let mask_opt = |value: &Option<String>| value.as_deref().map(mask);

@@ -5,7 +5,7 @@ package dev.agentlabs.fastbrowse.protocol;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * @param frame A PNG of the page this step acted on, when {@code Config.step_frames} asked for one. None when it did not, and also when a resolved secret was showing as page text: pixels cannot be masked the way text is.
+ * @param frame A PNG of the page this step acted on, when {@code Config.step_frames} asked for one. None when it did not, and also when a resolved secret was showing as page text or the run knew an address credential: pixels cannot be masked the way text is, and a page can paint its address where no text check sees it.
  */
 public record StepEvent(
     @JsonProperty("type") String type,

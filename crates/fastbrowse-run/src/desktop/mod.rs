@@ -92,6 +92,8 @@ pub struct DeskpilotPage {
     observed: Mutex<Option<Element>>,
     /// Set while the window may show a resolved secret, which a frame cannot mask: no frame is filmed then.
     withheld: AtomicBool,
+    /// Set once the run holds an address credential: no frame is filmed and no screenshot taken to its end.
+    held: AtomicBool,
     /// The latest frame, taken when the app opens or after an action, held until the next observation shows no
     /// secret: the action may be what put one on screen, and only that reading can tell.
     pending: Mutex<Option<Vec<u8>>>,
@@ -178,6 +180,7 @@ impl DeskpilotPage {
             film: None,
             observed: Mutex::new(None),
             withheld: AtomicBool::new(false),
+            held: AtomicBool::new(false),
             pending: Mutex::new(None),
         })
     }
@@ -735,6 +738,11 @@ impl Page for DeskpilotPage {
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         Box::pin(async move {
+            if self.held.load(Ordering::SeqCst) {
+                return Err(BrowserError::ScreenshotsUnavailable(
+                    "screenshots are withheld: the run holds an address credential, which a window can show".into(),
+                ));
+            }
             // Only the model's shots bind its points: a film frame taken since does not move them to another shot.
             let (shot, png, _) = self.shoot().await?;
             *self.shot.lock().unwrap() = Some(shot);
@@ -771,7 +779,13 @@ impl Page for DeskpilotPage {
 
     /// Holds back the film's frames while the window may show a secret; the recording keeps its last clean frame.
     /// Each observation says whether it shows one, which films or drops the frame taken after the action before it.
+    fn hold_images(&self) {
+        self.held.store(true, Ordering::SeqCst);
+        self.withhold_frames(true);
+    }
+
     fn withhold_frames(&self, withheld: bool) {
+        let withheld = withheld || self.held.load(Ordering::SeqCst);
         self.withheld.store(withheld, Ordering::SeqCst);
         let pending = self.pending.lock().unwrap().take();
         if let (false, Some(png), Some(film)) = (withheld, pending, &self.film) {

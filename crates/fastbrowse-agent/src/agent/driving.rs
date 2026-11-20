@@ -163,6 +163,7 @@ impl Agent {
                 }
                 None => {
                     self.resolve_answer_intent(state).await?;
+                    self.forget_looks(state);
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
                     context.check_surface = state.surface_judgement(&page).is_none();
                     context.list_read = if list_walk.is_some() {
@@ -1600,7 +1601,11 @@ impl Agent {
     pub(super) async fn observe(&self) -> Step<Observation> {
         let observation = self.trace.phase("observe", self.page.observe()).await?;
         let revealed = self.reveals(&observation);
-        let masked = super::masking::observation(&self.redactor(), &observation);
+        let masked = {
+            let mut redactor = self.redactor();
+            super::masking::keep_code_made(&mut redactor, &observation);
+            super::masking::observation(&redactor, &observation)
+        };
         let mut seen = self.seen();
         seen.raw = Some(observation);
         seen.secret_on_screen = revealed;
@@ -1628,7 +1633,9 @@ impl Agent {
         if let Ok(shown) = serde_json::to_value(&capture) {
             self.learn_credentials_shown(&shown);
         }
-        Ok(super::masking::capture(&self.redactor(), &capture))
+        let mut redactor = self.redactor();
+        super::masking::keep_capture_ids(&mut redactor, &capture);
+        Ok(super::masking::capture(&redactor, &capture))
     }
 
     /// What a step's question shows Jev besides text. A page showing pixels, a chart or a control drawn as pixels, has
@@ -1676,18 +1683,44 @@ impl Agent {
     /// No image while a secret shows as page text: pixels cannot be masked like text. Typed fields are masked by the
     /// page itself.
     pub(super) async fn screenshots(&self) -> Step<Vec<Vec<u8>>> {
-        if self.seen().secret_on_screen {
-            return Ok(Vec::new());
+        Ok(self.image(Shot::Model).await?.into_iter().collect())
+    }
+
+    /// Whether no image of the page may leave the run: from the first address credential it learns to its end, as
+    /// its live frames and recording are held (`learn_credentials`). A page can paint its own address, the password
+    /// in it, on a canvas, where no text reading finds it.
+    pub(super) fn images_withheld(&self) -> bool {
+        self.redactor().holds_credentials()
+    }
+
+    /// The one place an image of the page is taken for anything that leaves the run: a model's screenshot, a step
+    /// frame, the final frame and every screenshot artifact. None once the run holds an address credential, and while
+    /// a resolved secret may show; a frame is also refused from the first secret typed (`frame`).
+    async fn image(&self, shot: Shot) -> Step<Option<Vec<u8>>> {
+        if self.images_withheld() {
+            return Ok(None);
+        }
+        let refused = match shot {
+            Shot::Model => self.seen().secret_on_screen,
+            // A reading cannot show what a frame will: the page may echo the secret as pixels after it.
+            Shot::Frame => self.seen().secret_typed,
+        };
+        if refused {
+            return Ok(None);
         }
         // A delayed page update can reveal a secret after the decision's observation. The glance and the image are
-        // taken together, and the image is dropped unseen when the glance shows a secret.
-        let (now, image) = tokio::join!(self.trace.phase("screenshot", self.page.glance()), self.page.screenshot());
-        if self.reveals(&now?) {
-            return Ok(Vec::new());
+        // taken together, and the image is dropped unseen when the glance shows a secret or a credential it brings.
+        let phase = match shot {
+            Shot::Model => "screenshot",
+            Shot::Frame => "frame",
+        };
+        let (now, image) = tokio::join!(self.trace.phase(phase, self.page.glance()), self.page.screenshot());
+        if self.reveals(&now?) || self.images_withheld() {
+            return Ok(None);
         }
         match image {
-            Ok(image) => Ok(vec![image]),
-            Err(BrowserError::ScreenshotsUnavailable(_)) => Ok(Vec::new()),
+            Ok(image) => Ok(Some(image)),
+            Err(BrowserError::ScreenshotsUnavailable(_)) => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
@@ -1762,19 +1795,7 @@ impl Agent {
     /// The check is made against a fresh reading of the page rather than the last observation, which was taken before
     /// the action ran, and the action may be the one that put the secret there.
     pub(super) async fn frame(&self) -> Step<Option<Vec<u8>>> {
-        // A reading cannot show what a frame will: the page may echo the secret as pixels after it.
-        if self.seen().secret_typed {
-            return Ok(None);
-        }
-        let now = self.trace.phase("frame", self.page.glance()).await?;
-        if self.reveals(&now) {
-            return Ok(None);
-        }
-        match self.trace.phase("frame", self.page.screenshot()).await {
-            Ok(image) => Ok(Some(image)),
-            Err(BrowserError::ScreenshotsUnavailable(_)) => Ok(None),
-            Err(error) => Err(error.into()),
-        }
+        self.image(Shot::Frame).await
     }
 
     /// Whether a resolved secret shows on the page; live and recorded frames are held back while one does.
@@ -1899,6 +1920,15 @@ fn judge_site(state: &mut RunState, observation: &Observation, decision: &Decisi
     } else if reported {
         state.site_failure = None;
     }
+}
+
+/// What an image of the page is taken for (`Agent::image`).
+#[derive(Clone, Copy)]
+enum Shot {
+    /// For a model to look at.
+    Model,
+    /// For a caller: a step frame or the final frame.
+    Frame,
 }
 
 #[cfg(test)]

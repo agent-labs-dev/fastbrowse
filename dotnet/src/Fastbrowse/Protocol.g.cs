@@ -953,7 +953,8 @@ public sealed record StepEvent
 
     /// <summary>
     /// A PNG of the page this step acted on, when <c>Config.step_frames</c> asked for one. None when it did not,
-    /// and also when a resolved secret was showing as page text: pixels cannot be masked the way text is.
+    /// and also when a resolved secret was showing as page text or the run knew an address credential: pixels
+    /// cannot be masked the way text is, and a page can paint its address where no text check sees it.
     /// </summary>
     [JsonPropertyName("frame")]
     public string? Frame { get; init; }

@@ -59,6 +59,10 @@ use crate::verification::RecordSchema;
 
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
 const ENDING_FRAME_SECONDS: f64 = 6.0;
+
+/// The page fact Jev is given once a run holds an address credential and takes no image of the page
+/// (`Agent::images_withheld`): a rule that overrides what Jev is shown is stated to it.
+pub(super) const IMAGES_WITHHELD: &str = "No screenshot of any page is shown for the rest of this run: the run was given an address with credentials, and a page can show its address in pixels that cannot be masked. Judge from the page's text.";
 /// Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one.
 const REDRAW_WATCH_SECONDS: f64 = 10.0;
 
@@ -257,18 +261,32 @@ impl Agent {
 
     /// Register the credentials of every address in `texts` (`Redactor::register_address`: a text that is one address
     /// is parsed as the browser parses it, and every address in prose is found by scanning), and from the first,
-    /// hold live frames and the recording to the end of the run: Chrome drops the userinfo from `location.href` but
+    /// hold every image of the page to the end of the run, screenshots, step frames, live frames and the recording
+    /// alike (`Agent::image`, `PageLike::hold_images`): Chrome drops the userinfo from `location.href` but
     /// keeps it in `document.URL`, so a page can draw its own address, credentials and all, where no reading of its
     /// text looks, and a page can echo it after the reading that last found it clean.
     fn learn_credentials<'a>(&self, texts: impl IntoIterator<Item = &'a str>) {
+        let texts: Vec<Value> = texts.into_iter().map(Value::from).collect();
+        self.learn_credentials_in(&Value::Array(texts));
+    }
+
+    /// `learn_credentials` for every string in `given`, map keys included (`Redactor::register_tree`).
+    fn learn_credentials_in(&self, given: &Value) {
         let mut redactor = self.redactor();
-        for text in texts {
-            redactor.register_address(text);
-        }
+        redactor.register_tree(given);
         let held = redactor.holds_credentials();
         drop(redactor);
         if held {
-            self.page.withhold_frames(true);
+            self.page.hold_images();
+        }
+    }
+
+    /// Drop the cards of controls the run's history keeps, once the run holds an address credential: taken before it
+    /// was learnt, they are images of pages that may show it, and no image of a page leaves such a run.
+    pub(super) fn forget_looks(&self, state: &mut RunState) {
+        if self.images_withheld() {
+            state.look = None;
+            state.opened.iter_mut().chain(state.history.iter_mut()).for_each(|entry| entry.look = None);
         }
     }
 
@@ -466,15 +484,21 @@ impl Agent {
         // Registered before anything is asked or traced, from everything the caller handed the run: the runner does
         // the same before it builds the browser, and an embedder calling the agent directly reaches only this. A run
         // resumed in another agent is shown its first run's start, task and context.
+        // Names count as much as values: an input named with an address reached Jev as a question key (#1381).
         let carried = resume.as_ref().map(|resume| &resume.state);
-        let given = [Some(task), options.start.as_deref(), options.context.as_deref()]
-            .into_iter()
-            .flatten()
-            .chain(options.inputs.values().map(String::as_str))
-            .chain(carried.and_then(|state| state.caller_start.as_deref()))
-            .chain(carried.map(|state| state.raw_task.as_str()))
-            .chain(carried.and_then(|state| state.raw_context.as_deref()));
-        self.learn_credentials(given);
+        let secrets: Vec<String> =
+            self.secrets.iter().flat_map(|secrets| secrets.available()).map(|secret| secret.name).collect();
+        self.learn_credentials_in(&json!({
+            "task": task,
+            "start": options.start,
+            "context": options.context,
+            "inputs": options.inputs,
+            "attachments": options.attachments.iter().map(|attachment| &attachment.name).collect::<Vec<_>>(),
+            "output_fields": options.output_schema.iter().flat_map(|schema| schema.fields.keys()).collect::<Vec<_>>(),
+            "recipe": options.recipe,
+            "secrets": secrets,
+            "carried": carried.map(|state| [state.caller_start.as_deref(), Some(state.raw_task.as_str()), state.raw_context.as_deref()]),
+        }));
         let prepared = match resume {
             Some(Resume { state, url: Some(url) }) => {
                 self.trace.phase("open", self.page.navigate(&url, None)).await?;
@@ -848,11 +872,15 @@ impl Agent {
                 _ => None,
             };
         if requested && result.final_frame.is_none() && result.status == Status::Complete {
-            result.end_as(
-                Status::Unverified,
-                "FinalFrame/uncaptured".into(),
-                "The requested final screenshot could not be captured.".into(),
-            );
+            let (code, message) = if self.images_withheld() {
+                (
+                    "FinalFrame/withheld",
+                    "The requested final screenshot was not taken: the run was given an address with credentials, and no image of a page leaves such a run.",
+                )
+            } else {
+                ("FinalFrame/uncaptured", "The requested final screenshot could not be captured.")
+            };
+            result.end_as(Status::Unverified, code.into(), message.into());
         }
         result
     }
@@ -1083,6 +1111,10 @@ impl Agent {
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
         let mut page_facts = Self::page_facts(state, observation, self.page.unread());
+        // Told, so a page drawn in pixels is not judged from an image Jev was never sent.
+        if self.images_withheld() {
+            page_facts.push(IMAGES_WITHHELD.into());
+        }
         let page_origin = origin_of(&observation.url);
         let credential_origins: BTreeSet<_> = observation
             .controls
