@@ -11,6 +11,7 @@ import gc
 import json
 import time
 import warnings
+import zlib
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -306,16 +307,25 @@ def unretrieved(loop: asyncio.AbstractEventLoop) -> Generator[list[dict]]:
         loop.set_exception_handler(None)
 
 
-async def trickling(stop: asyncio.Event, closed: asyncio.Event) -> tuple[asyncio.Server, int]:
+async def trickling(stop: asyncio.Event, closed: asyncio.Event, *, gzip: bool = False) -> tuple[asyncio.Server, int]:
     """A server that answers every request with a body it sends a chunk at a time until `stop` is set, and sets
-    `closed` when a client hangs up."""
+    `closed` when a client hangs up. With `gzip`, the body is gzip whose chunks after the first decode to nothing."""
 
     async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             await reader.readuntil(b"\r\n\r\n")
-            writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+            if gzip:
+                writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Encoding: gzip\r\n\r\n")
+                compressor = zlib.compressobj(wbits=31)
+                head = compressor.compress(b"x") + compressor.flush(zlib.Z_SYNC_FLUSH)
+                writer.write(b"%x\r\n%s\r\n" % (len(head), head))
+                # An empty stored DEFLATE block: valid gzip data that decodes to no bytes.
+                chunk = b"5\r\n\x00\x00\x00\xff\xff\r\n"
+            else:
+                writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                chunk = b"1\r\nx\r\n"
             while not stop.is_set():
-                writer.write(b"1\r\nx\r\n")
+                writer.write(chunk)
                 await writer.drain()
                 await asyncio.sleep(0.05)
         except ConnectionError:
@@ -363,9 +373,10 @@ async def test_a_request_waits_for_a_connection_no_longer_than_its_timeout() -> 
         await holding
 
 
-async def test_a_dropped_request_stops_reading_its_answer() -> None:
+@pytest.mark.parametrize("gzip", [False, True], ids=["plain", "gzip"])
+async def test_a_dropped_request_stops_reading_its_answer(gzip: bool) -> None:
     stop, closed = asyncio.Event(), asyncio.Event()
-    server, port = await trickling(stop, closed)
+    server, port = await trickling(stop, closed, gzip=gzip)
     async with server, httpx.AsyncClient(limits=httpx.Limits(max_connections=1)) as client:
         sent = asyncio.ensure_future(
             native._http(client)("GET", f"http://127.0.0.1:{port}/", [], b"", None, 5.0, Handoff())
@@ -373,7 +384,7 @@ async def test_a_dropped_request_stops_reading_its_answer() -> None:
         await asyncio.sleep(0.3)
         sent.cancel()
         # The body keeps coming, a chunk every 50 ms, well inside the request's timeout; read to its end, it would hold
-        # the connection until the server stops.
+        # the connection until the server stops. Gzip chunks that decode to nothing still count as chunks.
         async with asyncio.timeout(2):
             await closed.wait()
         stop.set()

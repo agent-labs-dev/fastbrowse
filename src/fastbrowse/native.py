@@ -17,7 +17,7 @@ import sys
 import time
 import warnings
 import weakref
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any, ClassVar, NoReturn, Protocol
 
@@ -402,6 +402,32 @@ def _settled(sent: asyncio.Task[_Sent]) -> None:
         sent.exception()
 
 
+class _Abandoned(Exception):
+    """Nobody waits for the answer being read any longer."""
+
+
+class _Waited(httpx.AsyncByteStream):
+    """An answer's body as it comes off the network, which stops once nobody waits for it.
+
+    httpx yields decoded bytes, and a compressed chunk can decode to none while it resets the read timeout, so a check
+    between decoded chunks never runs while such chunks keep coming, and the connection stays held. Each network chunk
+    is checked here instead, before httpx decodes it.
+    """
+
+    def __init__(self, stream: httpx.AsyncByteStream, waited: asyncio.Event) -> None:
+        self.stream = stream
+        self.waited = waited
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self.stream:
+            if not self.waited.is_set():
+                raise _Abandoned
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self.stream.aclose()
+
+
 def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
     async def exchange(
         method: str,
@@ -418,17 +444,22 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
             request = client.build_request(method, url, headers=headers, content=body or None, timeout=silence)
             # The core follows redirects itself, checking each against the run's allowed origins.
             response = await client.send(request, stream=True, follow_redirects=False)
+            # An answer nobody waits for any longer is not worth its connection. An AsyncClient's answer always
+            # streams asynchronously; a sync stream would fail in aiter_bytes below as it does without this.
+            if isinstance(response.stream, httpx.AsyncByteStream):
+                response.stream = _Waited(response.stream, waited)
             try:
                 read = bytearray()
                 async for chunk in response.aiter_bytes():
                     read.extend(chunk)
-                    # One byte past the bound shows the core it was passed, without the rest landing in memory. An
-                    # answer nobody waits for any longer is not worth its connection.
-                    if (max_bytes is not None and len(read) > max_bytes) or not waited.is_set():
+                    # One byte past the bound shows the core it was passed, without the rest landing in memory.
+                    if max_bytes is not None and len(read) > max_bytes:
                         break
                 content = bytes(read if max_bytes is None else read[: max_bytes + 1])
             finally:
                 await response.aclose()
+        except _Abandoned:
+            return ("transient", "Abandoned")
         except (httpx.PoolTimeout, httpx.ConnectTimeout, httpx.ConnectError) as exc:
             # httpx raises these before the request has a connection: waiting for one from the pool, or opening one,
             # which httpcore maps from its TCP connect and TLS handshake alone. No byte of the request was written, so
@@ -466,9 +497,9 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
         new connection, which stays CONNECTING with no request (encode/httpcore#1093), between connecting and sending,
         which leaves it NEW, or while it closes a response, whose shield holds against anyio's cancellation but not
         asyncio's, which leaves it ACTIVE. Each holds a slot of the pool for good, until every later request on the
-        client raises PoolTimeout. A request httpx has been handed is sent as soon as it connects, and billed whether
-        or not its answer is read; once nobody waits for it, it stops at its next body chunk, so it holds its
-        connection for at most one more silence.
+        client raises PoolTimeout. A request httpx has been handed is sent as soon as it connects, and billed whether or
+        not its answer is read; once nobody waits for it, it stops at its next body chunk off the network, whether or
+        not it decodes to any bytes, so it holds its connection for at most one more silence.
         """
         connections = _connections(client, url)
         if connections is not None:
