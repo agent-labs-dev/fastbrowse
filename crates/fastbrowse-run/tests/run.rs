@@ -1605,6 +1605,8 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
     let checked = Arc::new(Mutex::new(Vec::<String>::new()));
     let until_seen = checked.clone();
     let recording = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("canary-{}.mp4", std::process::id()));
+    // A recording is refused without ffmpeg, which CI's rust job lacks; the other sinks are checked either way.
+    let records = fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_some();
     let trace = fastbrowse_core::telemetry::Trace::collecting();
     let jev: Arc<dyn DecisionClient> =
         Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(vec![fastbrowse_agent::scripted::Step {
@@ -1642,7 +1644,7 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
         ),
         start: Some(format!("http://ops:{head}\t{tail}@127.0.0.1:{port}/")),
         context: Some(format!(r#"{{"crm": "http://ops:{context_pw}@127.0.0.1:{port}/crm"}}"#)),
-        record: Some(recording.clone()),
+        record: records.then(|| recording.clone()),
         launch: true,
         browser: true,
         ..RunTask::default()
