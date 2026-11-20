@@ -1032,6 +1032,21 @@ async fn test_page_ready_is_told_once_the_opening_page_is_open_and_only_then() {
     }
 }
 
+/// Chrome keeps a start address's userinfo in its tab's address while `location.href` drops it, and the browser never
+/// draws an address on the page: matched there, the start's credentials withheld every screenshot and frame of the
+/// run (#1381). Only the page showing them holds images back.
+#[test]
+fn test_a_start_address_credential_in_a_tab_address_withholds_no_image() {
+    const START: &str = "https://shopper:s3cr3t-pw@shop.test/orders";
+    let agent = agent();
+    agent.redactor().register_address_credentials("start_credentials", START);
+    let tab = fastbrowse_core::page::Tab { url: START.into(), ..tab("t1", true) };
+    let page = Observation { tabs: vec![tab], ..at("https://shop.test/orders", &[]) };
+    assert!(!agent.reveals(&page));
+    let echoed = Observation { viewport_text: format!("You opened {START}"), ..page };
+    assert!(agent.reveals(&echoed));
+}
+
 #[test]
 fn test_the_trace_keeps_each_page_a_step_saw_without_its_secrets() {
     let trace = Trace::collecting();
@@ -2165,9 +2180,12 @@ async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opene
 
 /// Answers the opening at `landed` whatever address it was sent to, as a server that redirects does, and shows a page
 /// with nothing on it to act on, so a run's first decision is DONE.
+#[derive(Default)]
 struct Redirecting {
     landed: &'static str,
     navigated: Mutex<Vec<String>>,
+    /// Each time frames were withheld or let through, with how many navigations had been asked by then.
+    withheld: Mutex<Vec<(usize, bool)>>,
 }
 
 impl Page for Redirecting {
@@ -2206,7 +2224,10 @@ impl Page for Redirecting {
         Box::pin(async { Err(BrowserError::NeedsBrowser("no pixels".into())) })
     }
 
-    fn withhold_frames(&self, _: bool) {}
+    fn withhold_frames(&self, withheld: bool) {
+        let navigations = self.navigated.lock().unwrap().len();
+        self.withheld.lock().unwrap().push((navigations, withheld));
+    }
 
     fn address(&self) -> BoxFuture<'_, PageResult<String>> {
         let landed = self.landed.to_string();
@@ -2250,7 +2271,7 @@ async fn test_the_done_check_is_shown_where_the_opening_landed_and_the_browser_r
         ("a run opened with a redirect", None),
         ("a run resumed in the browser after a fetch", Some(super::Resume { state: fetched, url: None })),
     ] {
-        let page = Arc::new(Redirecting { landed: LANDED, navigated: Mutex::default() });
+        let page = Arc::new(Redirecting { landed: LANDED, ..Default::default() });
         // No to every other yes-or-no question, such as whether the page is a bot check.
         let jev = Arc::new(DoneCheckJev::new(Default::default(), 0.0, "done"));
         let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
@@ -2305,23 +2326,86 @@ impl LLMClient for SentToLLM {
 
 /// A caller's start address carrying a user and password was shown to Jev and the LLM as given, on every step and in
 /// the done check (#1381): only typed secrets were masked. The browser still opens the address as given, and the
-/// browser's own report of it, credentials and all, is masked too.
+/// browser's own report of it, credentials and all, is masked too, as is everything the run writes out. A run fetched
+/// over HTTP and resumed in another agent's browser carries the start with it, and is masked the same way.
 #[tokio::test]
-async fn test_a_start_address_with_credentials_reaches_no_model_unmasked() {
+async fn test_a_start_address_with_credentials_reaches_no_model_or_output_unmasked() {
     const START: &str = "https://shopper:s3cr3t-pw@shop.test/orders";
-    let page = Arc::new(Redirecting { landed: START, navigated: Mutex::default() });
-    let jev = Arc::new(SentToJev(DoneCheckJev::new(Default::default(), 0.0, "done"), Mutex::default()));
-    let llm = Arc::new(SentToLLM::default());
-    let agent = Agent::new(page.clone(), jev.clone(), llm.clone());
-    let options = super::RunOptions { start: Some(START.into()), ..Default::default() };
-    let _ = agent.run("Tell me what the orders page says", options).await;
-    assert_eq!(page.navigated.lock().unwrap().first().map(String::as_str), Some(START));
-    let jev_sent = jev.1.lock().unwrap();
-    let llm_sent = llm.0.lock().unwrap();
-    assert!(jev_sent.iter().any(|sent| sent.contains("@shop.test/orders")), "the address is shown: {jev_sent:?}");
-    assert!(llm_sent.iter().any(|sent| sent.contains("@shop.test/orders")), "the address is shown: {llm_sent:?}");
-    for sent in jev_sent.iter().chain(llm_sent.iter()) {
-        assert!(!sent.contains("s3cr3t-pw") && !sent.contains("shopper"), "{sent}");
+    // The task writes the start out again, encoded as the start does not: the same credentials, which parsing finds.
+    const TASK: &str = "Tell me what https://shopper:s3cr3t%2Dpw@shop.test/orders says";
+    let fetch =
+        Agent::new(Arc::new(Unfetchable::default()), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let _ = fetch.run(TASK, super::RunOptions { start: Some(START.into()), ..Default::default() }).await;
+    let Some(super::Resume { state: mut fetched, url: None }) = fetch.resume() else {
+        panic!("a fetch that needs a browser hands the run on with no page open")
+    };
+    // Judged by the fetch's scripted Jev; judged again here, the task reads as the run opened in the browser does.
+    fetched.output_intent = super::state::OutputIntent::Unknown;
+    fetched.output_answers = None;
+    let resumed = super::Resume { state: fetched, url: None };
+    for (case, resume) in [("a run opened in the browser", None), ("a run resumed after a fetch", Some(resumed))] {
+        let page = Arc::new(Redirecting { landed: START, ..Default::default() });
+        let jev = Arc::new(SentToJev(DoneCheckJev::new(Default::default(), 0.0, "done"), Mutex::default()));
+        let llm = Arc::new(SentToLLM::default());
+        let events: Arc<Mutex<Vec<Event>>> = Arc::default();
+        let sink = events.clone();
+        let on_event: EventHandler = Arc::new(move |event: Event| {
+            sink.lock().unwrap().push(event);
+            Box::pin(async {})
+        });
+        let trace = Trace::collecting();
+        let agent =
+            Agent::new(page.clone(), jev.clone(), llm.clone()).with_events(Some(on_event)).with_trace(trace.clone());
+        let start_given = resume.is_none();
+        let start = start_given.then(|| START.to_string());
+        let result =
+            agent.run(TASK, super::RunOptions { start, resume, ..Default::default() }).await.expect("a result");
+        assert_eq!(page.navigated.lock().unwrap().first().map(String::as_str), Some(START), "{case}");
+        // The page can draw `document.URL`, credentials and all, before the first observation reads it.
+        assert_eq!(page.withheld.lock().unwrap().first(), Some(&(0, true)), "{case}: frames shown before the open");
+        let jev_sent = jev.1.lock().unwrap().clone();
+        let llm_sent = llm.0.lock().unwrap().clone();
+        assert!(jev_sent.iter().any(|sent| sent.contains("@shop.test/orders")), "{case}: shown: {jev_sent:?}");
+        // A resumed run asked for its known pages before the handoff, so it asks the LLM nothing.
+        assert_eq!(
+            llm_sent.iter().any(|sent| sent.contains("@shop.test/orders")),
+            start_given,
+            "{case}: shown: {llm_sent:?}"
+        );
+        // Asked for pages to open, the LLM is told the bullets cannot be used, as `accept_start` discards them.
+        assert_eq!(
+            llm_sent.iter().any(|sent| sent.starts_with("KnownPages") && sent.contains("withheld from you")),
+            start_given,
+            "{case}: {llm_sent:?}"
+        );
+        let written = [
+            serde_json::to_string(&result).unwrap(),
+            serde_json::to_string(&trace.events()).unwrap(),
+            serde_json::to_string(&*events.lock().unwrap()).unwrap(),
+        ];
+        // The run took no step past its opening; a step on the start, recorded once the run has registered it, is
+        // what the run's result and step events would carry.
+        let step = StepResult {
+            index: 0,
+            operation: Operation::Navigate,
+            decided_by: Decider::Jev,
+            outcome: StepOutcome::Executed,
+            failure: None,
+            url: START.into(),
+            target: Some(START.into()),
+            confidence: None,
+            note: None,
+            facts: Vec::new(),
+            page_changed: None,
+            duration_ms: 0,
+            choices: Vec::new(),
+        };
+        agent.record_step(&mut run_state(), step, false, None).await.unwrap();
+        let Some(Event::Step(event)) = events.lock().unwrap().pop() else { panic!("{case}: no step event") };
+        assert_eq!(event.step.url, "https://[secret:start_credentials]@shop.test/orders", "{case}");
+        for sent in jev_sent.iter().chain(llm_sent.iter()).chain(&written) {
+            assert!(!sent.contains("s3cr3t") && !sent.contains("shopper"), "{case}: {sent}");
+        }
     }
 }
 

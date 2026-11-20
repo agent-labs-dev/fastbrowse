@@ -18,7 +18,7 @@ sig = "0b8636a01d265bb0"
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-core/src/safety.rs"
-sig = "2c921d6f449e70e8"
+sig = "77decd237f16da81"
 
 [[bindings]]
 doc = "blog/agent-credentials-scoped.md"

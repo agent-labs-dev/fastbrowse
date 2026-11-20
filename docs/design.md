@@ -507,7 +507,15 @@ out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, th
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from
 the agent, and handler failures are logged. A handler must honour cancellation: it runs on the caller's event
 loop, so one that swallows `CancelledError` keeps that loop alive and `asyncio.run` waits for it at shutdown. Live images and MP4 recordings are held back from the moment a secret is typed until the run ends, and whenever the page is read showing one;
-a recording holds its last clean frame meanwhile.
+a recording holds its last clean frame meanwhile. A run whose start address carries a user name or password holds them
+from its start until the first reading finds the page clean: Chrome keeps the credentials in `document.URL`, so a page
+can draw them before any reading. A page or tab address is not page text, so credentials in one hold nothing back.
+
+A start address's userinfo is masked in every address a model is shown or the run writes out, found by parsing the
+address, so any percent-encoding of it is caught. In other text only the credential is a secret: the password, or the
+user name when there is no password, as a token sent as a user name is. A user name that comes with a password is an
+identifier and stays readable. A page address a model proposes with a user name or password in it is discarded, and the
+known pages request is told so when the start carries them.
 
 ## Recipes
 
