@@ -12,6 +12,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
+- A run no longer sends rejected drafts back to gather evidence without limit. Each new page it reached renewed the recovery budget, so after a rejected draft a run kept rewriting and re-reading: one run took 53 steps and 455 Jev calls ($0.39, against $0.03 for the task) before the time limit stopped it. A rejected draft now spends a rewrite that new pages do not renew, and the run ends with what holds once they are spent.
 
 ## [0.12.0] - 2026-11-19
 

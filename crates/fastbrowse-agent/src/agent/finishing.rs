@@ -369,6 +369,12 @@ impl Agent {
             && !repeated
             && let Some(rejection) = rejection
         {
+            // New pages renew the recovery budget, so it cannot bound the rewrites: each rejected draft spends one that
+            // progress does not renew, and one past them is the recovery that runs out.
+            if state.rewrites >= self.config.stall.max_recoveries {
+                state.recoveries = state.recoveries.max(self.config.stall.max_recoveries);
+            }
+            state.rewrites += 1;
             let reason = rejection_reason(&rejection, false);
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()
