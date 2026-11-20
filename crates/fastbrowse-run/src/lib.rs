@@ -39,7 +39,7 @@ use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::Page;
 use fastbrowse_core::py::text::repr;
-use fastbrowse_core::telemetry::{Ledger, LedgerState};
+use fastbrowse_core::telemetry::{Ledger, LedgerState, Trace};
 use serde_json::{Map, Value};
 use tokio::sync::Notify;
 
@@ -777,12 +777,11 @@ async fn browser(
     let foreground = lazily || task.foreground;
     if task.wants_extension() {
         let (record, connected) = pick_host(&host_dir(), task.extension_browser.as_deref())?;
-        // The task after `#` names the run's tab group.
         let connection = BrowserConnection {
             attach: task.attach || task.target_match.is_some(),
             target_match: task.target_match.clone(),
             foreground,
-            ..BrowserConnection::new(format!("{SCHEME}{}#{}", record.display(), task.task), true)
+            ..BrowserConnection::new(extension_address(&record, &task.task, &http.trace), true)
         };
         return Ok((connection, Owned::Extension(Box::new(connected))));
     }
@@ -906,6 +905,32 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
 }
 
 /// Open `start`, pursue `task`, and return what the run could prove.
+/// Register the credentials in every address the caller wrote, so each is masked wherever the task or context is shown
+/// to a model, a trace or a frame, and say whether there were any.
+fn learn_credentials(trace: &Trace, task: &RunTask) -> bool {
+    let Some(redactor) = trace.redactor() else { return false };
+    let mut redactor = redactor.lock().unwrap();
+    let inputs = task.inputs.iter().flat_map(|inputs| inputs.values());
+    let texts = [task.start.as_deref(), Some(task.task.as_str()), task.context.as_deref()];
+    for text in texts.into_iter().flatten().chain(inputs.map(String::as_str)) {
+        redactor.register_credentials_in(text);
+    }
+    redactor.holds_credentials()
+}
+
+/// The extension's address for the host at `record`, the task after `#` naming the run's tab group. The name is shown
+/// in the browser and traced with the connection, so it carries the task as the trace writes it.
+fn extension_address(record: &Path, task: &str, trace: &Trace) -> String {
+    format!("{SCHEME}{}#{}", record.display(), redacted(trace, task))
+}
+
+/// `text` as the run's trace writes it out, its secrets and every address's credentials named.
+fn redacted(trace: &Trace, text: &str) -> String {
+    trace
+        .redactor()
+        .map_or_else(|| fastbrowse_core::safety::Redactor::default().redact(text), |r| r.lock().unwrap().redact(text))
+}
+
 pub async fn run_task(task: RunTask, host: Host) -> Result<RunResult, RunError> {
     // Boxed so a caller holds a pointer rather than the whole run, which an unoptimized build copies into each
     // caller's frame: inline, a run on a 2 MB thread stack overflowed it before the browser started.
@@ -943,6 +968,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     // The agent learns each secret, and its clients write the requests that may carry one, so they share a redactor.
     let trace = http.trace.clone().redacting(Arc::default());
     let http = http.with_trace(trace);
+    // Learned before anything reads the task: the consent check, the extension's tab group and the first frame all
+    // come before the agent, and each took an address's credentials as the caller wrote them (#1381).
+    let credentialed = learn_credentials(&http.trace, &task);
     let (warning_task, warning_tx, warning_stop_tx) = host
         .on_event
         .clone()
@@ -1041,7 +1069,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         // Asked while the browser starts: a task that answers a consent banner itself needs it left on the page.
         let consent = async {
             config.refuse_cookie_banners
-                && fastbrowse_agent::start::answers_consent_itself(&*jev, &task.task, &ledger).await.unwrap_or(false)
+                && fastbrowse_agent::start::answers_consent_itself(&*jev, &redacted(&http.trace, &task.task), &ledger)
+                    .await
+                    .unwrap_or(false)
         };
         let (started, answers_consent) = if task.wants_extension() {
             // The connected browser is found first, so with none the run ends before the consent check spends.
@@ -1088,6 +1118,11 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             },
         );
         session = Some(opened.clone());
+        // Held from the first frame to the end of the run: a frame cannot be checked for a value as it arrives, and
+        // the start page's address bar and content can show the credentials it was opened with.
+        if credentialed {
+            opened.seal_frames();
+        }
         opened.open().await?;
         // The cursor is drawn wherever someone can see the page: the user's own Chrome, a headed or attached local
         // browser, a cloud browser's live view, the frames a host streams, or a recording. A headless run nobody
@@ -1156,7 +1191,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             && !result.status.waits_on_person()
             && let Some(filming) = recording.lock().await.as_mut()
         {
-            let _ = filming.show_result(&task.task, &card(&result)).await;
+            let _ = filming.show_result(&redacted(&http.trace, &task.task), &card(&result)).await;
         }
         Ok(result)
     };
@@ -1409,6 +1444,37 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    /// The consent check, the extension's tab group and the result card each took the task as the caller wrote it,
+    /// an address's credentials included, before the agent had masked anything (#1381).
+    #[test]
+    fn test_the_tab_group_and_the_result_card_show_the_task_with_its_credentials_masked() {
+        let trace = Trace::collecting().redacting(Arc::default());
+        let task = RunTask {
+            task: "Read https://shopper:t4sk-pw@shop.test/orders".into(),
+            context: Some("The CRM is https://ana:c0ntext-pw@crm.test/".into()),
+            ..RunTask::default()
+        };
+        assert!(learn_credentials(&trace, &task));
+        let group = extension_address(Path::new("/hosts/a"), &task.task, &trace);
+        assert_eq!(
+            group.split_once('#').map(|(_, name)| name),
+            Some("Read https://[secret:address_credentials]@shop.test/orders")
+        );
+        // Learned, a credential is masked where the text names it outside an address too.
+        let context = task.context.as_deref().unwrap_or_default();
+        for shown in
+            [group, redacted(&trace, &task.task), redacted(&trace, context), redacted(&trace, "typed c0ntext-pw")]
+        {
+            assert!(
+                !shown.contains("t4sk-pw") && !shown.contains("shopper") && !shown.contains("c0ntext-pw"),
+                "{shown}"
+            );
+            assert!(!shown.contains("ana:"), "{shown}");
+        }
+        let clean = RunTask { task: "Read https://shop.test/orders".into(), ..RunTask::default() };
+        assert!(!learn_credentials(&Trace::collecting().redacting(Arc::default()), &clean));
+    }
 
     #[tokio::test]
     async fn a_stop_that_says_why_is_the_errors_text() {

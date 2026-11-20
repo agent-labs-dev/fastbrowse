@@ -174,8 +174,11 @@ fn several_values(target: &Control) -> String {
 
 /// What a field's value is picked from.
 pub(super) struct Value {
-    /// The task.
+    /// The task as Jev reads it, credentials in its addresses masked.
     task: String,
+    /// The text a value is typed from: `task` unmasked, character for character, so a span Jev picks on `task` is cut
+    /// from here (#1381).
+    typed: String,
     /// What was read that answers the task.
     read: Vec<ReadSource>,
     label: String,
@@ -544,7 +547,7 @@ impl Agent {
             }),
             Operation::Navigate => {
                 let Some(url) = decision.url.clone().filter(|url| {
-                    task_urls(&state.task, state.caller_start.as_deref(), true).contains(url)
+                    task_urls(&state.raw_task, state.caller_start.as_deref(), true).contains(url)
                         || state.reload_target(&observation.url).as_ref() == Some(url)
                         || state.pager_followed.contains(url)
                         || state.routes.contains(url)
@@ -557,7 +560,8 @@ impl Agent {
                     )
                     .into());
                 };
-                if self.reveals_text(&url) {
+                // Credentials the caller wrote into the address are theirs to send; only a resolved secret stops it.
+                if self.redactor().reveals_secret(&url) {
                     return Err(Stop::new(
                         Status::NeedsInput,
                         "Navigate/secret-in-address",
@@ -565,10 +569,12 @@ impl Agent {
                     )
                     .into());
                 }
-                self.gate_download(state, observation, decision, &caller_link(&url)).await?;
-                let irreversible = navigation_question(&url);
-                let action = format!("open the address {url}.\n");
-                self.gate_question(state, observation, decision, &url, Some(irreversible), &action, None).await?;
+                // Jev classifies the address as the task shows it, credentials masked (#1381).
+                let shown = self.mask(&url);
+                self.gate_download(state, observation, decision, &caller_link(&shown)).await?;
+                let irreversible = navigation_question(&shown);
+                let action = format!("open the address {shown}.\n");
+                self.gate_question(state, observation, decision, &shown, Some(irreversible), &action, None).await?;
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
             Operation::Click | Operation::Enter => {
@@ -1503,7 +1509,7 @@ impl Agent {
             let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
-        let Value { task, read, label, group, mut sources, source_question } = self.value(state, target);
+        let Value { task, typed, read, label, group, mut sources, source_question } = self.value(state, target);
         if task_only {
             sources.retain(|source, _| source == IN_TASK);
         }
@@ -1552,7 +1558,7 @@ impl Agent {
                 Some(value) => {
                     // Words the task gives as they were typed are the task's value, however Jev got to them, so a
                     // recipe can type them again. Anything composed stays live.
-                    if state.task.contains(value.as_str()) {
+                    if state.raw_task.contains(value.as_str()) {
                         state.text_source = Some(RecipeText::Literal(value.clone()));
                     }
                     Ok(value)
@@ -1578,7 +1584,9 @@ impl Agent {
                     .copy_words(state, observation, target, (&task, "the task", &label), (begins, ends), &picks)
                     .await?
                     .ok_or_else(|| self.missing(state, observation, target))?;
-                let value: String = task.chars().skip(value.start).take(value.len()).collect();
+                // Jev picks the span on the masked task, which keeps one character per character, so the same span
+                // cut from the caller's task is the text to type, credentials in an address included (#1381).
+                let value: String = typed.chars().skip(value.start).take(value.len()).collect();
                 state.text_source = Some(RecipeText::Literal(value.clone()));
                 Ok(value)
             }
@@ -2089,7 +2097,10 @@ impl Agent {
             .collect();
         let shown = facts.iter().map(|fact| fact.text.as_str()).collect::<Vec<_>>().join("\n");
         let read = read_sources(state, &facts);
-        let task = state.task.clone();
+        // Jev reads the task with credentials in its addresses masked; the same text unmasked is what a span it picks
+        // is cut from (#1381).
+        let typed = state.raw_task.clone();
+        let task = self.mask(&typed);
         let group = words(&task, target.max_length);
         let mut sources: IndexMap<String, JsonValue> = state
             .inputs
@@ -2133,7 +2144,7 @@ impl Agent {
         if !read.is_empty() && self.config.tokens.input_chars(&[whole]) == 0 {
             shorten_read(&mut source_question, &mut sources);
         }
-        Value { task, read, label, group, source_question, sources }
+        Value { task, typed, read, label, group, source_question, sources }
     }
 
     /// Resolve replacement passwords separately from existing credentials, without model-written values.
@@ -2644,8 +2655,8 @@ impl Agent {
             // was masked (#1534). Masking blanks at equal length, so the boundaries are the task's own, a
             // secret holding a sentence delimiter cannot redraw them, and one spanning two clauses is still
             // blanked whole rather than left in pieces either side of the cut.
-            let steps = spans(&state.task, SpanKind::Str);
-            let masked: Vec<char> = task.chars().collect();
+            let steps = spans(&state.raw_task, SpanKind::Str);
+            let masked: Vec<char> = self.caller_task(state).chars().collect();
             let labels: Vec<String> =
                 steps.iter().map(|(start, end, _)| masked[*start..*end].iter().collect()).collect();
             let criteria = labels

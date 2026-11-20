@@ -60,8 +60,6 @@ use crate::verification::RecordSchema;
 const ENDING_FRAME_SECONDS: f64 = 6.0;
 /// Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one.
 const REDRAW_WATCH_SECONDS: f64 = 10.0;
-/// The secret a caller's start address carries in its userinfo is named this in traces and text results.
-const START_CREDENTIALS: &str = "start_credentials";
 
 /// What one run is asked to do, beyond its task.
 #[derive(Default)]
@@ -237,7 +235,7 @@ impl Agent {
     // step no action had taken, and Jev chose DONE over typing a sign-in code it had just read. Mask at the call
     // boundary: a secret may have been resolved since the run began.
     fn model_task(&self, state: &RunState) -> String {
-        let task = self.mask(&state.task);
+        let task = self.mask(&state.raw_task);
         match state.caller_start.as_deref() {
             Some(start) => format!("The browser opened {} for this task. {task}", self.mask(start)),
             None => task,
@@ -248,7 +246,28 @@ impl Agent {
     // start is not a step the caller authorized or one any action shows, and beside it a form posting to /list/delete
     // under "Tidy it up" scored 0.49 to 0.59 as irreversible, where the task alone scored 0.56 to 0.65.
     fn caller_task(&self, state: &RunState) -> String {
-        self.mask(&state.task)
+        self.mask(&state.raw_task)
+    }
+
+    /// Register the credentials of every address in `texts` (`Redactor::register_credentials_in`), and from the first,
+    /// hold live frames and the recording to the end of the run: Chrome drops the userinfo from `location.href` but
+    /// keeps it in `document.URL`, so a page can draw its own address, credentials and all, where no reading of its
+    /// text looks, and a page can echo it after the reading that last found it clean.
+    fn learn_credentials<'a>(&self, texts: impl IntoIterator<Item = &'a str>) {
+        let mut redactor = self.redactor();
+        for text in texts {
+            redactor.register_credentials_in(text);
+        }
+        let held = redactor.holds_credentials();
+        drop(redactor);
+        if held {
+            self.page.withhold_frames(true);
+        }
+    }
+
+    /// The caller's background, masked as the task is.
+    fn model_context(&self, state: &RunState) -> Option<String> {
+        state.raw_context.as_deref().map(|context| self.mask(context))
     }
 
     fn reveals_text(&self, value: &str) -> bool {
@@ -294,7 +313,8 @@ impl Agent {
                 match body.await {
                     Ok(result) => (result, true, false),
                     Err(Flow::Browser(BrowserError::NeedsBrowser(message))) => {
-                        (blocked_without_browser(message), false, true)
+                        // The browser's message can name the address it could not open, credentials and all.
+                        (blocked_without_browser(self.redact(&message)), false, true)
                     }
                     Err(flow) => (
                         self.stopped(flow, slot.as_mut(), &ledger, options.output_schema.as_deref()).await,
@@ -436,20 +456,18 @@ impl Agent {
         ledger: &Arc<Ledger>,
         slot: &mut Option<RunState>,
     ) -> Result<RunResult, Flow> {
-        // Registered before anything is asked or traced: the caller's start is in the task every model is shown, and a
-        // run resumed in another agent is shown its first run's start. How long it lasts is the redactor's
-        // (`register_address_credentials`).
-        let carried_start = resume.as_ref().and_then(|resume| resume.state.caller_start.as_deref());
-        let mut credentialed = false;
-        for start in options.start.as_deref().into_iter().chain(carried_start) {
-            credentialed |= self.redactor().register_address_credentials(START_CREDENTIALS, start);
-        }
-        // Chrome drops the userinfo from `location.href` but keeps it in `document.URL`, so a page can draw its own
-        // address, credentials and all, before any observation has read it: live frames and the recording stay held
-        // until the first observation finds the page clean (`reveals`).
-        if credentialed {
-            self.page.withhold_frames(true);
-        }
+        // Registered before anything is asked or traced, from everything the caller handed the run: the runner does
+        // the same before it builds the browser, and an embedder calling the agent directly reaches only this. A run
+        // resumed in another agent is shown its first run's start, task and context.
+        let carried = resume.as_ref().map(|resume| &resume.state);
+        let given = [Some(task), options.start.as_deref(), options.context.as_deref()]
+            .into_iter()
+            .flatten()
+            .chain(options.inputs.values().map(String::as_str))
+            .chain(carried.and_then(|state| state.caller_start.as_deref()))
+            .chain(carried.map(|state| state.raw_task.as_str()))
+            .chain(carried.and_then(|state| state.raw_context.as_deref()));
+        self.learn_credentials(given);
         let prepared = match resume {
             Some(Resume { state, url: Some(url) }) => {
                 self.trace.phase("open", self.page.navigate(&url, None)).await?;
@@ -543,7 +561,7 @@ impl Agent {
             state.known_pages = known;
             state.known_asked = asked;
             state.replay = options.recipe.clone().map(replay::Replay::new);
-            state.context = options.context.clone();
+            state.raw_context = options.context.clone();
             state.caller_start = start.map(String::from);
             Ok(Box::new(state))
         };
@@ -568,6 +586,7 @@ impl Agent {
         self.tell_page_ready().await;
         if let Some(opening) = state.started_url.clone() {
             let landed = self.page.address().await?;
+            self.learn_credentials([landed.as_str()]);
             state.opened = Some(HistoryEntry {
                 effect: Some(format!("went to {landed}")),
                 ..HistoryEntry::new(Some(Operation::Navigate), Some(&opening), StepOutcome::Executed, true)
@@ -1090,7 +1109,8 @@ impl Agent {
         }
         Ok(StepContext {
             task: self.model_task(state),
-            literal_task: Some(state.task.clone()),
+            // Raw for code: the addresses it names are opened as written, and Jev is shown them masked.
+            literal_task: Some(state.raw_task.clone()),
             web_search: self.page.search_price().is_some(),
             subgoal: state.hint.clone(),
             dates: state.dates.clone(),
@@ -1112,7 +1132,7 @@ impl Agent {
                 .filter(|url| !state.reached_known_pages.contains(url))
                 .cloned()
                 .collect(),
-            background: state.context.clone(),
+            background: self.model_context(state),
             omitted_actions: 0,
             problem: None,
             withheld_targets: Vec::new(),

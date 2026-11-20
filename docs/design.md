@@ -536,15 +536,24 @@ out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, th
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from
 the agent, and handler failures are logged. A handler must honour cancellation: it runs on the caller's event
 loop, so one that swallows `CancelledError` keeps that loop alive and `asyncio.run` waits for it at shutdown. Live images and MP4 recordings are held back from the moment a secret is typed until the run ends, and whenever the page is read showing one;
-a recording holds its last clean frame meanwhile. A run whose start address carries a user name or password holds them
-from its start until the first reading finds the page clean: Chrome keeps the credentials in `document.URL`, so a page
-can draw them before any reading. A page or tab address is not page text, so credentials in one hold nothing back.
+a recording holds its last clean frame meanwhile. A run whose start, task, context or inputs write an address with a
+user name or password holds them from before the browser opens to the end of the run: Chrome keeps the credentials in
+`document.URL` and in the tab's address, so a page can draw them from its first paint, and pixels cannot be checked as
+a frame arrives. A redirect, tab or history address that first brings credentials starts the hold then, to the end of
+the run. A model screenshot is not held for them: a page or tab address is not page text.
 
-A start address's userinfo is masked in every address a model is shown or the run writes out, found by parsing the
-address, so any percent-encoding of it is caught. In other text only the credential is a secret: the password, or the
-user name when there is no password, as a token sent as a user name is. A user name that comes with a password is an
-identifier and stays readable. A page address a model proposes with a user name or password in it is discarded, and the
-known pages request is told so when the start carries them.
+The userinfo of every address is masked in every text a model is shown or the run writes out, registered or not: an
+address with a scheme, a scheme-relative `//user:pass@host`, and an address percent-encoded inside another's query.
+The run also learns each credential it sees, from the start, the task, the context, the inputs and every page and tab
+address, and masks it wherever it appears: the password, or the user name when there is no password, as a token sent
+as a user name is. A learned value is matched as text, so a short one also blanks the same letters inside other
+words. A user name that comes with a password is an identifier and stays readable outside an address.
+
+The browser opens an address as written, credentials included, and a path the task names is resolved on the start
+with them. A value Jev picks from the task to type is cut from the task as written, at the same offsets: masking keeps
+the text's length in code points. A model's proposed address with a user name or password in it is discarded, except
+an address the task writes, given back as the model was shown it, which opens as written. The known pages and start
+page requests are told what the bullets are.
 
 ## Recipes
 
@@ -573,7 +582,7 @@ in the task: `fastbrowse "Search Wikipedia for the person named in input person"
 with each value it names shown beside the name ("input person (Ada Lovelace)"), and a fill that types an input's
 value is saved as the input's name, so the replay types the new value. The recipe keeps the task as written. Pages after it, such as the article, have a different address
 and are decided live.
-If the task or start URL contains a resolved secret, or the start URL carries a user name and password, no recipe is saved: a redacted task would fail the exact task match required for replay, and a redacted start URL would not open the original page.
+If the task or start URL contains a resolved secret, or writes an address with a user name or password, no recipe is saved: a redacted task would fail the exact task match required for replay, and a redacted start URL would not open the original page.
 
 Reading, answering and the check for `complete` always run live. Replay searches the remaining saved steps without
 an arbitrary lookahead or miss cutoff, so a non-replayable step does not discard later reusable actions. A recipe is not evidence that the present task

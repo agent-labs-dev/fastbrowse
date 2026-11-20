@@ -102,6 +102,16 @@ fn task_paths(task: &str) -> Vec<(usize, &str)> {
     found
 }
 
+/// Every http(s) address `task` writes out in full, as written, credentials included: for code that maps an address a
+/// model was shown masked back to the one the caller wrote.
+pub fn written_addresses(task: &str) -> Vec<String> {
+    let task = space_after_separators(task).replace("](", "] (");
+    absolute_addresses(&task)
+        .into_iter()
+        .map(|(at, found)| trimmed(&task, at, found, SENTENCE_END).to_string())
+        .collect()
+}
+
 /// The addresses a task names, in order, each once: written out in full, or as a path on the caller's `start`.
 pub fn task_urls(task: &str, start: Option<&str>, include_start: bool) -> Vec<String> {
     let mut urls: IndexSet<String> = IndexSet::new();
@@ -112,7 +122,10 @@ pub fn task_urls(task: &str, start: Option<&str>, include_start: bool) -> Vec<St
             urls.insert(url.to_string());
         }
     }
-    if let Some(start) = start.filter(|start| valid_address(start)) {
+    // The caller's start is opened as given, credentials and all, so a path resolves on it with them: refused as an
+    // address with userinfo, a credentialed start left "Open /next" with nowhere to go (#1381). Every address
+    // offered to a model has its userinfo masked (`safety::mask_userinfo`).
+    if let Some(start) = start.filter(|start| valid_start(start)) {
         // An entry page with nothing on it left a run told to "sign in at /login" with no address to open, so it
         // stopped stuck. The caller gave the path for the site they started the run on, so it resolves there.
         if let Ok(base) = Url::parse(start) {
@@ -120,7 +133,7 @@ pub fn task_urls(task: &str, start: Option<&str>, include_start: bool) -> Vec<St
                 // A path asked about in a question ends the sentence with "?", which an address does not.
                 let path = trimmed(&task, at, found, QUESTION_END);
                 if let Ok(joined) = base.join(path)
-                    && valid_address(joined.as_str())
+                    && valid_start(joined.as_str())
                 {
                     urls.insert(joined.into());
                 }
@@ -157,6 +170,15 @@ pub fn writes_userinfo(url: &str) -> bool {
     let Some((_, rest)) = url.split_once("://") else { return false };
     let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
     authority.contains('@')
+}
+
+/// A valid address once any userinfo it carries is set aside: the caller's start, and the paths joined onto it.
+fn valid_start(url: &str) -> bool {
+    let Ok(mut parsed) = Url::parse(url) else { return false };
+    if !writes_userinfo(url) {
+        return valid_address(url);
+    }
+    parsed.set_username("").and_then(|()| parsed.set_password(None)).is_ok() && valid_address(parsed.as_str())
 }
 
 /// An http(s) address with a host, no credentials and a usable port, as Chrome would parse it.
@@ -291,6 +313,19 @@ mod tests {
         ] {
             assert_eq!(navigation_urls(&task, ENTRY, Some(ENTRY), None, false), expected, "{task}");
         }
+    }
+
+    /// The caller's start is opened with its credentials, so a path in the task resolves on it with them: refused as
+    /// an address with userinfo, a credentialed start left "Open /next" with nowhere to go (#1381).
+    #[test]
+    fn test_a_path_resolves_on_a_credentialed_start_with_its_credentials() {
+        let start = "https://admin:p%2Fss@shop.test/orders";
+        assert_eq!(
+            task_urls("Open /next and report", Some(start), true),
+            ["https://admin:p%2Fss@shop.test/next", start]
+        );
+        // An address the task writes with credentials is still none to open; only the caller's start carries them.
+        assert_eq!(task_urls("Open https://u:p@other.test/", Some(start), false), Vec::<String>::new());
     }
 
     #[test]
