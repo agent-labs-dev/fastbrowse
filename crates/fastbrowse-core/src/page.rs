@@ -598,6 +598,13 @@ pub trait Page: Send + Sync {
             }
         })
     }
+    /// Why this page cannot press `key`, by its own key grammar, or None when it can. A browser presses the chords
+    /// [`crate::keys::chord`] parses; a page with another key dialect says so here, so a key copied from the task is
+    /// checked by the grammar of the page that will press it.
+    fn key_error(&self, key: &str) -> Option<String> {
+        crate::keys::chord(key).err().map(|error| error.to_string())
+    }
+
     /// Whether this page was fetched over HTTP: its scripts never ran, and it can only follow links.
     fn over_http(&self) -> bool {
         false
