@@ -18,6 +18,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - A run with a dollar limit goes on after its first call to a model is cancelled. That call's cost could be bounded only once the model's price listing had been read, and the listing was read after the call, so a cancelled first call was recorded with an unknown cost and the run stopped because the limit could not be enforced. The listing is now read before the first call to each model under a dollar limit ([#1291](https://github.com/agent-labs-dev/fastbrowse/issues/1291)).
 
+- `--help` and `docs/cli.md` list the flag combinations the CLI refuses, and `--fetch` now also refuses `--secret`, `--bitwarden`, `--input`, `--file` and `--authorize` before resolving any secret: a fetched page can only follow links, so these were accepted and never used ([#1337](https://github.com/agent-labs-dev/fastbrowse/issues/1337)). The lists leave `--record` out of what `--desktop` refuses, since a desktop run is filmed from its window. `--json` prints `dollars` and `cost_complete` after `status`, as the plain output does, and the MCP `browse` result names the `browser` that ran ([#1342](https://github.com/agent-labs-dev/fastbrowse/issues/1342)).
+
 ## [0.12.0] - 2026-11-19
 
 - Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.

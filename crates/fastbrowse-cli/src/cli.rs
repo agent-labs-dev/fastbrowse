@@ -269,30 +269,39 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
     })
 }
 
-/// The files `--file` names, read now, each under its own file name. A task can only name a path, and a run had no way
-/// to put that file in a page's file input, so an upload it was asked for stopped `stuck` (#878).
+/// The files `--file` names, each under its own file name, with their bytes read by `read_attachments`. A task can only
+/// name a path, and a run had no way to put that file in a page's file input, so an upload it was asked for stopped
+/// `stuck` (#878).
 fn attachments(paths: &[PathBuf]) -> Result<Vec<RunAttachment>, ConfigurationError> {
-    let attachments = paths
+    paths
         .iter()
         .map(|path| {
             let name = path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .ok_or_else(|| ConfigurationError(format!("--file {} names no file", path.display())))?;
-            let content = std::fs::read(path)
-                .map_err(|error| ConfigurationError(format!("--file cannot read {}: {error}", path.display())))?;
             // The type a browser's own file picker would give: by extension, and none for one it does not know.
             let mime_type = mime_guess::from_path(path).first_raw().unwrap_or_default().to_owned();
-            Ok(RunAttachment { name, mime_type, content: Base64Bytes(content) })
+            Ok(RunAttachment { name, mime_type, content: Base64Bytes(Vec::new()) })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect()
+}
+
+/// Read the bytes of the files `paths` names into `attachments`, once the run is known to take them: read first, a
+/// `--fetch` run named a missing file instead of the conflict, and a named pipe blocked it before any check.
+fn read_attachments(attachments: &mut [RunAttachment], paths: &[PathBuf]) -> Result<(), ConfigurationError> {
+    for (attachment, path) in attachments.iter_mut().zip(paths) {
+        let content = std::fs::read(path)
+            .map_err(|error| ConfigurationError(format!("--file cannot read {}: {error}", path.display())))?;
+        attachment.content = Base64Bytes(content);
+    }
     // Every upload past the limit fails, so a run given more would only end stuck after spending its steps.
     let total: usize = attachments.iter().map(|attachment| attachment.content.0.len()).sum();
     let limit = Config::default().max_upload_bytes;
     if total as i64 > limit {
         return Err(ConfigurationError(format!("--file totals {total} bytes, over the {limit} byte upload limit")));
     }
-    Ok(attachments)
+    Ok(())
 }
 
 /// `NAME=VALUE`, the value taken as given, `=` and all.
@@ -329,7 +338,9 @@ mod viewport_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let big = dir.join("big.bin");
         std::fs::File::create(&big).unwrap().set_len(Config::default().max_upload_bytes as u64 + 1).unwrap();
-        assert!(attachments(std::slice::from_ref(&big)).unwrap_err().0.contains("upload limit"));
+        let paths = std::slice::from_ref(&big);
+        let mut named = attachments(paths).unwrap();
+        assert!(read_attachments(&mut named, paths).unwrap_err().0.contains("upload limit"));
         assert!(attachments(&[PathBuf::from("..")]).unwrap_err().0.contains("names no file"));
         std::fs::remove_file(&big).unwrap();
         std::fs::remove_dir(&dir).unwrap();
@@ -449,9 +460,13 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let explicit_extension = args.extension || args.extension_browser.is_some();
     let extension = explicit_extension || (!args.cloud && !args.fetch && args.desktop.is_empty());
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension) {
+    // A desktop run starts no browser, so a cloud one asked for beside it was silently never started (#1337).
+    let desktop = !args.desktop.is_empty();
+    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension || desktop) {
         return Err(ConfigurationError(
-            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
+            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch, --extension or \
+             --desktop"
+                .into(),
         ));
     }
     let cdp_port = args
@@ -462,8 +477,6 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         })
         .transpose()?;
     let limits = limits(args)?;
-    // Check secrets before browser setup so a missing credential names what the operator needs to supply.
-    let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let settings = (context.settings)()?;
     let chrome = if args.cloud {
         None
@@ -475,7 +488,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
             profile: args.profile.clone(),
         })
     };
-    let task = RunTask {
+    let mut task = RunTask {
         task: args.task.clone(),
         start: args.start.clone(),
         context: args.context.clone(),
@@ -506,7 +519,11 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         desktop_apps: args.desktop.iter().skip(1).cloned().collect(),
         ..RunTask::default()
     };
-    fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;
+    let secrets_given = !args.secret.is_empty() || args.bitwarden.is_some();
+    fastbrowse_run::check(&task, secrets_given).map_err(|error| ConfigurationError(error.to_string()))?;
+    read_attachments(&mut task.attachments, &args.file)?;
+    // Check secrets before browser setup so a missing credential names what the operator needs to supply.
+    let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let extension = task.wants_extension();
     let recipe_sink =
         (args.recipe.is_some() || args.save_recipe.is_some()).then(fastbrowse_agent::agent::RecipeSink::default);
@@ -528,13 +545,20 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         Err(RunError::AfterSpending { error, receipt }) => options::cancelled_result(error.to_string(), receipt),
         Err(error) => return Err(ConfigurationError(error.to_string())),
     };
-    if let Some(sink) = recipe_sink
+    // Replay accounting only for a run that replayed: a run that only saved one printed "0 actions reused" (#1342).
+    if args.recipe.is_some()
+        && let Some(sink) = recipe_sink
         && let Some(outcome) = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
     {
         context.streams.eprint(&format!(
             "  recipe: {} actions reused, {} unmatched observations",
             outcome.replayed, outcome.fell_back
         ));
+    }
+    if let Some(path) = &args.save_recipe
+        && result.status != Status::Complete
+    {
+        context.streams.eprint(&format!("  recipe not saved to {}: only a complete run is saved", path.display()));
     }
     if result.status == Status::NeedsLogin {
         result.error = Some(format!(
@@ -546,7 +570,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     }
     let streams = &context.streams;
     if args.json {
-        streams.print(&json::write(&with_build(result.dump(), &context.build), Style::PYDANTIC.indented(2)));
+        streams.print(&json::write(&json_result(&result, &context.build), Style::PYDANTIC.indented(2)));
     } else {
         // A local LLM endpoint reports no price, and printing only the priced calls would read as the whole bill.
         let mut spend = format!("${:.4}", result.cost.known_dollars());
@@ -608,7 +632,7 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
         Err(error) => {
             if args.json {
                 context.streams.print(&json::write(
-                    &with_build(options::error_result(&error.0).dump(), &context.build),
+                    &json_result(&options::error_result(&error.0), &context.build),
                     Style::PYDANTIC.indented(2),
                 ));
             }
@@ -618,10 +642,20 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
     }
 }
 
-/// The result `--json` prints, with the build that produced it, so a result file names its commit.
-fn with_build(mut result: serde_json::Value, build: &Build) -> serde_json::Value {
-    if let serde_json::Value::Object(fields) = &mut result {
-        fields.insert("build".into(), build.fields().into());
+/// The result `--json` prints: its total cost beside its status, as the plain output and the MCP result give it, since
+/// a caller otherwise summed the cost lines itself (#1342), and the build that produced it, so a result file names
+/// its commit.
+fn json_result(result: &fastbrowse_core::models::RunResult, build: &Build) -> serde_json::Value {
+    let mut fields = serde_json::Map::new();
+    let serde_json::Value::Object(dumped) = result.dump() else { return result.dump() };
+    for (name, value) in dumped {
+        let status = name == "status";
+        fields.insert(name, value);
+        if status {
+            fields.insert("dollars".into(), fastbrowse_core::py::round(result.cost.known_dollars(), 6).into());
+            fields.insert("cost_complete".into(), (!result.cost.has_unknown()).into());
+        }
     }
-    result
+    fields.insert("build".into(), build.fields().into());
+    fields.into()
 }

@@ -21,8 +21,9 @@ workflows go through the SDKs. Read [references/browser-access.md](references/br
 Use a connected fastbrowse MCP `browse` tool when its browser configuration matches that choice. Inspect its
 schema and pass `task` and `start` when known. Pass resource limits when the user supplies them or an
 existing task budget requires them. Server ceilings still apply. If the server's browser configuration is unknown,
-use the CLI to make the browser choice explicit. The tool returns `status`, `answer`, `citations`, and
-`next_step` when the task is unfinished.
+use the CLI to make the browser choice explicit. The tool returns `status`, `answer`, `citations`, `dollars`,
+`cost_complete`, `browser` (how the browser was reached and which profile ran), and `next_step` when the task is
+unfinished. Check `browser` when the run had to happen in a particular browser.
 
 Otherwise use the CLI. Check `fastbrowse --help` if installed; otherwise check `uvx --from fastbrowse fastbrowse
 --help`. Run the installed command or the `uvx` form below. In a fastbrowse source checkout, use `uv run fastbrowse`.

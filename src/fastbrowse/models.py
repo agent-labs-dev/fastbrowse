@@ -441,8 +441,12 @@ class Build(Frozen):
 
 
 class CliResult(RunResult):
-    """What `fastbrowse --json` prints: the run's result and the build that produced it."""
+    """What `fastbrowse --json` prints: the run's result, its total cost and the build that produced it."""
 
+    dollars: float
+    """The run's known cost in dollars, the sum of `cost`'s priced lines."""
+    cost_complete: bool
+    """False when a call reported no cost, so `dollars` is a lower bound."""
     build: Build
 
 
