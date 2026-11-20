@@ -17,8 +17,18 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - A field the task does not give a value for word for word is written knowing what the field is: its label, the section it sits in and its name. An unlabelled search box read only as `textbox`, so a research run typed its whole cited answer into a site's search box and submitted it; told the field sat under Advanced Search and was named `q`, the writer wrote a search query ([#1339](https://github.com/agent-labs-dev/fastbrowse/issues/1339)).
 
+## [0.12.0] - 2026-11-19
+
+- Model calls go through `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` ([#1358](https://github.com/agent-labs-dev/fastbrowse/issues/1358)). The Rust client connected directly, so on a network whose only way out is a CONNECT proxy every call failed with a connection error. It now tunnels a covered destination through the proxy, sends the proxy URL's login, and speaks TLS to an https proxy, as the Python client does.
+
 - A `--record` clip (and live frames) now stop at the last clean frame once a secret is typed and stay stopped for the rest of the run. A page that echoed the secret on the next page, such as a form's result, was recorded in clear: a reading of the page text that came back clean released the hold, and frames arrived before the next reading. Closes #1347.
 - A run in your own Chrome opens a link's new tab behind your current tab. Chrome raised and activated its window for a tab the page opened, so on a desktop that gives focus to an activated window, such as Hyprland with `misc:focus_on_activate = true`, each link the run followed to a new tab took your keyboard focus. A tab a page script opens still activates the window; [Your own Chrome](docs/cli.md#your-own-chrome) names those cases and the desktop setting ([#1348](https://github.com/agent-labs-dev/fastbrowse/issues/1348)).
+
+- A desktop run can use more than one app. Repeat `--desktop` to start each one (`desktop_apps` in the SDKs and `serve`), and every window on the run's hidden workspace is a tab: the apps' windows and the dialogs they open. The run moves between them as between browser tabs, without focusing anything, follows a window an action opens, and goes back to the previous window when the one it reads closes. Before, a run stayed in one window, and a dialog the app opened was out of its reach.
+
+- A desktop run closes the apps it started when it ends, whether it finishes, fails or is cancelled. It killed deskpilot before deskpilot could close them, so they stayed open, and a later run of the same app could fail because deskpilot could not tell its window from the old one with the same title. That failure is now reported as a failed read naming the cause, not as deskpilot being unavailable ([#1345](https://github.com/agent-labs-dev/fastbrowse/issues/1345)).
+
+- A desktop run that reads the answer and then ends returns it. Each window was keyed by its app alone, so a read of one window could retire notes from another, and an answer derived from quotes read after the last step was dropped, so the run ended `complete` with no answer. A run that asked a question and has no answer now ends `unverified`, saying nothing read answers the task ([#1343](https://github.com/agent-labs-dev/fastbrowse/issues/1343)).
 
 - `--record` works with `--desktop`. A desktop run was refused before its app started ("desktop drives an app, not a browser, so drop record"), and `--help` did not say so ([#1334](https://github.com/agent-labs-dev/fastbrowse/issues/1334)). The run now films the app's window from deskpilot's shots, taken when the app opens and after each action settles, captions each step, draws the cursor gliding to each click, fill, hover and choice, and ends on the result card, so a hidden desktop run leaves a video of what it did. As with a browser recording, no frame is filmed while the window may show a resolved secret. `--help` and the docs now also say that `--record` cannot be combined with `--fetch`, which starts no browser.
 
@@ -2283,7 +2293,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.11.2...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.12.0
 [0.11.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.2
 [0.11.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.1
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
