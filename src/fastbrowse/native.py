@@ -15,10 +15,11 @@ import json
 import signal
 import sys
 import time
+import warnings
 import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
-from typing import Any, ClassVar, NoReturn
+from typing import Any, ClassVar, NoReturn, Protocol
 
 import httpcore
 import httpx
@@ -346,32 +347,68 @@ _CONNECTIONS: weakref.WeakKeyDictionary[httpcore.AsyncConnectionPool, asyncio.Se
 _FINISHING: set[asyncio.Task[_Sent]] = set()
 
 
+class _Handoff(Protocol):
+    """The core's record of whether a request this client queued went out; `fastbrowse._native.Handoff`."""
+
+    def queue(self) -> None: ...
+
+    def take(self) -> bool: ...
+
+
 def _connections(client: httpx.AsyncClient, url: str) -> asyncio.Semaphore | None:
     """The connections the pool `url` goes through may open, or None when its transport sets no limit.
 
     The core sends a pass's batches together, hundreds on a long page. In an httpx pool that queues past its
     `max_connections`, and httpcore's queue bookkeeping redoes every queued request on each change, so dropping a
     thousand of them held the event loop for seconds. A request beyond the limit waits here instead, where dropping it
-    holds nothing. The limit is the pool's own: an HTTP/2 connection carries more streams, but the pool learns that
-    only once it has connected, and queues until then. A transport other than httpx's own pool, such as a mock, has no
-    limit to read.
+    holds nothing. The limit counts requests, not connections, so an HTTP/2 pool, whose connection carries many
+    streams, is held to it too: the pool learns how many streams a connection takes only once it has connected, and
+    queues until then. A transport other than httpx's own pool, such as a mock, has no limit to read.
     """
-    transport = client._transport_for_url(httpx.URL(url))
-    if not isinstance(transport, httpx.AsyncHTTPTransport):
+    try:
+        # httpx and httpcore expose neither the transport for a URL nor a pool's limit; tests/test_native_pool.py
+        # fails on a release that renames them.
+        transport = client._transport_for_url(httpx.URL(url))
+        if not isinstance(transport, httpx.AsyncHTTPTransport):
+            return None
+        pool = transport._pool
+        if not isinstance(pool, httpcore.AsyncConnectionPool):
+            return None
+        limit = pool._max_connections
+    except AttributeError as exc:
+        # Refusing the request would stop every run on this httpx; sending it unbounded is how httpx alone behaves.
+        warnings.warn(
+            f"fastbrowse cannot read this httpx client's connection limit ({exc}), so requests past it queue in "
+            "httpcore, where a cancelled run can leave the client raising PoolTimeout",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return None
-    pool = transport._pool
     # httpcore stores an unlimited pool as sys.maxsize.
-    if not isinstance(pool, httpcore.AsyncConnectionPool) or pool._max_connections == sys.maxsize:
+    if limit == sys.maxsize:
         return None
     free = _CONNECTIONS.get(pool)
     if free is None:
-        free = _CONNECTIONS[pool] = asyncio.Semaphore(pool._max_connections)
+        free = _CONNECTIONS[pool] = asyncio.Semaphore(limit)
     return free
+
+
+def _settled(sent: asyncio.Task[_Sent]) -> None:
+    """Retrieve what a request raised once nobody waits for it, so asyncio has no unread exception to report: a run
+    cancelled just before the caller closed its client leaves a request to start on a closed client."""
+    if not sent.cancelled():
+        sent.exception()
 
 
 def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
     async def exchange(
-        method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None, silence: float
+        method: str,
+        url: str,
+        headers: list[tuple[str, str]],
+        body: bytes,
+        max_bytes: int | None,
+        silence: float,
+        waited: asyncio.Event,
     ) -> _Sent:
         try:
             # The core's timeout bounds each silence, not the whole answer, as an httpx timeout does.
@@ -379,16 +416,14 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
             # The core follows redirects itself, checking each against the run's allowed origins.
             response = await client.send(request, stream=True, follow_redirects=False)
             try:
-                if max_bytes is None:
-                    content = await response.aread()
-                else:
-                    # One byte past the bound shows the core it was passed, without the rest landing in memory.
-                    read = bytearray()
-                    async for chunk in response.aiter_bytes():
-                        read.extend(chunk)
-                        if len(read) > max_bytes:
-                            break
-                    content = bytes(read[: max_bytes + 1])
+                read = bytearray()
+                async for chunk in response.aiter_bytes():
+                    read.extend(chunk)
+                    # One byte past the bound shows the core it was passed, without the rest landing in memory. An
+                    # answer nobody waits for any longer is not worth its connection.
+                    if (max_bytes is not None and len(read) > max_bytes) or not waited.is_set():
+                        break
+                content = bytes(read if max_bytes is None else read[: max_bytes + 1])
             finally:
                 await response.aclose()
         except httpx.TimeoutException as exc:
@@ -405,28 +440,52 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
         return ("ok", response.status_code, headers, content)
 
     async def send(
-        method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None, silence: float
+        method: str,
+        url: str,
+        headers: list[tuple[str, str]],
+        body: bytes,
+        max_bytes: int | None,
+        silence: float,
+        handoff: _Handoff,
     ) -> _Sent:
         """Send a request for the core, which drops it when the run stops or a batch beside it fails.
 
-        A request dropped while it waits for a connection is cancelled; one httpx has been handed is left to finish,
-        and its answer goes unread. httpcore 1.0.9, the latest release, strands a connection when a task is cancelled
-        inside it: just after the pool assigns it a new connection, which stays CONNECTING with no request
-        (encode/httpcore#1093), between connecting and sending, which leaves it NEW, or while it closes a response,
-        whose shield holds against anyio's cancellation but not asyncio's, which leaves it ACTIVE. Each holds a slot of
-        the pool for good, until every later request on the client raises PoolTimeout. A request httpx has been handed
-        is sent as soon as it connects, and billed whether or not its answer is read, and it holds its connection no
-        longer than its own timeout allows.
+        A request dropped while it waits for a connection is cancelled, and `handoff` tells the core it never went out,
+        so it costs nothing. One httpx has been handed is left to finish, and its answer goes unread. httpcore 1.0.9,
+        the latest release, strands a connection when a task is cancelled inside it: just after the pool assigns it a
+        new connection, which stays CONNECTING with no request (encode/httpcore#1093), between connecting and sending,
+        which leaves it NEW, or while it closes a response, whose shield holds against anyio's cancellation but not
+        asyncio's, which leaves it ACTIVE. Each holds a slot of the pool for good, until every later request on the
+        client raises PoolTimeout. A request httpx has been handed is sent as soon as it connects, and billed whether
+        or not its answer is read; once nobody waits for it, it stops at its next body chunk, so it holds its
+        connection for at most one more silence.
         """
         connections = _connections(client, url)
         if connections is not None:
-            await connections.acquire()
-        sent = asyncio.ensure_future(exchange(method, url, headers, body, max_bytes, silence))
+            handoff.queue()
+            try:
+                # The request carries `silence` as every httpx timeout, its pool timeout included, so httpx would
+                # wait that long for a connection; waiting for one here instead, it fails as httpx then does.
+                async with asyncio.timeout(silence):
+                    await connections.acquire()
+            except TimeoutError:
+                return ("timeout", "PoolTimeout")
+            if not handoff.take():
+                # The run withdrew the request as the permit came, and has counted it as never sent.
+                connections.release()
+                raise asyncio.CancelledError
+        waited = asyncio.Event()
+        waited.set()
+        sent = asyncio.ensure_future(exchange(method, url, headers, body, max_bytes, silence, waited))
         _FINISHING.add(sent)
         sent.add_done_callback(_FINISHING.discard)
+        sent.add_done_callback(_settled)
         if connections is not None:
             sent.add_done_callback(lambda _: connections.release())
-        return await asyncio.shield(sent)
+        try:
+            return await asyncio.shield(sent)
+        finally:
+            waited.clear()
 
     return send
 
