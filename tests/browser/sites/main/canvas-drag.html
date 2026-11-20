@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas drag</title>
+<style>
+  body { margin: 8px; font: 16px sans-serif; }
+  canvas { display: block; width: 400px; height: 200px; border: 1px solid #333; }
+</style>
+<canvas id="pad" width="400" height="200" aria-label="Drawing pad"></canvas>
+<p id="result" data-drawn="none">Draw on the pad.</p>
+<script>
+  const pad = document.querySelector('#pad');
+  const result = document.querySelector('#result');
+  const context = pad.getContext('2d');
+  let drawing = false;
+  let points = [];
+  let shifted = false;
+  window.moveButtons = [];
+  window.captureDuringMove = [];
+  window.shiftEvents = [];
+
+  const local = event => {
+    const box = pad.getBoundingClientRect();
+    return [event.clientX - box.left, event.clientY - box.top];
+  };
+  const render = () => {
+    context.clearRect(0, 0, pad.width, pad.height);
+    if (points.length < 2) return;
+    context.beginPath();
+    context.moveTo(...points[0]);
+    for (const point of points.slice(1)) context.lineTo(...point);
+    context.strokeStyle = shifted ? '#b11' : '#1464a0';
+    context.lineWidth = 4;
+    context.stroke();
+  };
+  pad.addEventListener('pointerdown', event => {
+    drawing = true;
+    points = [local(event)];
+    shifted = event.shiftKey;
+    window.shiftEvents.push(event.shiftKey);
+    pad.setPointerCapture(event.pointerId);
+    result.dataset.drawn = 'started';
+  });
+  pad.addEventListener('pointermove', event => {
+    if (!drawing) return;
+    window.moveButtons.push(event.buttons);
+    window.captureDuringMove.push(pad.hasPointerCapture(event.pointerId));
+    window.shiftEvents.push(event.shiftKey);
+    points.push(local(event));
+    render();
+  });
+  pad.addEventListener('pointerup', event => {
+    if (!drawing) return;
+    drawing = false;
+    window.shiftEvents.push(event.shiftKey);
+    render();
+    result.dataset.drawn = `${points.length}:${shifted ? 'shift' : 'plain'}`;
+    result.textContent = `Drawn ${points.length} points${shifted ? ' with Shift' : ''}.`;
+    pad.releasePointerCapture(event.pointerId);
+  });
+</script>

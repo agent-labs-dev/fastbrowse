@@ -2535,16 +2535,96 @@ async fn test_the_viewport_a_measurement_read_is_not_asked_for_again() {
     assert!(width > 0.0 && height > 0.0, "{wheel:?}");
     assert_eq!(viewport_reads(&sent), 0, "{:?}", sent.lock().unwrap().iter().map(|(m, _)| m).collect::<Vec<_>>());
 
-    // Pointer marks need the viewport too, and a recording run has them on: the same measurement answers.
-    let marks = Arc::new(Mutex::new(vec![]));
-    let marked = CdpPage::new(h.session.clone(), Config::default()).with_pointer_marks(marks.clone());
+    // A page that draws the cursor glides it to the click's point and presses there, measured once.
+    let marked = CdpPage::new(h.session.clone(), Config::default()).with_cursor();
     h.goto("/").await;
     let obs = marked.observe().await.expect("observe");
     sent.lock().unwrap().clear();
     let clicked = act(&marked, click(find(&obs, "Sign in")), &obs).await;
     assert_eq!(clicked.outcome, StepOutcome::Executed);
     assert_eq!(viewport_reads(&sent), 0, "a click re-read the viewport");
-    assert_eq!(marks.lock().unwrap().len(), 1, "the click left no pointer mark");
+    let drawn: Vec<String> = sent
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p)| m == "Runtime.evaluate" && p["contextId"].is_number())
+        .filter_map(|(_, p)| p["expression"].as_str().and_then(|e| e.rsplit(").").next()).map(str::to_owned))
+        .collect();
+    assert!(
+        drawn.iter().any(|m| m.starts_with("glide(")) && drawn.iter().any(|m| m.starts_with("press(")),
+        "{drawn:?}"
+    );
+    h.close().await;
+}
+
+/// The cursor's press is drawn for every press the run sends, a fill's click as well as a click's, at the point and the
+/// moment the press goes out, and not for an action that never presses. Only a click drew it once, so a fill in a
+/// recording showed no press.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_the_cursor_presses_where_each_press_is_sent_and_a_hover_does_not() {
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    let sent = Arc::new(Mutex::new(vec![]));
+    let Some(h) = proxied(connection, recording(sent.clone())).await else { return };
+    let drawn = CdpPage::new(h.session.clone(), Config::default()).with_cursor();
+    h.goto("").await;
+    eval_active(&h, "document.body.innerHTML = '<input aria-label=Search> <button>Go</button>'; true").await;
+    let calls = |sent: &Arc<Mutex<Vec<(String, Value)>>>| -> Vec<String> {
+        sent.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(m, p)| match m.as_str() {
+                "Runtime.evaluate" if p["contextId"].is_number() => {
+                    p["expression"].as_str().and_then(|e| e.rsplit(").").next()).map(str::to_owned)
+                }
+                "Input.dispatchMouseEvent" if p["type"] == "mousePressed" => {
+                    Some(format!("sent({}, {})", p["x"], p["y"]))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let obs = drawn.observe().await.expect("observe");
+    sent.lock().unwrap().clear();
+    assert_eq!(act(&drawn, fill(find(&obs, "Search"), "hyprland"), &obs).await.outcome, StepOutcome::Executed);
+    let filled = calls(&sent);
+    let pressed = filled.iter().position(|c| c.starts_with("press(")).unwrap_or_else(|| panic!("{filled:?}"));
+    let sent_at = filled.iter().position(|c| c.starts_with("sent(")).unwrap_or_else(|| panic!("{filled:?}"));
+    assert!(pressed < sent_at, "the press was drawn after it was sent: {filled:?}");
+    let point = |call: &str| -> Vec<f64> {
+        let inner = call.split_once('(').unwrap().1.trim_end_matches(')');
+        inner.split(',').map(|n| n.trim().parse().unwrap()).collect()
+    };
+    assert_eq!(point(&filled[pressed]), point(&filled[sent_at]), "{filled:?}");
+
+    let obs = drawn.observe().await.expect("observe");
+    sent.lock().unwrap().clear();
+    assert_eq!(act(&drawn, hover(find(&obs, "Go")), &obs).await.outcome, StepOutcome::Executed);
+    let hovered = calls(&sent);
+    assert!(hovered.iter().any(|c| c.starts_with("glide(")), "{hovered:?}");
+    assert!(!hovered.iter().any(|c| c.starts_with("press(")), "a hover drew a press: {hovered:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_the_cursor_is_drawn_in_the_page_but_not_in_the_models_screenshot() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    let drawn = CdpPage::new(h.session.clone(), Config::default()).with_cursor();
+    h.goto("/").await;
+    let before = drawn.observe().await.expect("observe");
+    let plain = h.page.screenshot().await.expect("screenshot");
+    let hovered = act(&drawn, hover(find(&before, "Sign in")), &before).await;
+    assert_eq!(hovered.outcome, StepOutcome::Executed);
+    // The other page draws no cursor of its own, so its capture is what a watcher of the tab sees.
+    let watched = h.page.screenshot().await.expect("screenshot");
+    assert_ne!(watched, plain, "the cursor was not drawn");
+    let for_model = drawn.screenshot().await.expect("screenshot");
+    assert_ne!(for_model, watched, "the model's screenshot showed the cursor");
+    assert_eq!(h.page.screenshot().await.expect("screenshot"), watched, "the cursor was not put back");
+    let after = drawn.observe().await.expect("observe");
+    let names = |obs: &Observation| obs.controls.iter().map(|c| c.label.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&after), names(&before), "the cursor reached the snapshot");
     h.close().await;
 }
 

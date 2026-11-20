@@ -66,6 +66,21 @@ impl CdpPage {
         Ok(self.regions(&[id.to_string()], "nodes").await?.swap_remove(id))
     }
 
+    /// Scroll control `id` into view, by the rule the hit test scrolls by, unless it is already in full view. A
+    /// control gone from the page stays where it is: the action on it finds it stale.
+    pub async fn reveal(&self, id: &str) -> Result<(), BrowserError> {
+        let Some(target) = self.last().and_then(|last| last.controls.get(id).cloned()) else { return Ok(()) };
+        let script = format!(
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected) return; \
+             const w = e.ownerDocument.defaultView, v = e.getBoundingClientRect(); \
+             if (v.top < 0 || v.left < 0 || v.bottom > w.innerHeight || v.right > w.innerWidth) \
+             e.scrollIntoView({{block: 'center', inline: 'nearest', behavior: 'instant'}}); }})()",
+            target.2
+        );
+        self.evaluate(&target.0, &script).await?;
+        Ok(())
+    }
+
     /// The element `registry` holds for each of `ids` in the map named `map`, measured against the visual viewport.
     async fn regions(&self, ids: &[String], map: &str) -> Result<IndexMap<String, Edges>, BrowserError> {
         let session_id = self.session.active_session_id()?;

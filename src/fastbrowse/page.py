@@ -55,8 +55,8 @@ class Control(Frozen):
     download: bool | None = None
     """A link the page marks with a `download` attribute: activating it saves a file instead of opening a page."""
     drawn: bool | None = Field(default=None, exclude_if=lambda drawn: drawn is None)
-    """An image, canvas or video the page takes input on: what it shows is pixels, with no page elements inside it
-    to read or act on, such as a streamed remote browser or a canvas app."""
+    """An image, canvas, video or pointer gesture surface the page takes input on: what it shows is pixels or a
+    gesture state, with no page elements inside it to read or act on."""
     pictured: bool | None = Field(default=None, exclude_if=lambda pictured: pictured is None)
     """A control whose card shows a picture while its text leaves it alike to another control or unnamed: the task
     may name it by what the picture shows."""
@@ -192,12 +192,30 @@ class Capture(Frozen):
     inaccessible_frames: int = Field(default=0, ge=0)
 
 
+class DragPoint(Frozen):
+    """One same-control drag point, normalized to the target's live box."""
+
+    x: float
+    y: float
+
+
+class DragPath(Frozen):
+    """The complete pointer path for a drag drawn on one control."""
+
+    press: DragPoint
+    points: tuple[DragPoint, ...] = Field(min_length=1)
+    release: DragPoint
+    shift: bool = False
+
+
 class Action(Frozen):
     operation: Operation
     url: str | None = None
     target_id: str | None = None
     destination_id: str | None = None
     """Drop target of a drag: the control the dragged element is released onto."""
+    drag_path: DragPath | None = None
+    """A same-control drag path, normalized to the target's live box."""
     text: str | None = None
     """Value to type or option to select. May hold a resolved secret: never log or persist an Action."""
     secret: bool = False

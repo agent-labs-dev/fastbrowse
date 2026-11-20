@@ -112,6 +112,27 @@ async fn test_an_image_or_canvas_that_takes_input_is_a_drawn_control() {
     h.close().await;
 }
 
+/// An image the page names draggable is a source for its own drag and drop onto a drop zone, not a surface to draw on.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_draggable_image_is_dragged_to_a_drop_zone_not_drawn_on() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<img alt="Card" draggable="true" width="64" height="64" ' +
+          'src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">';
+        document.querySelector('img').onclick = () => {};
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let card = obs.controls.iter().find(|c| c.label == "Card").expect("the image is a control");
+    assert_eq!(card.drawn, None, "{:?}", obs.controls);
+    assert!(card.operations.contains(&Operation::Drag), "{:?}", obs.controls);
+    h.close().await;
+}
+
 /// A map library listens for clicks on its viewport, beside its own zoom buttons, rather than on the canvas it draws
 /// the map on: the canvas is still what a click on the map presses. Nameless, it is called a canvas, not by its role.
 #[tokio::test(flavor = "multi_thread")]

@@ -16,7 +16,7 @@ use lifecycle_support::{FakeChrome, Reply};
 use serde_json::json;
 use tokio::sync::watch;
 
-#[cfg(any(feature = "cursor", feature = "recording"))]
+#[cfg(feature = "recording")]
 fn temp_dir(name: &str) -> std::path::PathBuf {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -701,129 +701,6 @@ async fn test_a_closed_tab_reaches_the_loop_as_unavailable() {
 //
 // test_recording_preserves_attached_page_geometry_and_reattachment is not ported: it runs `run_task` and `Agent`,
 // the run layer, which is not ported here.
-
-// -- test_cursor.py: cursor geometry must belong to the page that supplied the action point --------------------------
-
-#[cfg(feature = "cursor")]
-mod cursor {
-    use super::*;
-    use crate::common::{control, harness};
-    use fastbrowse_browser::cursor::Geometry;
-    use fastbrowse_browser::page::CdpPage;
-    use fastbrowse_browser::testing::lifecycle::{cursor_geometry, open_cursor};
-    use fastbrowse_core::config::Config;
-    use fastbrowse_core::models::{Operation, StepOutcome};
-    use fastbrowse_core::page::Action;
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_geometry_rejects_a_point_from_another_tab() {
-        let Some(h) = harness().await else { return };
-        h.goto("/").await;
-        let observation = h.observe().await;
-        let active = h.session.active_session_id().unwrap();
-        let same_page = |reading: Option<Geometry>| reading.expect("the page reports its frame").same_page;
-        assert!(same_page(cursor_geometry(&h.page, &active, &observation.document_key).await));
-        assert!(!same_page(cursor_geometry(&h.page, "another-session", &observation.document_key).await));
-        h.close().await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_geometry_rejects_a_point_from_the_previous_document() {
-        let Some(h) = harness().await else { return };
-        h.goto("/").await;
-        let before = h.observe().await;
-        let session_id = h.session.active_session_id().unwrap();
-        h.goto("/dispatch.html").await;
-        let after = h.observe().await;
-        assert_ne!(before.document_key, after.document_key);
-        // The old point means nothing on the new document, but the new one still says whether the browser shows.
-        let same_page = |reading: Option<Geometry>| reading.expect("the new page reports its frame").same_page;
-        assert!(!same_page(cursor_geometry(&h.page, &session_id, &before.document_key).await));
-        assert!(same_page(cursor_geometry(&h.page, &session_id, &after.document_key).await));
-        h.close().await;
-    }
-
-    /// A `cua-driver` that completes the handshake and then fails every tool call, as Python's mock driver does.
-    const FAILING_DRIVER: &str = r#"#!/usr/bin/env python3
-import json, sys
-if len(sys.argv) > 1 and sys.argv[1] == "cursor-theme":
-    print(json.dumps(["fastbrowse.focus.v1"]))
-    sys.exit(0)
-tools = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"]
-started = False
-for line in sys.stdin:
-    message = json.loads(line)
-    if "id" not in message:
-        continue
-    method = message.get("method")
-    if method == "initialize":
-        reply = {"result": {"capabilities": {}}}
-    elif method == "tools/list":
-        schema = {"properties": {"scope": {"enum": ["window", "desktop"]}, "cursor_theme": {"type": "object"}}}
-        reply = {"result": {"tools": [{"name": name, "inputSchema": schema} for name in tools]}}
-    elif message["params"]["name"] == "start_session" and not started:
-        started = True
-        reply = {"result": {"content": [], "structuredContent": {}}}
-    else:
-        reply = {"error": {"code": -32000, "message": "driver unavailable"}}
-    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], **reply}), flush=True)
-"#;
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_driver_failure_does_not_repeat_or_change_a_browser_action() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let Some(h) = harness().await else { return };
-        let dir = temp_dir("cursor");
-        let binary = dir.join("cua-driver");
-        std::fs::write(&binary, FAILING_DRIVER).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let feedback = Arc::new(open_cursor(&binary).await.expect("the driver's handshake passes"));
-        let page = CdpPage::new(h.session.clone(), Config::default()).with_cursor(Some(feedback.clone()));
-        page.navigate(
-            "data:text/html,<button onclick=\"this.textContent='Clicked '+(++window.clicks)\">Click</button>\
-             <script>window.clicks=0</script>",
-            None,
-        )
-        .await
-        .unwrap();
-        let observation = page.observe().await.unwrap();
-        let mut action = Action::new(Operation::Click);
-        action.target_id = Some(control(&observation, "Click").id.clone());
-        let result = page.act(&action, &observation).await.unwrap();
-        feedback.settled().await;
-        assert_eq!(result.outcome, StepOutcome::Executed);
-        let session_id = h.session.active_session_id().unwrap();
-        assert_eq!(page.evaluate(&session_id, "window.clicks").await.unwrap(), json!(1));
-        assert!(page.capture().await.unwrap().text.contains("Clicked 1"));
-        // `driver.close.assert_awaited_once()`: the failure closed the driver.
-        assert!(!feedback.running());
-        feedback.close().await;
-        h.close().await;
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Python makes the first `_evaluate` on a real page raise; the fake answers the geometry read with CDP's -32000
-    /// once, as a navigation that destroyed the context does.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_navigation_context_loss_skips_only_the_cursor_read() {
-        let fake = FakeChrome::start().await;
-        let session = fake.session(fake.connection()).await;
-        let page = CdpPage::new(session.clone(), Config::default());
-        let metrics = json!({"cssLayoutViewport": {"clientWidth": 800}, "layoutViewport": {"clientWidth": 800}});
-        let reading = json!({"result": {"value": [0, 0, 800, 600, 800, 600, 1, true, "document"]}});
-        fake.queue("SystemInfo.getProcessInfo", [json!({"processInfo": [{"type": "browser", "id": 5}]})]);
-        fake.queue("Page.getLayoutMetrics", [metrics.clone(), metrics]);
-        fake.script()
-            .results
-            .entry("Runtime.evaluate".into())
-            .or_default()
-            .extend([Reply::Error(-32000), Reply::Result(reading)]);
-        assert!(cursor_geometry(&page, "session", "document").await.is_none());
-        assert!(cursor_geometry(&page, "session", "document").await.is_some());
-        session.close().await.unwrap();
-    }
-}
 
 /// A server that never answers leaves Chrome loading with no further event, so a load is waited on for as long as a
 /// navigation is given one, from its own start, and no longer.

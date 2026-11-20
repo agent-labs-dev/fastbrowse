@@ -88,7 +88,7 @@ pub fn operation_label(operation: Operation) -> &'static str {
         }
         Operation::Click => "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
-        Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
+        Operation::Drag => "Drag a control onto a destination, or draw a pointer gesture on a drawn surface.",
         Operation::Fill => "Put the value the task needs into an editable field, typing or replacing its text.",
         Operation::Press => "Press the key or key chord the task gives in an editable field.",
         Operation::Blur => {
@@ -1174,16 +1174,8 @@ pub fn build_request(
     }
     let drops: Vec<Control> = controls.iter().filter(|control| !control.label.is_empty()).cloned().collect();
     let mut drop_groups: Vec<Vec<Control>> = Vec::new();
-    if offered.contains(&Operation::Drag) {
-        if drops.len() <= limit {
-            questions.insert(keys::DRAG_DESTINATION.into(), destination_question(&drops).into());
-        } else {
-            drop_groups = chunks(&drops, size);
-            questions.insert(
-                keys::DRAG_DESTINATION_GROUP.into(),
-                group_question(Operation::Drag, &drop_groups, &DESTINATION).into(),
-            );
-        }
+    if offered.contains(&Operation::Drag) && drops.len() > limit {
+        drop_groups = chunks(&drops, size);
     }
     if offered.contains(&Operation::SwitchTab) {
         let instructions = dumps(&json!({"rules": *TARGET, "operation": Operation::SwitchTab.as_str()}));
@@ -1464,13 +1456,19 @@ async fn evaluate(
         target_confidence = Some(group_confidence * target_answer.confidence);
     }
     let mut destination: Option<Control> = None;
-    if operation == Operation::Drag {
+    if operation == Operation::Drag && target.as_ref().is_none_or(|target| target.drawn != Some(true)) {
         let destination_confidence = if request.destination_groups.is_empty() {
-            let destination_answer = choice_answer(&evaluation, keys::DRAG_DESTINATION)?;
+            let key = keys::DRAG_DESTINATION.to_string();
+            let question = destination_question(&request.destinations);
+            let destination_evaluation = ask(&IndexMap::from([(key.clone(), question.into())])).await?;
+            let destination_answer = choice_answer(&destination_evaluation, &key)?;
             destination = Some(find_control(&request.destinations, &destination_answer.choice)?);
             destination_answer.confidence
         } else {
-            let group_answer = choice_answer(&evaluation, keys::DRAG_DESTINATION_GROUP)?;
+            let group_key = keys::DRAG_DESTINATION_GROUP.to_string();
+            let group_question = group_question(Operation::Drag, &request.destination_groups, &DESTINATION);
+            let group_evaluation = ask(&IndexMap::from([(group_key.clone(), group_question.into())])).await?;
+            let group_answer = choice_answer(&group_evaluation, &group_key)?;
             let group =
                 &request.destination_groups[group_index(&group_answer.choice, request.destination_groups.len())?];
             let questions = IndexMap::from([(keys::DRAG_DESTINATION.to_string(), destination_question(group).into())]);
@@ -2808,6 +2806,19 @@ mod tests {
             build_request(&page, &[button(1)], &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
         assert!(!request.questions.contains_key("drag_target"));
         assert!(!request.questions.contains_key("drag_destination"));
+    }
+
+    #[test]
+    fn test_drawn_drag_has_a_target_but_no_destination_question() {
+        let mut surface = button(1);
+        surface.drawn = Some(true);
+        surface.operations = [Operation::Drag].into_iter().collect();
+        let page = observation(vec![surface.clone()]);
+        let request =
+            build_request(&page, &[surface], &StepContext::new("draw on it"), &Config::default(), MAX_CHOICE_OPTIONS);
+        assert!(request.questions.contains_key(&keys::target(Operation::Drag)));
+        assert!(!request.questions.contains_key(keys::DRAG_DESTINATION));
+        assert!(!request.questions.contains_key(keys::DRAG_DESTINATION_GROUP));
     }
 
     fn assert_send<T: Send>(_: &T) {}

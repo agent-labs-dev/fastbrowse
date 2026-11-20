@@ -71,6 +71,9 @@ fn describe_control(
         if let Some(context) = destination.context.as_deref().filter(|c| !c.is_empty()) {
             instructions.push_str(&format!("The drop target sits under {} on the page.\n", text::repr(context)));
         }
+    } else if operation == Operation::Drag {
+        instructions
+            .push_str("This gesture stays on the selected surface and may draw, sign, move or change what it shows.\n");
     }
     if let Some(semantics) = control.submit_semantics.as_deref().filter(|s| !s.is_empty())
         && (matches!(operation, Operation::Enter | Operation::Press)
@@ -1232,6 +1235,15 @@ mod tests {
         assert!(archive_question.instructions.contains("Drop it onto the element labelled 'Archive'."));
         assert!(delete_question.instructions.contains("Drop it onto the element labelled 'Delete'."));
         assert_ne!(archive_question.instructions, delete_question.instructions);
+    }
+
+    #[test]
+    fn requested_same_surface_drag_action_describes_the_gesture() {
+        let surface = Control::new("canvas", "img", "Drawing surface", [Operation::Drag]);
+        let question = requested_question(&control_action(Operation::Drag, &surface, None, &[]));
+        assert!(question.instructions.contains("This gesture stays on the selected surface"));
+        assert!(question.instructions.contains("draw, sign, move or change what it shows"));
+        assert!(!question.instructions.contains("drop target"));
     }
 
     fn password(id: &str, form: Option<&str>, autocomplete: Option<&str>) -> Control {

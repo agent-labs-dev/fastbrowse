@@ -294,8 +294,9 @@ pub struct RunTask {
     pub recipe: Option<PathBuf>,
     #[serde(default)]
     pub save_recipe: Option<PathBuf>,
-    /// Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver. Unset draws it wherever
-    /// it can be placed, true also brings the window to the front for it, false turns it off.
+    /// Draw the agent's cursor inside the page, so whoever watches the browser, its live view or a recording sees where
+    /// each action lands. Unset draws it wherever the page can be seen, true in every run, false never. The model
+    /// never sees it.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub cursor: Option<bool>,
     /// A browser on this machine instead of a Browser Use Cloud browser: the user's own Chrome through the fastbrowse

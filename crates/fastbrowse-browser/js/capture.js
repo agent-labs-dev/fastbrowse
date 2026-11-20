@@ -566,7 +566,7 @@
         run.push(node);
         continue;
       }
-      if (node.nodeType !== 1 || hidden(node)) continue;
+      if (node.nodeType !== 1 || hidden(node) || node.hasAttribute('data-fastbrowse-cursor')) continue;
       if (FRAMES.has(node.tagName)) {
         flushRun(false);
         enter(node, path);

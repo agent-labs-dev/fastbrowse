@@ -198,11 +198,11 @@ pub struct Args {
     pub desktop: Vec<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
-    /// `--cursor` or `--no-cursor`; neither draws the cursor wherever it can be placed.
+    /// `--cursor` or `--no-cursor`; neither draws the cursor wherever the page can be seen.
     pub cursor: Option<bool>,
 }
 
-/// The cursor a run was asked for: `--cursor` also brings the window forward, `--no-cursor` turns it off.
+/// The cursor a run was asked for: `--cursor` draws it in every run, `--no-cursor` turns it off.
 pub(crate) fn cursor_choice(cursor: bool, no_cursor: bool) -> Option<bool> {
     match (cursor, no_cursor) {
         (true, _) => Some(true),

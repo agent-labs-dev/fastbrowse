@@ -42,6 +42,18 @@ pub const SELECT_TEXT_JS: &str = concat!(
     "selection.removeAllRanges(); selection.addRange(range); } ",
 );
 
+/// An element's box in the top viewport's CSS pixels, mapped out of the same-origin frames it sits in: a frame's
+/// document starts inside its border and padding, as Puppeteer's frame offset also counts. Null inside a frame of
+/// another origin, whose element this document cannot reach.
+pub const TOP_RECT_JS: &str = concat!(
+    "(e => { const r = e.getBoundingClientRect(); let [x, y, w, h] = [r.x, r.y, r.width, r.height]; ",
+    "for (let view = e.ownerDocument.defaultView; view !== window; ) { const f = view.frameElement; if (!f) return null; ",
+    "const b = f.getBoundingClientRect(), pad = getComputedStyle(f), sx = b.width / f.offsetWidth, ",
+    "sy = b.height / f.offsetHeight; x = b.x + (f.clientLeft + parseFloat(pad.paddingLeft) + x) * sx; ",
+    "y = b.y + (f.clientTop + parseFloat(pad.paddingTop) + y) * sy; w *= sx; h *= sy; view = f.ownerDocument.defaultView; } ",
+    "return {left: x, top: y, right: x + w, bottom: y + h}; })",
+);
+
 pub const HIT_TEST_JS: &str = concat!(
     "((id, scroll = true) => { const e = window.__fastbrowse?.nodes.get(id); ",
     "if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled=\"true\"],[inert]') || ",
@@ -85,9 +97,11 @@ pub const HIT_TEST_JS: &str = concat!(
     "if (node === e ? !owns(e) && !labels.some(owns) : !node.contains(hit)) return 'covered'; ",
     "if (doc === document) break; ",
     "node = view.frameElement; if (!node) return null; ",
-    "const frame = node.getBoundingClientRect(); ",
-    "x = frame.x + (node.clientLeft + x) * frame.width / node.offsetWidth; ",
-    "y = frame.y + (node.clientTop + y) * frame.height / node.offsetHeight; doc = node.ownerDocument; } ",
+    // A frame's document starts inside its border and padding, as Puppeteer's frame offset also counts.
+    "const frame = node.getBoundingClientRect(), pad = getComputedStyle(node); ",
+    "x = frame.x + (node.clientLeft + parseFloat(pad.paddingLeft) + x) * frame.width / node.offsetWidth; ",
+    "y = frame.y + (node.clientTop + parseFloat(pad.paddingTop) + y) * frame.height / node.offsetHeight; ",
+    "doc = node.ownerDocument; } ",
     "return [x, y]; }; ",
     "for (const r of rects) { for (const [fx, fy] of [[.5, .5], [.25, .25], [.75, .25], [.25, .75], [.75, .75]]) { ",
     "const point = hitAt(r.left + (r.right - r.left) * fx, r.top + (r.bottom - r.top) * fy); ",
@@ -121,12 +135,6 @@ pub const ACTIVATION_KEY_JS: &str = concat!(
     "input[type=image]')) return 'Enter'; ",
     "if (['button', 'link', 'tab', 'menuitem', 'option', 'treeitem'].includes(role)) return 'Enter'; ",
     "return null; })",
-);
-
-pub const GEOMETRY_JS: &str = concat!(
-    "[window.screenX, window.screenY, window.outerWidth, window.outerHeight, window.innerWidth, window.innerHeight, ",
-    "window.visualViewport ? window.visualViewport.scale : 1, document.visibilityState === 'visible', ",
-    "String(performance.timeOrigin)]",
 );
 
 /// Resolves once the page has drawn a frame, or after 100ms where a hidden page never draws one. A guard resumed
@@ -245,9 +253,10 @@ pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
         "if (r.width * r.height >= view.innerWidth * view.innerHeight / 2) return 'other'; band = true; } ",
         "return band ? 'band' : 'other'; } ",
         "if (doc === document) return 'none'; node = view.frameElement; if (!node) return 'none'; ",
-        "const frame = node.getBoundingClientRect(); ",
-        "x = frame.x + (node.clientLeft + x) * frame.width / node.offsetWidth; ",
-        "y = frame.y + (node.clientTop + y) * frame.height / node.offsetHeight; doc = node.ownerDocument; } })",
+        "const frame = node.getBoundingClientRect(), pad = getComputedStyle(node); ",
+        "x = frame.x + (node.clientLeft + parseFloat(pad.paddingLeft) + x) * frame.width / node.offsetWidth; ",
+        "y = frame.y + (node.clientTop + parseFloat(pad.paddingTop) + y) * frame.height / node.offsetHeight; ",
+        "doc = node.ownerDocument; } })",
     ]
     .concat()
 });
