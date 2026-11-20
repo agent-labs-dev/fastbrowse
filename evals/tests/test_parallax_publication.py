@@ -201,6 +201,17 @@ def test_browser_harness_is_public_only_on_its_pinned_model_or_none() -> None:
     assert arm_for("fastbrowse", "test/model") == "fastbrowse"
 
 
+def test_cua_codex_runs_its_pinned_model() -> None:
+    from fastbrowse_evals.arms import public_arm as arm_for
+    from fastbrowse_evals.catalog import ARMS
+
+    assert [(b.harness, b.model) for b in invocations(["cua-codex"])] == [("cua-codex", "openai/gpt-6-luna")]
+    assert arm_for("cua-codex", "openai/gpt-6-luna") == "cua-codex"
+    assert arm_for("cua-codex", None) == "cua-codex"
+    assert arm_for("cua-codex", "anthropic/claude-haiku-5.5") is None
+    assert "openai/gpt-6-luna" in ARMS["cua-codex"].pin
+
+
 def test_public_arm_maps_parallax_competitor_identity() -> None:
     cloud = result("pypi-version", 0).model_copy(update={"harness": "browser-use-cloud"})
     ultrafast = cloud.model_copy(update={"model": "bu-ultrafast"})
