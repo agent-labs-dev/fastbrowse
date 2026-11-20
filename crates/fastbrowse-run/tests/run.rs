@@ -761,14 +761,22 @@ impl<J: DecisionClient> DecisionClient for StepStates<J> {
 /// example.com's served page is a paragraph and a script that builds its heading and its one link. Read over HTTP,
 /// it offered no controls, Jev was told nothing on it led anywhere else, and a run asked to follow its link ended
 /// `complete` without following it (#1380). A page whose markup carries scripts is stated as read without running
-/// them, and the wait Jev picks there takes the run to a browser. A page with no scripts still leads nowhere.
+/// them, and the wait Jev picks there takes the run to a browser; a run limited to fetching is told no browser opens.
+/// A page with no scripts still leads nowhere.
 #[tokio::test]
 async fn test_a_fetched_page_whose_links_a_script_builds_is_not_said_to_lead_nowhere() {
     let script_built = "<title>Example Domain</title><div><p>This domain is for use in documentation examples.</p></div>\
                         <script src=/s.js></script>";
     let plain = "<title>Example Domain</title><div><p>This domain is for use in documentation examples.</p></div>\
                  <script type=application/ld+json>{\"@type\": \"WebSite\"}</script>";
-    for (markup, scripts) in [(script_built, true), (plain, false)] {
+    let opens = "This page was read over HTTP: its markup holds no links or controls, but its scripts did not run. A \
+                 read takes in only this markup; a wait, scroll or other step on this page opens it in a browser, \
+                 which runs them.";
+    let cannot = "This page was read over HTTP: its markup holds no links or controls, but its scripts did not run. \
+                  This run cannot open a browser, so no step on this page runs them: a read takes in only this markup.";
+    let nowhere = "This page offers no links or controls: nothing on it leads anywhere else.";
+    for (markup, fetch, stated) in [(script_built, false, opens), (script_built, true, cannot), (plain, false, nowhere)]
+    {
         let asked = Arc::new(Mutex::new(Vec::new()));
         let wait = fastbrowse_agent::scripted::Step {
             operation: fastbrowse_core::models::Operation::Wait,
@@ -777,6 +785,7 @@ async fn test_a_fetched_page_whose_links_a_script_builds_is_not_said_to_lead_now
         };
         let jev = StepStates(fastbrowse_agent::scripted::ScriptedJev::new(vec![wait]), asked.clone());
         let options = task(|o, h| {
+            o.fetch = fetch;
             o.task = "Open https://docs.example.test/, follow the link on that page, and report the main heading of \
                       the page the link opens."
                 .into();
@@ -797,19 +806,19 @@ async fn test_a_fetched_page_whose_links_a_script_builds_is_not_said_to_lead_now
         });
         let result = run(options).await.unwrap();
         let facts = asked.lock().unwrap()[0]["page_facts"].to_string();
-        let unrun = "This page was read over HTTP without running the scripts its markup carries: the markup holds no \
-                     links or controls, but a browser running those scripts may show some. A read takes in only this \
-                     markup; a wait, scroll or other step on this page needs a browser, which runs them.";
-        let nowhere = "This page offers no links or controls: nothing on it leads anywhere else.";
-        assert_eq!(facts.contains(unrun), scripts, "{facts}");
-        assert_eq!(facts.contains(nowhere), !scripts, "{facts}");
-        if scripts {
+        for fact in [opens, cannot, nowhere] {
+            assert_eq!(facts.contains(fact), fact == stated, "{facts}");
+        }
+        // The wait hands the run to the browser, which here fails to start; a fetch-only run ends where it is.
+        if stated == opens {
             assert_eq!(result.status, Status::Error, "{:?}", result.error);
             assert!(
                 result.error.as_deref().is_some_and(|error| error.contains("no browser here")),
                 "{:?}",
                 result.error
             );
+        } else if fetch {
+            assert_eq!(result.status, Status::Blocked, "{:?}", result.error);
         }
     }
 }

@@ -614,6 +614,17 @@ pub struct ActResult {
 
 pub type PageResult<T> = Result<T, BrowserError>;
 
+/// What a page read without a browser left out of the current document, which a browser shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unread {
+    /// The markup carries scripts a browser would run, and none of them ran.
+    pub scripts: bool,
+    /// Frames whose documents were not read.
+    pub frames: i64,
+    /// Whether a step this page cannot take opens it in a browser in this run; a run limited to fetching cannot.
+    pub browser: bool,
+}
+
 pub trait Page: Send + Sync {
     /// The documented maximum price of one configured web-search request. None leaves search unavailable.
     fn search_price(&self) -> Option<f64> {
@@ -639,10 +650,10 @@ pub trait Page: Send + Sync {
         false
     }
 
-    /// Whether the current document carries scripts a browser would run and this page never ran, as a page fetched
-    /// over HTTP does: what they build, links included, is missing from what it observes.
-    fn scripts_unrun(&self) -> bool {
-        false
+    /// What a browser would show of the current document that this page did not take in, as a page fetched over HTTP
+    /// leaves out what scripts build and what unread frames hold, links included. None when it took in all of it.
+    fn unread(&self) -> Option<Unread> {
+        None
     }
 
     /// The error that ends this run's page and sends it on to a browser.

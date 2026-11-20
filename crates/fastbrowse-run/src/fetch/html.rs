@@ -1444,14 +1444,121 @@ const JAVASCRIPT_TYPES: [&str; 16] = [
     "text/x-javascript",
 ];
 
+/// The event handler content attributes the HTML standard has every element support (its tables for
+/// `GlobalEventHandlers` and `DocumentAndElementEventHandlers`): a handler set by one runs script on that event.
+const ELEMENT_HANDLERS: [&str; 76] = [
+    "onabort",
+    "onauxclick",
+    "onbeforeinput",
+    "onbeforematch",
+    "onbeforetoggle",
+    "onblur",
+    "oncancel",
+    "oncanplay",
+    "oncanplaythrough",
+    "onchange",
+    "onclick",
+    "onclose",
+    "oncommand",
+    "oncontextlost",
+    "oncontextmenu",
+    "oncontextrestored",
+    "oncopy",
+    "oncuechange",
+    "oncut",
+    "ondblclick",
+    "ondrag",
+    "ondragend",
+    "ondragenter",
+    "ondragleave",
+    "ondragover",
+    "ondragstart",
+    "ondrop",
+    "ondurationchange",
+    "onemptied",
+    "onended",
+    "onerror",
+    "onfocus",
+    "onformdata",
+    "oninput",
+    "oninvalid",
+    "onkeydown",
+    "onkeypress",
+    "onkeyup",
+    "onload",
+    "onloadeddata",
+    "onloadedmetadata",
+    "onloadstart",
+    "onmousedown",
+    "onmouseenter",
+    "onmouseleave",
+    "onmousemove",
+    "onmouseout",
+    "onmouseover",
+    "onmouseup",
+    "onpaste",
+    "onpause",
+    "onplay",
+    "onplaying",
+    "onprogress",
+    "onratechange",
+    "onreset",
+    "onresize",
+    "onscroll",
+    "onscrollend",
+    "onsecuritypolicyviolation",
+    "onseeked",
+    "onseeking",
+    "onselect",
+    "onslotchange",
+    "onstalled",
+    "onsubmit",
+    "onsuspend",
+    "ontimeupdate",
+    "ontoggle",
+    "onvolumechange",
+    "onwaiting",
+    "onwebkitanimationend",
+    "onwebkitanimationiteration",
+    "onwebkitanimationstart",
+    "onwebkittransitionend",
+    "onwheel",
+];
+
+/// The event handler content attributes the HTML standard adds on `<body>` and `<frameset>` for their window, such as
+/// `onpageshow`, which a load fires with no step taken.
+const WINDOW_HANDLERS: [&str; 18] = [
+    "onafterprint",
+    "onbeforeprint",
+    "onbeforeunload",
+    "onhashchange",
+    "onlanguagechange",
+    "onmessage",
+    "onmessageerror",
+    "onoffline",
+    "ononline",
+    "onpagehide",
+    "onpagereveal",
+    "onpageshow",
+    "onpageswap",
+    "onpopstate",
+    "onrejectionhandled",
+    "onstorage",
+    "onunhandledrejection",
+    "onunload",
+];
+
 /// The `<script>` elements of `html` a browser would run, which a read of the markup never does. Whatever they build,
 /// links included, is missing from that read: example.com's served page is one paragraph and a script that adds its
 /// heading and its one link, and a fetched read of it was told the page led nowhere (#1380).
 ///
 /// Counted as the HTML standard's "prepare the script element" decides: a script with neither a `src` nor any text
 /// does nothing, a type string that is not JavaScript or `module` is a data block, a classic script marked
-/// `nomodule` is skipped by a browser that runs modules, and a script inside a `<template>` is inert. An element with
-/// an event handler attribute counts as one more script.
+/// `nomodule` is skipped by a browser that runs modules, and a script inside a `<template>` is inert. A type string
+/// with parameters, such as `text/javascript; charset=utf-8`, is no essence match, and Chrome does not run it either.
+/// A script whose text is only whitespace or a comment still runs, as the standard has it, doing nothing: telling
+/// what a script does is past what reading markup can know. An element with one of the standard's event handler
+/// attributes counts as one more script, unless the handler is empty, which compiles to nothing.
 pub fn scripts(html: &str) -> usize {
     #[derive(Default)]
     struct Scripts {
@@ -1480,11 +1587,18 @@ pub fn scripts(html: &str) -> usize {
                     self.open = Some(runs(tag));
                     self.text = false;
                 }
-                // Every event handler content attribute the HTML standard defines is named `on` and its event, and
-                // one a load or an error fires, such as `<body onload>`, runs with no step taken: a page whose only
-                // script is a handler was still said to lead nowhere (#1380 review).
-                _ if self.templates == 0
-                    && tag.attrs.iter().any(|a| a.name.local.starts_with("on") && !a.value.is_empty()) =>
+                // A handler a load or an error fires, such as `<body onload>`, runs with no step taken: a page whose
+                // only script was a handler was still said to lead nowhere (#1380 review). An attribute counts only by
+                // the standard's own names, so `on-sale` or a framework's `onsale` is no handler.
+                name if self.templates == 0
+                    && tag.attrs.iter().any(|attribute| {
+                        let handler = !attribute.value.is_empty();
+                        let attribute = &*attribute.name.local;
+                        handler
+                            && (ELEMENT_HANDLERS.binary_search(&attribute).is_ok()
+                                || (matches!(name, "body" | "frameset")
+                                    && WINDOW_HANDLERS.binary_search(&attribute).is_ok()))
+                    }) =>
                 {
                     self.count += 1;
                 }
@@ -1540,12 +1654,23 @@ mod tests {
         assert_eq!(scripts("<p>Text</p>"), 0);
         assert_eq!(scripts("<script></script>"), 0, "a script with no source and no text does nothing");
         assert_eq!(scripts("<script type=application/ld+json>{\"a\": 1}</script>"), 0, "a data block");
-        assert_eq!(scripts("<script type=importmap>{}</script><script type='text/javascript; x=y'>a</script>"), 0);
+        assert_eq!(scripts("<script type=importmap>{}</script>"), 0);
+        // The standard runs a type string only as an essence match, and headless Chrome left this one unrun.
+        assert_eq!(scripts("<script type='text/javascript; charset=utf-8'>a()</script>"), 0, "parameters");
         assert_eq!(scripts("<script nomodule src=legacy.js></script>"), 0);
         assert_eq!(scripts("<template><script src=t.js></script></template>"), 0, "a template's content is inert");
         assert_eq!(scripts("<noscript><script src=n.js></script></noscript>"), 0);
         assert_eq!(scripts("<body onload=addLink()><p>Text</p><img src=x onerror=more()></body>"), 2, "handlers");
+        assert_eq!(scripts("<body onpageshow=add()><p>Text</p></body><div onpageshow=add()></div>"), 1, "body's own");
         assert_eq!(scripts("<body onload=''><p>Text</p><template><img onerror=x()></template></body>"), 0);
+        assert_eq!(scripts("<div on-sale=yes onsale=yes one=1 data-onload=x()>Sale</div>"), 0, "not handler names");
+        assert_eq!(scripts("<script>   </script><script>// note</script>"), 2, "run, doing nothing");
+    }
+
+    /// The handler names are searched by bisection, which only finds a name in a sorted list.
+    #[test]
+    fn handler_names_are_sorted() {
+        assert!(ELEMENT_HANDLERS.is_sorted() && WINDOW_HANDLERS.is_sorted());
     }
 
     #[test]

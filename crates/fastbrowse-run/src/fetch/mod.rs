@@ -29,7 +29,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, Link, Operation, StepOutcome};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult, Tab,
+    ActResult, Action, Block, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult, Tab, Unread,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::{sha256_hex, text};
@@ -364,6 +364,8 @@ pub struct FetchedPage {
     check_access: Option<CheckAccess>,
     loaded: Mutex<Loaded>,
     needed_browser: AtomicBool,
+    /// Whether a step this page refuses opens a browser on it, which a run limited to fetching never does.
+    browser: bool,
 }
 
 impl FetchedPage {
@@ -374,7 +376,14 @@ impl FetchedPage {
             check_access,
             loaded: Mutex::new(Loaded::default()),
             needed_browser: AtomicBool::new(false),
+            browser: true,
         }
+    }
+
+    /// This page in a run that may not open a browser, so what a refused step needs is never there.
+    pub fn without_browser(mut self) -> FetchedPage {
+        self.browser = false;
+        self
     }
 
     /// The caller's gate, asked again: permission can be withdrawn while the run is reading.
@@ -421,8 +430,10 @@ impl Page for FetchedPage {
         true
     }
 
-    fn scripts_unrun(&self) -> bool {
-        self.loaded.lock().unwrap().scripts
+    fn unread(&self) -> Option<Unread> {
+        let loaded = self.loaded.lock().unwrap();
+        let frames = loaded.capture.as_ref().map_or(0, |capture| capture.inaccessible_frames);
+        (loaded.scripts || frames > 0).then_some(Unread { scripts: loaded.scripts, frames, browser: self.browser })
     }
 
     fn needs_browser(&self, message: String) -> BrowserError {

@@ -9,7 +9,7 @@ use fastbrowse_browser::session::CheckAccess;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::Operation;
-use fastbrowse_core::page::{Action, BlockKind, BrowserError, Page};
+use fastbrowse_core::page::{Action, BlockKind, BrowserError, Page, Unread};
 use fastbrowse_core::py::sha256_hex;
 use fastbrowse_run::fetch::html::blocks;
 use fastbrowse_run::fetch::{FetchedPage, NotFetched, eligible, fetch_document};
@@ -700,7 +700,8 @@ async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
 }
 
 /// A script in a frame read into the page, or an event handler a load fires, can build a link as a `<script>` of the
-/// page's own can, so the fetched page records unrun scripts for each (#1380).
+/// page's own can, so the fetched page records unrun scripts for each (#1380). A frame it never reads, such as one
+/// nested in a frame, may hold links too: the page states it unread rather than free of scripts.
 #[tokio::test]
 async fn test_scripts_a_frame_or_handler_carries_are_unrun_scripts_of_the_page() {
     let http = serving(|request| {
@@ -709,6 +710,8 @@ async fn test_scripts_a_frame_or_handler_carries_are_unrun_scripts_of_the_page()
             "framed" => "<p>Outer text</p><iframe src=/inner></iframe>",
             "inline" => "<p>Outer text</p><iframe srcdoc='<p>Note</p><script>add()</script>'></iframe>",
             "handler" => "<body onload=addLink()><p>Outer text</p></body>",
+            "nesting" => "<p>Outer text</p><iframe src=/middle></iframe>",
+            "middle" => "<p>Middle text</p><iframe src=/deep></iframe>",
             _ => "<p>Outer text</p><iframe srcdoc='<p>Note</p>'></iframe>",
         };
         Response::new(200, body.to_string()).with_header("content-type", "text/html")
@@ -717,6 +720,15 @@ async fn test_scripts_a_frame_or_handler_carries_are_unrun_scripts_of_the_page()
         let fetched = fetch_document(&http, &format!("https://docs.example.test/{path}"), None, 15.0).await;
         assert_eq!(fetched.expect("read").scripts, scripts, "{path}");
     }
+    let unread = |page: FetchedPage, path: &'static str| async move {
+        page.navigate(&format!("https://docs.example.test/{path}"), None).await.unwrap();
+        page.unread()
+    };
+    let page = || FetchedPage::new(http.clone(), None, None);
+    let nested = Unread { scripts: false, frames: 1, browser: true };
+    assert_eq!(unread(page(), "nesting").await, Some(nested));
+    assert_eq!(unread(page().without_browser(), "nesting").await, Some(Unread { browser: false, ..nested }));
+    assert_eq!(unread(page(), "plain").await, None);
 }
 
 #[tokio::test]
