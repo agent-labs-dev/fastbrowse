@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value.
+- Copying a winner's field no longer fails when its quote does not label the value. The reader took a missing label for a missing value and answered null for a card that plainly led with its title, in about one request in six, and one null left the whole field unread ("No 'title' could be copied"). It is now told to answer null only when no text holds the field's value, and that the field is the claim's own word for it: asked for a `name` of cards that say `title:` or nothing, it answered null about one request in five.
 
 ## [0.12.0] - 2026-11-19
 
