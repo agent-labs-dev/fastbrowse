@@ -40,7 +40,7 @@ impl Method {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Request {
     pub method: Method,
     pub url: String,
@@ -56,6 +56,21 @@ pub struct Request {
     pub timeout: Duration,
     /// Whether a transport that queues requests before sending them sent this one; see [`Handoff`].
     pub handoff: Handoff,
+}
+/// Header names only and the address's userinfo masked: a request carries the provider's key in its headers.
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Request { method, url, headers, body, max_bytes, timeout, handoff } = self;
+        f.debug_struct("Request")
+            .field("method", method)
+            .field("url", &fastbrowse_core::safety::mask_userinfo(url))
+            .field("headers", &headers.iter().map(|(name, _)| name).collect::<Vec<_>>())
+            .field("body_bytes", &body.len())
+            .field("max_bytes", max_bytes)
+            .field("timeout", timeout)
+            .field("handoff", handoff)
+            .finish()
+    }
 }
 
 /// Settles once whether a request a transport queued before sending it went out: the transport takes it from its

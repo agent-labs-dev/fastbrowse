@@ -346,6 +346,70 @@ async def test_the_callers_own_clients_serve_the_rust_run() -> None:
 
 
 @pytest.mark.usefixtures("rust_core")
+async def test_a_start_with_credentials_reaches_no_model_callback_or_result_through_python() -> None:
+    """The Python layer forwards what the core gives it, so a task's address credentials stay masked end to end, the
+    page echoing them included (#1381). Reading over HTTP refuses an address with credentials, so they are in the task.
+    """
+    password, token = "Pyth0n9pw", "Tok3nPy9w"
+    echo = f"<p>{password} {base64.b64encode(f'ops:{password}'.encode()).decode()} {token}</p>"
+    counted = Counted()
+    sent: list[str] = []
+    evaluate, generate = counted.jev.evaluate, counted.llm.generate
+
+    async def recorded_evaluate(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        sent.append(json.dumps(state) + json.dumps({key: q.model_dump(mode="json") for key, q in questions.items()}))
+        return await evaluate(state, questions)
+
+    async def recorded_generate(purpose: LLMPurpose, messages: Any, *args: Any, **kwargs: Any) -> Any:
+        sent.extend(message.content for message in messages)
+        return await generate(purpose, messages, *args, **kwargs)
+
+    counted.jev.evaluate = recorded_evaluate
+    counted.llm.generate = recorded_generate
+
+    def page(request: httpx.Request) -> httpx.Response:
+        counted.requests.append(str(request.url))
+        return httpx.Response(
+            200, text=PAGE.replace("</main>", echo + "</main>"), headers={"content-type": "text/html"}
+        )
+
+    events: list[str] = []
+    checked: list[str] = []
+
+    async def on_event(event: Any) -> None:
+        events.append(event.model_dump_json())
+
+    async def until(url: str) -> bool:
+        checked.append(url)
+        return True
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(page)) as http:
+        result = await run_task(
+            f"Read the release. The login is https://ops:{password}@pypi.example/login and the mirror"
+            f" https://{token}@mirror.example/httpx, neither needed.",
+            start="https://pypi.example/httpx",
+            fetch=True,
+            jev=counted.jev,
+            llm=counted.llm,
+            http=http,
+            on_event=on_event,
+            until=until,
+            config=Config(step_frames=False),
+        )
+    assert counted.requests == ["https://pypi.example/httpx"], (result.status, result.error)
+    assert checked, "until was not asked"
+    assert any("0.28.1" in text for text in sent), "no model read the page"
+    for sink, texts in {
+        "model": sent,
+        "event": events,
+        "until": checked,
+        "result": [result.model_dump_json()],
+    }.items():
+        for text in texts:
+            assert password not in text and token not in text, f"a credential reached the {sink}"
+
+
+@pytest.mark.usefixtures("rust_core")
 async def test_a_reservation_the_rust_ledger_refuses_ends_the_run_budget_exceeded() -> None:
     counted = Counted()
     generate = counted.llm.generate

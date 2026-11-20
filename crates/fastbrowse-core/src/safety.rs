@@ -672,13 +672,29 @@ pub fn mask_userinfo(text: &str) -> String {
     Redactor::default().mask(text)
 }
 
+/// `value` written for `Debug` from its serialized form, every address's userinfo masked. A struct holding an address
+/// the caller wrote (a start, a DevTools endpoint) prints this way, so a field added later is printed and masked with
+/// the rest rather than derived raw.
+pub fn debug_masked<T: serde::Serialize>(name: &str, value: &T, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let written = serde_json::to_string(value).map_err(|_| std::fmt::Error)?;
+    write!(f, "{name}({})", mask_userinfo(&written))
+}
+
 /// Replaces every resolved secret value with its name in anything written out of the process.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Redactor {
     values: IndexMap<String, String>,
     typed_on: HashMap<String, HashSet<String>>,
     /// Whether an address's credential has been registered (`register_credentials_in`).
     credentials: bool,
+}
+
+/// The names it redacts, never their values: a derived `Debug` printed every secret it holds.
+impl std::fmt::Debug for Redactor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: HashSet<&str> = self.values.values().map(String::as_str).collect();
+        f.debug_struct("Redactor").field("names", &names).field("credentials", &self.credentials).finish()
+    }
 }
 
 impl Redactor {
@@ -721,31 +737,80 @@ impl Redactor {
     /// Nothing in a path or query is a credential by the grammar, so a token there is not registered. A credential is
     /// blanked wherever its characters appear, so a short one (`pw`) blanks those letters inside other words too.
     ///
-    /// The credential is registered as written, decoded and as the browser writes it (`p ss`, `p%20ss`), the forms a
-    /// page, a log or an address bar carries. Like a typed secret, a registration lasts as long as the redactor: the
-    /// runner gives each run its own, so there it is the run's.
+    /// The credential is registered in each form a browser, a server or a page derives from it (`learn_userinfo`).
+    /// Like a typed secret, a registration lasts as long as the redactor: the runner gives each run its own, so there
+    /// it is the run's.
     pub fn register_credentials_in(&mut self, text: &str) -> bool {
         let mut new = false;
         for (_, _, written) in userinfos(text) {
-            // Text already masked or redacted carries no credential to learn.
-            if written.contains(MASK) || written.contains("[secret:") {
-                continue;
-            }
             let (user, password) = written.split_once(':').map_or((written.as_str(), ""), |(u, p)| (u, p));
-            let secret = if password.is_empty() { user } else { password };
-            if secret.is_empty() {
-                continue;
-            }
-            let browser = Url::parse(&format!("https://{written}@host.invalid/")).ok().map(|url| {
-                if password.is_empty() { url.username().to_string() } else { url.password().unwrap_or("").to_string() }
-            });
-            for form in [Some(secret.to_string()), Some(decoded(secret)), browser].into_iter().flatten() {
-                if !form.is_empty() && !self.values.contains_key(hex_upper(&form).as_ref()) {
-                    self.register(ADDRESS_CREDENTIALS, &form, None);
-                    new = true;
+            new |= self.learn_userinfo(user, password);
+        }
+        new
+    }
+
+    /// `register_credentials_in` for text that is one whole address by construction: a start, a navigation target,
+    /// a redirect's landing, a tab or a history entry. It is parsed as the browser parses it (the `url` crate follows
+    /// WHATWG URL, which Chrome implements), so its user name and password are exactly the browser's, whatever they
+    /// hold; an address nested in its query is still found by scanning.
+    ///
+    /// A browser strips every tab and newline from an address before it parses it, so `https://ops:pa<TAB>ss@host/`
+    /// opens with the password `pass`, and a scan, which ends an address at whitespace, never saw its userinfo. Such
+    /// an address registers its credential as the browser reads it and as it was written.
+    pub fn register_address(&mut self, address: &str) -> bool {
+        let mut new = self.register_credentials_in(address);
+        let written = address.trim_matches(|c: char| c <= ' ');
+        if let Ok(url) = Url::parse(written) {
+            new |= self.learn_userinfo(url.username(), url.password().unwrap_or(""));
+            if written.contains(['\t', '\n', '\r'])
+                && let Some((_, rest)) = written.split_once("://")
+            {
+                let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+                let authority = if url.is_special() { authority.split('\\').next().unwrap_or("") } else { authority };
+                if let Some((userinfo, _)) = authority.rsplit_once('@') {
+                    let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+                    new |= self.learn_userinfo(user, password);
                 }
             }
-            self.credentials = true;
+        }
+        new
+    }
+
+    /// Register the credential of one userinfo, its user name and password as written, and say whether it was new.
+    ///
+    /// The forms registered are those something derives from it without guessing: as written, percent-decoded, as the
+    /// browser re-encodes it in an address (`p ss` becomes `p%20ss`), and the `Authorization: Basic` value a browser
+    /// sends for it, base64 of `user:password` decoded, in the standard alphabet and the URL-safe one, which a 401 page
+    /// or a request echo shows. HTML entities are not a form: every capture is text a parser decoded (the browser's
+    /// DOM, or html5ever over HTTP), so a page's `&#39;` reaches the redactor as `'`.
+    fn learn_userinfo(&mut self, user: &str, password: &str) -> bool {
+        // Text already masked or redacted carries no credential to learn.
+        if [user, password].iter().any(|part| part.contains(MASK) || part.contains("[secret:")) {
+            return false;
+        }
+        let secret = if password.is_empty() { user } else { password };
+        if secret.is_empty() {
+            return false;
+        }
+        self.credentials = true;
+        let (user, password) = (decoded(user), decoded(password));
+        let browser = Url::parse("https://host.invalid/").ok().and_then(|mut url| {
+            if password.is_empty() {
+                url.set_username(&user).ok()?;
+            } else {
+                url.set_password(Some(&password)).ok()?;
+            }
+            Some(if password.is_empty() { url.username().to_string() } else { url.password()?.to_string() })
+        });
+        let basic = crate::py::base64::encode(format!("{user}:{password}").as_bytes());
+        let url_safe = basic.replace('+', "-").replace('/', "_");
+        let forms = [Some(secret.to_string()), Some(decoded(secret)), browser, Some(basic), Some(url_safe)];
+        let mut new = false;
+        for form in forms.into_iter().flatten() {
+            if !form.is_empty() && !self.values.contains_key(hex_upper(&form).as_ref()) {
+                self.register(ADDRESS_CREDENTIALS, &form, None);
+                new = true;
+            }
         }
         new
     }
@@ -886,6 +951,22 @@ impl Redactor {
             .collect()
     }
 
+    /// Mask every string inside `value`, map keys included, as `mask` masks one.
+    pub fn mask_value(&self, value: &mut Value) {
+        match value {
+            Value::String(text) => *text = self.mask(text),
+            Value::Array(items) => items.iter_mut().for_each(|item| self.mask_value(item)),
+            Value::Object(fields) => {
+                let entries = std::mem::take(fields);
+                for (key, mut item) in entries {
+                    self.mask_value(&mut item);
+                    fields.insert(self.mask(&key), item);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+    }
+
     /// Redact every string inside `value`, as a trace event is written out.
     pub fn redact_value(&self, value: &mut Value) {
         match value {
@@ -935,8 +1016,14 @@ const SPECIAL_SCHEMES: [&str; 5] = ["http", "https", "ws", "wss", "ftp"];
 /// and backslashes, none included, as a browser reads `https:\\user@host` and `https:user@host`. A scheme-relative
 /// reference is a `//` where a reference can begin: at the start, or after a space, a quote, a backtick, `<`, `>`,
 /// `(`, `[`, `=` or `,`, as in an attribute, a JSON string or a query parameter. A `//` inside a path (`/a//b@c`)
-/// is not one, since a browser reads it as path. The authority runs to the first space, `/`, `?`, `#`, `\`, `<`,
-/// `>`, a quote or a backtick, less a sentence's closing punctuation.
+/// is not one, since a browser reads it as path.
+///
+/// The authority ends where a browser ends it, at `/`, `?` or `#` (and `\` for a special scheme), or at a space,
+/// which no address written in text holds. When an `@` lies inside, the userinfo is everything before the last one,
+/// whatever it holds: a browser reads `https://admin:it's-secret@host/` as the password `it's-secret`, and cut at the
+/// quote, only `it` was masked (#1381). Prose ends only the host after it, at `<`, `>`, a quote or a backtick, less a
+/// sentence's closing punctuation. Text that reads as an authority with an `@` is masked to the last `@` even where a
+/// writer did not mean one (`"https://a.test","mail":"b@c.test"`): a browser given that string reads it so too.
 fn authorities(text: &str) -> Vec<Authority> {
     let bytes = text.as_bytes();
     let mut found = Vec::new();
@@ -977,20 +1064,24 @@ fn authorities(text: &str) -> Vec<Authority> {
             at = netloc_start.max(at + 1);
             continue;
         }
-        let length = text[netloc_start..]
-            .find(|c: char| text::is_space(c) || matches!(c, '/' | '?' | '#' | '\\' | '<' | '>' | '"' | '\'' | '`'))
-            .unwrap_or(text.len() - netloc_start);
-        // A sentence's full stop or a closing bracket is not part of the host it follows.
-        let netloc = text[netloc_start..netloc_start + length]
-            .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', '}', '\'', '"']);
-        let userinfo = netloc
-            .rsplit_once('@')
-            .filter(|(written, _)| !written.is_empty())
-            .map(|(written, _)| (netloc_start, netloc_start + written.len()));
-        if !netloc.is_empty() {
-            found.push(Authority { scheme, netloc: (netloc_start, netloc_start + netloc.len()), userinfo });
+        let authority_end = text[netloc_start..]
+            .find(|c: char| text::is_space(c) || matches!(c, '/' | '?' | '#') || (special && c == '\\'))
+            .map_or(text.len(), |length| netloc_start + length);
+        let last_at = text[netloc_start..authority_end].rfind('@').map(|offset| netloc_start + offset);
+        let userinfo = last_at.filter(|at| *at > netloc_start).map(|at| (netloc_start, at));
+        let host_start = last_at.map_or(netloc_start, |at| at + 1);
+        // Prose ends the host where an address in it cannot go on, and a sentence's full stop or a closing bracket is
+        // not part of the host it follows.
+        let host_end = text[host_start..authority_end]
+            .find(['<', '>', '"', '\'', '`'])
+            .map_or(authority_end, |length| host_start + length);
+        let host = text[host_start..host_end].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', '}', '\'', '"']);
+        let netloc_end = host_start + host.len();
+        if netloc_end > netloc_start {
+            found.push(Authority { scheme, netloc: (netloc_start, netloc_end), userinfo });
         }
-        at = netloc_start + length.max(1);
+        // An address after a quote that ended this one's host is read on its own.
+        at = if userinfo.is_some() { authority_end } else { host_end }.max(netloc_start + 1);
     }
     found
 }
@@ -1195,6 +1286,98 @@ mod tests {
             assert!(!none.register_credentials_in(text), "{text}");
         }
         assert!(!none.holds_credentials() && none.values.is_empty());
+    }
+
+    /// A browser ends an authority only at `/`, `?` or `#` (and `\` for a special scheme) and reads the userinfo to the
+    /// last `@` before it. Cut at a quote or a bracket, `https://admin:it's-secret@host/` masked only `it`, and
+    /// `s-secret` reached every model (#1381). Each character a password can hold is masked with the rest of it,
+    /// written as a start, in prose, in quotes, at a sentence's end, in an attribute and in JSON.
+    #[test]
+    fn test_a_password_is_masked_whole_whatever_characters_it_holds() {
+        for character in ["'", "\"", "<", ">", "`", "(", ")", ",", ";", "!", ".", "@", ":", "%20"] {
+            let password = format!("pw{character}tail9");
+            let address = format!("https://admin:{password}@shop.test/orders");
+            let mut redactor = Redactor::new();
+            assert!(redactor.register_address(&address), "{address}");
+            let masked = "https://[secret:address_credentials]@shop.test/orders".to_string();
+            for (text, redacted) in [
+                (address.clone(), masked.clone()),
+                (format!("Open {address} and read it"), format!("Open {masked} and read it")),
+                (format!("Open '{address}' now"), format!("Open '{masked}' now")),
+                (format!("Open \"{address}\"."), format!("Open \"{masked}\".")),
+                (format!("It is at {address}."), format!("It is at {masked}.")),
+                (format!("<a href=\"{address}\">orders</a>"), format!("<a href=\"{masked}\">orders</a>")),
+                (format!("{{\"url\": \"{address}\"}}"), format!("{{\"url\": \"{masked}\"}}")),
+            ] {
+                let shown = redactor.redact(&text);
+                assert_eq!(shown, redacted, "{text}");
+                // Unregistered, the structure alone masks the whole userinfo.
+                let unregistered = Redactor::new().redact(&text);
+                assert!(!unregistered.contains("tail9"), "{unregistered}");
+            }
+            // The password alone, in the page's text, as the browser decodes it.
+            let decoded = decoded(&password);
+            assert_eq!(
+                redactor.redact(&format!("is {decoded} ok")),
+                "is [secret:address_credentials] ok",
+                "{password}"
+            );
+        }
+    }
+
+    /// Chrome strips a tab or newline inside an address before it parses it: given `https://ops:pa<TAB>ss@host/`, it
+    /// opens with the password `pass`, and the scan, ending the address at the tab, registered nothing. In prose a tab
+    /// separates words, so only a whole address is read this way.
+    #[test]
+    fn test_a_whole_address_with_a_tab_in_its_password_registers_it_as_written_and_as_the_browser_reads_it() {
+        for written in
+            ["https://ops:Pa\tss9w@shop.test/", "https://ops:Pa\nss9w@shop.test/", "\thttps://Tok\tn9w@shop.test/"]
+        {
+            let mut redactor = Redactor::new();
+            assert!(redactor.register_address(written), "{written:?}");
+            assert!(redactor.holds_credentials());
+            let browser = Url::parse(written.trim()).unwrap();
+            let read = browser.password().unwrap_or(browser.username()).to_string();
+            for text in [format!("it is {read} here"), format!("page shows {written}")] {
+                let shown = redactor.redact(&text);
+                assert!(!shown.contains("9w"), "{shown:?}");
+            }
+        }
+    }
+
+    /// The secret of an address is its password when one is written, else its user name, which is how an access token
+    /// is written (`https://TOKEN@host/`); a user name beside a password is not the secret, and is masked only inside
+    /// an address.
+    #[test]
+    fn test_the_secret_of_an_address_is_its_password_or_else_its_only_userinfo() {
+        let mut token = Redactor::new();
+        token.register_address("https://ghp_T0ken9w@code.test/repo");
+        assert_eq!(token.redact("the key ghp_T0ken9w works"), "the key [secret:address_credentials] works");
+        let mut both = Redactor::new();
+        both.register_address("https://admin:Pw9w@shop.test/");
+        assert_eq!(both.redact("admin and Pw9w"), "admin and [secret:address_credentials]");
+        assert_eq!(
+            both.redact("at https://admin:Pw9w@shop.test/"),
+            "at https://[secret:address_credentials]@shop.test/"
+        );
+    }
+
+    /// A browser answering a 401 sends `Authorization: Basic` with base64 of `user:password`, and a page or log that
+    /// echoes the header shows the credential in that form; a token with no password goes as `token:`.
+    #[test]
+    fn test_the_basic_authorization_a_browser_derives_from_an_address_is_masked() {
+        let mut redactor = Redactor::new();
+        redactor.register_address("https://admin:p%3Ess%3F@shop.test/");
+        let basic = crate::py::base64::encode(b"admin:p>ss?");
+        assert!(basic.contains('+') || basic.contains('/') || basic.contains('='), "{basic}");
+        let url_safe = basic.replace('+', "-").replace('/', "_");
+        for text in [format!("Authorization: Basic {basic}"), format!("auth={url_safe}")] {
+            assert!(!redactor.redact(&text).contains(&basic) && !redactor.redact(&text).contains(&url_safe), "{text}");
+        }
+        let mut token = Redactor::new();
+        token.register_address("https://ghp_tok3n@code.test/");
+        let basic = crate::py::base64::encode(b"ghp_tok3n:");
+        assert_eq!(token.redact(&format!("Basic {basic}")), "Basic [secret:address_credentials]");
     }
 
     #[test]

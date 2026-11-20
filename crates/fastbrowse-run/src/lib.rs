@@ -41,6 +41,7 @@ use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::Page;
 use fastbrowse_core::py::text::repr;
+use fastbrowse_core::safety::mask_userinfo;
 use fastbrowse_core::telemetry::{Ledger, LedgerState, Trace};
 use serde_json::{Map, Value};
 use tokio::sync::Notify;
@@ -404,7 +405,8 @@ fn checked(task: &RunTask, secrets: bool) -> Result<Checked, RunError> {
         if let Some(url) = &task.cdp_url
             && !(url.starts_with("ws://") || url.starts_with("wss://"))
         {
-            return refuse(format!("cdp_url expects a ws:// or wss:// URL, got {}", repr(url)));
+            // Refused before the run's redactor exists, and raised to an embedder as an error it may log.
+            return refuse(format!("cdp_url expects a ws:// or wss:// URL, got {}", repr(&mask_userinfo(url))));
         }
         if task.cdp_port == Some(0) {
             return refuse("cdp_port expects a port from 1 to 65535, got 0".into());
@@ -483,8 +485,10 @@ fn sink(downloads: Option<&Path>, scratch: &Scratch) -> Result<Arc<dyn ArtifactS
 
 /// The websocket URL of the browser serving DevTools on `port`, read from its `/json/version` endpoint.
 pub async fn resolve_cdp_port(port: u16, host: &str, http: &Http) -> Result<String, BrowserError> {
-    let endpoint = format!("http://{host}:{port}/json/version");
-    let response = http.get(&endpoint, &[], 5.0).await.map_err(|_| {
+    // Named in every error below, which an embedder may log; a host written with credentials keeps them out.
+    let endpoint = mask_userinfo(&format!("http://{host}:{port}/json/version"));
+    let address = format!("http://{host}:{port}/json/version");
+    let response = http.get(&address, &[], 5.0).await.map_err(|_| {
         BrowserError::failed("devtools/ConnectError", format!("no DevTools endpoint at {endpoint} (ConnectError)"))
     })?;
     if response.status == 404 {
@@ -949,13 +953,14 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
 /// Open `start`, pursue `task`, and return what the run could prove.
 /// Register the credentials in every address the caller wrote, so each is masked wherever the task or context is shown
 /// to a model, a trace or a frame, and say whether there were any.
-fn learn_credentials(trace: &Trace, task: &RunTask) -> bool {
+/// A recipe's start is the caller's too: a run replaying one opens it, and it was never registered (#1381).
+fn learn_credentials(trace: &Trace, task: &RunTask, recipe: Option<&str>) -> bool {
     let Some(redactor) = trace.redactor() else { return false };
     let mut redactor = redactor.lock().unwrap();
     let inputs = task.inputs.iter().flat_map(|inputs| inputs.values());
-    let texts = [task.start.as_deref(), Some(task.task.as_str()), task.context.as_deref()];
+    let texts = [task.start.as_deref(), recipe, Some(task.task.as_str()), task.context.as_deref()];
     for text in texts.into_iter().flatten().chain(inputs.map(String::as_str)) {
-        redactor.register_credentials_in(text);
+        redactor.register_address(text);
     }
     redactor.holds_credentials()
 }
@@ -1012,7 +1017,8 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     let http = http.with_trace(trace);
     // Learned before anything reads the task: the consent check, the extension's tab group and the first frame all
     // come before the agent, and each took an address's credentials as the caller wrote them (#1381).
-    let credentialed = learn_credentials(&http.trace, &task);
+    let credentialed =
+        learn_credentials(&http.trace, &task, recipe.as_ref().and_then(|recipe| recipe.start.as_deref()));
     let (warning_task, warning_tx, warning_stop_tx) = host
         .on_event
         .clone()
@@ -1639,7 +1645,7 @@ mod tests {
             context: Some("The CRM is https://ana:c0ntext-pw@crm.test/".into()),
             ..RunTask::default()
         };
-        assert!(learn_credentials(&trace, &task));
+        assert!(learn_credentials(&trace, &task, None));
         let group = extension_address(Path::new("/hosts/a"), &task.task, &trace);
         assert_eq!(
             group.split_once('#').map(|(_, name)| name),
@@ -1657,7 +1663,21 @@ mod tests {
             assert!(!shown.contains("ana:"), "{shown}");
         }
         let clean = RunTask { task: "Read https://shop.test/orders".into(), ..RunTask::default() };
-        assert!(!learn_credentials(&Trace::collecting().redacting(Arc::default()), &clean));
+        assert!(!learn_credentials(&Trace::collecting().redacting(Arc::default()), &clean, None));
+        // A caller's JSON is decoded before anything reads it, so an `@` it escaped is an `@` here, and a context
+        // that is itself JSON keeps its addresses masked within it.
+        let decoded: RunTask = serde_json::from_str(
+            r#"{"task": "Read it", "context": "{\"crm\": \"https://ana:J5on9w\u0040crm.test/\"}"}"#,
+        )
+        .unwrap();
+        let json = Trace::collecting().redacting(Arc::default());
+        assert!(learn_credentials(&json, &decoded, None));
+        let context = redacted(&json, decoded.context.as_deref().unwrap_or_default());
+        assert_eq!(context, r#"{"crm": "https://[secret:address_credentials]@crm.test/"}"#);
+        // A replayed recipe's start opens the run as a caller's start does.
+        let replayed = Trace::collecting().redacting(Arc::default());
+        assert!(learn_credentials(&replayed, &clean, Some("https://ops:r3cipe-pw@shop.test/")));
+        assert!(!redacted(&replayed, "it said r3cipe-pw").contains("r3cipe-pw"));
     }
 
     #[tokio::test]

@@ -249,7 +249,11 @@ pub fn bounded(
 fn start_origin(start: &str) -> Result<String, String> {
     let parts = SplitUrl::of(start);
     if !matches!(parts.scheme.as_str(), "http" | "https") || parts.hostname().is_empty() {
-        return Err(format!("start must be an http or https URL, got {}", repr(start)));
+        // The refusal goes back to the MCP client, which may show or log it.
+        return Err(format!(
+            "start must be an http or https URL, got {}",
+            repr(&fastbrowse_core::safety::mask_userinfo(start))
+        ));
     }
     Ok(origin_of(start))
 }

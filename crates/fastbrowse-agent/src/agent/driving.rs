@@ -8,9 +8,8 @@ use fastbrowse_core::effects::{Effect, SETTING_ROLES, Setting, effect, state_key
 use fastbrowse_core::models::{
     Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepFailure, StepOutcome, StepResult, WallKind,
 };
-use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
+use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
-use fastbrowse_core::py::sha256_hex;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{may_be_irreversible, origin_of};
 use indexmap::IndexMap;
@@ -1597,50 +1596,11 @@ impl Agent {
         state.note_shown(&before, observation, &done.shown, showing);
     }
 
-    /// Every observation models see has resolved secret values blanked, wherever the page echoes them.
+    /// Every observation models see has resolved secret values blanked, wherever the page echoes them (`masking`).
     pub(super) async fn observe(&self) -> Step<Observation> {
         let observation = self.trace.phase("observe", self.page.observe()).await?;
         let revealed = self.reveals(&observation);
-        let redactor = self.redactor();
-        let mask = |value: &str| redactor.mask(value);
-        let mask_opt = |value: &Option<String>| value.as_deref().map(mask);
-        let controls = observation
-            .controls
-            .iter()
-            .map(|control| Control {
-                label: mask(&control.label),
-                context: mask_opt(&control.context),
-                value: mask_opt(&control.value),
-                input_name: mask_opt(&control.input_name),
-                autocomplete: mask_opt(&control.autocomplete),
-                href: mask_opt(&control.href),
-                frame_origin: mask_opt(&control.frame_origin),
-                submit_semantics: mask_opt(&control.submit_semantics),
-                options: control.options.iter().map(|option| mask(option)).collect(),
-                ..control.clone()
-            })
-            .collect();
-        let masked = Observation {
-            url: mask(&observation.url),
-            title: mask(&observation.title),
-            viewport_text: mask(&observation.viewport_text),
-            offscreen_text: mask(&observation.offscreen_text),
-            controls,
-            tabs: observation
-                .tabs
-                .iter()
-                .map(|tab| Tab { url: mask(&tab.url), title: mask(&tab.title), ..tab.clone() })
-                .collect(),
-            dialog: observation.dialog.as_ref().map(|dialog| Dialog {
-                message: mask(&dialog.message),
-                default_prompt: mask_opt(&dialog.default_prompt),
-                ..dialog.clone()
-            }),
-            // A page can name its modal with what it echoes back, a resolved secret among it.
-            modal: mask_opt(&observation.modal),
-            ..observation.clone()
-        };
-        drop(redactor);
+        let masked = super::masking::observation(&self.redactor(), &observation);
         let mut seen = self.seen();
         seen.raw = Some(observation);
         seen.secret_on_screen = revealed;
@@ -1665,52 +1625,10 @@ impl Agent {
 
     pub(super) async fn capture(&self) -> Step<Capture> {
         let capture = self.trace.phase("capture", self.page.capture()).await?;
-        let redactor = self.redactor();
-        let mask = |value: &str| redactor.mask(value);
-        let text = mask(&capture.text);
-        let digest = sha256_hex(text.as_bytes());
-        let blocks = capture
-            .blocks
-            .iter()
-            .map(|block| fastbrowse_core::page::Block {
-                heading_path: block.heading_path.iter().map(|heading| mask(heading)).collect(),
-                fields: block
-                    .fields
-                    .iter()
-                    .map(|field| fastbrowse_core::page::SourceField {
-                        path: field.path.iter().map(|part| mask(part)).collect(),
-                        ..field.clone()
-                    })
-                    .collect(),
-                control_context: block.control_context.as_ref().map(|context| fastbrowse_core::models::SourceControl {
-                    role: mask(&context.role),
-                    label: mask(&context.label),
-                    context: context.context.as_deref().map(mask),
-                }),
-                href: block.href.as_deref().map(mask),
-                // An address can carry a token in its query, and a link's text is page text like the rest.
-                links: block
-                    .links
-                    .iter()
-                    .map(|link| fastbrowse_core::models::Link {
-                        text: mask(&link.text),
-                        href: mask(&link.href),
-                        ..link.clone()
-                    })
-                    .collect(),
-                source_url: block.source_url.as_deref().map(mask),
-                ..block.clone()
-            })
-            .collect();
-        Ok(Capture {
-            masked: redactor.masked_spans(&capture.text),
-            text,
-            url: mask(&capture.url),
-            title: mask(&capture.title),
-            sha256: digest,
-            blocks,
-            ..capture.clone()
-        })
+        if let Ok(shown) = serde_json::to_value(&capture) {
+            self.learn_credentials_shown(&shown);
+        }
+        Ok(super::masking::capture(&self.redactor(), &capture))
     }
 
     /// What a step's question shows Jev besides text. A page showing pixels, a chart or a control drawn as pixels, has
@@ -1860,13 +1778,35 @@ impl Agent {
     }
 
     /// Whether a resolved secret shows on the page; live and recorded frames are held back while one does.
+    /// Learn the credentials of every address a page shows, in its text, a link or a field. Chrome can drop the
+    /// userinfo of an address a redirect brought from the tab's address once it has answered the server's 401 with
+    /// it, so the page's own `document.URL` and its echo of the password were the only places the run met it, and
+    /// the bare echo and the `Authorization` value the page showed reached Jev unmasked (#1381). Each string is
+    /// scanned on its own: a JSON dump writes a quote as `\"`, and `\` ends a special scheme's authority.
+    fn learn_credentials_shown(&self, shown: &Value) {
+        fn strings<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+            match value {
+                Value::String(text) => out.push(text),
+                Value::Array(items) => items.iter().for_each(|item| strings(item, out)),
+                Value::Object(fields) => fields.values().for_each(|item| strings(item, out)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        strings(shown, &mut found);
+        self.learn_credentials(found);
+    }
+
     pub(super) fn reveals(&self, observation: &Observation) -> bool {
         // A dialog hides the page text, so its observation cannot prove the pixels contain no secret.
         // An address a redirect or a new tab brings with credentials is learnt here, before its observation is masked
         // for a model or a trace, and from then on the run's frames are held to its end (`learn_credentials`).
         self.learn_credentials(
-            std::iter::once(observation.url.as_str()).chain(observation.tabs.iter().map(|tab| tab.url.as_str())),
+            std::iter::once(observation.url.as_str())
+                .chain(observation.tabs.iter().map(|tab| tab.url.as_str()))
+                .chain(observation.history_entry.as_deref()),
         );
+        self.learn_credentials_shown(&observation.dump());
         // The page's own address and its tabs' are not drawn on the page, so they are set aside: Chrome keeps a
         // start's credentials in a tab's address, and every model image of such a run was withheld.
         let mut drawn = observation.dump();

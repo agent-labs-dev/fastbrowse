@@ -1723,6 +1723,25 @@ mod tests {
         assert!(ELEMENT_HANDLERS.is_sorted() && WINDOW_HANDLERS.is_sorted());
     }
 
+    /// A fetched page's text and links reach the redactor entity-decoded, as a browser's DOM does: an address written
+    /// `ops:pw&#64;host` in an attribute or `&commat;` in text is masked as the `@` it is, with no entity form to
+    /// register (#1381).
+    #[test]
+    fn an_address_written_with_entities_reaches_the_redactor_decoded_and_masked() {
+        let page = "<p>See https://ops:Ent1ty9w&commat;shop.test/ now</p>\
+                    <p><a href=\"https://ops:Ent2ty9w&#64;shop.test/a\">orders</a></p>";
+        let (_, found) = blocks(page, "https://shop.test/");
+        let text: String = found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("https://ops:Ent1ty9w@shop.test/"), "{text}");
+        let hrefs: Vec<&str> =
+            found.iter().flat_map(|block| block.links.iter().map(|(_, href)| href.as_str())).collect();
+        assert!(hrefs.iter().any(|href| href.starts_with("https://ops:Ent2ty9w@shop.test/")), "{hrefs:?}");
+        let redactor = fastbrowse_core::safety::Redactor::new();
+        for shown in std::iter::once(text.as_str()).chain(hrefs) {
+            assert!(!redactor.mask(shown).contains("ty9w"), "{shown}");
+        }
+    }
+
     #[test]
     fn clean_collapses_what_a_browser_would() {
         assert_eq!(clean("  a \t b \n  c\n\n\n\nd  "), "a b\nc\n\nd");

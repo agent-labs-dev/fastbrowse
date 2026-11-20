@@ -507,18 +507,43 @@ out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, th
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from
 the agent, and handler failures are logged. A handler must honour cancellation: it runs on the caller's event
 loop, so one that swallows `CancelledError` keeps that loop alive and `asyncio.run` waits for it at shutdown. Live images and MP4 recordings are held back from the moment a secret is typed until the run ends, and whenever the page is read showing one;
-a recording holds its last clean frame meanwhile. A run whose start, task, context or inputs write an address with a
-user name or password holds them from before the browser opens to the end of the run: Chrome keeps the credentials in
-`document.URL` and in the tab's address, so a page can draw them from its first paint, and pixels cannot be checked as
-a frame arrives. A redirect, tab or history address that first brings credentials starts the hold then, to the end of
-the run. A model screenshot is not held for them: a page or tab address is not page text.
+a recording holds its last clean frame meanwhile. A run whose start, recipe start, task, context or inputs write an
+address with a user name or password holds them from before the browser opens to the end of the run: Chrome keeps the
+credentials in `document.URL` and in the tab's address, so a page can draw them from its first paint, and pixels cannot
+be checked as a frame arrives. A credential first seen mid-run, in a redirect, a tab or history address or any text a
+page shows, starts the hold then, to the end of the run. That is the one case no hold covers: a frame sent before the
+run first saw a credential that arrives mid-run may already show it. PNG step frames and the final screenshot are
+checked against the page as it is when each is taken, and withheld while it shows a resolved secret. A model
+screenshot is not held for address credentials: a page or tab address is not page text.
 
-The userinfo of every address is masked in every text a model is shown or the run writes out, registered or not: an
-address with a scheme, a scheme-relative `//user:pass@host`, and an address percent-encoded inside another's query.
-The run also learns each credential it sees, from the start, the task, the context, the inputs and every page and tab
-address, and masks it wherever it appears: the password, or the user name when there is no password, as a token sent
-as a user name is. A learned value is matched as text, so a short one also blanks the same letters inside other
-words. A user name that comes with a password is an identifier and stays readable outside an address.
+Every request to Jev or an LLM passes one boundary that masks every registered secret and address credential in it,
+whatever built the request, and an observation and a capture are masked field by field before any request is built;
+a field added to either does not compile until it is masked or named as one the browser layer makes (an id, a key, a
+kind). The userinfo of every address is masked in every text a model is shown or the run writes out, registered or
+not: an address with a scheme, a scheme-relative `//user:pass@host`, and an address percent-encoded inside another's
+query. Events, the `until` check, the result, the trace and the errors a run raises (a refused `cdp_url`, a failed
+navigation) show addresses the same way, and a task, browser connection, settings or HTTP request printed for a log
+prints its addresses masked.
+
+The userinfo of an address runs to its last `@`, as the WHATWG URL parser reads it, so a password holding `@`, `'`,
+`"`, `<`, `>`, `(`, `)`, `,`, `;`, `!`, `.`, `:` or `%20` is masked whole; prose punctuation ends only the host. The
+run learns each credential it sees, from the start, the recipe start, the task, the context, the inputs and every
+string a page, tab or history address shows, and masks it wherever it appears in each form a page can echo it: as
+written, percent-decoded, as the browser encodes it, and as the `Authorization: Basic` value the browser sends for it,
+in standard and URL-safe base64. The secret of an address is its password when one is written, else its user name,
+which is how an access token is written (`https://TOKEN@host/`); a user name beside a password is an identifier and
+stays readable outside an address, and masked inside one. A learned value is matched as text with no minimum length,
+as a resolved secret is, so a short one also blanks the same letters inside other words. A whole address with a tab or
+newline inside it (a start, a recipe start) registers its credential both as written and as the browser reads it, with
+the tab or newline removed.
+
+Masking covers these forms and no others, and these are its limits: a tab or newline inside an address in free prose
+(a task, a context) ends the address there, as it separates words; an address written with no scheme
+(`user:pass@host/path`) is not an address, and no entry point adds a scheme to one; a literal escape in free prose
+(`\u0040`, `&#64;` typed as characters) is not decoded. A caller's JSON is decoded before the run reads it, and a page's
+character references are decoded by the browser or the HTTP reader before the run sees its text, so neither is a form
+to register. A password written bare inside an attachment's contents is not known to be one: an attachment's bytes go
+only to the page's file input, and its name reaches Jev only through the masked boundary.
 
 The browser opens an address as written, credentials included, and a path the task names is resolved on the start
 with them. A value Jev picks from the task to type is cut from the task as written, at the same offsets: masking keeps
