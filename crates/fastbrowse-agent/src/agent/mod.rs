@@ -493,8 +493,10 @@ impl Agent {
             "start": options.start,
             "context": options.context,
             "inputs": options.inputs,
-            "attachments": options.attachments.iter().map(|attachment| &attachment.name).collect::<Vec<_>>(),
-            "output_fields": options.output_schema.iter().flat_map(|schema| schema.fields.keys()).collect::<Vec<_>>(),
+            "attachments": options.attachments.iter().map(|attachment| [&attachment.name, &attachment.mime_type]).collect::<Vec<_>>(),
+            // The whole schema the models are shown, descriptions and all: a field's description is written into
+            // the question that asks for it, and learnt by its key alone, one reached Jev unmasked (#1381).
+            "output_schema": options.output_schema.as_ref().map(|schema| schema.model.json_schema()),
             "recipe": options.recipe,
             "secrets": secrets,
             "carried": carried.map(|state| [state.caller_start.as_deref(), Some(state.raw_task.as_str()), state.raw_context.as_deref()]),

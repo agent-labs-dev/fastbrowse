@@ -656,7 +656,8 @@ impl Schema for RunAttachment {
 }
 
 /// `RunTask`'s fields, which `RunParams` carries beside its own.
-fn run_task_fields() -> Vec<Field> {
+/// `RunTask`'s fields as its schema describes them, for code that reads every one of them by its type.
+pub fn run_task_fields() -> Vec<Field> {
     let text = || Ty::optional(Ty::Str);
     let path = || Ty::optional(Ty::Path);
     let none = || Value::Null;

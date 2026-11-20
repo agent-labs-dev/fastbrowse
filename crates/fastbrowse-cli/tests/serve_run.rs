@@ -378,6 +378,22 @@ async fn test_invalid_params_are_refused_before_run_task_is_called() {
     }
 }
 
+/// A run id goes back as written in every message about its run and in the server's log, so one holding the task's
+/// credentials, or an address's own, is refused rather than masked past the client's matching (#1381).
+#[tokio::test]
+async fn test_a_run_id_that_holds_a_credential_is_refused_without_repeating_it() {
+    for (run_id, task) in [("https://ops:r1d-pw@h.test/", "Read it"), ("run-r1d-pw", "Read https://ops:r1d-pw@h.test/")]
+    {
+        let recorder = Recorder::default();
+        let mut client = serving(recorder.runner(), settings());
+        let response = client.request("run", Some(json!({"run_id": run_id, "task": task}))).await;
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+        let message = response["error"]["message"].as_str().unwrap();
+        assert!(message.contains("run_id holds a credential") && !message.contains("r1d-pw"), "{message}");
+        assert!(recorder.calls().is_empty());
+    }
+}
+
 #[tokio::test]
 async fn test_a_profile_from_the_environment_counts_against_a_handed_over_browser() {
     let recorder = Recorder::default();

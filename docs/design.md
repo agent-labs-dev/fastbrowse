@@ -552,20 +552,35 @@ the done check, the composer and the coverage check are told no screenshot is at
 frames and the final screenshot are checked against the page as it is when each is taken, and withheld while it shows
 a resolved secret.
 
+The hold covers the images the run sends, and these are outside it. A cloud browser's `live_url` shows the page's
+pixels, so a run that knows a credential when the browser opens sends no `live_url` in its browser event; a credential
+learnt later cannot recall a view already given. A headed Chrome window shows the page on screen. An embedder that
+drives the browser itself, through `connect_cdp`, `Page.screenshot` or a `FrameTap`, takes images the run never sees.
+
 Every request to Jev or an LLM passes one boundary that masks every registered secret and address credential in it,
 whatever built the request, and an observation and a capture are masked field by field before any request is built;
 a field added to either does not compile until it is masked or named as one the browser layer makes (an id, a key, a
 kind). The userinfo of every address is masked in every text a model is shown or the run writes out, registered or
 not: an address with a scheme, a scheme-relative `//user:pass@host`, and an address percent-encoded inside another's
-query. Events, the `until` check, the result, the trace and the errors a run raises (a refused `cdp_url`, a failed
-navigation) show addresses the same way, and a task, browser connection, settings or HTTP request printed for a log
-prints its addresses masked.
+query. Everything else that leaves a run is redacted once, at its exit, by its schema: the result (its `data` keys
+and values, `browser.profile`, recordings, artifacts and `error`), each event, the `until` check, which receives the
+address masked rather than as the page has it, the trace and the HTTP trace, every stderr warning and log line, and
+the errors a run raises, whatever caller text they repeat. A closed set's value and a model's field name are code's and
+stay whole; a key the caller chose is redacted like a value. A task, browser connection, recipe, settings or HTTP
+request printed for a log prints its addresses masked.
+
+A string the caller writes in a field that must come back as written (a path to record or save to, an output schema,
+a profile, a selector, a desktop app, an attachment's name, a serve `run_id`, a secret's name or origin) cannot be
+masked without breaking what the caller matches it against, so a run whose such field holds a credential is refused
+before it starts, by a message that does not repeat it. Only the start, task, context, inputs and `cdp_url` may carry
+an address's credentials. Settings refuse one anywhere but the two base URLs, `FASTBROWSE_LLM_EXTRA_BODY` included,
+its keys too, so no model request body carries one. A short credential refuses any such field its letters spell: a
+one-letter password refuses every path holding that letter.
 
 The userinfo of an address runs to its last `@`, as the WHATWG URL parser reads it, so a password holding `@`, `'`,
 `"`, `<`, `>`, `(`, `)`, `,`, `;`, `!`, `.`, `:` or `%20` is masked whole; prose punctuation ends only the host. The
-run learns each credential it sees, from the start, the task, the context, the inputs' names and values, the names of
-secrets and attachments, a recipe's steps and every
-string a page, tab or history address shows, and masks it wherever it appears in each form a page can echo it: as
+run learns each credential it sees, from every string the caller gives, read by the run's schema with its keys, a
+recipe, the settings' text and every string a page, tab or history address shows, and masks it wherever it appears in each form a page can echo it: as
 written, percent-decoded, as the browser encodes it, and as the `Authorization: Basic` value the browser sends for it,
 in standard and URL-safe base64. The secret of an address is its password when one is written, else its user name,
 which is how an access token is written (`https://TOKEN@host/`); a user name beside a password is an identifier and
@@ -580,7 +595,9 @@ Masking covers these forms and no others, and these are its limits: a tab or new
 (`\u0040`, `&#64;` typed as characters) is not decoded. A caller's JSON is decoded before the run reads it, and a page's
 character references are decoded by the browser or the HTTP reader before the run sees its text, so neither is a form
 to register. A password written bare inside an attachment's contents is not known to be one: an attachment's bytes go
-only to the page's file input, and its name reaches Jev only through the masked boundary.
+only to the page's file input, and its name reaches Jev only through the masked boundary. Base64 wrapped across lines,
+a value percent-encoded twice, hex and a credential split across a page's text nodes are not forms the run registers
+or matches.
 
 The browser opens an address as written, credentials included, and a path the task names is resolved on the start
 with them. A value Jev picks from the task to type is cut from the task as written, at the same offsets: masking keeps

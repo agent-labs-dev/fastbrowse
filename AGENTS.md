@@ -67,13 +67,17 @@ A reviewer rejects a change that breaks one.
   and recordings are held back from the first secret keystroke to the end of the run, whatever a reading says: pixels
   cannot be checked at the moment a frame arrives, and a page can echo the value after the reading that last found it
   clean. They are also held while observations reveal a resolved secret. Recordings keep their last clean frame.
-  Credentials written in an address (the start, task, context, inputs, a redirect) are secrets too: masked at the one
-  boundary every Jev and LLM request passes and in every event, callback, result, trace, error and log. From the
-  first one known to the end of the run no image of the page leaves the run: model screenshots, step frames, the
-  final frame, live frames and recordings all pass one gate, since a page can paint its address where no text check
-  sees it, and Jev and the LLM are told no screenshot is taken and why. Masking covers an address with a scheme, read to its last `@`,
-  in each form [docs/design.md](docs/design.md) lists; a tab or newline inside an address in free prose, an address
-  with no scheme, a literal escape typed in prose and a bare password inside an attachment are outside it.
+  Credentials written in an address (the start, task, context, inputs, a redirect) are secrets too. Every string the
+  caller gives is learnt; a run field other than the start, task, context, inputs and `cdp_url` that holds one is
+  refused at the door, as are a serve `run_id` and settings other than the base URLs. What leaves the run (every Jev
+  and LLM request, event, serve message, result, error, trace and log line) is redacted at its exit by its schema, keys
+  included. From the first one known to the end of the run, the run sends no image of the page: model screenshots,
+  step frames, the final frame, live frames and recordings pass one gate, since a page can paint its address where no
+  text check sees it, and Jev and the LLM are told no screenshot is taken and why. A cloud `live_url` is withheld when
+  a credential is known at the start; one learnt later cannot recall a view already given, a headed window shows the
+  page, and an embedder holding the browser (`connect_cdp`, `Page.screenshot`, `FrameTap`) is outside the gate.
+  Masking covers an address with a scheme, read to its last `@`, in each form [docs/design.md](docs/design.md) lists;
+  its limits are listed there.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code refuses an
   irreversible one unless the run is authorized and Jev judges the task asked for it. Only code-selected pagination
   skips classification.
