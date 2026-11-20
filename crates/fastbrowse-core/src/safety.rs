@@ -881,6 +881,34 @@ impl Redactor {
         }
     }
 
+    /// Register the credentials `address` carries as the secret `name` on the address's origin. Masked, the address
+    /// keeps its host, port, path and query.
+    ///
+    /// An address's userinfo is its credentials by definition (RFC 3986 section 3.2.1; WHATWG URL's username and
+    /// password), so a caller's start address that carries one hands the run a secret it never typed, and only typed
+    /// secrets were masked: `https://user:pass@host/` reached every model as given (#1381). The userinfo as a whole
+    /// is the secret, and so is a password on its own, as a page or a log can echo it alone; a user name beside a
+    /// password is not, so a page's "Signed in as user" still reads. Each is registered as the address writes it
+    /// and decoded. Nothing in a path or query is a credential by the grammar, so a token there stays as given.
+    pub fn register_address_credentials(&mut self, name: &str, address: &str) {
+        let Ok(url) = Url::parse(address) else { return };
+        let decoded = |value: &str| percent_encoding::percent_decode_str(value).decode_utf8_lossy().into_owned();
+        let user = url.username();
+        let values = match url.password() {
+            Some(password) => vec![
+                format!("{user}:{password}"),
+                format!("{}:{}", decoded(user), decoded(password)),
+                password.to_string(),
+                decoded(password),
+            ],
+            None if !user.is_empty() => vec![user.to_string(), decoded(user)],
+            None => return,
+        };
+        for value in values {
+            self.register(name, &value, Some(address));
+        }
+    }
+
     /// Replace each secret value with its name, except inside a host the secret was typed on (`spans`).
     pub fn redact(&self, text: &str) -> String {
         let mut out = String::with_capacity(text.len());
@@ -1083,6 +1111,36 @@ mod tests {
             assert_eq!(redactor.redact(url), redacted, "{url}");
         }
         assert_eq!(redactor.redact("sign in as practice"), "sign in as [secret:username]");
+    }
+
+    /// An address's userinfo is its credentials, which a caller's start address hands the run without typing them
+    /// (#1381): masked, the address keeps everything else, and the password stays masked wherever it is echoed.
+    #[test]
+    fn test_an_address_registers_its_userinfo_as_a_secret_on_its_origin() {
+        let mut redactor = Redactor::new();
+        redactor.register_address_credentials("start", "https://shopper:p%40ss%20w0rd@shop.test:8443/orders?id=7");
+        for (text, redacted) in [
+            (
+                "https://shopper:p%40ss%20w0rd@shop.test:8443/orders?id=7",
+                "https://[secret:start]@shop.test:8443/orders?id=7",
+            ),
+            ("https://shopper:p@ss w0rd@shop.test/", "https://[secret:start]@shop.test/"),
+            ("Your password is p@ss w0rd", "Your password is [secret:start]"),
+            ("Signed in as shopper", "Signed in as shopper"),
+        ] {
+            assert_eq!(redactor.redact(text), redacted, "{text}");
+        }
+        // With no password, the user name is the whole userinfo, as a token sent as one is.
+        let mut token = Redactor::new();
+        token.register_address_credentials("start", "https://ghp_token@code.test/repo");
+        assert_eq!(token.redact("https://ghp_token@code.test/repo"), "https://[secret:start]@code.test/repo");
+        // An address with no userinfo, or none a browser would parse, registers nothing: a token in a query or path is
+        // not a credential by the grammar.
+        let mut none = Redactor::new();
+        for address in ["https://shop.test/reset?token=abc", "https://@shop.test/", "not an address"] {
+            none.register_address_credentials("start", address);
+        }
+        assert!(!none.reveals("https://shop.test/reset?token=abc"));
     }
 
     #[test]
