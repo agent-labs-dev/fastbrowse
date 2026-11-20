@@ -161,6 +161,13 @@ def lists(want: list[str], directory: str = "scans") -> Fault:
     return fault
 
 
+def moved_to_keep(work: Path) -> str:
+    # A copy left in scans is not a move.
+    return lists(["photo-1.txt"], "scans/keep")(work) or lists(["IMG_4471.txt", "IMG_4472.txt", "keep/", "notes.txt"])(
+        work
+    )
+
+
 def calculator_and_editor(work: Path, port: int) -> list[list[str]]:
     return [["gnome-calculator"], [*EDITOR, str(write(work / "result.txt", ""))]]
 
@@ -317,7 +324,7 @@ TASKS = (
         kind="drag and drop",
         task="Drag photo-1.txt onto the keep folder in the scans folder so it moves there.",
         setup=scans("photo-1.txt", "keep/"),
-        fault=lists(["photo-1.txt"], "scans/keep"),
+        fault=moved_to_keep,
     ),
     AppTask(
         id="files-shortcut",
@@ -486,6 +493,8 @@ class Ran:
 async def answer_fault(task: AppTask, answer: str) -> str:
     if task.claim is None:
         return ""
+    if not answer:
+        return "it gave no answer"
     async with httpx.AsyncClient(timeout=60.0) as http:
         jev = jev_from_environment(http)
         if await judge_claims(jev, task=task.task, answer=answer, claims=(Claim(task.claim),)) is None:
@@ -543,7 +552,8 @@ def run(task: AppTask, repeat: int, out: Path, args: argparse.Namespace) -> Ran 
     status = result.get("status") or NO_RESULT
     answer = result.get("answer") or ""
     why = task.fault(work)
-    if not why and status == "complete":
+    if not why:
+        # Whatever status it ended with: a read task's work is its answer, and an unchanged file says nothing of it.
         why = asyncio.run(answer_fault(task, answer))
     lines = (result.get("cost") or {}).get("lines") or []
     ran = Ran(

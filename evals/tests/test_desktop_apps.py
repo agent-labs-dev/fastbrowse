@@ -86,3 +86,12 @@ def test_a_directory_holding_an_earlier_run_is_refused(tmp_path: Path) -> None:
     (tmp_path / "work").mkdir()
     with pytest.raises(SystemExit):
         run(BY_ID["zenity-question"], 1, tmp_path, argparse.Namespace())
+
+
+def test_a_dragged_file_copied_rather_than_moved_is_not_done(tmp_path: Path) -> None:
+    task = BY_ID["files-drag"]
+    task.setup(tmp_path, 0)
+    (tmp_path / "scans/keep/photo-1.txt").write_text("copy")
+    assert task.fault(tmp_path)
+    (tmp_path / "scans/photo-1.txt").unlink()
+    assert task.fault(tmp_path) == ""
