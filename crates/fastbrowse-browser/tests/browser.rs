@@ -1884,8 +1884,30 @@ async fn test_a_reply_box_is_named_by_its_commenter_whose_name_shows_twice() {
     act(&h.page, click(&reply), &obs).await;
     let opened = h.page.observe().await.expect("observe");
     for label in ["Comment text area", "Post"] {
-        assert_eq!(contexts(&opened, label), vec![Some("Keep it civil.".into()), Some("Ada".into())], "{label}");
+        assert_eq!(contexts(&opened, label), vec![Some("Keep it civil.".into()), Some("Ada / 2 days ago".into())], "{label}");
     }
+    h.close().await;
+}
+
+/// A label kept in a twin's card because some other cards lack it, as a commenter's name is, still does not name the
+/// card alone: an "Edit" link in one product card, and in the page's header, would have named that card's Add
+/// button "Edit" with nothing of the product it adds.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_card_whose_first_line_is_a_shared_link_is_named_by_its_next_line_too() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<header><a href=\"#edit\">Edit</a></header><ul>\
+         <li><a href=\"#a\">Edit</a><div>Brass Kettle</div><button>Add</button></li>\
+         <li><div>Copper Pan</div><button>Add</button></li></ul>'",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Add").await;
+    let contexts: Vec<Option<String>> =
+        obs.controls.iter().filter(|c| c.label == "Add").map(|c| c.context.clone()).collect();
+    assert_eq!(contexts, vec![Some("Edit / Brass Kettle".into()), Some("Copper Pan".into())]);
     h.close().await;
 }
 
