@@ -2524,6 +2524,28 @@ async fn test_an_address_only_the_task_writes_opens_with_its_credentials_and_rea
     }
 }
 
+/// An embedder driving `Agent` directly, not through `run_task`, declared a secret whose value its start address
+/// carried, and the value reached every model: only `run_task` declared what the resolver holds (#1381). Declared
+/// where every entry passes, it is masked from the first request, and frames are held from the open.
+#[tokio::test]
+async fn test_a_declared_secret_in_the_start_reaches_no_model_through_the_agent_itself() {
+    const ADDRESS: &str = "https://shop.test/orders?token=Ag3ntTok";
+    let sent = Sent::new(SentToLLM::default());
+    let page = Arc::new(Redirecting { landed: ADDRESS, ..Default::default() });
+    let secrets = fastbrowse_core::safety::ScopedSecrets::per_secret([(
+        "shop_token".to_string(),
+        (fastbrowse_core::models::SecretValue::from("Ag3ntTok"), vec!["https://shop.test".into()]),
+    )]);
+    let agent = sent.agent(page.clone()).with_secrets(Some(Arc::new(secrets)));
+    let options = super::RunOptions { start: Some(ADDRESS.into()), ..Default::default() };
+    let result = agent.run("Tell me what the page says", options).await.expect("a result");
+    assert!(sent.jev.1.lock().unwrap().iter().any(|state| state.contains("shop.test")), "the page was not shown");
+    for written in sent.written(&result) {
+        assert!(!written.contains("Ag3ntTok"), "{written}");
+    }
+    assert_eq!(page.withheld.lock().unwrap().first(), Some(&(0, true)), "frames shown before the open");
+}
+
 /// A caller's context naming an address with credentials reached Jev as the caller's background, unmasked (#1381).
 #[tokio::test]
 async fn test_an_address_with_credentials_in_the_callers_context_reaches_no_model_unmasked() {

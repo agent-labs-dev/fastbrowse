@@ -486,6 +486,11 @@ impl Agent {
         // resumed in another agent is shown its first run's start, task and context.
         // Names count as much as values: an input named with an address reached Jev as a question key (#1381).
         let carried = resume.as_ref().map(|resume| &resume.state);
+        // A secret the resolver holds as it is is masked from here, before anything types it: only the runner
+        // declared one, and a token an embedder driving the agent directly put in the start reached Jev (#1381).
+        if let Some(secrets) = &self.secrets {
+            self.redactor().declare_held(secrets.as_ref());
+        }
         let secrets: Vec<String> =
             self.secrets.iter().flat_map(|secrets| secrets.available()).map(|secret| secret.name).collect();
         self.learn_credentials_in(&json!({
@@ -501,6 +506,12 @@ impl Agent {
             "secrets": secrets,
             "carried": carried.map(|state| [state.caller_start.as_deref(), Some(state.raw_task.as_str()), state.raw_context.as_deref()]),
         }));
+        // The start page's first paint can draw a declared secret its address carries before any reading can say
+        // whether it shows, so frames are held from the open, as the runner holds them; an embedder driving the agent
+        // directly reaches only this (#1381).
+        if options.start.as_deref().is_some_and(|start| self.redactor().holds_images_from(Some(start))) {
+            self.page.withhold_frames(true);
+        }
         let prepared = match resume {
             Some(Resume { state, url: Some(url) }) => {
                 self.trace.phase("open", self.page.navigate(&url, None)).await?;

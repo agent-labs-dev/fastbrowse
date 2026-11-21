@@ -139,7 +139,7 @@ pub enum Params {
 }
 
 /// A call in either direction. One without an id is a notification and gets no reply. Unknown members are ignored.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
     #[serde(default)]
     pub jsonrpc: JsonRpc,
@@ -148,6 +148,14 @@ pub struct Request {
     pub method: String,
     #[serde(default)]
     pub params: Option<Params>,
+}
+
+/// Learnt from and masked, as every door reads a message: its id, method and params are the caller's, and a derived
+/// `Debug` printed an address's credential in any of them whole (#1381).
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::safety::debug_masked("Request", self, f)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -932,6 +940,23 @@ mod tests {
     }
     use crate::py::dump::Dump;
     use serde_json::json;
+
+    /// A request printed for a log was derived `Debug`, so an address in its id, method or params printed whole, a
+    /// password holding a quote included (#1381).
+    #[test]
+    fn test_a_request_prints_every_address_it_holds_masked() {
+        let request: Request = serde_json::from_value(json!({
+            "id": "https://ops:1d-pw@h.test/",
+            "method": "https://admin:m3th\"t4il@h.test/",
+            "params": {"start": "https://ops:p4r-pw@h.test/"},
+        }))
+        .unwrap();
+        let printed = format!("{request:?}");
+        assert!(printed.contains("h.test"), "{printed}");
+        for password in ["1d-pw", "m3th", "t4il", "p4r-pw"] {
+            assert!(!printed.contains(password), "{password}: {printed}");
+        }
+    }
 
     #[test]
     fn a_request_id_is_an_int_or_a_string_and_nothing_else() {

@@ -414,6 +414,31 @@ async fn test_a_refusal_masks_the_credential_in_what_it_quotes() {
     }
 }
 
+/// Every string of a message is learnt as a whole address before anything is said of it: a method whose password holds
+/// a quote ended the stateless scan at the quote and was quoted past it, and an id is echoed whole to be matched, so
+/// one holding a credential is refused with a null id. A line that is not JSON is refused quoting nothing (#1381).
+#[tokio::test]
+async fn test_every_string_of_a_message_is_learnt_before_a_refusal_quotes_it() {
+    let recorder = Recorder::default();
+    let mut client = serving(recorder.runner(), settings());
+    client.send(json!({"jsonrpc": "2.0", "id": 1, "method": "https://admin:m3th\"t4il@h.test/"}));
+    let response = client.receive().await;
+    assert_eq!(response["id"], 1, "{response}");
+    assert!(response["error"]["message"].is_string(), "{response}");
+    client.send(json!({"jsonrpc": "2.0", "id": "https://ops:1d-pw@h.test/", "method": "initialize"}));
+    let response = client.receive().await;
+    assert!(response["id"].is_null() && response["error"]["code"] == -32600, "{response}");
+    client.send_line(b"https://ops:n0tjs0n@h.test/ is not JSON");
+    let response = client.receive().await;
+    assert!(response["id"].is_null() && response["error"]["code"] == -32700, "{response}");
+    assert!(client.silent().await);
+    let written = String::from_utf8_lossy(&client.written).to_string();
+    for password in ["m3th", "t4il", "1d-pw", "n0tjs0n"] {
+        assert!(!written.contains(password), "{password}: {written}");
+    }
+    assert!(recorder.calls().is_empty());
+}
+
 #[tokio::test]
 async fn test_a_profile_from_the_environment_counts_against_a_handed_over_browser() {
     let recorder = Recorder::default();

@@ -21,7 +21,7 @@ use fastbrowse_core::protocol::CancellationReceipt;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Floats, Style};
 use fastbrowse_core::py::text::{self, repr};
-use fastbrowse_core::safety::{ScopedSecrets, origin_of, secret_allowed};
+use fastbrowse_core::safety::{Redactor, ScopedSecrets, origin_of, secret_allowed};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::sync::Semaphore;
@@ -249,11 +249,8 @@ pub fn bounded(
 fn start_origin(start: &str) -> Result<String, String> {
     let parts = SplitUrl::of(start);
     if !matches!(parts.scheme.as_str(), "http" | "https") || parts.hostname().is_empty() {
-        // The refusal goes back to the MCP client, which may show or log it.
-        return Err(format!(
-            "start must be an http or https URL, got {}",
-            repr(&fastbrowse_core::safety::mask_userinfo(start))
-        ));
+        // The refusal goes back to the MCP client through the call's outbox, which masks what the call held.
+        return Err(format!("start must be an http or https URL, got {}", repr(start)));
     }
     Ok(origin_of(start))
 }
@@ -606,10 +603,10 @@ fn response(id: &Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
-/// An error reply. Its message may quote what the caller sent (a resource, a prompt's name), and no run has learnt the
-/// caller's credentials, so it is masked for address userinfo by structure (#1381).
+/// An error reply. Its message may quote what the caller sent (a resource, a prompt's name), which the outbox of the
+/// request it answers masks (`McpServer::receive`).
 fn error_response(id: &Value, code: i64, message: &str, data: Option<&str>) -> Value {
-    let mut error = json!({"code": code, "message": fastbrowse_core::safety::mask_userinfo(message)});
+    let mut error = json!({"code": code, "message": message});
     if let Some(data) = data {
         error["data"] = json!(data);
     }
@@ -709,11 +706,27 @@ impl McpServer {
             crate::log::error("Received exception from stream: the line is not a JSON-RPC message");
             return outbox(internal());
         };
+        // Learnt before anything is said of the message: every reply and log line it causes is masked by what it
+        // holds. Masked after the fact by structure alone, a password holding a quote was quoted whole (#1381).
+        let learnt = Arc::new(fastbrowse_core::safety::learnt(&Value::Object(message.clone())));
+        if message.get("id").and_then(Value::as_str).is_some_and(|id| learnt.reveals(id)) {
+            // An id is echoed whole to be matched, so one holding a credential cannot be answered by it.
+            let message = "Invalid request: the id holds a credential; choose one that holds none";
+            return outbox(error_response(&Value::Null, -32600, message, None));
+        }
+        let outbox: Outbox = {
+            let (outbox, learnt) = (outbox.clone(), learnt.clone());
+            Arc::new(move |mut message: Value| {
+                learnt.mask_value(&mut message);
+                outbox(message);
+            })
+        };
+        let outbox = &outbox;
         let method = message.get("method").and_then(Value::as_str);
         let id = message.get("id").filter(|id| id.is_string() || id.is_i64() || id.is_u64()).cloned();
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         match (id, method) {
-            (Some(id), Some(method)) => self.request(session, id, method, params, outbox),
+            (Some(id), Some(method)) => self.request(session, &learnt, id, method, params, outbox),
             (None, Some(method)) if !message.contains_key("id") => self.notified(session, method, &params),
             // A response to nothing the server asked, or a shape that is neither request nor notification.
             _ if message.contains_key("result") || message.contains_key("error") => {}
@@ -738,7 +751,15 @@ impl McpServer {
         }
     }
 
-    fn request(self: &Arc<Self>, session: &Arc<Session>, id: Value, method: &str, params: Value, outbox: &Outbox) {
+    fn request(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        learnt: &Arc<Redactor>,
+        id: Value,
+        method: &str,
+        params: Value,
+        outbox: &Outbox,
+    ) {
         let invalid = || error_response(&id, -32602, "Invalid request parameters", Some(""));
         let initialized = *session.initialized.lock().unwrap_or_else(|p| p.into_inner());
         if !initialized && !matches!(method, "initialize" | "ping") {
@@ -781,7 +802,7 @@ impl McpServer {
             },
             "prompts/get" => match params.get("name").and_then(Value::as_str) {
                 Some(name) => {
-                    crate::log::error(&format!("Error getting prompt {name}"));
+                    crate::log::error(&learnt.mask(&format!("Error getting prompt {name}")));
                     outbox(error_response(&id, 0, &format!("Unknown prompt: {name}"), None));
                 }
                 None => outbox(invalid()),
@@ -803,7 +824,7 @@ impl McpServer {
                 let run_cancel = crate::runner::Cancel::default();
                 let key = id.to_string();
                 session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), cancel.clone());
-                let (server, session, outbox) = (self.clone(), session.clone(), outbox.clone());
+                let (server, session, outbox, learnt) = (self.clone(), session.clone(), outbox.clone(), learnt.clone());
                 tokio::spawn(async move {
                     let run_stop = run_cancel.clone();
                     // Cleanup keeps running after cancellation, but an answered request cannot send more progress.
@@ -817,7 +838,7 @@ impl McpServer {
                             }
                         })
                     };
-                    let call = server.call(&name, arguments, token, run_cancel, &events);
+                    let call = server.call(&learnt, &name, arguments, token, run_cancel, &events);
                     tokio::pin!(call);
                     let outcome = tokio::select! {
                         biased;
@@ -861,9 +882,6 @@ impl McpServer {
                                     Some(("fastbrowse.ai/receipt", receipt)),
                                 ),
                             };
-                            // serde's refusal of the arguments quoted the value it could not read and the key it
-                            // did not know, a tool's name is the caller's, and no run has learnt either (#1381).
-                            let text = fastbrowse_core::safety::mask_userinfo(&text);
                             let mut result = json!({"content": [{"type": "text", "text": text}], "isError": true});
                             if let Some((key, receipt)) = receipt {
                                 result["_meta"] = json!({key: receipt.dump()});
@@ -880,6 +898,7 @@ impl McpServer {
 
     async fn call(
         &self,
+        learnt: &Redactor,
         name: &str,
         arguments: Map<String, Value>,
         token: Option<Value>,
@@ -887,7 +906,8 @@ impl McpServer {
         outbox: &Outbox,
     ) -> Result<Value, ToolFailure> {
         if name != "browse" {
-            crate::log::warning(&format!("Tool {} not listed, no validation will be performed", repr(name)));
+            let message = format!("Tool {} not listed, no validation will be performed", repr(name));
+            crate::log::warning(&learnt.mask(&message));
             return Err(ToolFailure::Unknown(name.to_string()));
         }
         let arguments = Browse::read(arguments).map_err(ToolFailure::Tool)?;
