@@ -1894,7 +1894,11 @@ async fn test_a_reply_box_is_named_by_its_commenter_whose_name_shows_twice() {
     act(&h.page, click(&reply), &obs).await;
     let opened = h.page.observe().await.expect("observe");
     for label in ["Comment text area", "Post"] {
-        assert_eq!(contexts(&opened, label), vec![Some("Keep it civil.".into()), Some("Ada / 2 days ago".into())], "{label}");
+        assert_eq!(
+            contexts(&opened, label),
+            vec![Some("Keep it civil.".into()), Some("Ada / 2 days ago".into())],
+            "{label}"
+        );
     }
     h.close().await;
 }
