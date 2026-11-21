@@ -1735,7 +1735,7 @@ async fn test_a_task_that_rules_out_only_other_changes_makes_the_requested_one()
                 [(Operation::Click, &checkbox), (Operation::Fill, &reply), (Operation::Select, &size)]
             {
                 let decision = code_decision(operation, Some(control.clone()));
-                let gated = agent.gate_edit(&mut state, &page, &decision, control).await;
+                let gated = agent.gate_edit(&mut state, &page, &decision, control, None).await;
                 let case = format!("authorized {authorized}, requested {requested}: {operation} {}", control.role);
                 assert_eq!(gated.is_ok(), allowed, "{case}: {gated:?}");
                 if let Err(Flow::Unsure(unsure)) = gated {
@@ -1811,6 +1811,27 @@ async fn test_a_requested_press_is_asked_about_its_chord() {
     let asked = jev.0.lock().unwrap();
     assert_eq!(asked.len(), 1);
     assert!(asked[0].contains("The exact key chord to press is 'ArrowRight'."), "{}", asked[0]);
+}
+
+/// Asked whether the task asks to fill the element labelled "Description", Jev put the requested replacement at 0.11
+/// (#1004): a fill that the task rules other changes out around is asked about with the text it writes, a secret by
+/// its name.
+#[tokio::test]
+async fn test_a_requested_fill_is_asked_about_its_text() {
+    let field = Control::new("d", "textbox", "Description", [Operation::Fill]);
+    let page = observation(std::slice::from_ref(&field));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("api_key", "hunter2", None);
+    let mut state = run_state();
+    state.task = "Replace the description with the text below. Change nothing else.".into();
+    let decision = code_decision(Operation::Fill, Some(field.clone()));
+    let gated = agent.gate_edit(&mut state, &page, &decision, &field, Some("# Forever\nKey: hunter2")).await;
+    assert!(gated.is_ok(), "{gated:?}");
+    let asked = jev.0.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].contains("The field would then hold '# Forever\\nKey: [secret:api_key]'."), "{}", asked[0]);
+    assert!(!asked[0].contains("hunter2"), "{}", asked[0]);
 }
 
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
@@ -10186,6 +10207,27 @@ async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
     let picked = asked.iter().position(|q| q.contains("Which key should be pressed in")).expect("the key question");
     // The copy from the task is asked after the key question, as a press on an editable field always asks it.
     assert!(asked.len() > picked + 1, "{asked:?}");
+}
+
+/// A press on a text field copies its chord from the task, asked as a key chord: asked what should be typed into the
+/// field, Jev copied the description the task gave to type, which is no key (#1004).
+#[tokio::test]
+async fn test_a_press_on_a_text_field_is_asked_for_a_key_chord_not_text() {
+    let editor = Control {
+        value: Some("Old description".into()),
+        ..Control::new("d", "textbox", "Description", [Operation::Fill, Operation::Press])
+    };
+    let page = observation(std::slice::from_ref(&editor));
+    let jev = Arc::new(FirstChoice::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Replace the description with Hello world, then press ctrl+End in it.".into();
+    state.edits = Some(Edits::Allowed);
+    let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(editor))).await;
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key chord should be pressed in 'Description'?")), "{asked:?}");
+    assert!(asked.iter().any(|q| q.contains("names the key chord to press in 'Description'")), "{asked:?}");
+    assert!(!asked.iter().any(|q| q.contains("typed into") || q.contains("The field holds")), "{asked:?}");
 }
 
 #[tokio::test]

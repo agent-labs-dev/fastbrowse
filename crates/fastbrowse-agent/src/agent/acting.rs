@@ -159,8 +159,8 @@ type Asked<'a> = (&'a str, String, IndexMap<String, JsonValue>);
 /// What Jev is asked about a field: where its value comes from, where among `begins` it begins and where among `ends`
 /// it ends.
 fn value_questions<'a>(
+    (entry, target): (Entry, &Control),
     state: &RunState,
-    target: &Control,
     (text, holder): (&str, &str),
     label: &str,
     (begins, ends): (&[Word], &[Word]),
@@ -172,16 +172,18 @@ fn value_questions<'a>(
         sources.shift_remove(IN_TASK);
     }
     let holds = holding(target)
+        .filter(|_| entry == Entry::Typed)
         .map(|now| format!(" The field holds {now} now, and typing replaces all of it."))
         .unwrap_or_default();
     let source_question =
         if source_question.is_empty() { source_question } else { format!("{source_question}{holds}") };
-    let tried = field_history(state, target);
+    let tried = field_history(entry, state, target);
     let mut asked = vec![("source", source_question, sources)];
     if !begins.is_empty() && !ends.is_empty() {
         let several = several_values(target);
-        asked.push(("first", word_question((holder, label), "begins", &several, &tried), word_options(text, begins)));
-        asked.push(("last", word_question((holder, label), "ends", &several, &tried), word_options(text, ends)));
+        let question = |end| word_question(entry, (holder, label), end, &several, &tried);
+        asked.push(("first", question("begins"), word_options(text, begins)));
+        asked.push(("last", question("ends"), word_options(text, ends)));
     }
     asked
 }
@@ -192,14 +194,36 @@ fn value_questions<'a>(
 /// Asked only where a value begins, Jev began a document's text at the answer to the task's own question: told to type
 /// a quoted list and then say which item it lists second, it began at the second item 3 times in 3 (#1187). Told that
 /// the value is text given to be entered, it began at the quote's first word 5 times in 5.
-fn word_question((holder, label): (&str, &str), end: &str, several: &str, tried: &str) -> String {
-    format!(
-        "If {holder} states the value for {label}, which of its words {end} the value? The value is text {holder} gives to be entered, not the answer to a question the task asks. When it gives this field several values, {several} A search takes what is looked for, not the request around it.{tried}"
-    )
+fn word_question(entry: Entry, (holder, label): (&str, &str), end: &str, several: &str, tried: &str) -> String {
+    match entry {
+        Entry::Typed => format!(
+            "If {holder} states the value for {label}, which of its words {end} the value? The value is text {holder} gives to be entered, not the answer to a question the task asks. When it gives this field several values, {several} A search takes what is looked for, not the request around it.{tried}"
+        ),
+        Entry::Pressed => format!(
+            "If {holder} names the key chord to press in {label}, which of its words {end} the chord? {KEY_CHORD_SAID}"
+        ),
+    }
 }
 
+/// What a value copied from the task's words is for: text a fill types, or a key chord a press sends.
+///
+/// A press on a description editor was asked what should be typed into it, and copied the description the task gave
+/// to be typed, which is no key (#1004).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Entry {
+    Typed,
+    Pressed,
+}
+
+/// What a key chord is, said wherever one is copied from the task.
+const KEY_CHORD_SAID: &str = "A key chord is one key, named as a W3C UI Events key value such as Enter or End, after any of Alt, Control, Meta and Shift joined by +. It is pressed, not typed: text the task gives to type into the field is not a key chord.";
+
 /// What a field already had, as the question of where its value begins or ends says it.
-fn field_history(state: &RunState, target: &Control) -> String {
+fn field_history(entry: Entry, state: &RunState, target: &Control) -> String {
+    // What was typed and what the field holds say nothing of which key to press.
+    if entry == Entry::Pressed {
+        return String::new();
+    }
     let tried = typed_into(state, target);
     let tried = if tried.is_empty() {
         String::new()
@@ -343,8 +367,8 @@ impl Agent {
                 let Value { task, label, group, sources, source_question, .. } = self.value(state, control);
                 if group.len() <= max {
                     for (name, question, criteria) in value_questions(
+                        (Entry::Typed, control),
                         state,
-                        control,
                         (&task, "the task"),
                         &label,
                         (&group, &group),
@@ -402,7 +426,7 @@ impl Agent {
             }
             Operation::Click | Operation::Enter => {
                 if let Some(target) = target {
-                    self.gate_edit(state, observation, decision, target).await?;
+                    self.gate_edit(state, observation, decision, target, None).await?;
                 }
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
@@ -436,13 +460,22 @@ impl Agent {
             }
             Operation::Fill => {
                 let target = require(target)?;
-                self.gate_edit(state, observation, decision, target).await?;
+                // An edit the task may ask for is judged with the text it writes, so that is worked out first; one the
+                // task rules out is refused before anything is asked about its value.
+                let requested_only =
+                    changes_a_value(Operation::Fill, target) && self.edits(state).await? == Edits::RequestedOnly;
+                if !requested_only {
+                    self.gate_edit(state, observation, decision, target, None).await?;
+                }
                 // A fetched page takes no typing, so its value is worked out, and a secret asked for, in the browser.
                 if self.page.over_http() {
                     let reason = format!("{} can only be filled in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
                 let text = self.text(state, observation, decision, target).await?;
+                if requested_only {
+                    self.gate_edit(state, observation, decision, target, Some(&text)).await?;
+                }
                 // The task shows each input's value beside its name, so Jev copies or writes it like any value the
                 // task gives; typed as it was given, it is the input, and a recipe types the next run's value.
                 // Text the caller's own task also states, or that two inputs share, may not be the input's, and stays as
@@ -464,7 +497,7 @@ impl Agent {
             }
             Operation::Select => {
                 let target = require(target)?;
-                self.gate_edit(state, observation, decision, target).await?;
+                self.gate_edit(state, observation, decision, target, None).await?;
                 let raw = self.raw_target(target);
                 if raw.options.is_empty() {
                     // A fetched page does not list a select's options, and a live one can fill it once another field is set.
@@ -631,12 +664,17 @@ impl Agent {
     ///
     /// An unsaved toggle is reversible, so the irreversible gate lets it through. Authorization does not lift this
     /// either, for the reason it does not lift the download rule.
+    ///
+    /// `typed` is the text a fill writes. Asked only whether the task asks to fill the element labelled
+    /// "Description", Jev put the requested replacement of an add-on's description at 0.11 and the run stopped stuck
+    /// (#1004): one field can take an asked-for value or a wrong one, and only the text tells them apart.
     pub(super) async fn gate_edit(
         &self,
         state: &mut RunState,
         observation: &Observation,
         decision: &Decision,
         control: &Control,
+        typed: Option<&str>,
     ) -> Step {
         if !changes_a_value(decision.operation, control) {
             return Ok(());
@@ -647,7 +685,11 @@ impl Agent {
         }
         let mut questions = IndexMap::new();
         if edits == Edits::RequestedOnly {
-            let action = control_action(decision.operation, control, None, &observation.controls);
+            let mut action = control_action(decision.operation, control, None, &observation.controls);
+            if let Some(typed) = typed {
+                // A secret is named, never shown: the redactor puts its name where its value would be.
+                action.push_str(&format!("The field would then hold {}.\n", text::repr(&self.redact(typed))));
+            }
             questions.insert("requested".to_string(), Question::Noul(requested_question(&action)));
         }
         self.gate_asked_edit(state, observation, decision, control, edits, questions).await
@@ -1178,13 +1220,23 @@ impl Agent {
             let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
-        let Value { mut task, read, label, group, mut sources, source_question } = self.value(state, target);
-        if task_only {
+        let Value { mut task, read, label, group, mut sources, mut source_question } = self.value(state, target);
+        let entry = if task_only { Entry::Pressed } else { Entry::Typed };
+        if entry == Entry::Pressed {
             sources.retain(|source, _| source == IN_TASK);
+            sources.insert(IN_TASK.into(), "The task names the key chord to press, word for word.".into());
+            source_question = format!("Which key chord should be pressed in {label}? {KEY_CHORD_SAID}");
         }
-        let (mut begins, mut ends) = self.located(state, observation, &task, &label, group).await?;
-        let asked =
-            value_questions(state, target, (&task, "the task"), &label, (&begins, &ends), source_question, sources);
+        let (mut begins, mut ends) = self.located(entry, state, observation, &task, &label, group).await?;
+        let asked = value_questions(
+            (entry, target),
+            state,
+            (&task, "the task"),
+            &label,
+            (&begins, &ends),
+            source_question,
+            sources,
+        );
         let mut picks = match ahead_picks(decision, &asked) {
             Some(picks) => picks,
             None => self.ask_choices(state, Some(observation), asked).await?,
@@ -1222,10 +1274,11 @@ impl Agent {
         if source == IN_READ {
             state.text_source = Some(RecipeText::Live);
             task = read;
-            (begins, ends) = self.located(state, observation, &task, &label, words(&task, target.max_length)).await?;
+            (begins, ends) =
+                self.located(entry, state, observation, &task, &label, words(&task, target.max_length)).await?;
             let mut asked = value_questions(
+                (entry, target),
                 state,
-                target,
                 (&task, "what was read"),
                 &label,
                 (&begins, &ends),
@@ -1297,14 +1350,19 @@ impl Agent {
                 let run_task = self.model_task(state);
                 let several = several_values(target);
                 let exact = |bound: &str, options: &[(String, String)], elsewhere: &str| {
-                    let question = format!(
-                        "Which exact text belongs in {label}? Each choice is a candidate span copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
-                    );
+                    let question = match entry {
+                        Entry::Typed => format!(
+                            "Which exact text belongs in {label}? Each choice is a candidate span copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
+                        ),
+                        Entry::Pressed => format!(
+                            "Which exact text names the key chord to press in {label}? Each choice is a candidate span copied from {holder}, {bound}. Choose only the chord, without surrounding task instructions. {KEY_CHORD_SAID}"
+                        ),
+                    };
                     let (question, mut options) = self.offered_copies(&run_task, question, options);
                     options.insert(ELSEWHERE.into(), JsonValue::from(elsewhere));
                     (question, options)
                 };
-                let tried = field_history(state, target);
+                let tried = field_history(entry, state, target);
                 let (mut first, mut last, mut begins, mut ends) = (first.clone(), last.clone(), begins.clone(), ends);
                 // Each copy offered for one end runs from the other end as picked, so when that end is wrong every
                 // copy is: on a chat box told "Reply with only the word pong. Then send it. ...", a beginning picked
@@ -1336,7 +1394,7 @@ impl Agent {
                         if picked == ELSEWHERE {
                             begins.retain(|word| word.index != first.index);
                             first = self
-                                .repick(state, observation, target, (&task, holder, &label, &tried), &begins)
+                                .repick(entry, state, observation, target, (&task, holder, &label, &tried), &begins)
                                 .await?;
                             continue;
                         }
@@ -1380,9 +1438,14 @@ impl Agent {
                 // Words keep only their letters and digits, so punctuation the value starts or ends with, such as
                 // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave, where the
                 // choice of that end did not already settle it.
-                let question = format!(
-                    "Which exact text belongs in {label}? Each choice is the complete value copied from {holder}; choose whether the punctuation next to it is part of the value."
-                );
+                let question = match entry {
+                    Entry::Typed => format!(
+                        "Which exact text belongs in {label}? Each choice is the complete value copied from {holder}; choose whether the punctuation next to it is part of the value."
+                    ),
+                    Entry::Pressed => format!(
+                        "Which exact text names the key chord to press in {label}? Each choice is the complete chord copied from {holder}; choose whether the punctuation next to it is part of the chord."
+                    ),
+                };
                 let edges = edge_options(&chars, (first, last), (0, 0), target.max_length, max);
                 let edges = edges
                     .into_iter()
@@ -1411,6 +1474,7 @@ impl Agent {
     /// before. With no word left, the source does not state the value.
     async fn repick(
         &self,
+        entry: Entry,
         state: &mut RunState,
         observation: &Observation,
         target: &Control,
@@ -1420,7 +1484,7 @@ impl Agent {
         if words.is_empty() {
             return Err(self.missing(state, observation, target));
         }
-        let question = word_question((holder, label), "begins", &several_values(target), tried);
+        let question = word_question(entry, (holder, label), "begins", &several_values(target), tried);
         let picks =
             self.ask_choices(state, Some(observation), vec![("first", question, word_options(text, words))]).await?;
         let picked = picks.get("first").and_then(|index| index.parse::<usize>().ok());
@@ -1477,6 +1541,7 @@ impl Agent {
     /// leaves both empty, as the source then does not state the value.
     async fn located(
         &self,
+        entry: Entry,
         state: &mut RunState,
         observation: &Observation,
         task: &str,
@@ -1515,10 +1580,21 @@ impl Agent {
                         (n.to_string(), JsonValue::from(shown))
                     })
                     .collect();
-                criteria.insert(NO_VALUE.into(), JsonValue::from("None of these parts states the field's value."));
-                let question = format!(
-                    "Which part of this source holds the word the value for {label} {key} at, if any does? The value may run on into other parts."
-                );
+                let (none, question) = match entry {
+                    Entry::Typed => (
+                        "None of these parts states the field's value.",
+                        format!(
+                            "Which part of this source holds the word the value for {label} {key} at, if any does? The value may run on into other parts."
+                        ),
+                    ),
+                    Entry::Pressed => (
+                        "None of these parts names the key chord to press.",
+                        format!(
+                            "Which part of this source holds the word the key chord to press in {label} {key} at, if any does? The chord may run on into other parts. {KEY_CHORD_SAID}"
+                        ),
+                    ),
+                };
+                criteria.insert(NO_VALUE.into(), JsonValue::from(none));
                 asked.push((key, question, criteria));
                 cut.push((key, parts));
             }

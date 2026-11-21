@@ -10,7 +10,7 @@ When a field value or key chord is copied, Jev selects its source and first word
 each choice shows a candidate span from that first word to the candidate end, with one more
 answer: the value does not begin at that word. Jev then picks the first word again without it. The beginning is checked
 the same way against copies that end where the value ends, and an end Jev rejects there is picked again.
-Code copies the selected span unchanged. A task-provided key chord is copied only from the task, never from page text. Controls with standard ARIA keyboard interactions also offer their role's keys for Jev to choose.
+Code copies the selected span unchanged. A task-provided key chord is copied only from the task, never from page text, and Jev is asked for the chord to press, not for text to type into the field. Controls with standard ARIA keyboard interactions also offer their role's keys for Jev to choose.
 Earlier typing is shown as history, without assuming
 rejection or requiring a different value when the page changed the field.
 
@@ -60,6 +60,8 @@ When the task rules out downloading, a control the page says downloads a file is
 rules out changing anything, a fill, a select or a click on a setting control (a checkbox, radio, switch,
 option, or any control that reports a checked state) is refused, and from then on those operations are no
 longer offered. Typing into a search box is exempt, since searching is how a read-only task finds things.
+When the task asks for some changes and rules out the rest, Jev is asked whether the task asks for each one, and a
+fill is asked about with the text it would write, a secret by its name.
 Authorization does not lift either rule: it lets a run commit what the task asks for, never what the task
 forbids.
 
