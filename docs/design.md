@@ -157,6 +157,9 @@ The optional `invalid` flag reports `aria-invalid` or a failed native constraint
 in form validation. It describes the current field, without claiming that a submission occurred. A field
 that fails a native constraint also carries `validation_message`, the browser's own words for why, which
 Jev sees with the field: a refused submit shows that reason only in a browser bubble, not in page text.
+A control the page disables (`disabled`, or inside `aria-disabled="true"`) stays in the observation with
+`disabled: true` and no operations, so Jev sees a Save that an edit did not enable and cannot choose it. A step
+that enables or disables a control says so in its effect, and the page state counts it.
 Jev can choose `blur` for an editable field observed as focused, leaving that field without pressing
 another control or submitting its form. The field must still be the same node and hold focus when the
 action runs. A replacement field is not retried. Page change and blur handlers run as they do when the
