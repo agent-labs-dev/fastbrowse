@@ -246,8 +246,12 @@ struct Checked {
 /// before it resolves one: refusing them after resolving named a missing variable or vault item instead (#1337).
 pub fn check(task: &RunTask, secrets: bool) -> Result<(), RunError> {
     // Called before `run_task`, so outside the run's redactor, and a refusal quotes the value it refused (a proxy
-    // country, a DevTools endpoint) to an embedder that may log it: masked for address userinfo by structure (#1381).
-    checked(task, secrets).map(drop).map_err(|error| redacted_error(error, &Redactor::default()))
+    // country, a DevTools endpoint) to an embedder that may log it: masked by what the task holds, each string learnt
+    // as one whole address, as every door learns a message before it says anything of it (#1381).
+    checked(task, secrets).map(drop).map_err(|error| {
+        let learnt = serde_json::to_value(task).map(|given| fastbrowse_core::safety::learnt(&given));
+        redacted_error(error, &learnt.unwrap_or_default())
+    })
 }
 
 fn checked(task: &RunTask, secrets: bool) -> Result<Checked, RunError> {
@@ -1048,10 +1052,9 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
     }
     // A declared value is masked from here, before anything types it: a token the caller put in the start address's
     // query is no credential by its structure, and reached every model and exit as given (#1381).
-    let held = host.secrets.iter().flat_map(|secrets| secrets.held());
-    held.for_each(|(name, value)| {
-        redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).declare(&name, &value)
-    });
+    if let Some(secrets) = &host.secrets {
+        redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).declare_held(secrets.as_ref());
+    }
     host.on_event = host.on_event.take().map(|on_event| redacting(on_event, redactor.clone()));
     // Boxed so a caller holds a pointer rather than the whole run, which an unoptimized build copies into each
     // caller's frame: inline, a run on a 2 MB thread stack overflowed it before the browser started.
@@ -1205,18 +1208,23 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
         let (connection, started) = started?;
         owned = Some(started);
         let connection = BrowserConnection { allowed_origins: origins.clone(), ..connection };
+        let attach = connection.attach;
+        task.start = recipe_start(task.start.as_deref(), recipe.as_ref(), attach);
+        // One predicate for every image of the start page: a frame, a recording and a live view all show its pixels,
+        // address bar included, before any reading can say what they show. A start holding a declared secret got a
+        // live view while its frames were held (#1381).
+        let images_held =
+            redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).holds_images_from(task.start.as_deref());
         if let Some(on_event) = &host.on_event {
-            // A live view shows the page's pixels, which no reading can check, so a run that knows a credential from
-            // its start withholds it as it withholds every image. One learnt later cannot recall a view already given.
+            // A live view cannot be recalled once given, so a run whose images are held from its start gives none. A
+            // credential learnt later is held from then on in frames, and the view already given stays.
             let event = BrowserEvent {
                 kind: Default::default(),
-                live_url: connection.live_url.clone().filter(|_| !credentialed),
+                live_url: connection.live_url.clone().filter(|_| !images_held),
                 browser_id: connection.browser_id.clone(),
             };
             on_event(Event::Browser(event)).await;
         }
-        let attach = connection.attach;
-        task.start = recipe_start(task.start.as_deref(), recipe.as_ref(), attach);
         let opened = BrowserSession::new(
             connection,
             sink(task.downloads.as_deref(), &scratch)?,
@@ -1244,12 +1252,11 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
         session = Some(opened.clone());
         // Held from the first frame to the end of the run: a frame cannot be checked for a value as it arrives, and
         // the start page's address bar and content can show the credentials it was opened with.
+        // A declared secret in the start is held only until a reading of the page shows it gone: from the first
+        // reading on, the agent holds frames while the page shows it.
         if credentialed {
             opened.hold_images();
-        }
-        // A start address holding a declared secret can draw it from the first paint, before any reading can say
-        // whether it shows; from the first reading on, the agent holds frames while the page shows it.
-        if task.start.as_deref().is_some_and(|start| redactor.lock().unwrap().reveals(start)) {
+        } else if images_held {
             opened.set_frames_withheld(true);
         }
         opened.open().await?;

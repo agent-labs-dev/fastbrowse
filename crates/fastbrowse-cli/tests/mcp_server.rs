@@ -270,6 +270,30 @@ async fn test_a_refused_call_masks_the_credential_it_quotes() {
     assert!(!recorder.called());
 }
 
+/// The method and the id are the caller's strings too: a method whose password holds a quote was quoted past the
+/// quote, and an id is echoed whole to be matched, so one holding a credential is refused with a null id (#1381).
+#[tokio::test]
+async fn test_a_method_and_an_id_are_learnt_before_a_refusal_quotes_them() {
+    let recorder = Recorder::new(answered(Status::Complete));
+    let mut client = Client::new(ServerConfig::default(), recorder.runner());
+    client.send(json!({"jsonrpc": "2.0", "id": 7, "method": "https://admin:m3th\"t4il@h.test/"}));
+    client.send(json!({"jsonrpc": "2.0", "id": "https://ops:1d-pw@h.test/", "method": "tools/list"}));
+    client.send(json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": {"name": "https://ops:t00l-pw@h.test/", "arguments": {}}}));
+    let mut sent = Vec::new();
+    while let Ok(Some(message)) = tokio::time::timeout(Duration::from_millis(200), client.inbox.recv()).await {
+        sent.push(message);
+    }
+    let refused_id = sent.iter().find(|message| message["id"].is_null()).unwrap_or_else(|| panic!("{sent:?}"));
+    assert_eq!(refused_id["error"]["code"], -32600, "{refused_id}");
+    assert!(sent.iter().any(|message| message["id"] == 7), "{sent:?}");
+    let written = serde_json::to_string(&sent).unwrap();
+    for password in ["m3th", "t4il", "1d-pw", "t00l-pw"] {
+        assert!(!written.contains(password), "{password}: {written}");
+    }
+    assert!(!recorder.called());
+}
+
 #[tokio::test]
 async fn test_needs_confirmation_says_what_the_caller_can_do() {
     let recorder = Recorder::new(answered(Status::NeedsConfirmation));
@@ -572,6 +596,51 @@ async fn test_http_needs_the_bearer_token_except_for_the_health_check() {
     // Past the gate, the MCP app answers (406 here: the probe does not accept an event stream).
     let allowed = http(port, &request("POST", "/mcp", Some("s3cret"))).await;
     assert!(allowed.starts_with("HTTP/1.1 406"), "{allowed}");
+}
+
+/// A header value a refusal quotes is learnt with the body's strings before the refusal is written: an unsupported
+/// `MCP-Protocol-Version` holding an address was quoted whole, as were an id and a body that is not JSON (#1381).
+#[tokio::test]
+async fn test_http_learns_the_headers_and_body_it_quotes_before_refusing() {
+    let server = McpServer::new(ServerConfig::default(), Recorder::new(answered(Status::Complete)).runner());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { mcp::http::serve_on(listener, server, "127.0.0.1").await });
+    let post = |headers: &str, body: &str| {
+        format!(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n\
+             Accept: application/json, text/event-stream\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n\
+             {body}",
+            body.len()
+        )
+    };
+    let opened = http(
+        port,
+        &post(
+            "",
+            &json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})
+            .to_string(),
+        ),
+    )
+    .await;
+    let session = opened
+        .lines()
+        .find_map(|line| line.to_lowercase().strip_prefix("mcp-session-id: ").map(str::to_string))
+        .unwrap_or_else(|| panic!("{opened}"));
+    let session = format!("Mcp-Session-Id: {session}\r\n");
+    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let version =
+        http(port, &post(&format!("{session}MCP-Protocol-Version: https://ops:v3r-pw@h.test\r\n"), &ping)).await;
+    assert!(version.starts_with("HTTP/1.1 400") && version.contains("Unsupported protocol version"), "{version}");
+    let id = json!({"jsonrpc": "2.0", "id": "https://ops:1d-pw@h.test/", "method": "ping"}).to_string();
+    let id = http(port, &post(&session, &id)).await;
+    assert!(id.starts_with("HTTP/1.1 400") && id.contains("the id holds a credential"), "{id}");
+    let garbled = http(port, &post(&session, "https://ops:n0tjs0n@h.test/")).await;
+    assert!(garbled.starts_with("HTTP/1.1 400") && garbled.contains("not JSON"), "{garbled}");
+    for (response, password) in [(&version, "v3r-pw"), (&id, "1d-pw"), (&garbled, "n0tjs0n")] {
+        assert!(!response.contains(password), "{response}");
+    }
 }
 
 #[tokio::test]

@@ -553,8 +553,9 @@ frames and the final screenshot are checked against the page as it is when each 
 a resolved secret.
 
 The hold covers the images the run sends, and these are outside it. A cloud browser's `live_url` shows the page's
-pixels, so a run that knows a credential when the browser opens sends no `live_url` in its browser event; a credential
-learnt later cannot recall a view already given. A headed Chrome window shows the page on screen. An embedder that
+pixels, so a run whose images are held from its start sends no `live_url` in its browser event: one predicate decides
+both, a credential known when the browser opens or a start holding a declared secret. A credential learnt later cannot
+recall a view already given. A headed Chrome window shows the page on screen. An embedder that
 drives the browser itself, through `connect_cdp`, `Page.screenshot` or a `FrameTap`, takes images the run never sees.
 
 The credential the run recognises by its structure is an address's userinfo, in any string a caller writes, in its
@@ -563,8 +564,9 @@ bare header value or any other string is not recognisable as a credential by its
 it unless the caller declares the value as a secret. A declared value the run holds (`--secret NAME=ENV_VAR@ORIGIN`, a
 secret an MCP call names, a Rust `ScopedSecrets` plain value) is masked from the run's first request, before anything
 types it, in the start, the task, a refused `cdp_url`, events, the result, the trace and every model request; frames
-are held from before the browser opens when the start holds it, and from the first reading on whenever the page shows
-it. Declaring a value masks it and nothing else: where it may be typed is unchanged, and an address the caller wrote
+are held, and no `live_url` is sent, from before the browser opens when the start holds it, and frames from the first
+reading on whenever the page shows it. A declared value is matched as text with no minimum length, so a short one masks
+every occurrence of its letters from the first request, inside other words too. Declaring a value masks it and nothing else: where it may be typed is unchanged, and an address the caller wrote
 with it stays theirs to open. A value a resolver gives only when asked (a serve client's `secrets/resolve`, a Python
 resolver, a computed value) is masked from when the run types it. Not covered: a token in a query, path or header that
 is not declared, a serve `run_id`, the base64 of a password alone, and a provider error that echoes a transformed
@@ -578,8 +580,14 @@ not: an address with a scheme, a scheme-relative `//user:pass@host`, and an addr
 query. Everything else that leaves a run is redacted once, at its exit, by its schema: the result (its `data` keys
 and values, `browser.profile`, recordings, artifacts and `error`), each event, the `until` check, which receives the
 address masked rather than as the page has it, the trace and the HTTP trace, every stderr warning and log line, and
-the errors a run raises, whatever caller text they repeat. A refusal raised before a run exists (serve's and MCP's
-error replies, a refused tool call, the run's preflight check) masks the userinfo of every address it quotes. A closed
+the errors a run raises, whatever caller text they repeat. Every door a caller reaches the run through (serve's
+JSON-RPC, MCP over stdio and HTTP, the CLI, Python and the Rust `Agent`) first learns every string of the raw message,
+keys included, each as one whole address, and the HTTP header values it may quote, and only then reads the message
+into types; every reply, log line and printed request it makes is masked by what it learnt, so a refusal (an unknown
+method, a value serde could not read, an unsupported `MCP-Protocol-Version`, the run's preflight check) quotes no
+credential the message carried. Input that is not JSON has no strings to learn from, so it is refused with a fixed
+message that quotes none of it. A JSON-RPC id is echoed whole to be matched, so a request whose id holds a credential
+is refused with a fixed message and a null id. A closed
 set's value and a model's field name are code's and stay whole; a key the caller chose is redacted like a value, in a
 trace record as in the result. A task, browser connection, recipe, settings or HTTP request printed for a log prints
 its addresses masked; `FASTBROWSE_LLM_EXTRA_BODY` is printed, and written to the HTTP trace, with its keys kept and its
@@ -598,7 +606,9 @@ The userinfo of an address runs to its last `@`, as the WHATWG URL parser reads 
 `` ` `` cannot stand in a URL as written (RFC 3986), so in text it ends the address: `"https://a.test","mail":"b@c.test"`
 is two strings, not one userinfo. A whole address the caller gives, such as a start, is parsed whole, so a password
 holding one of those is still learnt and masked wherever it appears. An email address or a `mailto:` link has no
-userinfo, so a page showing one teaches the run nothing and holds no image. The
+userinfo, so a page showing one teaches the run nothing and holds no image. A literal quote, angle bracket or backtick
+inside userinfo is masked when the address arrives as its own caller string or is a page URL the browser reports, and
+not when it appears only inside free text the run never saw as a discrete value. The
 run learns each credential it sees, from every string the caller gives, read by the run's schema with its keys, a
 recipe, the settings' text and every string a page, tab or history address shows, and masks it wherever it appears in each form a page can echo it: as
 written, percent-decoded, as the browser encodes it, and as the `Authorization: Basic` value the browser sends for it,

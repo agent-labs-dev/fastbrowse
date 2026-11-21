@@ -24,6 +24,7 @@ use fastbrowse_core::protocol::{
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text::repr;
 use fastbrowse_core::py::{base64, sha256_hex};
+use fastbrowse_core::safety::Redactor;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -233,12 +234,10 @@ impl Server {
     }
 
     async fn receive(&self, line: &[u8]) {
-        let payload: Value = match serde_json::from_slice(line) {
-            Ok(payload) => payload,
-            Err(error) => {
-                let error = refused(ErrorCode::ParseError, error.to_string()).error();
-                return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: None, error }).await;
-            }
+        // A line that is not JSON has no strings to learn from, so its refusal quotes nothing of it.
+        let Ok(payload) = serde_json::from_slice::<Value>(line) else {
+            let error = Error { code: ErrorCode::ParseError, message: "the line is not JSON".into(), data: None };
+            return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: None, error }).await;
         };
         if let Value::Object(map) = &payload
             && !map.contains_key("method")
@@ -246,11 +245,22 @@ impl Server {
         {
             return self.settle(map);
         }
+        // Learnt before anything is said of the request: everything below quotes it masked by what it holds.
+        let learnt = Arc::new(fastbrowse_core::safety::learnt(&payload));
+        let id = id_of(&payload);
+        // An id is echoed whole to be matched, so one holding a credential cannot be answered by it.
+        if let Some(RequestId::Str(given)) = &id
+            && learnt.reveals(given)
+        {
+            let message = "the request id holds a credential; choose an id that holds none";
+            let error = Error { code: ErrorCode::InvalidRequest, message: message.into(), data: None };
+            return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: None, error }).await;
+        }
         let request: Request = match serde_json::from_value(payload.clone()) {
             Ok(request) => request,
             Err(error) => {
-                let error = refused(ErrorCode::InvalidRequest, error.to_string()).error();
-                return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: id_of(&payload), error }).await;
+                let error = refused(ErrorCode::InvalidRequest, learnt.mask(&error.to_string())).error();
+                return self.write(&ErrorResponse { jsonrpc: JsonRpc, id, error }).await;
             }
         };
         let id = request.id;
@@ -260,11 +270,11 @@ impl Server {
         };
         let Some(known) = Method::parse(&request.method) else {
             let refusal = refused(ErrorCode::MethodNotFound, format!("unknown method {}", repr(&request.method)));
-            return self.refuse(id.as_ref(), refusal).await;
+            return self.refuse(&learnt, id.as_ref(), refusal).await;
         };
         if params.is_array() {
             let message = format!("{}: params: name them; no method takes them by position", known.as_str());
-            return self.refuse(id.as_ref(), refused(ErrorCode::InvalidParams, message)).await;
+            return self.refuse(&learnt, id.as_ref(), refused(ErrorCode::InvalidParams, message)).await;
         }
         let checked = match known {
             Method::Initialize => read::<InitializeParams>(known, params.clone()).map(drop),
@@ -272,7 +282,7 @@ impl Server {
             Method::RunCancel | Method::Run => Ok(()),
         };
         if let Err(refusal) = checked {
-            return self.refuse(id.as_ref(), refusal).await;
+            return self.refuse(&learnt, id.as_ref(), refusal).await;
         }
         match known {
             Method::Initialize => {
@@ -293,11 +303,11 @@ impl Server {
                     }
                     self.respond(id.as_ref(), Value::Null).await;
                 }
-                Err(refusal) => self.refuse(id.as_ref(), refusal).await,
+                Err(refusal) => self.refuse(&learnt, id.as_ref(), refusal).await,
             },
             Method::Run => match read::<RunParams>(known, params) {
-                Ok(params) => self.start_run(id, params).await,
-                Err(refusal) => self.refuse(id.as_ref(), refusal).await,
+                Ok(params) => self.start_run(learnt, id, params).await,
+                Err(refusal) => self.refuse(&learnt, id.as_ref(), refusal).await,
             },
         }
     }
@@ -308,7 +318,9 @@ impl Server {
         }
     }
 
-    async fn refuse(&self, id: Option<&RequestId>, refusal: Refused) {
+    /// Refuse the request `learnt` was learnt from, its message masked by what that request held.
+    async fn refuse(&self, learnt: &Redactor, id: Option<&RequestId>, mut refusal: Refused) {
+        refusal.message = learnt.mask(&refusal.message);
         // Named in the log as well as the reply, since a notification that was refused has no reply.
         log::warning(&format!("serve: {}", refusal.message));
         if let Some(id) = id {
@@ -320,10 +332,10 @@ impl Server {
     ///
     /// Everything up to the run's first wait happens here, before the next line is read: a
     /// `run/cancel` or the end of input on the next line finds the run under way.
-    async fn start_run(&self, id: Option<RequestId>, params: RunParams) {
+    async fn start_run(&self, learnt: Arc<Redactor>, id: Option<RequestId>, params: RunParams) {
         if holds_credential(&params) {
             let message = "run_id holds a credential; choose an id that holds none";
-            return self.refuse(id.as_ref(), refused(ErrorCode::InvalidParams, message)).await;
+            return self.refuse(&learnt, id.as_ref(), refused(ErrorCode::InvalidParams, message)).await;
         }
         let cancel = Cancel::default();
         let busy = {
@@ -338,7 +350,7 @@ impl Server {
             }
         };
         if let Some(message) = busy {
-            return self.refuse(id.as_ref(), refused(ErrorCode::Busy, message)).await;
+            return self.refuse(&learnt, id.as_ref(), refused(ErrorCode::Busy, message)).await;
         }
         let context = RunContext {
             server: self.clone(),
@@ -351,7 +363,7 @@ impl Server {
             Ok(arguments) => arguments,
             Err(refusal) => {
                 self.finish_run();
-                return self.refuse(id.as_ref(), refusal).await;
+                return self.refuse(&learnt, id.as_ref(), refusal).await;
             }
         };
         let server = self.clone();
@@ -362,7 +374,7 @@ impl Server {
             let failure = context.failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
             match reply(outcome, failure, &run_id) {
                 Ok(result) => server.respond(id.as_ref(), result.dump()).await,
-                Err(refusal) => server.refuse(id.as_ref(), refusal).await,
+                Err(refusal) => server.refuse(&learnt, id.as_ref(), refusal).await,
             }
         });
         // One poll here, the rest from a task: the run gets as far as its first wait before the next line is read.

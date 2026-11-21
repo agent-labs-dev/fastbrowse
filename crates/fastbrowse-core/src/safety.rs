@@ -868,6 +868,18 @@ pub fn mask_userinfo(text: &str) -> String {
     Redactor::default().mask(text)
 }
 
+/// What a door learns from one message a caller sent, before it says anything about it: every string in `message`,
+/// map keys included, read as one whole address (`register_address`), as the browser would parse it. A door that
+/// masked a reply, a log line or an echoed id after the fact had only the structural scan, which cannot tell a
+/// password holding a quote (`https://admin:pw"tail@host/`) from an address followed by an email, and quoted the
+/// password whole (#1381). A message that is not JSON at all has no strings to learn, and is answered with a fixed
+/// string that quotes nothing.
+pub fn learnt(message: &Value) -> Redactor {
+    let mut redactor = Redactor::default();
+    redactor.register_tree(message);
+    redactor
+}
+
 /// The redactors of the runs this process has going, for what it writes to its own log.
 static LIVE: std::sync::Mutex<Vec<std::sync::Weak<std::sync::Mutex<Redactor>>>> = std::sync::Mutex::new(Vec::new());
 
@@ -941,8 +953,26 @@ impl Redactor {
     /// the value in its query is still theirs to open, so it does not count as one carrying a resolved secret
     /// (`reveals_secret`) until the run types the value (`register` with its origin).
     pub fn declare(&mut self, name: &str, value: &str) {
+        // A name the run already typed stays typed: declared again by an agent resuming the run, it lost its gate.
+        let typed = self.values.values().any(|known| known == name) && !self.untyped.contains(name);
         self.register(name, value, None);
-        self.untyped.insert(name.to_string());
+        if !typed {
+            self.untyped.insert(name.to_string());
+        }
+    }
+
+    /// `declare` each value `secrets` holds as it is (`SecretResolver::held`). Every entry calls it: the runner before
+    /// it opens the browser, and the agent before its first request, which an embedder driving the agent directly
+    /// reaches alone; a declared token there reached every model unmasked (#1381).
+    pub fn declare_held(&mut self, secrets: &dyn SecretResolver) {
+        secrets.held().iter().for_each(|(name, value)| self.declare(name, value));
+    }
+
+    /// Whether a run that starts at `start` holds its images from its first frame: it knows an address's credential,
+    /// or its start shows a declared secret. A live view, a frame and a recording all show the start page's pixels,
+    /// address bar included, before any reading can say what they show, so one predicate withholds them all.
+    pub fn holds_images_from(&self, start: Option<&str>) -> bool {
+        self.credentials || start.is_some_and(|start| self.reveals(start))
     }
 
     pub fn register(&mut self, name: &str, value: &str, origin: Option<&str>) {
@@ -1257,10 +1287,9 @@ impl Redactor {
             Value::String(_) | Value::Null | Value::Bool(_) | Value::Number(_) => {}
             Value::Array(items) => items.iter_mut().for_each(|item| self.mask_tree(item, keys)),
             Value::Object(fields) if keys => {
-                let entries = std::mem::take(fields);
-                for (key, mut item) in entries {
-                    self.mask_tree(&mut item, keys);
-                    fields.insert(self.mask(&key), item);
+                fields.values_mut().for_each(|item| self.mask_tree(item, keys));
+                if fields.keys().any(|key| self.reveals(key)) {
+                    *fields = std::mem::take(fields).into_iter().map(|(key, item)| (self.mask(&key), item)).collect();
                 }
             }
             Value::Object(fields) => fields.values_mut().for_each(|item| self.mask_tree(item, keys)),
@@ -1270,14 +1299,21 @@ impl Redactor {
     /// Redact every string inside `value`, map keys included, as a trace event is written out. A model request's body
     /// keys what the caller named (an input, an output field), and redacting values alone wrote a password learnt
     /// from such a name whole as the key (#1381). Kept ids are redacted too: a trace is read, never resolved.
+    ///
+    /// An object is rebuilt only when one of its keys changes: every trace event passes here, and rebuilding each map
+    /// to rewrite no key reallocated every event the run wrote.
     pub fn redact_value(&self, value: &mut Value) {
         match value {
-            Value::String(text) => *text = self.redact(text),
+            Value::String(text) => {
+                if self.reveals(text) {
+                    *text = self.redact(text);
+                }
+            }
             Value::Array(items) => items.iter_mut().for_each(|item| self.redact_value(item)),
             Value::Object(fields) => {
-                for (key, mut item) in std::mem::take(fields) {
-                    self.redact_value(&mut item);
-                    fields.insert(self.redact(&key), item);
+                fields.values_mut().for_each(|item| self.redact_value(item));
+                if fields.keys().any(|key| self.reveals(key)) {
+                    *fields = std::mem::take(fields).into_iter().map(|(key, item)| (self.redact(&key), item)).collect();
                 }
             }
             Value::Null | Value::Bool(_) | Value::Number(_) => {}
@@ -1518,10 +1554,13 @@ fn authorities(text: &str) -> Vec<Authority> {
         let authority_end = text[netloc_start..]
             .find(|c: char| text::is_space(c) || matches!(c, '/' | '?' | '#') || (special && c == '\\'))
             .map_or(text.len(), |length| netloc_start + length);
+        // The last `@` with no delimiter before it, tried from the right: in `"https://u:secret@host.test","mail":
+        // "b@c.test"` the last `@` is the email's, and taking none masked nothing of the credential before it.
         let last_at = text[netloc_start..authority_end]
-            .rfind('@')
-            .map(|offset| netloc_start + offset)
-            .filter(|at| !text[netloc_start..*at].contains(DELIMITERS));
+            .match_indices('@')
+            .map(|(offset, _)| netloc_start + offset)
+            .rev()
+            .find(|at| !text[netloc_start..*at].contains(DELIMITERS));
         let userinfo = last_at.filter(|at| *at > netloc_start).map(|at| (netloc_start, at));
         let host_start = last_at.map_or(netloc_start, |at| at + 1);
         // Prose ends the host where an address in it cannot go on, and a sentence's full stop or a closing bracket is
@@ -1534,8 +1573,8 @@ fn authorities(text: &str) -> Vec<Authority> {
         if netloc_end > netloc_start {
             found.push(Authority { scheme, netloc: (netloc_start, netloc_end), userinfo });
         }
-        // An address after a quote that ended this one's host is read on its own.
-        at = if userinfo.is_some() { authority_end } else { host_end }.max(netloc_start + 1);
+        // An address after a quote that ended this one's host is read on its own, the credential before it or not.
+        at = host_end.max(netloc_start + 1);
     }
     found
 }
@@ -1557,6 +1596,12 @@ fn hosts(text: &str) -> Vec<((usize, usize), String)> {
 /// encoding. An address percent-encoded into another's query (`?next=https%3A%2F%2Fuser%3Apass%40host`) is found
 /// in the text decoded, again as often as decoding changes it, and its range mapped back to the text as written.
 fn userinfos(text: &str) -> Vec<(usize, usize, String)> {
+    // A userinfo ends at an `@`, by URL syntax, and decoding makes an `@` only out of a `%` escape, so text with
+    // neither holds none at any level of encoding. Every value the run masks passes here, most of them page text
+    // without either, and each was scanned whole for addresses.
+    if !text.contains(['@', '%']) {
+        return Vec::new();
+    }
     let mut found: Vec<(usize, usize, String)> = authorities(text)
         .into_iter()
         .filter_map(|authority| authority.userinfo)
@@ -1891,6 +1936,8 @@ mod tests {
                 "https://[secret:address_credentials]@shop.test/orders"
             }
             .to_string();
+            // A door learns a caller's string as one whole address, whatever its password holds.
+            let door = learnt(&serde_json::json!({ "start": address }));
             for (text, redacted) in [
                 (address.clone(), masked.clone()),
                 (format!("Open {address} and read it"), format!("Open {masked} and read it")),
@@ -1902,10 +1949,7 @@ mod tests {
             ] {
                 let shown = redactor.redact(&text);
                 assert_eq!(shown, redacted, "{text}");
-                // Unregistered, the structure alone masks the whole userinfo, where URL syntax lets it hold the
-                // character unencoded.
-                let unregistered = Redactor::new().redact(&text);
-                assert!(delimited || !unregistered.contains("tail9"), "{unregistered}");
+                assert_eq!(door.redact(&text), redacted, "{text}");
             }
             // The password alone, in the page's text, as the browser decodes it.
             let decoded = decoded(&password);
@@ -1959,6 +2003,60 @@ mod tests {
             }
             assert_eq!(mask_userinfo(text), text);
         }
+    }
+
+    /// The last `@` in an authority read to the next slash can be a later email's: the credential before it is
+    /// masked by the first `@` with no delimiter before it, and the email is left.
+    #[test]
+    fn test_a_credential_followed_by_an_email_is_masked_and_the_email_left() {
+        for (text, masked) in [
+            (
+                r#"{"start":"https://u:secret@host.test","mail":"b@c.test"}"#,
+                r#"{"start":"https://••••••••@host.test","mail":"b@c.test"}"#,
+            ),
+            (
+                "Open https://u:secret@host.test\"then\" write to b@c.test",
+                "Open https://••••••••@host.test\"then\" write to b@c.test",
+            ),
+            (
+                r#"<a href="https://u:secret@host.test">x</a><a href="mailto:b@c.test">b@c.test</a>"#,
+                r#"<a href="https://••••••••@host.test">x</a><a href="mailto:b@c.test">b@c.test</a>"#,
+            ),
+            (
+                r#"["https://u:secret@host.test","https://v:other@k.test","b@c.test"]"#,
+                r#"["https://••••••••@host.test","https://•••••••@k.test","b@c.test"]"#,
+            ),
+        ] {
+            assert_eq!(mask_userinfo(text), masked, "{text}");
+        }
+    }
+
+    /// A door learns each string a caller sent as one whole address before it says anything, so a password holding
+    /// a character the scan ends an address at is masked wherever the message is quoted, escaped as JSON or not.
+    #[test]
+    fn test_a_door_learns_a_quoted_password_from_the_message() {
+        let message: Value = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"https://u:IdPw9@host.test/","method":"https://admin:pw\"tail9@host.test/"}"#,
+        )
+        .unwrap();
+        let learnt = learnt(&message);
+        let quoted = format!("unknown method {} for {}", serde_json::to_string(&message["method"]).unwrap(), message);
+        let shown = learnt.mask(&quoted);
+        assert!(!shown.contains("tail9") && !shown.contains("IdPw9"), "{shown}");
+        assert!(learnt.reveals(message["id"].as_str().unwrap()));
+    }
+
+    /// One predicate holds every image of the start page, live view included: a start holding a declared secret got a
+    /// live view while its frames were held.
+    #[test]
+    fn test_images_are_held_from_a_start_holding_a_declared_secret_or_a_credential() {
+        let mut redactor = Redactor::new();
+        redactor.declare("shop_token", "St4rtTok");
+        assert!(redactor.holds_images_from(Some("https://shop.test/?token=St4rtTok")));
+        assert!(!redactor.holds_images_from(Some("https://shop.test/")));
+        assert!(!redactor.holds_images_from(None));
+        redactor.register_tree(&serde_json::json!(["https://ops:St4rtPw@shop.test/"]));
+        assert!(redactor.holds_images_from(Some("https://shop.test/")));
     }
 
     /// Chrome strips a tab or newline inside an address before it parses it: given `https://ops:pa<TAB>ss@host/`, it

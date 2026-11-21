@@ -622,16 +622,22 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
 /// What follows the `serve` check: parse, run, and report a configuration error on both streams when `--json`
 /// was asked for, so a caller parsing stdout still gets a result.
 pub async fn main(argv: &[String], context: &Context) -> i32 {
+    // Learnt before anything is said of the arguments, each read as one whole address, and counted among the live
+    // runs so a log line is masked by them too: a usage error or a refusal quoted an argument, and masked after the
+    // fact by structure alone, a password holding a quote was printed whole (#1381).
+    let learnt = Arc::new(Mutex::new(fastbrowse_core::safety::learnt(&serde_json::json!(argv))));
+    fastbrowse_core::safety::live(&learnt);
+    let masked = |text: &str| learnt.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).mask(text);
     let args = match parse(argv, &context.build) {
         Ok(args) => args,
         Err(Exit::Print(text)) => {
             let mut out = context.streams.out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
+            let _ = out.write_all(masked(&text).as_bytes()).and_then(|()| out.flush());
             return 0;
         }
         Err(Exit::Usage(text)) => {
             let mut err = context.streams.err.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = err.write_all(text.as_bytes()).and_then(|()| err.flush());
+            let _ = err.write_all(masked(&text).as_bytes()).and_then(|()| err.flush());
             return 2;
         }
     };
@@ -639,13 +645,13 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
     if let Some(destination) = destination
         && let Err(error) = trace_to(Some(destination))
     {
-        context.streams.eprint(&format!("fastbrowse: cannot write the trace to {destination}: {error}"));
+        context.streams.eprint(&masked(&format!("fastbrowse: cannot write the trace to {destination}: {error}")));
         return 1;
     }
     Trace::disabled().event("build", || context.build.fields());
     match run(&args, context).await {
         Ok(code) => code,
-        Err(error) => fail(&args, context, &error.0, None),
+        Err(error) => fail(&args, context, &masked(&error.0), None),
     }
 }
 
