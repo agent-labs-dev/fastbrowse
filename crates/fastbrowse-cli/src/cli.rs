@@ -605,19 +605,45 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     Ok(exit_code(result.status))
 }
 
+/// What a command learns from how it was started, before it says anything about it: every argument and every value of
+/// the environment and of the `.env` file the settings are read from, each read as one whole address, and counted
+/// among the live runs so a log line is masked by them too. A usage error, a refusal or a settings error quotes them,
+/// and masked after the fact by structure alone, a password holding a quote was printed whole (#1381). Every entry the
+/// binary has (the CLI, `fastbrowse serve`, `fastbrowse-mcp` and the subcommands) learns through this one path; when
+/// only the CLI did, `fastbrowse-mcp --port 'https://ops:pw"x@h/'` printed the password.
+pub struct Invocation(Arc<Mutex<fastbrowse_core::safety::Redactor>>);
+
+impl Invocation {
+    pub fn learn(argv: &[String], environ: &HashMap<String, String>) -> Invocation {
+        let dotenv = std::fs::read_to_string(".env").map(|text| fastbrowse_clients::environment::parse_dotenv(&text));
+        let dotenv: Vec<String> = dotenv.unwrap_or_default().into_iter().map(|(_, value)| value).collect();
+        let environment: Vec<&String> = environ.values().collect();
+        let learnt =
+            Arc::new(Mutex::new(fastbrowse_core::safety::learnt(&serde_json::json!([argv, environment, dotenv]))));
+        fastbrowse_core::safety::live(&learnt);
+        Invocation(learnt)
+    }
+
+    pub fn mask(&self, text: &str) -> String {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).mask(text)
+    }
+}
+
 /// What follows the `serve` check: parse, run, and report a configuration error on both streams when `--json`
 /// was asked for, so a caller parsing stdout still gets a result.
 pub async fn main(argv: &[String], context: &Context) -> i32 {
+    let invocation = Invocation::learn(argv, &context.environ);
+    let masked = |text: &str| invocation.mask(text);
     let args = match parse(argv, &context.build) {
         Ok(args) => args,
         Err(Exit::Print(text)) => {
             let mut out = context.streams.out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
+            let _ = out.write_all(masked(&text).as_bytes()).and_then(|()| out.flush());
             return 0;
         }
         Err(Exit::Usage(text)) => {
             let mut err = context.streams.err.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = err.write_all(text.as_bytes()).and_then(|()| err.flush());
+            let _ = err.write_all(masked(&text).as_bytes()).and_then(|()| err.flush());
             return 2;
         }
     };
@@ -625,20 +651,21 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
     if let Some(destination) = destination
         && let Err(error) = trace_to(Some(destination))
     {
-        context.streams.eprint(&format!("fastbrowse: cannot write the trace to {destination}: {error}"));
+        context.streams.eprint(&masked(&format!("fastbrowse: cannot write the trace to {destination}: {error}")));
         return 1;
     }
     Trace::disabled().event("build", || context.build.fields());
     match run(&args, context).await {
         Ok(code) => code,
         Err(error) => {
+            let message = masked(&error.0);
             if args.json {
                 context.streams.print(&json::write(
-                    &json_result(&options::error_result("Configuration", &error.0), &context.build),
+                    &json_result(&options::error_result("Configuration", &message), &context.build),
                     Style::PYDANTIC.indented(2),
                 ));
             }
-            context.streams.eprint(&format!("fastbrowse: {}", error.0));
+            context.streams.eprint(&format!("fastbrowse: {message}"));
             1
         }
     }

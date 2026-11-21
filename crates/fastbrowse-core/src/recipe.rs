@@ -29,7 +29,7 @@ pub const REPLAYABLE: &[Operation] = &[
     Operation::Escape,
 ];
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Recipe {
     pub version: u32,
@@ -37,6 +37,14 @@ pub struct Recipe {
     #[serde(default)]
     pub start: Option<String>,
     pub steps: Vec<RecipeStep>,
+}
+
+/// Printed with every address's credentials masked (`debug_masked`): a recipe holds the caller's task and the links,
+/// labels and text a run met, and derived, a panic or a log printed them as written.
+impl std::fmt::Debug for Recipe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::safety::debug_masked("Recipe", self, f)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +310,19 @@ mod tests {
 
     fn control(id: &str, role: &str, label: &str) -> Control {
         Control::new(id, role, label, [])
+    }
+
+    /// A derived `Debug` printed a recipe's start and steps whole, an address's credentials included (#1381).
+    #[test]
+    fn test_a_recipe_prints_with_its_credentials_masked() {
+        let recipe = Recipe {
+            version: RECIPE_VERSION,
+            task: "Read https://ops:t4sk-pw@h.test/".into(),
+            start: Some("https://ops:st4rt-pw@h.test/".into()),
+            steps: Vec::new(),
+        };
+        let printed = format!("{recipe:?}");
+        assert!(printed.starts_with("Recipe") && !printed.contains("t4sk-pw") && !printed.contains("st4rt-pw"));
     }
 
     #[test]

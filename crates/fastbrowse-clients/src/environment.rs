@@ -38,6 +38,7 @@ use fastbrowse_core::decision::{DecisionClient, JEV_MODEL};
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{LLMPurpose, LocalChrome};
 use fastbrowse_core::py::lax::bool_of;
+use fastbrowse_core::safety::mask_userinfo;
 use serde_json::{Map, Value};
 
 use crate::action_picker::{ActionPicker, LlmDecisionClient};
@@ -212,7 +213,7 @@ fn set(key: &Option<Secret>) -> bool {
     key.as_ref().is_some_and(Secret::is_set)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Settings {
     pub typesafe_api_key: Option<Secret>,
     pub ai_gateway_api_key: Option<Secret>,
@@ -257,6 +258,73 @@ pub struct Settings {
     pub profile: Option<PathBuf>,
 }
 
+/// Every field as derived but these: a key prints as `Secret`; an endpoint's and the Chrome command's userinfo is
+/// masked, since a base address written `https://user:pass@host/v1` carries the provider's credentials; and the extra
+/// body prints its keys with every value withheld. Taken apart without `..`, so
+/// a field added later does not compile until it is printed here.
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Settings {
+            typesafe_api_key,
+            ai_gateway_api_key,
+            openrouter_api_key,
+            browser_use_api_key,
+            exa_api_key,
+            mcp_token,
+            decision_source,
+            decision_base_url,
+            decision_model,
+            decision_api_key,
+            action_picker,
+            telnyx_api_key,
+            openai_api_key,
+            aimlapi_api_key,
+            perplexity_api_key,
+            llm_provider,
+            llm_provider_api_key,
+            llm_model,
+            llm_base_url,
+            llm_api_key,
+            llm_strict,
+            llm_strict_set,
+            llm_extra_body,
+            llm_reasoning,
+            chrome,
+            headed,
+            profile,
+        } = self;
+        f.debug_struct("Settings")
+            .field("typesafe_api_key", typesafe_api_key)
+            .field("ai_gateway_api_key", ai_gateway_api_key)
+            .field("openrouter_api_key", openrouter_api_key)
+            .field("browser_use_api_key", browser_use_api_key)
+            .field("exa_api_key", exa_api_key)
+            .field("mcp_token", mcp_token)
+            .field("decision_source", decision_source)
+            .field("decision_base_url", &decision_base_url.as_deref().map(mask_userinfo))
+            .field("decision_model", decision_model)
+            .field("decision_api_key", decision_api_key)
+            .field("action_picker", action_picker)
+            .field("telnyx_api_key", telnyx_api_key)
+            .field("openai_api_key", openai_api_key)
+            .field("aimlapi_api_key", aimlapi_api_key)
+            .field("perplexity_api_key", perplexity_api_key)
+            .field("llm_provider", llm_provider)
+            .field("llm_provider_api_key", llm_provider_api_key)
+            .field("llm_model", llm_model)
+            .field("llm_base_url", &llm_base_url.as_deref().map(mask_userinfo))
+            .field("llm_api_key", llm_api_key)
+            .field("llm_strict", llm_strict)
+            .field("llm_strict_set", llm_strict_set)
+            .field("llm_extra_body", &llm_extra_body.as_deref().map(withheld_body))
+            .field("llm_reasoning", llm_reasoning)
+            .field("chrome", &chrome.as_deref().map(mask_userinfo))
+            .field("headed", headed)
+            .field("profile", profile)
+            .finish()
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -292,7 +360,7 @@ impl Default for Settings {
 }
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 25] = [
+pub const FIELDS: [(&str, &str); 25] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -361,6 +429,16 @@ pub fn parse_dotenv(text: &str) -> Vec<(String, String)> {
     pairs
 }
 
+/// The settings an address's credentials may be written in: the endpoints a client connects to.
+const BASE_ADDRESSES: [&str; 2] = ["decision_base_url", "llm_base_url"];
+
+/// Whether any string of `value`, keys included, is or holds an address that carries credentials.
+fn carries_credentials(value: &Value) -> bool {
+    let mut redactor = fastbrowse_core::safety::Redactor::default();
+    redactor.register_tree(value);
+    redactor.holds_credentials()
+}
+
 impl Settings {
     /// `load_settings()`: the process environment over `.env` in the working directory.
     pub fn load() -> Result<Settings, ConfigurationError> {
@@ -400,7 +478,78 @@ impl Settings {
             // Name the setting, never echo the input: the field may be a key.
             return Err(ConfigurationError(format!("invalid settings: {}", invalid.join(", "))));
         }
+        settings.refuse_credentials()?;
         Ok(settings)
+    }
+
+    /// Every setting that is text rather than a key, by name, the extra body as the JSON it parses to: what a run
+    /// learns credentials from. Taken apart without `..`, so a field added later does not compile until it is sorted
+    /// here as text or not.
+    pub fn text(&self) -> Vec<(&'static str, Value)> {
+        let Settings {
+            typesafe_api_key: _,
+            ai_gateway_api_key: _,
+            openrouter_api_key: _,
+            browser_use_api_key: _,
+            exa_api_key: _,
+            mcp_token: _,
+            decision_source: _,
+            decision_base_url,
+            decision_model,
+            decision_api_key: _,
+            action_picker: _,
+            telnyx_api_key: _,
+            openai_api_key: _,
+            aimlapi_api_key: _,
+            perplexity_api_key: _,
+            llm_provider: _,
+            llm_provider_api_key: _,
+            llm_model,
+            llm_base_url,
+            llm_api_key: _,
+            llm_strict: _,
+            llm_strict_set: _,
+            llm_extra_body,
+            llm_reasoning: _,
+            chrome,
+            headed: _,
+            profile,
+        } = self;
+        let extra_body = llm_extra_body
+            .as_ref()
+            .map(|raw| serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::from(raw.as_str())));
+        [
+            ("decision_base_url", decision_base_url.clone().map(Value::from)),
+            ("decision_model", decision_model.clone().map(Value::from)),
+            ("llm_model", llm_model.clone().map(Value::from)),
+            ("llm_base_url", llm_base_url.clone().map(Value::from)),
+            ("llm_extra_body", extra_body),
+            ("chrome", chrome.clone().map(Value::from)),
+            ("profile", profile.as_ref().map(|path| Value::from(path.to_string_lossy().into_owned()))),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| Some((name, value?)))
+        .collect()
+    }
+
+    /// Refuse an address's credentials in any text setting but the two base addresses. A model name and the extra
+    /// body are written into every model request as they are, and a Chrome or profile path into errors and the
+    /// result, so a credential in one reached the provider and the caller unmasked (#1381); a base address is only
+    /// connected to, and its userinfo is masked wherever an address is shown.
+    fn refuse_credentials(&self) -> Result<(), ConfigurationError> {
+        let held: Vec<&str> = self
+            .text()
+            .into_iter()
+            .filter(|(name, value)| !BASE_ADDRESSES.contains(name) && carries_credentials(value))
+            .map(|(name, _)| name)
+            .collect();
+        if held.is_empty() {
+            return Ok(());
+        }
+        Err(ConfigurationError(format!(
+            "settings hold an address with credentials: {}; only the base URLs may carry one",
+            held.join(", ")
+        )))
     }
 
     fn assign(&mut self, name: &str, value: &str) -> Result<(), ()> {
@@ -653,6 +802,13 @@ impl Settings {
         let Value::Object(parsed) = parsed else {
             return Err(ConfigurationError("FASTBROWSE_LLM_EXTRA_BODY must be a JSON object".into()));
         };
+        // Checked here as well as at load: a caller can build `Settings` in code, and the body is merged into each
+        // model request after the messages are masked.
+        if carries_credentials(&Value::Object(parsed.clone())) {
+            return Err(ConfigurationError(
+                "FASTBROWSE_LLM_EXTRA_BODY holds an address with credentials; only the base URLs may carry one".into(),
+            ));
+        }
         let clashes = reserved_clashes(&parsed);
         if !clashes.is_empty() {
             return Err(ConfigurationError(format!(
@@ -830,5 +986,64 @@ impl Settings {
             Some(key) if key.is_set() => Ok(key.expose()),
             _ => Err(ConfigurationError("set BROWSER_USE_API_KEY for a cloud browser".into())),
         }
+    }
+}
+
+/// The extra body as `Debug` prints it: its keys, each value withheld, since it may hold a provider's own token that
+/// nothing structural tells from any other value (#1381). A body that is not JSON prints as withheld whole.
+fn withheld_body(raw: &str) -> String {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(mut body) => {
+            crate::http::withhold(&mut body);
+            body.to_string()
+        }
+        Err(_) => "<withheld>".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every setting is read with an address's credentials in it, and each one either refuses it or holds it where
+    /// nothing prints it (a key, a masked base address). A model name or the extra body took it into every model
+    /// request, and a path into errors and results (#1381).
+    #[test]
+    fn test_no_setting_takes_an_address_credential_where_it_is_shown() {
+        for (name, variable) in FIELDS {
+            let loaded = Settings::from_sources(&[(variable, "https://ops:s3t-pw@h.test/")], None);
+            match loaded {
+                Ok(settings) => assert!(!format!("{settings:?}").contains("s3t-pw"), "{name}"),
+                Err(error) => assert!(!error.to_string().contains("s3t-pw"), "{name}: {error}"),
+            }
+        }
+        for extra in [
+            r#"{"metadata": "https://ops:s3t-pw@h.test/"}"#,
+            r#"{"https://ops:s3t-pw@h.test/": "x"}"#,
+            r#"{"metadata": "https:\/\/ops:s3t-pw@h.test\/"}"#,
+        ] {
+            let error = Settings::from_sources(&[("FASTBROWSE_LLM_EXTRA_BODY", extra)], None).unwrap_err();
+            assert!(error.to_string().contains("llm_extra_body") && !error.to_string().contains("s3t-pw"), "{error}");
+            // Settings built in code are checked where the body is read, before any request is written.
+            let settings = Settings { llm_extra_body: Some(extra.into()), ..Settings::default() };
+            let error = settings.extra_body().unwrap_err().to_string();
+            assert!(error.contains("credentials") && !error.contains("s3t-pw"), "{error}");
+        }
+        let based = Settings::from_sources(&[("FASTBROWSE_LLM_BASE_URL", "https://ops:s3t-pw@h.test/v1")], None);
+        assert!(based.is_ok(), "a base address may carry its provider's credentials");
+    }
+
+    /// The extra body may hold a provider's own token, which nothing structural tells from any other value, and a
+    /// Chrome command may name a proxy with its password; `Debug` printed both as given (#1381).
+    #[test]
+    fn test_settings_print_the_extra_body_withheld_and_chrome_masked() {
+        let settings = Settings {
+            llm_extra_body: Some(r#"{"routing": {"token": "xb-t0ken"}}"#.into()),
+            chrome: Some("chrome --proxy-server=http://ops:chr-pw@proxy.test:8080".into()),
+            ..Settings::default()
+        };
+        let printed = format!("{settings:?}");
+        assert!(!printed.contains("xb-t0ken") && !printed.contains("chr-pw"), "{printed}");
+        assert!(printed.contains("routing") && printed.contains("proxy.test"), "{printed}");
     }
 }

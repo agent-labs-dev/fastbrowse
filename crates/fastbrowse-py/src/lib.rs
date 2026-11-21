@@ -193,7 +193,16 @@ fn run_task(
     http: Option<Py<PyAny>>,
     trace: bool,
 ) -> PyResult<Run> {
-    let invalid = |error: serde_json::Error| refused("invalid", error.to_string());
+    // Learnt before anything is said of the arguments, each string read as one whole address: serde's refusal quotes
+    // the value it could not read, and masked after the fact by structure alone, a password holding a quote was
+    // raised whole (#1381). Arguments that are not JSON have no strings to learn from, so that refusal quotes nothing.
+    let given = [Some(task), secrets, config, settings].map(|text| text.map(serde_json::from_str::<serde_json::Value>));
+    if given.iter().flatten().any(Result::is_err) {
+        return Err(refused("invalid", "the run's arguments are not JSON".into()));
+    }
+    let learnt =
+        fastbrowse_core::safety::learnt(&serde_json::Value::Array(given.into_iter().flatten().flatten().collect()));
+    let invalid = |error: serde_json::Error| refused("invalid", learnt.mask(&error.to_string()));
     let task: RunTask = serde_json::from_str(task).map_err(invalid)?;
     let refs: Option<Vec<SecretRef>> = secrets.map(serde_json::from_str).transpose().map_err(invalid)?;
     let config: Option<Config> = config.map(serde_json::from_str).transpose().map_err(invalid)?;
@@ -204,7 +213,7 @@ fn run_task(
             Settings::from_sources(&pairs, None)
         })
         .transpose()
-        .map_err(|error| refused("configuration", error.0))?;
+        .map_err(|error| refused("configuration", learnt.mask(&error.0)))?;
     let mut run = Host { browser_api_key, config, settings, ..Host::default() };
     let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
     let result = event_loop.call_method0("create_future")?;

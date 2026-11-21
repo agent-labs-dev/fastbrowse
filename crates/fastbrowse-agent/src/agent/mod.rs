@@ -10,6 +10,7 @@ mod batching;
 mod driving;
 mod finishing;
 pub mod helpers;
+mod masking;
 mod reading;
 mod recovery;
 mod replay;
@@ -58,6 +59,10 @@ use crate::verification::RecordSchema;
 
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
 const ENDING_FRAME_SECONDS: f64 = 6.0;
+
+/// The page fact Jev is given once a run holds an address credential and takes no image of the page
+/// (`Agent::images_withheld`): a rule that overrides what Jev is shown is stated to it.
+pub(super) const IMAGES_WITHHELD: &str = "No screenshot of any page is shown for the rest of this run: the run was given an address with credentials, and a page can show its address in pixels that cannot be masked. Judge from the page's text.";
 /// Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one.
 const REDRAW_WATCH_SECONDS: f64 = 10.0;
 
@@ -125,6 +130,8 @@ pub struct Agent {
     page: Arc<dyn Page>,
     jev: Arc<dyn DecisionClient>,
     llm: Arc<dyn LLMClient>,
+    /// The clients as given, for `with_redactor` to wrap again around another redactor.
+    clients: (Arc<dyn DecisionClient>, Arc<dyn LLMClient>),
     config: Config,
     secrets: Option<Arc<dyn SecretResolver>>,
     on_event: Option<EventHandler>,
@@ -138,11 +145,12 @@ pub struct Agent {
 impl Agent {
     pub fn new(page: Arc<dyn Page>, jev: Arc<dyn DecisionClient>, llm: Arc<dyn LLMClient>) -> Agent {
         let config = jev.profile().fit(None);
-        let redactor = Arc::default();
+        let redactor: Arc<Mutex<Redactor>> = Arc::default();
         Agent {
             page,
-            jev: Arc::new(superseding::Decisions(jev)),
-            llm: Arc::new(superseding::Generations(llm)),
+            jev: superseding::decisions(&jev, &redactor),
+            llm: superseding::generations(&llm, &redactor),
+            clients: (jev, llm),
             config,
             secrets: None,
             on_event: None,
@@ -178,6 +186,8 @@ impl Agent {
     /// Keep the run's secrets in `redactor`, so a trace the run's clients write through is redacted too.
     pub fn with_redactor(mut self, redactor: Arc<Mutex<Redactor>>) -> Agent {
         self.trace = self.trace.redacting(Arc::clone(&redactor));
+        self.jev = superseding::decisions(&self.clients.0, &redactor);
+        self.llm = superseding::generations(&self.clients.1, &redactor);
         self.redactor = redactor;
         self
     }
@@ -235,7 +245,7 @@ impl Agent {
     // step no action had taken, and Jev chose DONE over typing a sign-in code it had just read. Mask at the call
     // boundary: a secret may have been resolved since the run began.
     fn model_task(&self, state: &RunState) -> String {
-        let task = self.mask(&state.task);
+        let task = self.mask(&state.raw_task);
         match state.caller_start.as_deref() {
             Some(start) => format!("The browser opened {} for this task. {task}", self.mask(start)),
             None => task,
@@ -246,7 +256,43 @@ impl Agent {
     // start is not a step the caller authorized or one any action shows, and beside it a form posting to /list/delete
     // under "Tidy it up" scored 0.49 to 0.59 as irreversible, where the task alone scored 0.56 to 0.65.
     fn caller_task(&self, state: &RunState) -> String {
-        self.mask(&state.task)
+        self.mask(&state.raw_task)
+    }
+
+    /// Register the credentials of every address in `texts` (`Redactor::register_address`: a text that is one address
+    /// is parsed as the browser parses it, and every address in prose is found by scanning), and from the first,
+    /// hold every image of the page to the end of the run, screenshots, step frames, live frames and the recording
+    /// alike (`Agent::image`, `PageLike::hold_images`): Chrome drops the userinfo from `location.href` but
+    /// keeps it in `document.URL`, so a page can draw its own address, credentials and all, where no reading of its
+    /// text looks, and a page can echo it after the reading that last found it clean.
+    fn learn_credentials<'a>(&self, texts: impl IntoIterator<Item = &'a str>) {
+        let texts: Vec<Value> = texts.into_iter().map(Value::from).collect();
+        self.learn_credentials_in(&Value::Array(texts));
+    }
+
+    /// `learn_credentials` for every string in `given`, map keys included (`Redactor::register_tree`).
+    fn learn_credentials_in(&self, given: &Value) {
+        let mut redactor = self.redactor();
+        redactor.register_tree(given);
+        let held = redactor.holds_credentials();
+        drop(redactor);
+        if held {
+            self.page.hold_images();
+        }
+    }
+
+    /// Drop the cards of controls the run's history keeps, once the run holds an address credential: taken before it
+    /// was learnt, they are images of pages that may show it, and no image of a page leaves such a run.
+    pub(super) fn forget_looks(&self, state: &mut RunState) {
+        if self.images_withheld() {
+            state.look = None;
+            state.opened.iter_mut().chain(state.history.iter_mut()).for_each(|entry| entry.look = None);
+        }
+    }
+
+    /// The caller's background, masked as the task is.
+    fn model_context(&self, state: &RunState) -> Option<String> {
+        state.raw_context.as_deref().map(|context| self.mask(context))
     }
 
     fn reveals_text(&self, value: &str) -> bool {
@@ -292,7 +338,8 @@ impl Agent {
                 match body.await {
                     Ok(result) => (result, true, false),
                     Err(Flow::Browser(BrowserError::NeedsBrowser(message))) => {
-                        (blocked_without_browser(message), false, true)
+                        // The browser's message can name the address it could not open, credentials and all.
+                        (blocked_without_browser(self.redact(&message)), false, true)
                     }
                     Err(flow) => (
                         self.stopped(flow, slot.as_mut(), &ledger, options.output_schema.as_deref()).await,
@@ -434,6 +481,37 @@ impl Agent {
         ledger: &Arc<Ledger>,
         slot: &mut Option<RunState>,
     ) -> Result<RunResult, Flow> {
+        // Registered before anything is asked or traced, from everything the caller handed the run: the runner does
+        // the same before it builds the browser, and an embedder calling the agent directly reaches only this. A run
+        // resumed in another agent is shown its first run's start, task and context.
+        // Names count as much as values: an input named with an address reached Jev as a question key (#1381).
+        let carried = resume.as_ref().map(|resume| &resume.state);
+        // A secret the resolver holds as it is is masked from here, before anything types it: only the runner
+        // declared one, and a token an embedder driving the agent directly put in the start reached Jev (#1381).
+        if let Some(secrets) = &self.secrets {
+            self.redactor().declare_held(secrets.as_ref());
+        }
+        let secrets: Vec<String> =
+            self.secrets.iter().flat_map(|secrets| secrets.available()).map(|secret| secret.name).collect();
+        self.learn_credentials_in(&json!({
+            "task": task,
+            "start": options.start,
+            "context": options.context,
+            "inputs": options.inputs,
+            "attachments": options.attachments.iter().map(|attachment| [&attachment.name, &attachment.mime_type]).collect::<Vec<_>>(),
+            // The whole schema the models are shown, descriptions and all: a field's description is written into
+            // the question that asks for it, and learnt by its key alone, one reached Jev unmasked (#1381).
+            "output_schema": options.output_schema.as_ref().map(|schema| schema.model.json_schema()),
+            "recipe": options.recipe,
+            "secrets": secrets,
+            "carried": carried.map(|state| [state.caller_start.as_deref(), Some(state.raw_task.as_str()), state.raw_context.as_deref()]),
+        }));
+        // The start page's first paint can draw a declared secret its address carries before any reading can say
+        // whether it shows, so frames are held from the open, as the runner holds them; an embedder driving the agent
+        // directly reaches only this (#1381).
+        if options.start.as_deref().is_some_and(|start| self.redactor().holds_images_from(Some(start))) {
+            self.page.withhold_frames(true);
+        }
         let prepared = match resume {
             Some(Resume { state, url: Some(url) }) => {
                 self.trace.phase("open", self.page.navigate(&url, None)).await?;
@@ -445,6 +523,7 @@ impl Agent {
             None => None,
         };
         let start = options.start.as_deref();
+        let shown_start = start.map(|start| self.mask(start));
         let mut opening = prepared.as_ref().and_then(|state| state.started_url.clone());
         // `start=None` leaves the browser where it is, which is what a caller stepping a run on from a page it opened
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first
@@ -477,7 +556,9 @@ impl Agent {
             if let Some(state) = prepared {
                 return Ok::<_, Flow>(state);
             }
-            let given = state::with_inputs(task, &options.inputs);
+            // Masked as the task every step is shown is: a task that writes the start address out carried its
+            // credentials to the task judgments and the known pages request.
+            let given = self.mask(&state::with_inputs(task, &options.inputs));
             // The known pages are asked beside the first page's open, observation and decision, and taken before the
             // run first reads for, builds or acts on a decision, or proposes a route (`known_pages_arrived`). Awaited
             // here, the text LLM's answer held every run's first step, for about a second and up to 3.4 s. A run with a
@@ -487,7 +568,7 @@ impl Agent {
                 ledger.limits.max_dollars.is_none().then(|| tokio::runtime::Handle::try_current().ok()).flatten().map(
                     |runtime| {
                         let (llm, given, start, ledger) =
-                            (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
+                            (self.llm.clone(), given.clone(), shown_start.clone(), ledger.clone());
                         state::KnownAsked::new(runtime.spawn(async move {
                             crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await
                         }))
@@ -499,7 +580,10 @@ impl Agent {
                 tokio::task::yield_now().await;
                 (self.task_judgments(&given, ledger).await, Ok(Vec::new()))
             } else {
-                tokio::join!(self.task_judgments(&given, ledger), self.known_pages(&given, start, ledger))
+                tokio::join!(
+                    self.task_judgments(&given, ledger),
+                    self.known_pages(&given, shown_start.as_deref(), ledger)
+                )
             };
             // Dropped on an error, the request is aborted and records what it was billed so far.
             let (judgments, known) = (judgments?, known?);
@@ -515,7 +599,7 @@ impl Agent {
             state.known_pages = known;
             state.known_asked = asked;
             state.replay = options.recipe.clone().map(replay::Replay::new);
-            state.context = options.context.clone();
+            state.raw_context = options.context.clone();
             state.caller_start = start.map(String::from);
             Ok(Box::new(state))
         };
@@ -540,6 +624,7 @@ impl Agent {
         self.tell_page_ready().await;
         if let Some(opening) = state.started_url.clone() {
             let landed = self.page.address().await?;
+            self.learn_credentials([landed.as_str()]);
             state.opened = Some(HistoryEntry {
                 effect: Some(format!("went to {landed}")),
                 ..HistoryEntry::new(Some(Operation::Navigate), Some(&opening), StepOutcome::Executed, true)
@@ -800,11 +885,15 @@ impl Agent {
                 _ => None,
             };
         if requested && result.final_frame.is_none() && result.status == Status::Complete {
-            result.end_as(
-                Status::Unverified,
-                "FinalFrame/uncaptured".into(),
-                "The requested final screenshot could not be captured.".into(),
-            );
+            let (code, message) = if self.images_withheld() {
+                (
+                    "FinalFrame/withheld",
+                    "The requested final screenshot was not taken: the run was given an address with credentials, and no image of a page leaves such a run.",
+                )
+            } else {
+                ("FinalFrame/uncaptured", "The requested final screenshot could not be captured.")
+            };
+            result.end_as(Status::Unverified, code.into(), message.into());
         }
         result
     }
@@ -1035,6 +1124,10 @@ impl Agent {
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
         let mut page_facts = Self::page_facts(state, observation, self.page.unread());
+        // Told, so a page drawn in pixels is not judged from an image Jev was never sent.
+        if self.images_withheld() {
+            page_facts.push(IMAGES_WITHHELD.into());
+        }
         let page_origin = origin_of(&observation.url);
         let credential_origins: BTreeSet<_> = observation
             .controls
@@ -1059,7 +1152,8 @@ impl Agent {
         }
         Ok(StepContext {
             task: self.model_task(state),
-            literal_task: Some(state.task.clone()),
+            // Raw for code: the addresses it names are opened as written, and Jev is shown them masked.
+            literal_task: Some(state.raw_task.clone()),
             web_search: self.page.search_price().is_some(),
             subgoal: state.hint.clone(),
             dates: state.dates.clone(),
@@ -1081,7 +1175,7 @@ impl Agent {
                 .filter(|url| !state.reached_known_pages.contains(url))
                 .cloned()
                 .collect(),
-            background: state.context.clone(),
+            background: self.model_context(state),
             omitted_actions: 0,
             problem: None,
             withheld_targets: Vec::new(),

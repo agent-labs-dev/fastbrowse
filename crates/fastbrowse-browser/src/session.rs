@@ -325,6 +325,9 @@ pub(crate) struct State {
     /// Set once a secret has been typed, and never cleared: a page can echo it as pixels no reading of its text
     /// shows, and between one reading and the next frames arrive that nothing has checked.
     pub(crate) frames_sealed: bool,
+    /// Set once the run holds an address credential, and never cleared: no image of the page leaves the run, a
+    /// screenshot included (`Session::hold_images`).
+    pub(crate) images_held: bool,
     pub(crate) screencast_session_id: Option<String>,
     pub(crate) pending_frame: Option<Frame>,
     pub(crate) frame_scheduled: bool,
@@ -680,6 +683,20 @@ impl BrowserSession {
     pub fn frames_withheld(&self) -> bool {
         let state = self.0.state.lock().unwrap();
         state.frames_withheld || state.frames_sealed || self.0.grant.is_some()
+    }
+
+    /// Hold every image of the page to the end of the session: live frames and the recording, sealed as a typed
+    /// secret seals them, and screenshots. The run holds an address credential, and a page can paint its own address
+    /// where no reading of its text finds it.
+    pub fn hold_images(&self) {
+        let mut state = self.0.state.lock().unwrap();
+        state.images_held = true;
+        state.frames_sealed = true;
+    }
+
+    /// Whether `hold_images` was called: `CdpPage::screenshot` refuses from then on.
+    pub fn images_held(&self) -> bool {
+        self.0.state.lock().unwrap().images_held
     }
 
     pub fn set_frames_withheld(&self, withheld: bool) {

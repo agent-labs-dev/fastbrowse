@@ -841,7 +841,8 @@ pub struct RunResult {
     /// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
     #[serde(default)]
     pub final_url: Option<String>,
-    /// A safe final PNG requested by the task or enabled with step frames; kept out of text results.
+    /// A safe final PNG requested by the task or enabled with step frames; kept out of text results. None once the run
+    /// knew an address credential, as every image of the page is.
     #[serde(skip)]
     pub final_frame: Option<Vec<u8>>,
     /// The videos this run finished writing, captioned then plain.
@@ -961,7 +962,7 @@ fn origins_field<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserConnection {
     /// Browser-level DevTools WebSocket URL (`ws://` or `wss://`).
@@ -986,6 +987,13 @@ pub struct BrowserConnection {
     /// Exact `http(s)://host[:port]` origins whose documents the run may inspect and control, else unscoped.
     #[serde(default, deserialize_with = "origins_field")]
     pub allowed_origins: Option<Vec<String>>,
+}
+
+/// A DevTools or live address can carry credentials, so it prints masked (`debug_masked`).
+impl std::fmt::Debug for BrowserConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::safety::debug_masked("BrowserConnection", self, f)
+    }
 }
 
 impl BrowserConnection {
@@ -1184,6 +1192,14 @@ pub trait SecretResolver: Send + Sync {
     fn available(&self) -> Vec<SecretRef>;
 
     fn resolve<'a>(&'a self, name: &'a str, origin: &'a str) -> BoxFuture<'a, Option<String>>;
+
+    /// `(name, value)` for each secret whose value this resolver already holds as it is, which the run masks from its
+    /// first request, before anything types it: a declared token in a start address's query reached every model and
+    /// exit, since a value was learnt only as it was typed (#1381). A value given only on request (a client's, a
+    /// callback's, a computed one) is not asked for early, and is masked from when it is typed.
+    fn held(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 pub trait ArtifactSink: Send + Sync {
@@ -1260,7 +1276,8 @@ pub struct StepEvent {
     pub kind: StepTag,
     pub step: StepResult,
     /// A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not, and also
-    /// when a resolved secret was showing as page text: pixels cannot be masked the way text is.
+    /// when a resolved secret was showing as page text or the run knew an address credential: pixels cannot be masked the
+    /// way text is, and a page can paint its address where no text check sees it.
     #[serde(default)]
     pub frame: Option<Image>,
 }
@@ -1273,7 +1290,7 @@ impl Schema for StepEvent {
                 Field::default("type", StepTag::ty(), "step"),
                 Field::required("step", StepResult::ty()),
                 Field::default("frame", Ty::optional(Ty::Image), Value::Null).doc(
-                    "A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\nand also when a resolved secret was showing as page text: pixels cannot be masked the way text is.",
+                    "A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\nand also when a resolved secret was showing as page text or the run knew an address credential: pixels\ncannot be masked the way text is, and a page can paint its address where no text check sees it.",
                 ),
             ],
         )

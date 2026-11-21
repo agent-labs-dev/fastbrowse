@@ -14,7 +14,7 @@ use fastbrowse_core::py::dump::Dump;
 use serde_json::Value;
 
 use crate::runner::{Cancel, Runner, default_runner};
-use crate::serve::{Callbacks, ClientError, Refused, SettingsSource, arguments, read, reply, secret_failure};
+use crate::serve::{Callbacks, ClientError, Refused, SettingsSource, arguments, read, refused, reply, secret_failure};
 
 /// A host function the run awaits. An `Err` carries the message of what the host raised or threw.
 pub type HostCall<A, R> = Arc<dyn Fn(A) -> BoxFuture<'static, Result<R, String>> + Send + Sync>;
@@ -120,7 +120,7 @@ impl Embedded {
 }
 
 fn refusal(message: String) -> Refused {
-    Refused { code: ErrorCode::InvalidParams, message, data: None }
+    refused(ErrorCode::InvalidParams, message)
 }
 
 /// The first callback the host failed, which stops the run.

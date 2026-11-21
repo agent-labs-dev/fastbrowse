@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::argparse::{Exit, Opt, Parser};
-use crate::cli::{self, Build, Context, Streams};
+use crate::cli::{self, Build, Context, Invocation, Streams};
 use crate::runner::default_runner;
 use crate::serve::{self, Server, StdioTransport, Transport};
 use crate::{log, mcp, options};
@@ -13,28 +13,28 @@ fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime starts")
 }
 
-fn report(exit: Exit) -> i32 {
+fn report(invocation: &Invocation, exit: Exit) -> i32 {
     match exit {
         Exit::Print(text) => {
-            print!("{text}");
+            print!("{}", invocation.mask(&text));
             0
         }
         Exit::Usage(text) => {
-            eprint!("{text}");
+            eprint!("{}", invocation.mask(&text));
             2
         }
     }
 }
 
 /// `trace_to()`: the trace goes where `FASTBROWSE_TRACE` says, if anywhere.
-fn trace_from_environment(name: &str) -> Result<(), i32> {
+fn trace_from_environment(invocation: &Invocation, name: &str) -> Result<(), i32> {
     fastbrowse_core::telemetry::trace_to(None).map_err(|error| {
-        eprintln!("{name}: cannot write the trace: {error}");
+        eprintln!("{}", invocation.mask(&format!("{name}: cannot write the trace: {error}")));
         1
     })
 }
 
-fn serve_command(argv: &[String]) -> i32 {
+fn serve_command(invocation: &Invocation, argv: &[String]) -> i32 {
     let mut options = vec![Opt::flag("--stdio").required()];
     // Tests that start this command need a run with no model behind it. It is left out of the help because it is no
     // part of what the command offers.
@@ -60,7 +60,7 @@ fn serve_command(argv: &[String]) -> i32 {
     };
     let parsed = match parser.parse(argv, check) {
         Ok(parsed) => parsed,
-        Err(exit) => return report(exit),
+        Err(exit) => return report(invocation, exit),
     };
     let transport: Arc<dyn Transport> = Arc::new(StdioTransport::start());
     #[cfg(feature = "scripted")]
@@ -71,7 +71,7 @@ fn serve_command(argv: &[String]) -> i32 {
         (default_runner(), fastbrowse_core::protocol::PROTOCOL_VERSION)
     };
     log::init("fastbrowse");
-    if let Err(code) = trace_from_environment("fastbrowse") {
+    if let Err(code) = trace_from_environment(invocation, "fastbrowse") {
         return code;
     }
     runtime().block_on(async move {
@@ -82,22 +82,22 @@ fn serve_command(argv: &[String]) -> i32 {
     })
 }
 
-fn mcp_command(argv: &[String]) -> i32 {
+fn mcp_command(invocation: &Invocation, argv: &[String]) -> i32 {
     // stdout carries the protocol under stdio, so every log line goes to stderr.
     log::init("fastbrowse-mcp");
-    if let Err(code) = trace_from_environment("fastbrowse-mcp") {
+    if let Err(code) = trace_from_environment(invocation, "fastbrowse-mcp") {
         return code;
     }
     let args = match mcp::parse(argv) {
         Ok(args) => args,
-        Err(exit) => return report(exit),
+        Err(exit) => return report(invocation, exit),
     };
     let configured = fastbrowse_clients::environment::Settings::load()
         .and_then(|settings| mcp::configure(&args, &settings, &options::environ()));
     let config = match configured {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("fastbrowse-mcp: {}", error.0);
+            eprintln!("fastbrowse-mcp: {}", invocation.mask(&error.0));
             return 1;
         }
     };
@@ -118,7 +118,7 @@ fn mcp_command(argv: &[String]) -> i32 {
         match mcp::http::serve(server, &args.host, args.port).await {
             Ok(()) => 0,
             Err(error) => {
-                eprintln!("fastbrowse-mcp: {error}");
+                eprintln!("{}", invocation.mask(&format!("fastbrowse-mcp: {error}")));
                 1
             }
         }
@@ -133,21 +133,26 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
         return code;
     }
     let program_name = program;
+    let invocation = Invocation::learn(
+        &std::iter::once(program.to_string()).chain(args.iter().cloned()).collect::<Vec<_>>(),
+        &options::environ(),
+    );
     let program = std::path::Path::new(program).file_stem();
     if program.is_some_and(|name| name == "fastbrowse-mcp") {
-        mcp_command(args)
+        mcp_command(&invocation, args)
     } else if args.first().is_some_and(|arg| arg == "native-host") {
         // Chrome starts this when the extension connects, with the extension's origin as the first argument.
         let origin = args.get(1).map_or("", String::as_str);
         match runtime().block_on(fastbrowse_browser::extension::host::run(origin)) {
             Ok(()) => 0,
             Err(error) => {
-                eprintln!("fastbrowse native-host: {error}");
+                eprintln!("{}", invocation.mask(&format!("fastbrowse native-host: {error}")));
                 1
             }
         }
     } else if args.first().is_some_and(|arg| arg == "extension") {
         let (text, code) = crate::extension::command(program_name, &args[1..]);
+        let text = invocation.mask(&text);
         if code == 0 {
             print!("{text}");
         } else {
@@ -156,6 +161,7 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
         code
     } else if args.first().is_some_and(|arg| arg == "self-update") {
         let (text, code) = crate::update::command(&args[1..], &build);
+        let text = invocation.mask(&text);
         if code == 0 {
             print!("{text}");
         } else {
@@ -164,7 +170,7 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
         code
     } else if args.first().is_some_and(|arg| arg == "serve") {
         // Only as the first argument, so a task that mentions the word, or `--local serve`, is still a task.
-        serve_command(&args[1..])
+        serve_command(&invocation, &args[1..])
     } else {
         // Retries, failovers and a recording that could not be written are warnings; say whose they are.
         log::init("fastbrowse");

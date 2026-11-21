@@ -96,8 +96,8 @@ page and beside what its text answered, and the reader describes what the image 
 quoting text. A page styled only by CSS states its colours nowhere in its text, so the image is the evidence.
 A successful screenshot reading that finds no answer is reused for identical pixels within one run.
 A changed screenshot is read again; failed model calls are not cached.
-Model screenshots check fresh page text for resolved secrets before capture. Image readings mask resolved
-secret values before they enter notes and evidence. A filled form that requires confirmation stops before
+Model screenshots check fresh page text for resolved secrets before capture, and none is taken once the run knows an
+address credential (see below). Image readings mask resolved secret values before they enter notes and evidence. A filled form that requires confirmation stops before
 optional image reading.
 
 Content shown only under the pointer is reached by a hover target, which moves the real pointer there. An
@@ -489,7 +489,8 @@ their reader and source links in `StepResult.facts`, and any available explanati
 it, including a disconnected target reported as `stale`. A changed or covered control without a known cause
 has no failure value. Policy refusals and an unmet caller condition also leave it unset, because the browser
 has reported no fault. Older results without the field still parse; `note` remains diagnostic text.
-`Config(step_frames=True)` attaches a PNG to each step unless a fresh observation shows a resolved secret.
+`Config(step_frames=True)` attaches a PNG to each step unless a fresh observation shows a resolved secret or the run
+knows an address credential.
 This safety reading preserves the pending action's guards and leaves download notices for the next decision.
 
 Jev identifies whether the task requests a final image, text, both, or an action without a report. A requested
@@ -497,8 +498,9 @@ final screenshot does not require step frames. Image-only output skips answer co
 requirements; a request for both keeps the text evidence checks. An HTTP-first run opens a browser when
 its requested output needs pixels. When the run has a browser page, the done check, the composer and the coverage
 check are told that code attaches one screenshot, of the page the run ends on: a requested screenshot is given when
-that page is the one the task asks to have pictured, and the answer need not say whether one is attached. A fresh secret check can withhold the image; a completed task without
-its requested image becomes `unverified`. Python and Rust expose the PNG as `RunResult.final_frame`.
+that page is the one the task asks to have pictured, and the answer need not say whether one is attached. A fresh secret check or a known address credential can withhold the image, and the
+three checks are then told no screenshot is attached and why; a completed task without its requested image becomes
+`unverified`. Python and Rust expose the PNG as `RunResult.final_frame`.
 JSON clients receive a `screenshot` artifact with an `image/png` MIME type, SHA-256 digest and a base64 data URI.
 `Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried
 out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, the destination too).
@@ -507,7 +509,114 @@ out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, th
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from
 the agent, and handler failures are logged. A handler must honour cancellation: it runs on the caller's event
 loop, so one that swallows `CancelledError` keeps that loop alive and `asyncio.run` waits for it at shutdown. Live images and MP4 recordings are held back from the moment a secret is typed until the run ends, and whenever the page is read showing one;
-a recording holds its last clean frame meanwhile.
+a recording holds its last clean frame meanwhile. A run whose start, task, context or inputs (names or values) write an
+address with a user name or password holds them from before the browser opens to the end of the run: Chrome keeps the
+credentials in `document.URL` and in the tab's address, so a page can draw them from its first paint, and pixels cannot
+be checked as a frame arrives. A credential first seen mid-run, in a redirect, a tab or history address or any text a
+page shows, starts the hold then, to the end of the run. That is the one case no hold covers: a frame sent before the
+run first saw a credential that arrives mid-run may already show it. The same hold stops every other image of the
+page: a model screenshot for Jev or the LLM, a PNG step frame, a screenshot artifact and `RunResult.final_frame`. A
+page can paint `document.URL` on a canvas, where no text check sees it, so every image path asks one gate, the one live
+frames and recordings ask, and the boundary every Jev and LLM request passes refuses a request carrying an image while
+the run holds. The page state tells Jev that screenshots are withheld because the run holds an address credential, and
+the done check, the composer and the coverage check are told no screenshot is attached. Without a credential, PNG step
+frames and the final screenshot are checked against the page as it is when each is taken, and withheld while it shows
+a resolved secret.
+
+The hold covers the images the run sends, and these are outside it. A cloud browser's `live_url` shows the page's
+pixels, so a run whose images are held from its start sends no `live_url` in its browser event: one predicate decides
+both, a credential known when the browser opens or a start holding a declared secret. A credential learnt later cannot
+recall a view already given. A headed Chrome window shows the page on screen. An embedder that
+drives the browser itself, through `connect_cdp`, `Page.screenshot` or a `FrameTap`, takes images the run never sees.
+
+The credential the run recognises by its structure is an address's userinfo, in any string a caller writes, in its
+literal, percent-encoded, JSON-escaped and `Authorization: Basic` base64 forms. A query parameter, a path segment, a
+bare header value or any other string is not recognisable as a credential by its structure, so the run does not mask
+it unless the caller declares the value as a secret. A declared value the run holds (`--secret NAME=ENV_VAR@ORIGIN`, a
+secret an MCP call names, a Rust `ScopedSecrets` plain value) is masked from the run's first request, before anything
+types it, in the start, the task, a refused `cdp_url`, events, the result, the trace and every model request; frames
+are held, and no `live_url` is sent, from before the browser opens when the start holds it, and frames from the first
+reading on whenever the page shows it. A declared value is matched as text with no minimum length, so a short one masks
+every occurrence of its letters from the first request, inside other words too. Declaring a value masks it and nothing else: where it may be typed is unchanged, and an address the caller wrote
+with it stays theirs to open. A value a resolver gives only when asked (a serve client's `secrets/resolve`, a Python
+resolver, a computed value) is masked from when the run types it. Not covered: a token in a query, path or header that
+is not declared, a serve `run_id`, the base64 of a password alone, and a provider error that echoes a transformed
+`FASTBROWSE_LLM_API_KEY`.
+
+Every request to Jev or an LLM passes one boundary that masks every registered secret and address credential in it,
+whatever built the request, and an observation and a capture are masked field by field before any request is built;
+a field added to either does not compile until it is masked or named as one the browser layer makes (an id, a key, a
+kind). The userinfo of every address is masked in every text a model is shown or the run writes out, registered or
+not: an address with a scheme, a scheme-relative `//user:pass@host`, and an address percent-encoded inside another's
+query. Everything else that leaves a run is redacted once, at its exit, by its schema: the result (its `data` keys
+and values, `browser.profile`, recordings, artifacts and `error`), each event, the `until` check, which receives the
+address masked rather than as the page has it, the trace and the HTTP trace, every stderr warning and log line, and
+the errors a run raises, whatever caller text they repeat. Serve's JSON-RPC and MCP over stdio and HTTP learn every
+string of every message a client sends, keys included, each as one whole address, before anything settles or quotes
+it, whatever the message is (a request, a notification, a reply to a callback, an error reply, an answer to
+`secrets/resolve` or `run/until`), and keep it for the life of the connection or session; MCP over HTTP learns the
+header values it may quote too. Every binary entry (the CLI, `fastbrowse serve`, `fastbrowse-mcp` and the
+subcommands) learns its arguments and the environment and `.env` values it may quote through one path before it
+reports anything. Python and the Rust `Agent` learn the run's arguments, and the address a host's `open_browser`
+answers is learnt as it is handed over, like `cdp_url`. Every reply, log line and printed request is masked by what
+was learnt, so a refusal (an unknown method, a value serde could not read, an unsupported `MCP-Protocol-Version`, the
+run's preflight check) quotes no credential a message carried. Only the members of a reply that can quote the caller
+are masked (a result, an error's message and data, an event, a progress or log note); the envelope (`jsonrpc`, `id`,
+`method`, an error's `code`) is the protocol's and stays as written, or a password `0` turned `"2.0"` into `"2.•"`.
+Input that is not JSON has no strings to learn from, so it is refused with a fixed message that quotes none of it. A
+JSON-RPC id is echoed whole to be matched, so a request whose id is itself an address with a credential is refused
+with a fixed message and a null id; a short password learnt elsewhere does not refuse an ordinary id that holds its
+letters. A closed
+set's value and a model's field name are code's and stay whole; a key the caller chose is redacted like a value, in a
+trace record as in the result. A task, browser connection, recipe, settings or HTTP request printed for a log prints
+its addresses masked; `FASTBROWSE_LLM_EXTRA_BODY` is printed, and written to the HTTP trace, with its keys kept and its
+values withheld.
+
+A string the caller writes in a field that must come back as written (a path to record or save to, an output schema,
+a profile, a selector, a desktop app, an attachment's name, a serve `run_id`, a secret's name or origin) cannot be
+masked without breaking what the caller matches it against, so a run whose such field holds a credential is refused
+before it starts, by a message that does not repeat it. Only the start, task, context, inputs and `cdp_url` may carry
+an address's credentials. Settings refuse one anywhere but the two base URLs, `FASTBROWSE_LLM_EXTRA_BODY` included,
+its keys too, so no model request body carries one. A short credential refuses any such field its letters spell: a
+one-letter password refuses every path holding that letter.
+
+The userinfo of an address runs to its last `@`, as the WHATWG URL parser reads it, so a password holding `@`, `'`,
+`(`, `)`, `,`, `;`, `!`, `.`, `:` or `%20` is masked whole; prose punctuation ends only the host. A `"`, `<`, `>` or
+`` ` `` cannot stand in a URL as written (RFC 3986), so in text it ends the address: `"https://a.test","mail":"b@c.test"`
+is two strings, not one userinfo. A whole address the caller gives, such as a start, is parsed whole, so a password
+holding one of those is still learnt and masked wherever it appears. An email address or a `mailto:` link has no
+userinfo, so a page showing one teaches the run nothing and holds no image. A literal quote, angle bracket or backtick
+inside userinfo is masked when the address arrives as its own caller string or is a page URL the browser reports, and
+not when it appears only inside free text the run never saw as a discrete value. The
+run learns each credential it sees, from every string the caller gives, read by the run's schema with its keys, a
+recipe, the settings' text and every string a page, tab or history address shows, and masks it wherever it appears in each form a page can echo it: as
+written, percent-decoded, as the browser encodes it, and as the `Authorization: Basic` value the browser sends for it,
+in standard and URL-safe base64. The secret of an address is its password when one is written, else its user name,
+which is how an access token is written (`https://TOKEN@host/`); a user name beside a password is an identifier and
+stays readable outside an address, and masked inside one. A lone user name is a credential by structure, since nothing
+in the address tells a token from a login: `ssh://git@github.com/o/r` blanks `git` for the run, as
+`https://ghp_TOKEN@github.com/o/r` blanks the token. A learned value is matched as text with no minimum length,
+as a resolved secret is, so a short one also blanks the same letters inside other words. A whole address with a tab or
+newline inside it (a start) registers its credential both as written and as the browser reads it, with
+the tab or newline removed.
+
+Masking covers these forms and no others, and these are its limits: a tab or newline inside an address in free prose
+(a task, a context) ends the address there, as it separates words; an address written with no scheme
+(`user:pass@host/path`) is not an address, and no entry point adds a scheme to one; `,` and `)` are characters a
+userinfo may hold (RFC 3986 sub-delims), so in free prose `https://a.test,b@c.test` and `[x](https://a.test)b@c.test`
+read as one address whose userinfo is `a.test,b` or `a.test)b`, which is masked and learnt; a literal escape in free prose
+(`\u0040`, `&#64;` typed as characters) is not decoded. A caller's JSON is decoded before the run reads it, and a page's
+character references are decoded by the browser or the HTTP reader before the run sees its text, so neither is a form
+to register. A password written bare inside an attachment's contents is not known to be one: an attachment's bytes go
+only to the page's file input, and its name reaches Jev only through the masked boundary. Base64 wrapped across lines,
+a value percent-encoded twice, hex and a credential split across a page's text nodes are not forms the run registers
+or matches.
+
+The browser opens an address as written, credentials included, and a path the task names is resolved on the start
+with them. A value Jev picks from the task to type is cut from the task as written, at the same offsets: masking keeps
+the text's length in code points. A model's proposed address with a user name or password in it is discarded, except
+an address the task writes, given back as the model was shown it, which opens as written. The known pages and start
+page requests are told what the bullets are.
 
 ## Recipes
 
@@ -536,7 +645,7 @@ in the task: `fastbrowse "Search Wikipedia for the person named in input person"
 with each value it names shown beside the name ("input person (Ada Lovelace)"), and a fill that types an input's
 value is saved as the input's name, so the replay types the new value. The recipe keeps the task as written. Pages after it, such as the article, have a different address
 and are decided live.
-If the task or start URL contains a resolved secret, no recipe is saved: a redacted task would fail the exact task match required for replay, and a redacted start URL would not open the original page.
+If the task or start URL contains a resolved secret, or writes an address with a user name or password, no recipe is saved: a redacted task would fail the exact task match required for replay, and a redacted start URL would not open the original page.
 
 Reading, answering and the check for `complete` always run live. Replay searches the remaining saved steps without
 an arbitrary lookahead or miss cutoff, so a non-replayable step does not discard later reusable actions. A recipe is not evidence that the present task

@@ -522,6 +522,22 @@ mod tests {
         assert!(Trace::disabled().events().is_empty());
     }
 
+    /// A model request's body carries map keys the caller chose (an input's name, a field of its output schema), and
+    /// a trace redacted only values, so a password learnt from such a key was written whole as the key (#1381).
+    #[test]
+    fn a_traced_event_redacts_its_keys_as_well_as_its_values() {
+        let mut redactor = Redactor::default();
+        redactor.register_address("https://ops:tr4ce-pw@h.test/");
+        let trace = Trace::collecting().redacting(Arc::new(Mutex::new(redactor)));
+        trace.event("http", || {
+            let mut fields = Map::new();
+            fields.insert("request".into(), json!({"inputs": {"https://ops:tr4ce-pw@h.test/": "v", "tr4ce-pw": 1}}));
+            fields
+        });
+        let written = trace.events()[0].to_string();
+        assert!(!written.contains("tr4ce-pw"), "{written}");
+    }
+
     #[test]
     fn a_dropped_call_is_cancelled() {
         let trace = Trace::collecting();

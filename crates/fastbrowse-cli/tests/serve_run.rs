@@ -378,6 +378,81 @@ async fn test_invalid_params_are_refused_before_run_task_is_called() {
     }
 }
 
+/// A run id goes back as written in every message about its run and in the server's log, so one holding the task's
+/// credentials, or an address's own, is refused rather than masked past the client's matching (#1381).
+#[tokio::test]
+async fn test_a_run_id_that_holds_a_credential_is_refused_without_repeating_it() {
+    for (run_id, task) in [("https://ops:r1d-pw@h.test/", "Read it"), ("run-r1d-pw", "Read https://ops:r1d-pw@h.test/")]
+    {
+        let recorder = Recorder::default();
+        let mut client = serving(recorder.runner(), settings());
+        let response = client.request("run", Some(json!({"run_id": run_id, "task": task}))).await;
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+        let message = response["error"]["message"].as_str().unwrap();
+        assert!(message.contains("run_id holds a credential") && !message.contains("r1d-pw"), "{message}");
+        assert!(recorder.calls().is_empty());
+    }
+}
+
+/// A refusal quoted what it refused: the method's name, a value serde could not read, an unknown key. Each is masked
+/// for address userinfo like everything else the run shows, by structure, since no run has learnt it yet (#1381).
+#[tokio::test]
+async fn test_a_refusal_masks_the_credential_in_what_it_quotes() {
+    let cases = [
+        ("https://ops:d00r-pw@h.test/", json!({})),
+        ("run", json!({"run_id": "r", "task": "t", "max_steps": "https://ops:d00r-pw@h.test/"})),
+        ("run", json!({"run_id": "r", "task": "t", "https://ops:d00r-pw@h.test/": 1})),
+        ("initialize", json!({"protocol_version": "https://ops:d00r-pw@h.test/"})),
+    ];
+    for (method, params) in cases {
+        let recorder = Recorder::default();
+        let mut client = serving(recorder.runner(), settings());
+        let response = client.request(method, Some(params.clone())).await;
+        let message = response["error"]["message"].as_str().unwrap_or_else(|| panic!("{response}"));
+        assert!(!message.contains("d00r-pw"), "{method} {params}: {message}");
+        assert!(recorder.calls().is_empty());
+    }
+}
+
+/// Every string of a message is learnt as a whole address before anything is said of it: a method whose password holds
+/// a quote ended the stateless scan at the quote and was quoted past it, and an id is echoed whole to be matched, so
+/// one holding a credential is refused with a null id. A line that is not JSON is refused quoting nothing (#1381).
+#[tokio::test]
+async fn test_every_string_of_a_message_is_learnt_before_a_refusal_quotes_it() {
+    let recorder = Recorder::default();
+    let mut client = serving(recorder.runner(), settings());
+    client.send(json!({"jsonrpc": "2.0", "id": 1, "method": "https://admin:m3th\"t4il@h.test/"}));
+    let response = client.receive().await;
+    assert_eq!(response["id"], 1, "{response}");
+    assert!(response["error"]["message"].is_string(), "{response}");
+    client.send(json!({"jsonrpc": "2.0", "id": "https://ops:1d-pw@h.test/", "method": "initialize"}));
+    let response = client.receive().await;
+    assert!(response["id"].is_null() && response["error"]["code"] == -32600, "{response}");
+    client.send_line(b"https://ops:n0tjs0n@h.test/ is not JSON");
+    let response = client.receive().await;
+    assert!(response["id"].is_null() && response["error"]["code"] == -32700, "{response}");
+    assert!(client.silent().await);
+    let written = String::from_utf8_lossy(&client.written).to_string();
+    for password in ["m3th", "t4il", "1d-pw", "n0tjs0n"] {
+        assert!(!written.contains(password), "{password}: {written}");
+    }
+    assert!(recorder.calls().is_empty());
+}
+
+/// An id is refused only when it is itself an address with a credential, and the envelope is never masked: with a
+/// short password learnt from a request, `req-1` was refused for holding `1`, and masked, `"2.0"` became `"2.•"`.
+#[tokio::test]
+async fn test_a_short_password_neither_refuses_an_ordinary_id_nor_rewrites_the_envelope() {
+    let mut client = serving(Recorder::default().runner(), settings());
+    let held = json!({"a": "https://u:0@h.test/", "b": "https://v:1@h.test/"});
+    client.send(json!({"jsonrpc": "2.0", "id": "req-1", "method": "nothing/0", "params": held}));
+    let response = client.receive().await;
+    assert_eq!(response["jsonrpc"], "2.0", "{response}");
+    assert_eq!(response["id"], "req-1", "{response}");
+    assert_eq!(response["error"]["code"], -32601, "{response}");
+    assert_eq!(response["error"]["message"], "unknown method 'nothing/\u{2022}'", "{response}");
+}
+
 #[tokio::test]
 async fn test_a_profile_from_the_environment_counts_against_a_handed_over_browser() {
     let recorder = Recorder::default();

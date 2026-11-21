@@ -40,7 +40,7 @@ impl Method {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Request {
     pub method: Method,
     pub url: String,
@@ -56,6 +56,21 @@ pub struct Request {
     pub timeout: Duration,
     /// Whether a transport that queues requests before sending them sent this one; see [`Handoff`].
     pub handoff: Handoff,
+}
+/// Header names only and the address's userinfo masked: a request carries the provider's key in its headers.
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Request { method, url, headers, body, max_bytes, timeout, handoff } = self;
+        f.debug_struct("Request")
+            .field("method", method)
+            .field("url", &fastbrowse_core::safety::mask_userinfo(url))
+            .field("headers", &headers.iter().map(|(name, _)| name).collect::<Vec<_>>())
+            .field("body_bytes", &body.len())
+            .field("max_bytes", max_bytes)
+            .field("timeout", timeout)
+            .field("handoff", handoff)
+            .finish()
+    }
 }
 
 /// Settles once whether a request a transport queued before sending it went out: the transport takes it from its
@@ -208,6 +223,7 @@ struct HttpEvent<'a> {
     trace: &'a Trace,
     url: &'a str,
     body: &'a Value,
+    withheld: &'a [String],
     began: f64,
     written: bool,
 }
@@ -218,7 +234,7 @@ impl HttpEvent<'_> {
         self.trace.event("http", || {
             let mut fields = Map::new();
             fields.insert("url".into(), self.url.into());
-            fields.insert("request".into(), traced(self.body));
+            fields.insert("request".into(), traced(self.body, self.withheld));
             fields.insert("began".into(), self.began.into());
             fields.insert("ended".into(), monotonic().into());
             outcome(&mut fields);
@@ -311,7 +327,7 @@ mod tests {
             "state": {"viewport_screenshot": "screenshot-abc"},
             "assets": {"screenshot-abc": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo"}},
         });
-        let traced = traced(&body);
+        let traced = traced(&body, &[]);
         assert_eq!(traced["assets"]["screenshot-abc"]["data_base64"], "<image>");
         assert_eq!(traced["assets"]["screenshot-abc"]["type"], "image");
         assert_eq!(traced["state"]["viewport_screenshot"], "screenshot-abc");
@@ -322,7 +338,7 @@ mod tests {
     fn an_images_data_url_is_kept_as_one_image() {
         let body = json!({"messages": [{"content": [{"type": "image_url",
             "image_url": {"url": "data:image/png;base64,iVBORw0KGgo"}}]}]});
-        assert_eq!(traced(&body)["messages"][0]["content"][0]["image_url"]["url"], "data:image/<image>");
+        assert_eq!(traced(&body, &[])["messages"][0]["content"][0]["image_url"]["url"], "data:image/<image>");
     }
 }
 
@@ -340,10 +356,26 @@ impl Drop for HttpEvent<'_> {
 /// screenshot's asset name is `screenshot-<sha256>`, so the name stands in for the bytes: otherwise a run that sends a
 /// viewport screenshot on every step of a drawn page writes a 102 MB trace (BU Bench bu2-157, 51 steps), a record no
 /// tool can read.
-fn traced(body: &Value) -> Value {
+fn traced(body: &Value, withheld: &[String]) -> Value {
     let mut body = body.clone();
     blank_images(&mut body);
+    if let Value::Object(fields) = &mut body {
+        for key in withheld {
+            if let Some(value) = fields.get_mut(key) {
+                withhold(value);
+            }
+        }
+    }
     body
+}
+
+/// `value` with its object keys kept and every other value replaced, so a trace shows what was set and not to what.
+pub(crate) fn withhold(value: &mut Value) {
+    match value {
+        Value::Object(fields) => fields.values_mut().for_each(withhold),
+        Value::Array(items) => items.iter_mut().for_each(withhold),
+        _ => *value = Value::String("<withheld>".into()),
+    }
 }
 
 /// A Jev image asset's `data_base64`, and a data URL's payload, replaced as the eval replay already replaces them.
@@ -374,11 +406,14 @@ pub struct Http {
     pub trace: Trace,
     /// The header a provider takes its key in, when that is none of the usual three.
     credential_header: Option<&'static str>,
+    /// Top-level body keys whose values the trace withholds: the operator's extra body, which may hold a provider's
+    /// token that nothing structural tells from any other value (#1381).
+    withheld: Arc<[String]>,
 }
 
 impl Http {
     pub fn new(transport: Arc<dyn Transport>) -> Http {
-        Http { transport, trace: Trace::disabled(), credential_header: None }
+        Http { transport, trace: Trace::disabled(), credential_header: None, withheld: Arc::new([]) }
     }
 
     /// hyper over rustls with the Mozilla roots.
@@ -393,6 +428,12 @@ impl Http {
 
     pub(crate) fn with_credential_header(mut self, header: Option<&'static str>) -> Http {
         self.credential_header = header;
+        self
+    }
+
+    /// This client, tracing each of `keys` in a request body with its key structure only, every value withheld.
+    pub(crate) fn withholding(mut self, keys: impl IntoIterator<Item = String>) -> Http {
+        self.withheld = keys.into_iter().collect();
         self
     }
 
@@ -429,7 +470,8 @@ impl Http {
             timeout: if seconds == f64::INFINITY { Duration::MAX } else { Duration::from_secs_f64(seconds) },
             handoff,
         };
-        let mut event = HttpEvent { trace: &self.trace, url, body, began: monotonic(), written: false };
+        let mut event =
+            HttpEvent { trace: &self.trace, url, body, withheld: &self.withheld, began: monotonic(), written: false };
         let result = self.send(request).await;
         event.write(|fields| match &result {
             Ok(response) => {

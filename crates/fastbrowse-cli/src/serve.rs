@@ -24,6 +24,7 @@ use fastbrowse_core::protocol::{
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text::repr;
 use fastbrowse_core::py::{base64, sha256_hex};
+use fastbrowse_core::safety::Redactor;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -108,8 +109,11 @@ pub struct Refused {
     pub data: Option<Box<CancellationReceipt>>,
 }
 
-fn refused(code: ErrorCode, message: impl Into<String>) -> Refused {
-    Refused { code, message: message.into(), data: None }
+/// A refusal of `message`, masked for address userinfo. A refusal quotes what it refused (a method's name, a value
+/// serde could not read, an unknown key), and it comes before any run has learnt the caller's credentials, so the
+/// mask is the stateless structural one (#1381).
+pub fn refused(code: ErrorCode, message: impl Into<String>) -> Refused {
+    Refused { code, message: fastbrowse_core::safety::mask_userinfo(&message.into()), data: None }
 }
 
 impl Refused {
@@ -177,6 +181,9 @@ struct Inner {
     settings: SettingsSource,
     protocol_version: i64,
     state: Mutex<State>,
+    /// Every string the client has sent on this connection, learnt as it arrives (`receive`), and counted among the
+    /// process's live redactors so a log line is masked by it too.
+    learnt: Arc<Mutex<Redactor>>,
 }
 
 #[derive(Clone)]
@@ -203,7 +210,9 @@ impl Server {
         settings: SettingsSource,
         protocol_version: i64,
     ) -> Server {
-        Server(Arc::new(Inner { transport, runner, settings, protocol_version, state: Mutex::default() }))
+        let learnt = Arc::new(Mutex::new(Redactor::default()));
+        fastbrowse_core::safety::live(&learnt);
+        Server(Arc::new(Inner { transport, runner, settings, protocol_version, state: Mutex::default(), learnt }))
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -230,24 +239,37 @@ impl Server {
     }
 
     async fn receive(&self, line: &[u8]) {
-        let payload: Value = match serde_json::from_slice(line) {
-            Ok(payload) => payload,
-            Err(error) => {
-                let error = refused(ErrorCode::ParseError, error.to_string()).error();
-                return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: None, error }).await;
-            }
+        // A line that is not JSON has no strings to learn from, so its refusal quotes nothing of it.
+        let Ok(payload) = serde_json::from_slice::<Value>(line) else {
+            let error = Error { code: ErrorCode::ParseError, message: "the line is not JSON".into(), data: None };
+            return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: None, error }).await;
         };
+        // Learnt before anything is settled, said or logged, whatever the message is, and kept for the connection's
+        // life: a reply to a callback carried text the server learnt nothing from, and an error reply's message
+        // reached the run's result unmasked (`https://u:reply-pw@h.test/` in a `run/until` error).
+        self.lock_learnt().register_tree(&payload);
         if let Value::Object(map) = &payload
             && !map.contains_key("method")
             && (map.contains_key("result") || map.contains_key("error"))
         {
             return self.settle(map);
         }
+        let id = id_of(&payload);
+        // An id is echoed whole to be matched, so one that is itself an address with a credential cannot be answered
+        // by it. Asked of the id alone: a short password learnt elsewhere in the request (`1`) is in many an
+        // ordinary id (`req-1`), and the envelope, the id included, is never masked (`write`).
+        if let Some(RequestId::Str(given)) = &id
+            && fastbrowse_core::safety::learnt(&json!(given)).holds_credentials()
+        {
+            let message = "the request id is an address with a credential; choose an id that is not";
+            let error = Error { code: ErrorCode::InvalidRequest, message: message.into(), data: None };
+            return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: None, error }).await;
+        }
         let request: Request = match serde_json::from_value(payload.clone()) {
             Ok(request) => request,
             Err(error) => {
-                let error = refused(ErrorCode::InvalidRequest, error.to_string()).error();
-                return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: id_of(&payload), error }).await;
+                let error = refused(ErrorCode::InvalidRequest, self.mask(&error.to_string())).error();
+                return self.write(&ErrorResponse { jsonrpc: JsonRpc, id, error }).await;
             }
         };
         let id = request.id;
@@ -305,7 +327,17 @@ impl Server {
         }
     }
 
-    async fn refuse(&self, id: Option<&RequestId>, refusal: Refused) {
+    fn lock_learnt(&self) -> std::sync::MutexGuard<'_, Redactor> {
+        self.0.learnt.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn mask(&self, text: &str) -> String {
+        self.lock_learnt().mask(text)
+    }
+
+    /// Refuse a request, its message masked by everything the client has sent.
+    async fn refuse(&self, id: Option<&RequestId>, mut refusal: Refused) {
+        refusal.message = self.mask(&refusal.message);
         // Named in the log as well as the reply, since a notification that was refused has no reply.
         log::warning(&format!("serve: {}", refusal.message));
         if let Some(id) = id {
@@ -318,6 +350,10 @@ impl Server {
     /// Everything up to the run's first wait happens here, before the next line is read: a
     /// `run/cancel` or the end of input on the next line finds the run under way.
     async fn start_run(&self, id: Option<RequestId>, params: RunParams) {
+        if holds_credential(&params) {
+            let message = "run_id holds a credential; choose an id that holds none";
+            return self.refuse(id.as_ref(), refused(ErrorCode::InvalidParams, message)).await;
+        }
         let cancel = Cancel::default();
         let busy = {
             let mut state = self.state();
@@ -463,8 +499,19 @@ impl Server {
         let _ = question.answer.send(answer);
     }
 
+    /// Write `message`, the text in it that can quote the client masked by everything the client has sent: a result,
+    /// an error's message and data, and a run's events. The envelope is the protocol's (`mask_members`). A question
+    /// to the client is not
+    /// masked either: it names the secret, origin or address the client must answer about. A frame is an image,
+    /// whose bytes masking would corrupt; the run holds its frames while it knows a credential.
     async fn write(&self, message: &impl Serialize) {
-        let mut line = message.dump_json().into_bytes();
+        let mut message = message.dump();
+        let event = message.get("method").and_then(Value::as_str) == Some(ServerMethod::RunEvent.as_str());
+        let quoting: &[&[&str]] = &[&["result"], &["error", "message"], &["error", "data"], &["params", "event"]];
+        // A run's id is echoed to be matched, like a request's, so only an event's own fields are masked.
+        self.lock_learnt().mask_members(&mut message, if event { quoting } else { &quoting[..3] });
+        let mut line =
+            fastbrowse_core::py::json::write(&message, fastbrowse_core::py::json::Style::PYDANTIC).into_bytes();
         line.push(b'\n');
         self.0.transport.send(&line);
         // Yield after each write so the run's other tasks can make progress.
@@ -526,6 +573,25 @@ pub struct Callbacks {
 pub type Resolve = Arc<dyn Fn(String, String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
 
 /// A method's params as its model, or the refusal that names the method, the field at fault and the fault.
+/// Whether the run's id holds an address's credentials, or a credential written anywhere else in the request. The id
+/// goes back as written in every message about the run (`run/event`, `run/frame`, `run/until`, `secrets/resolve`, the
+/// reply) and in the server's log, and masked, no client could match those to its run, so the run is refused instead
+/// (#1381).
+fn holds_credential(params: &RunParams) -> bool {
+    let mut redactor = fastbrowse_core::safety::Redactor::default();
+    if let Ok(run) = serde_json::to_value(&params.run) {
+        redactor.register_tree(&run);
+    }
+    params
+        .secrets
+        .iter()
+        .filter_map(|secret| serde_json::to_value(secret).ok())
+        .for_each(|secret| redactor.register_tree(&secret));
+    let run_id = Value::from(params.run_id.as_str());
+    redactor.register_tree(&run_id);
+    redactor.holds_typed(&fastbrowse_core::schema::Ty::Str, &run_id)
+}
+
 pub fn read<T: DeserializeOwned>(method: Method, params: Value) -> Result<T, Refused> {
     serde_path_to_error::deserialize(params).map_err(|error| {
         let message = match error.path().to_string() {

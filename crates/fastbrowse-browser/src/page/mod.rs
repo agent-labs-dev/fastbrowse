@@ -1375,6 +1375,11 @@ impl CdpPage {
                 "screenshots are unavailable for scoped documents".into(),
             ));
         }
+        if self.session.images_held() {
+            return Err(BrowserError::ScreenshotsUnavailable(
+                "screenshots are withheld: the run holds an address credential, which a page can paint".into(),
+            ));
+        }
         let client = self.session.client()?;
         let session_id = self.session.active_session_id()?;
         let metrics = client.send("Page.getLayoutMetrics", json!({}), Some(&session_id)).await?;
@@ -1607,7 +1612,8 @@ impl CdpPage {
         // A timeout says nothing about the page's content; a caller with no step of its own yet needs the distinct
         // type, not this message, to tell a slow site or session from its own broken navigation. The address is the
         // caller's own, and a run that failed before its first step has no other record of where it was going.
-        let message = format!("Page.navigate failed ({failure}) for {url}");
+        // Its credentials stay out: the error reaches the result and an embedder's logs before any redactor sees it.
+        let message = format!("Page.navigate failed ({failure}) for {}", fastbrowse_core::safety::mask_userinfo(url));
         if timed_out {
             return Err(BrowserError::NavigationTimeout(Failure::new(format!("Page.navigate/{failure}"), message)));
         }
@@ -2005,6 +2011,10 @@ impl Page for CdpPage {
 
     fn withhold_frames(&self, withheld: bool) {
         CdpPage::withhold_frames(self, withheld);
+    }
+
+    fn hold_images(&self) {
+        self.session.hold_images();
     }
 
     fn hand_over_tab(&self) {

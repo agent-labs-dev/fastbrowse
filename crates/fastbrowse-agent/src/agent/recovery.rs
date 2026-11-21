@@ -349,6 +349,7 @@ impl Agent {
     ) -> Step {
         let secrets = self.secret_names(&origin_of(&observation.url));
         self.resolve_answer_intent(state).await?;
+        self.forget_looks(state);
         let mut context = self.context(state, observation, secrets, false, false)?;
         let mut offered = observation.clone();
         context.problem = Some(reason.to_string());

@@ -320,9 +320,11 @@ pub(crate) fn safe_steps(steps: Vec<RecipeStep>, reveals: impl Fn(&str) -> bool)
             if step.option.as_deref().is_some_and(&reveals) {
                 return false;
             }
+            // An input's or a secret's name is the caller's text too: an input named with an address would be
+            // written to the recipe with the credential in it (#1381).
             match step.text.as_ref() {
-                Some(RecipeText::Literal(value)) => !reveals(value),
-                _ => true,
+                Some(RecipeText::Literal(text) | RecipeText::Input(text) | RecipeText::Secret(text)) => !reveals(text),
+                Some(RecipeText::Live) | None => true,
             }
         })
         .collect()
@@ -684,6 +686,25 @@ mod tests {
         assert_eq!(kept, vec![step.clone()]);
         let removed = safe_steps(vec![step], |text| text.contains("shop"));
         assert!(removed.is_empty());
+    }
+
+    /// An input's or a secret's name is the caller's text: one named with an address would be saved with its
+    /// credential (#1381).
+    #[test]
+    fn a_recipe_drops_a_step_whose_input_or_secret_name_reveals_a_credential() {
+        let action = Action::new(Operation::Click);
+        let decision = code_decision(Operation::Click, Some(button("b", "Continue")));
+        let step = step_of(URL, &decision, &action, None, |_| false).unwrap();
+        let reveals = |text: &str| text.contains("n4me-pw");
+        for text in [
+            RecipeText::Input("https://ops:n4me-pw@h.test/".into()),
+            RecipeText::Secret("https://ops:n4me-pw@h.test/".into()),
+        ] {
+            let named = RecipeStep { text: Some(text.clone()), ..step.clone() };
+            assert!(safe_steps(vec![named], reveals).is_empty(), "{text:?}");
+        }
+        let plain = RecipeStep { text: Some(RecipeText::Input("email".into())), ..step };
+        assert_eq!(safe_steps(vec![plain.clone()], reveals), vec![plain]);
     }
 
     #[test]

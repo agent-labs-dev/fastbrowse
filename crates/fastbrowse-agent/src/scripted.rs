@@ -103,7 +103,27 @@ impl ScriptedJev {
         }
         let step = step?;
         if key == "pick" {
-            return step.pick.clone();
+            let pick = step.pick.clone()?;
+            if question.criteria.contains_key(&pick) {
+                return Some(pick);
+            }
+            // A stored secret or a provided value is offered under a numbered handle, its name said in its
+            // description, so the script's `secret:token` finds the option that names `token`.
+            let name = pick.split_once(':').map_or(pick.as_str(), |(_, name)| name);
+            let names = |described: &str| {
+                ["The stored secret named ", "The provided value named "].iter().any(|said| {
+                    described
+                        .strip_prefix(said)
+                        .and_then(|rest| rest.strip_prefix(name))
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', ':']))
+                })
+            };
+            return question
+                .criteria
+                .iter()
+                .find(|(_, described)| described.as_str().is_some_and(names))
+                .map(|(option, _)| option.clone())
+                .or(Some(pick));
         }
         if key == keys::target(step.operation) {
             // A control's id is only known once the page is indexed, so the script names it by its label.
@@ -303,6 +323,16 @@ mod tests {
         let pick = ChoiceQuestion::new("value", criteria.iter().map(|(k, v)| (k.to_string(), json!(v))).collect());
         let picked = ask(&jev, &[("pick", pick.into())]);
         assert_eq!(chosen(&picked, "pick"), "secret:token");
+    }
+
+    #[test]
+    fn test_a_named_secret_is_picked_from_numbered_handles_by_its_description() {
+        let jev = ScriptedJev::new(steps("fill Token = secret:token").unwrap());
+        ask(&jev, &[("operation", operation())]);
+        let criteria = [("0", "The stored secret named tokens"), ("1", "The stored secret named token")];
+        let pick = ChoiceQuestion::new("value", criteria.iter().map(|(k, v)| (k.to_string(), json!(v))).collect());
+        let picked = ask(&jev, &[("pick", pick.into())]);
+        assert_eq!(chosen(&picked, "pick"), "1");
     }
 
     #[test]

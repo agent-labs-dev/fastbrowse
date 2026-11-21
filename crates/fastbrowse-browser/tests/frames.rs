@@ -351,10 +351,11 @@ async fn test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_f
     use fastbrowse_browser::recording::Recording;
     use fastbrowse_browser::session::{BoxError, CheckAccess};
 
-    if fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_none() {
-        eprintln!("recording needs ffmpeg; skipping");
-        return;
-    }
+    // A recording test that passed without ffmpeg checked nothing of what a recording holds, so it fails by name.
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_some(),
+        "recording needs ffmpeg on PATH; CI's rust job installs it"
+    );
     for page in ["clear", "showing a secret", "revealing a secret during the capture", "after access is revoked"] {
         let dir = temp_dir("recording");
         let still = dir.join("still.jpg");
@@ -418,10 +419,11 @@ async fn test_a_fed_recording_writes_both_videos_with_the_cursor_and_the_drawn_c
     use fastbrowse_browser::recording::{Recording, ResultCard};
     use fastbrowse_core::models::Operation;
 
-    if fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_none() {
-        eprintln!("recording needs ffmpeg; skipping");
-        return;
-    }
+    // A recording test that passed without ffmpeg checked nothing of what a recording holds, so it fails by name.
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_some(),
+        "recording needs ffmpeg on PATH; CI's rust job installs it"
+    );
     let dir = temp_dir("fed-recording");
     let still = dir.join("window.png");
     let made = tokio::process::Command::new("ffmpeg")
@@ -715,9 +717,13 @@ mod cursor {
     use fastbrowse_core::models::{Operation, StepOutcome};
     use fastbrowse_core::page::Action;
 
+    // A cursor test that passed without Chrome checked nothing of the page it reads, so it fails by name; CI's rust
+    // job installs Chrome for Testing.
+    const NEEDS_CHROME: &str = "this cursor test needs Chrome";
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_geometry_rejects_a_point_from_another_tab() {
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         h.goto("/").await;
         let observation = h.observe().await;
         let active = h.session.active_session_id().unwrap();
@@ -729,7 +735,7 @@ mod cursor {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_geometry_rejects_a_point_from_the_previous_document() {
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         h.goto("/").await;
         let before = h.observe().await;
         let session_id = h.session.active_session_id().unwrap();
@@ -773,7 +779,7 @@ for line in sys.stdin:
     async fn test_driver_failure_does_not_repeat_or_change_a_browser_action() {
         use std::os::unix::fs::PermissionsExt;
 
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         let dir = temp_dir("cursor");
         let binary = dir.join("cua-driver");
         std::fs::write(&binary, FAILING_DRIVER).unwrap();
