@@ -10155,6 +10155,28 @@ async fn test_a_press_on_a_slider_picks_one_of_the_keys_its_role_supports() {
         && q.contains("orientation: vertical")));
 }
 
+/// A sortable card says how it is operated in its role description and its described-by text: the key question carries
+/// both, so Jev can pick Space, an arrow, then Space across the steps.
+#[tokio::test]
+async fn test_the_key_question_carries_what_the_page_says_about_a_draggable_card() {
+    let card = Control {
+        role_description: Some("draggable".into()),
+        description: Some("To pick up a draggable item, press the space bar.".into()),
+        ..Control::new("c", "button", "One", [Operation::Click, Operation::Press])
+    };
+    let page = observation(std::slice::from_ref(&card));
+    let jev = Arc::new(FirstChoice { wants: Some("Space"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let action = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(card))).await.expect("action");
+    assert_eq!(action.text.as_deref(), Some("Space"));
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in")
+        && q.contains("The page calls it 'draggable'.")
+        && q.contains("To pick up a draggable item, press the space bar.")));
+}
+
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.
 #[tokio::test]
 async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {

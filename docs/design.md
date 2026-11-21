@@ -152,7 +152,7 @@ hover, scroll and guard passes read the same facts again when the walk no longer
 snapshots, without allocating new comparison arrays. Repeated heading and scope text reuses its normalized
 lines only when a fresh native read returns the exact same text.
 
-A browser observation reports each control's `focused` state. A custom page may leave it unknown.
+A control also carries `role_description` (`aria-roledescription`) and `description` (the text its `aria-describedby` points at), each as the page states it and only when present, which Jev reads beside the control; a widget that is operated by keys, such as a dnd-kit card, states them there. The key question for a press repeats both. A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
 in form validation. It describes the current field, without claiming that a submission occurred. A field
 that fails a native constraint also carries `validation_message`, the browser's own words for why, which

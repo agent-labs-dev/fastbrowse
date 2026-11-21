@@ -161,6 +161,8 @@ struct SnapshotControl {
     required: Option<bool>,
     invalid: Option<bool>,
     validation_message: Option<String>,
+    role_description: Option<String>,
+    description: Option<String>,
     next_page: Option<bool>,
     download: Option<bool>,
     #[serde(default)]
@@ -517,6 +519,8 @@ fn control_from_raw(
         required: c.required,
         invalid: c.invalid,
         validation_message: c.validation_message.clone(),
+        role_description: c.role_description.clone(),
+        description: c.description.clone(),
         focused: c.focused,
         next_page: c.next_page,
         download: c.download,

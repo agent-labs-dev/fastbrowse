@@ -1107,12 +1107,20 @@ impl Agent {
             return self.task_key(state, observation, decision, target).await;
         }
         let options: Vec<String> = press_keys(&target.role).iter().map(|key| key.to_string()).collect();
-        let question = format!(
+        let mut question = format!(
             "Which key should be pressed in {}? Each is named as a W3C UI Events key value; a {} supports the ones listed \
              first, and the standard keys follow.",
             text::repr(&describe(target)),
             target.role
         );
+        // A widget states its own keys (a draggable card: Space picks it up, an arrow moves it, Space drops it), and
+        // the recent actions say how far the sequence has got.
+        if let Some(role_description) = &target.role_description {
+            question.push_str(&format!(" The page calls it {}.", text::repr(role_description)));
+        }
+        if let Some(description) = &target.description {
+            question.push_str(&format!(" The page describes it: {}", text::repr(description)));
+        }
         match self.choose_among(state, observation, &question, &options, &[(TASK_KEY, TASK_KEY_SAID)]).await? {
             Chosen::Option(key) => {
                 state.text_source = Some(RecipeText::Literal(key.clone()));

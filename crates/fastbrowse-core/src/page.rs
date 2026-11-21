@@ -120,6 +120,12 @@ pub struct Control {
     /// The browser's own words for why a native constraint refuses this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_message: Option<String>,
+    /// What the page calls this control's role (`aria-roledescription`), such as "draggable".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_description: Option<String>,
+    /// The text the page attaches to this control to describe it (`aria-describedby`), as the page states it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// A link the page marks `rel="next"`: the next page of the list it belongs to.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub next_page: Option<bool>,
@@ -175,6 +181,8 @@ impl Control {
             required: None,
             invalid: None,
             validation_message: None,
+            role_description: None,
+            description: None,
             next_page: None,
             download: None,
             drawn: None,

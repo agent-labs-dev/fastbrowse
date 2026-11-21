@@ -2113,8 +2113,10 @@ async fn test_a_card_that_declares_itself_sortable_is_moved_by_keys() {
     eval_active(
         &h.page,
         r#"
-        document.body.innerHTML = '<ul id="cards">'
-          + ['One', 'Two', 'Three'].map(n => `<li><div role="button" tabindex="0" aria-roledescription="sortable" aria-label="${n}">${n}</div></li>`).join('')
+        // dnd-kit's markup: each card is a role=button li that names itself "draggable" and points at a hidden
+        // element holding the keyboard instructions.
+        document.body.innerHTML = '<div id="dnd-kit-description-1" style="display:none">To pick up a draggable item, press the space bar. While dragging, use the arrow keys to move the item. Press space again to drop the item in its new position, or press escape to cancel.</div><ul id="cards">'
+          + ['One', 'Two', 'Three'].map(n => `<li role="button" tabindex="0" aria-roledescription="draggable" aria-describedby="dnd-kit-description-1" aria-pressed="false" aria-label="${n}">${n}</li>`).join('')
           + '</ul><button>Save</button>';
         let lifted = null;
         const list = document.getElementById('cards');
@@ -2122,7 +2124,7 @@ async fn test_a_card_that_declares_itself_sortable_is_moved_by_keys() {
           const card = e.target.closest('li');
           if (e.key === ' ') { lifted = lifted ? null : card; e.preventDefault(); }
           else if (lifted && e.key === 'ArrowDown' && card.nextElementSibling) card.nextElementSibling.after(card);
-          if (lifted) setTimeout(() => card.querySelector('[role=button]').focus());
+          if (lifted) setTimeout(() => card.focus());
         });
         true
     "#,
@@ -2132,6 +2134,12 @@ async fn test_a_card_that_declares_itself_sortable_is_moved_by_keys() {
     assert!(!find(&before, "Save").operations.contains(&Operation::Press));
     let one = find(&before, "One");
     assert!(one.operations.contains(&Operation::Press), "{one:?}");
+    assert_eq!(one.role_description.as_deref(), Some("draggable"));
+    assert!(
+        one.description.as_deref().is_some_and(|d| d.starts_with("To pick up a draggable item, press the space bar.")),
+        "{one:?}"
+    );
+    assert_eq!(find(&before, "Save").description, None);
     for key in ["Space", "ArrowDown", "Space"] {
         let now = h.observe().await;
         let card = find(&now, "One");

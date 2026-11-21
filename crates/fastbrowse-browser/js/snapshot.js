@@ -1360,6 +1360,13 @@
     // that held the red circle beside it.
     if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role'))) base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
+    // What the page says the control is and how it is operated, in its own words: a dnd-kit card is a "button" whose
+    // `aria-roledescription` is "draggable" and whose described-by text says Space picks it up and the arrows move it.
+    // Without both, Jev saw a plain button and clicked it.
+    const roleDescription = (e.getAttribute('aria-roledescription') || '').replace(/\s+/g, ' ').trim();
+    if (roleDescription) base.role_description = roleDescription;
+    const description = describedBy(e);
+    if (description && description !== base.label) base.description = description;
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
     if (nativeProperty(source, 'required') || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
