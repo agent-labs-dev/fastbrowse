@@ -294,6 +294,35 @@ async fn test_a_method_and_an_id_are_learnt_before_a_refusal_quotes_them() {
     assert!(!recorder.called());
 }
 
+/// Every message the client sends is learnt for the session's life, whatever it is: a credential that came in a
+/// notification or in a reply to nothing, then quoted outside any address by a later refusal, was quoted whole when
+/// each message was learnt only for its own replies. A short password learnt there refuses no ordinary id and leaves
+/// the envelope as written.
+#[tokio::test]
+async fn test_every_message_is_learnt_for_the_session_before_anything_quotes_it() {
+    let mut client = Client::new(ServerConfig::default(), Recorder::new(answered(Status::Complete)).runner());
+    client.send(json!({"jsonrpc": "2.0", "method": "notifications/x", "params": {"a": "https://u:n0t\"e-pw@h.test/"}}));
+    client.send(json!({"jsonrpc": "2.0", "id": 99, "result": {"a": "https://u:r3\"sult-pw@h.test/"}}));
+    client.send(json!({"jsonrpc": "2.0", "id": 98, "error": {"code": 1, "message": "https://u:0@h.test/"}}));
+    for (id, name) in [("req-1", "n0t\"e-pw"), ("req-2", "r3\"sult-pw")] {
+        client.send(json!({"jsonrpc": "2.0", "id": id, "method": "prompts/get", "params": {"name": name}}));
+    }
+    let mut sent = Vec::new();
+    while let Ok(Some(message)) = tokio::time::timeout(Duration::from_millis(200), client.inbox.recv()).await {
+        sent.push(message);
+    }
+    let replies: Vec<&Value> = sent.iter().filter(|message| message["id"].is_string()).collect();
+    assert_eq!(replies.len(), 2, "{sent:?}");
+    for reply in replies {
+        assert_eq!(reply["jsonrpc"], "2.0", "{reply}");
+        assert!(reply["error"]["message"].as_str().unwrap().starts_with("Unknown prompt: "), "{reply}");
+    }
+    let written = serde_json::to_string(&sent).unwrap();
+    for password in ["e-pw", "sult-pw"] {
+        assert!(!written.contains(password), "{password}: {written}");
+    }
+}
+
 #[tokio::test]
 async fn test_needs_confirmation_says_what_the_caller_can_do() {
     let recorder = Recorder::new(answered(Status::NeedsConfirmation));
@@ -630,15 +659,22 @@ async fn test_http_learns_the_headers_and_body_it_quotes_before_refusing() {
         .unwrap_or_else(|| panic!("{opened}"));
     let session = format!("Mcp-Session-Id: {session}\r\n");
     let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
-    let version =
-        http(port, &post(&format!("{session}MCP-Protocol-Version: https://ops:v3r-pw@h.test\r\n"), &ping)).await;
+    // The quote ends an address for the structural scan, so only learning the header masks the password whole.
+    let bad_version = "MCP-Protocol-Version: https://ops:v3r\"hdr-pw@h.test\r\n";
+    let version = http(port, &post(&format!("{session}{bad_version}"), &ping)).await;
     assert!(version.starts_with("HTTP/1.1 400") && version.contains("Unsupported protocol version"), "{version}");
+    let delete = format!(
+        "DELETE /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{session}{bad_version}Content-Length: 0\r\n\
+         Connection: close\r\n\r\n"
+    );
+    let deleted = http(port, &delete).await;
+    assert!(deleted.starts_with("HTTP/1.1 400") && deleted.contains("Unsupported protocol version"), "{deleted}");
     let id = json!({"jsonrpc": "2.0", "id": "https://ops:1d-pw@h.test/", "method": "ping"}).to_string();
     let id = http(port, &post(&session, &id)).await;
-    assert!(id.starts_with("HTTP/1.1 400") && id.contains("the id holds a credential"), "{id}");
+    assert!(id.starts_with("HTTP/1.1 400") && id.contains("the id is an address with a credential"), "{id}");
     let garbled = http(port, &post(&session, "https://ops:n0tjs0n@h.test/")).await;
     assert!(garbled.starts_with("HTTP/1.1 400") && garbled.contains("not JSON"), "{garbled}");
-    for (response, password) in [(&version, "v3r-pw"), (&id, "1d-pw"), (&garbled, "n0tjs0n")] {
+    for (response, password) in [(&version, "hdr-pw"), (&deleted, "hdr-pw"), (&id, "1d-pw"), (&garbled, "n0tjs0n")] {
         assert!(!response.contains(password), "{response}");
     }
 }

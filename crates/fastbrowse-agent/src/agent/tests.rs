@@ -1661,7 +1661,7 @@ async fn test_an_action_the_task_says_not_to_take_is_refused_even_when_reversibl
         let jev = Arc::new(Conditioned { answers: given, chosen, asked: Default::default() });
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state();
-        state.task = "Choose upload_fixture.txt in the file input. Do not click Upload or submit anything.".into();
+        state.raw_task = "Choose upload_fixture.txt in the file input. Do not click Upload or submit anything.".into();
         state.prohibits = None;
         state.authorization = Authorization { irreversible_actions: authorized };
         let upload = Control { context: Some("File Uploader".into()), ..button("Upload") };
@@ -1708,7 +1708,7 @@ async fn test_an_upload_the_task_says_not_to_make_is_refused_before_the_file_is_
         let jev = Arc::new(Conditioned { answers: given, chosen: IndexMap::new(), asked: Default::default() });
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state();
-        state.task = "Open the upload form. Do not attach secret.txt.".into();
+        state.raw_task = "Open the upload form. Do not attach secret.txt.".into();
         state.prohibits = None;
         state.attachments = vec![fastbrowse_core::models::Attachment {
             name: "secret.txt".into(),
@@ -1976,7 +1976,7 @@ async fn test_the_condition_check_is_told_the_steps_the_run_took() {
     });
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.task = "Click Reorder, then click Cancel there. Then delete the image titled Old.".into();
+    state.raw_task = "Click Reorder, then click Cancel there. Then delete the image titled Old.".into();
     state.authorization = Authorization { irreversible_actions: true };
     let stale = HistoryEntry { outcome: StepOutcome::Stale, ..executed(Some(Operation::Click), Some("Old"), false) };
     let secret = HistoryEntry { text: Some("<secret>".into()), ..executed(Some(Operation::Fill), Some("Key"), true) };
@@ -2048,7 +2048,7 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     });
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.task = "Reply under the comment by Syrberus with 'Thanks for the log', then click Post once.".into();
+    state.raw_task = "Reply under the comment by Syrberus with 'Thanks for the log', then click Post once.".into();
     state.authorization = Authorization { irreversible_actions: true };
     state.commits = 1;
     let in_form = |control: Control, form: &str| Control { form_id: Some(form.into()), ..control };
@@ -2310,7 +2310,7 @@ async fn test_a_press_is_asked_whether_it_changes_a_value_not_whether_it_commits
     let jev = Arc::new(RequestedRecorder::default());
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.task = "Add the result under \"Settle up:\" and save it with Ctrl+S.".into();
+    state.raw_task = "Add the result under \"Settle up:\" and save it with Ctrl+S.".into();
     let decision = code_decision(Operation::Press, Some(editor.clone()));
     let _ = agent.gate_key_edit(&mut state, &page, &decision, &editor, "Control+s").await;
     let asked = jev.0.lock().unwrap();
@@ -2329,7 +2329,7 @@ async fn test_a_requested_press_states_what_the_page_calls_the_control() {
     let jev = Arc::new(RequestedRecorder::default());
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.task = "Reorder the cards. Change nothing else.".into();
+    state.raw_task = "Reorder the cards. Change nothing else.".into();
     let decision = code_decision(Operation::Press, Some(card.clone()));
     let gated = agent.gate_key_edit(&mut state, &page, &decision, &card, "Space").await;
     assert!(gated.is_ok(), "{gated:?}");
@@ -2409,7 +2409,7 @@ fn test_an_action_refused_is_left_out_with_the_refusal_its_page_gave() {
         refused: Some(refusal.into()),
     });
     let mut offered = page.clone();
-    let mut context = crate::policy::StepContext::new(&state.task);
+    let mut context = crate::policy::StepContext::new(&state.raw_task);
     super::recovery::leave_out_idle(&state, &mut offered, &mut context);
     let problem = context.problem.unwrap_or_default();
     assert!(problem.contains(refusal), "{problem}");
@@ -5695,7 +5695,7 @@ async fn a_written_value_is_asked_for_the_field_as_the_page_describes_it() {
     let writer = Arc::new(DateWriter::default());
     let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), writer.clone());
     let mut state = run_state();
-    state.task = "Research with citations: who created Python?".into();
+    state.raw_task = "Research with citations: who created Python?".into();
     let mut target = Control::new("main:3", "textbox", "textbox", [Operation::Fill, Operation::Click]);
     (target.context, target.input_name, target.max_length) =
         (Some("Advanced Search".into()), Some("q".into()), Some(80));
@@ -10334,7 +10334,7 @@ async fn test_done_on_a_list_whose_read_gave_the_answer_in_one_passage_finishes_
     let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
     let agent = Agent::new(Arc::new(FinishPage(first.clone())), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.task = "How many open issues carry the bug label?".into();
+    state.raw_task = "How many open issues carry the bug label?".into();
     state.output_intent = super::state::OutputIntent::Text;
     state.extent = Extent::EveryPage;
     let captured = Capture { url: first.url.clone(), ..capture(&[(BlockKind::Paragraph, "59 results")]) };
@@ -11612,6 +11612,7 @@ impl Page for OneButton {
                 page_changed: true,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }
@@ -12113,7 +12114,7 @@ async fn test_a_press_copied_from_a_task_that_names_no_key_is_not_made() {
     let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), noul: Some(0.0), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.task = "Make the document's text bold, then save the document.".into();
+    state.raw_task = "Make the document's text bold, then save the document.".into();
     state.edits = Some(Edits::Allowed);
     let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(editor))).await;
     let Err(Flow::Unsure(unsure)) = result else { panic!("words that are no key were pressed: {result:?}") };

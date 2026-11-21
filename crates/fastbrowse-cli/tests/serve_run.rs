@@ -439,6 +439,20 @@ async fn test_every_string_of_a_message_is_learnt_before_a_refusal_quotes_it() {
     assert!(recorder.calls().is_empty());
 }
 
+/// An id is refused only when it is itself an address with a credential, and the envelope is never masked: with a
+/// short password learnt from a request, `req-1` was refused for holding `1`, and masked, `"2.0"` became `"2.•"`.
+#[tokio::test]
+async fn test_a_short_password_neither_refuses_an_ordinary_id_nor_rewrites_the_envelope() {
+    let mut client = serving(Recorder::default().runner(), settings());
+    let held = json!({"a": "https://u:0@h.test/", "b": "https://v:1@h.test/"});
+    client.send(json!({"jsonrpc": "2.0", "id": "req-1", "method": "nothing/0", "params": held}));
+    let response = client.receive().await;
+    assert_eq!(response["jsonrpc"], "2.0", "{response}");
+    assert_eq!(response["id"], "req-1", "{response}");
+    assert_eq!(response["error"]["code"], -32601, "{response}");
+    assert_eq!(response["error"]["message"], "unknown method 'nothing/\u{2022}'", "{response}");
+}
+
 #[tokio::test]
 async fn test_a_profile_from_the_environment_counts_against_a_handed_over_browser() {
     let recorder = Recorder::default();

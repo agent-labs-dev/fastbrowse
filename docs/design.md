@@ -580,14 +580,22 @@ not: an address with a scheme, a scheme-relative `//user:pass@host`, and an addr
 query. Everything else that leaves a run is redacted once, at its exit, by its schema: the result (its `data` keys
 and values, `browser.profile`, recordings, artifacts and `error`), each event, the `until` check, which receives the
 address masked rather than as the page has it, the trace and the HTTP trace, every stderr warning and log line, and
-the errors a run raises, whatever caller text they repeat. Every door a caller reaches the run through (serve's
-JSON-RPC, MCP over stdio and HTTP, the CLI, Python and the Rust `Agent`) first learns every string of the raw message,
-keys included, each as one whole address, and the HTTP header values it may quote, and only then reads the message
-into types; every reply, log line and printed request it makes is masked by what it learnt, so a refusal (an unknown
-method, a value serde could not read, an unsupported `MCP-Protocol-Version`, the run's preflight check) quotes no
-credential the message carried. Input that is not JSON has no strings to learn from, so it is refused with a fixed
-message that quotes none of it. A JSON-RPC id is echoed whole to be matched, so a request whose id holds a credential
-is refused with a fixed message and a null id. A closed
+the errors a run raises, whatever caller text they repeat. Serve's JSON-RPC and MCP over stdio and HTTP learn every
+string of every message a client sends, keys included, each as one whole address, before anything settles or quotes
+it, whatever the message is (a request, a notification, a reply to a callback, an error reply, an answer to
+`secrets/resolve` or `run/until`), and keep it for the life of the connection or session; MCP over HTTP learns the
+header values it may quote too. Every binary entry (the CLI, `fastbrowse serve`, `fastbrowse-mcp` and the
+subcommands) learns its arguments and the environment and `.env` values it may quote through one path before it
+reports anything. Python and the Rust `Agent` learn the run's arguments, and the address a host's `open_browser`
+answers is learnt as it is handed over, like `cdp_url`. Every reply, log line and printed request is masked by what
+was learnt, so a refusal (an unknown method, a value serde could not read, an unsupported `MCP-Protocol-Version`, the
+run's preflight check) quotes no credential a message carried. Only the members of a reply that can quote the caller
+are masked (a result, an error's message and data, an event, a progress or log note); the envelope (`jsonrpc`, `id`,
+`method`, an error's `code`) is the protocol's and stays as written, or a password `0` turned `"2.0"` into `"2.•"`.
+Input that is not JSON has no strings to learn from, so it is refused with a fixed message that quotes none of it. A
+JSON-RPC id is echoed whole to be matched, so a request whose id is itself an address with a credential is refused
+with a fixed message and a null id; a short password learnt elsewhere does not refuse an ordinary id that holds its
+letters. A closed
 set's value and a model's field name are code's and stay whole; a key the caller chose is redacted like a value, in a
 trace record as in the result. A task, browser connection, recipe, settings or HTTP request printed for a log prints
 its addresses masked; `FASTBROWSE_LLM_EXTRA_BODY` is printed, and written to the HTTP trace, with its keys kept and its
@@ -614,14 +622,18 @@ recipe, the settings' text and every string a page, tab or history address shows
 written, percent-decoded, as the browser encodes it, and as the `Authorization: Basic` value the browser sends for it,
 in standard and URL-safe base64. The secret of an address is its password when one is written, else its user name,
 which is how an access token is written (`https://TOKEN@host/`); a user name beside a password is an identifier and
-stays readable outside an address, and masked inside one. A learned value is matched as text with no minimum length,
+stays readable outside an address, and masked inside one. A lone user name is a credential by structure, since nothing
+in the address tells a token from a login: `ssh://git@github.com/o/r` blanks `git` for the run, as
+`https://ghp_TOKEN@github.com/o/r` blanks the token. A learned value is matched as text with no minimum length,
 as a resolved secret is, so a short one also blanks the same letters inside other words. A whole address with a tab or
 newline inside it (a start) registers its credential both as written and as the browser reads it, with
 the tab or newline removed.
 
 Masking covers these forms and no others, and these are its limits: a tab or newline inside an address in free prose
 (a task, a context) ends the address there, as it separates words; an address written with no scheme
-(`user:pass@host/path`) is not an address, and no entry point adds a scheme to one; a literal escape in free prose
+(`user:pass@host/path`) is not an address, and no entry point adds a scheme to one; `,` and `)` are characters a
+userinfo may hold (RFC 3986 sub-delims), so in free prose `https://a.test,b@c.test` and `[x](https://a.test)b@c.test`
+read as one address whose userinfo is `a.test,b` or `a.test)b`, which is masked and learnt; a literal escape in free prose
 (`\u0040`, `&#64;` typed as characters) is not decoded. A caller's JSON is decoded before the run reads it, and a page's
 character references are decoded by the browser or the HTTP reader before the run sees its text, so neither is a form
 to register. A password written bare inside an attachment's contents is not known to be one: an attachment's bytes go

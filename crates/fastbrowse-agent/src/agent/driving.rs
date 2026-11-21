@@ -10,6 +10,7 @@ use fastbrowse_core::models::{
 };
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
+use fastbrowse_core::py::sha256_hex;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{may_be_irreversible, origin_of};
 use indexmap::IndexMap;

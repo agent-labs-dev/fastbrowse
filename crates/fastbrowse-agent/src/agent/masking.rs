@@ -7,7 +7,7 @@
 //! valid. A code-made field (an id, a fingerprint, a kind the browser layer names) is kept: it holds no page text,
 //! and masking a short secret inside `e12` would point an action at no control.
 
-use fastbrowse_core::models::{Link, SourceControl};
+use fastbrowse_core::models::{Held, Link, SourceControl};
 use fastbrowse_core::page::{Block, Capture, Control, Dialog, Media, Observation, SourceField, Tab};
 use fastbrowse_core::py::sha256_hex;
 use fastbrowse_core::safety::Redactor;
@@ -16,11 +16,13 @@ use fastbrowse_core::safety::Redactor;
 /// boundary masks every string a request holds, and a password `e1` or `p` masked inside a control's id there left
 /// Jev picking an option no control has.
 pub(super) fn keep_code_made(redactor: &mut Redactor, observation: &Observation) {
-    let mut kept = vec![&observation.page_key, &observation.document_key];
+    let mut kept = vec![&observation.page_key, &observation.document_key, &observation.viewport_key];
     for control in &observation.controls {
         kept.push(&control.id);
         kept.extend(
-            [&control.frame_id, &control.form_id, &control.shown_by, &control.input_type].into_iter().flatten(),
+            [&control.frame_id, &control.frame_document_key, &control.form_id, &control.shown_by, &control.input_type]
+                .into_iter()
+                .flatten(),
         );
         kept.push(&control.role);
     }
@@ -51,6 +53,7 @@ pub(super) fn observation(redactor: &Redactor, observation: &Observation) -> Obs
         captured_at,
         response_status,
         document_key,
+        viewport_key,
         controls,
         viewport_text,
         offscreen_text,
@@ -70,6 +73,8 @@ pub(super) fn observation(redactor: &Redactor, observation: &Observation) -> Obs
         captured_at: *captured_at,
         response_status: *response_status,
         document_key: document_key.clone(),
+        // A fingerprint of the place the viewport shows, as code's own keys above.
+        viewport_key: viewport_key.clone(),
         controls: controls.iter().map(|item| self::control(redactor, item)).collect(),
         viewport_text: mask(viewport_text),
         offscreen_text: mask(offscreen_text),
@@ -92,6 +97,7 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         id,
         frame_id,
         frame_origin,
+        frame_document_key,
         form_id,
         retarget_key,
         role,
@@ -121,11 +127,18 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         pictured,
         already_read,
         shown_by,
+        role_description,
+        description,
+        item_position,
+        item_count,
+        other_site,
     } = control;
     Control {
         id: id.clone(),
         frame_id: frame_id.clone(),
         frame_origin: mask_opt(frame_origin),
+        // A document key, as code's own, so an action still matches it after a reload.
+        frame_document_key: frame_document_key.clone(),
         form_id: form_id.clone(),
         // Never written out, so no model or trace reads it, and acting matches it against the live page.
         retarget_key: retarget_key.clone(),
@@ -156,6 +169,11 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         pictured: *pictured,
         already_read: *already_read,
         shown_by: shown_by.clone(),
+        role_description: mask_opt(role_description),
+        description: mask_opt(description),
+        item_position: *item_position,
+        item_count: *item_count,
+        other_site: *other_site,
     }
 }
 
@@ -235,10 +253,16 @@ fn block(redactor: &Redactor, block: &Block) -> Block {
         start: *start,
         end: *end,
         heading_path: heading_path.iter().map(|heading| mask(heading)).collect(),
-        control_context: control_context.as_ref().map(|SourceControl { role, label, context }| SourceControl {
-            role: mask(role),
-            label: mask(label),
-            context: context.as_deref().map(mask),
+        control_context: control_context.as_ref().map(|control| SourceControl {
+            role: mask(&control.role),
+            label: mask(&control.label),
+            context: control.context.as_deref().map(mask),
+            document: control.document.clone(),
+            held: control
+                .held
+                .iter()
+                .map(|held| Held { element: held.element.clone(), value: mask(&held.value).into() })
+                .collect(),
         }),
         href: href.as_deref().map(mask),
         // An address can carry a token in its query, and a link's text is page text like the rest.
