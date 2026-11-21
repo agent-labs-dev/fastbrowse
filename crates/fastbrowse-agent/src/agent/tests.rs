@@ -6681,7 +6681,7 @@ fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
     );
     let request = crate::policy::build_request(&offered, &offered.controls, &context, &Default::default(), 64);
     let Question::Choice(targets) = &request.questions["blur_target"] else { panic!("a choice") };
-    assert_eq!(targets.criteria.keys().map(String::as_str).collect::<Vec<_>>(), ["other"]);
+    assert_eq!(targets.criteria.keys().map(String::as_str).collect::<Vec<_>>(), ["other", "not_here"]);
     assert_eq!(offered.controls[0].focused, Some(true));
     assert!(offered.controls[0].operations.contains(&Operation::Fill));
     assert!(context.problem.as_deref().unwrap().contains("not offered this time"));
