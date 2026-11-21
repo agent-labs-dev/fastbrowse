@@ -4528,7 +4528,7 @@ impl LLMClient for DateWriter {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
-            let data = schema.validate_json(r#"{"value":"2026-11-04"}"#).map_err(LLMError::schema)?;
+            let data = schema.validate_json(r#"{"value":"2026-11-04","changes":[]}"#).map_err(LLMError::schema)?;
             let cost = CostLine {
                 purpose: Some(purpose),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))

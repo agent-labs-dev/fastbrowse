@@ -200,7 +200,7 @@ impl ScriptedLLM {
             LLMPurpose::Start => Some(json!({"url": null})),
             LLMPurpose::Compose => Some(json!({"claims": []})),
             LLMPurpose::ImageRead => Some(json!({"text": null})),
-            LLMPurpose::Fill => Some(json!({"value": null})),
+            LLMPurpose::Fill => Some(json!({"value": null, "changes": []})),
             LLMPurpose::Pages => Some(json!({"first": null, "last": null})),
             LLMPurpose::Dates => Some(json!({"dates": []})),
             LLMPurpose::KnownPages | LLMPurpose::RecoveryPages => Some(json!({"urls": []})),

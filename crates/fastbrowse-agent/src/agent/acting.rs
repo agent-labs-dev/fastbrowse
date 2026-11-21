@@ -1259,20 +1259,23 @@ impl Agent {
             return Err(self.untouched(state, observation, target));
         }
         if source == WRITTEN {
+            let holds = holding(target);
             let written = write_value(
                 &*self.llm,
                 &self.model_task(state),
                 &label,
                 target.input_type.as_deref(),
                 &typed_into(state, target),
-                holding(target).as_deref(),
+                holds.as_deref(),
                 &crate::dates::dated(observation.captured_at, &state.dates),
                 &state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
                 Some(&state.ledger),
             )
             .await?;
             state.ledger.record([written.cost])?;
-            return match written.data.value.filter(|value| !value.trim().is_empty()) {
+            // Changes apply to the text the writer was shown, which is none for a field whose value it never saw.
+            let shown = holds.and(target.value.as_deref()).unwrap_or_default();
+            return match written.data.text(shown).filter(|value| !value.trim().is_empty()) {
                 Some(value) => {
                     // Words the task gives as they were typed are the task's value, however Jev got to them, so a
                     // recipe can type them again. Anything composed stays live.
