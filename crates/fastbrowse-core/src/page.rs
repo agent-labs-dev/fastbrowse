@@ -150,6 +150,13 @@ pub struct Control {
 }
 
 impl Control {
+    /// Whether the control offers any operation. A disabled control offers none: it is shown to Jev but never picked,
+    /// so whatever asks "is there anything to act on" or counts what can be offered asks this, not whether it is
+    /// listed (#1415).
+    pub fn actionable(&self) -> bool {
+        !self.operations.is_empty()
+    }
+
     /// A control with every optional field at its default.
     pub fn new(id: &str, role: &str, label: &str, operations: impl IntoIterator<Item = Operation>) -> Control {
         Control {

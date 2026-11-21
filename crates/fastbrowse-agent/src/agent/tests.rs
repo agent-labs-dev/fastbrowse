@@ -6095,6 +6095,23 @@ fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
     assert!(context.problem.as_deref().unwrap().contains("not offered this time"));
 }
 
+#[test]
+fn test_withholding_a_stalled_fill_keeps_the_disabled_save_shown() {
+    // A fill left Save disabled and changed nothing; the re-ask hid Save again with the fill, so Jev was told nothing
+    // about why the edit had not taken (#1415).
+    let mut offered = reference("Alpha-17", true);
+    offered.controls.push(Control { disabled: Some(true), ..Control::new("save", "button", "Save", []) });
+    let mut context = crate::policy::StepContext::new("set the reference and save it");
+    super::recovery::withhold(
+        &mut offered,
+        &mut context,
+        "nothing changed",
+        &super::recovery::Idle::performed(Some((Operation::Fill, Some("Reference".into())))),
+    );
+    let save = offered.controls.iter().find(|control| control.label == "Save").expect("the disabled Save stays shown");
+    assert!(save.operations.is_empty());
+}
+
 const ENTRY: &str = "https://shop.test/entry";
 const SIGN_IN: &str = "Sign in at /login as grace@example.com, or at /entry?mode=login";
 

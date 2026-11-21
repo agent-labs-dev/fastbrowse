@@ -159,7 +159,9 @@ that fails a native constraint also carries `validation_message`, the browser's 
 Jev sees with the field: a refused submit shows that reason only in a browser bubble, not in page text.
 A control the page disables (`disabled`, or inside `aria-disabled="true"`) stays in the observation with
 `disabled: true` and no operations, so Jev sees a Save that an edit did not enable and cannot choose it. A step
-that enables or disables a control says so in its effect, and the page state counts it.
+that enables or disables a control says so in its effect, and the page state counts it; a control it enables is
+reported as changed, not as newly shown. The stall rule's re-ask and replay leave a disabled control in place
+without counting it among the controls offered.
 Jev can choose `blur` for an editable field observed as focused, leaving that field without pressing
 another control or submitting its form. The field must still be the same node and hold focus when the
 action runs. A replacement field is not retried. Page change and blur handlers run as they do when the
@@ -192,8 +194,8 @@ The ledger reserves the documented search price before dispatch and records the 
 price when the receipt is unavailable. No key leaves search unavailable.
 
 Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
-offered as what it has. A disabled control (`disabled`, `aria-disabled="true"` or `inert` on the element) is not
-offered, as a browser capture leaves it out, so a disabled next link is no next page. A step only a browser can
+offered as what it has. A disabled control (`disabled` or `aria-disabled="true"` on the element) is kept offering
+nothing, as a browser capture keeps it, and an `inert` one is left out, so a disabled next link is no next page. A step only a browser can
 take starts one on the same page, and the run carries on with
 what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
 build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a

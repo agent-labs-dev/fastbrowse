@@ -89,7 +89,9 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
                     }
                     left_out |= control.operations.remove(&operation);
                 }
-                offered.controls.retain(|control| !control.operations.is_empty());
+                // Only a control this removal emptied goes: a disabled one offered nothing before it and stays shown, or
+                // the re-ask hides the disabled Save the stall was about (#1415).
+                offered.controls.retain(|control| control.actionable() || control.disabled == Some(true));
             }
             None => {
                 context.withheld.push(operation);

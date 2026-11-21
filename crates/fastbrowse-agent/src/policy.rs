@@ -617,7 +617,9 @@ pub async fn decide(
     let mut tokens = 0;
     // A target is picked from at most `options` groups of at most `group_size`, so no more can be offered at once.
     let max_offered = fitting.group_size() * options;
-    let mut shortlist_tried = context.list_read != ListRead::Continue && controls.len() > max_offered;
+    // Only a control with an operation is offered: a disabled one is listed but takes no place in the choice (#1415).
+    let offerable = controls.iter().filter(|control| control.actionable()).count();
+    let mut shortlist_tried = context.list_read != ListRead::Continue && offerable > max_offered;
     if shortlist_tried {
         let shortlisted = shortlist(jev, &observation, &controls, &context, fitting, ledger, trace).await?;
         if let Some((kept, paid, used)) = shortlisted {
@@ -812,9 +814,12 @@ fn trim(
 /// Protected controls, then the first others up to `limit` in all: document order when no relevance score is known.
 fn protected_first(controls: &[Control], limit: usize) -> HashSet<usize> {
     let mut keep: HashSet<usize> = (0..controls.len()).filter(|i| protected(&controls[*i])).collect();
-    let room = limit.saturating_sub(keep.len());
-    let others: Vec<usize> = (0..controls.len()).filter(|i| !keep.contains(i)).take(room).collect();
+    let room = limit.saturating_sub(keep.iter().filter(|i| controls[**i].actionable()).count());
+    let others: Vec<usize> =
+        (0..controls.len()).filter(|i| !keep.contains(i) && controls[*i].actionable()).take(room).collect();
     keep.extend(others);
+    // A disabled control takes no place among the offered, so it stays with whatever is kept.
+    keep.extend((0..controls.len()).filter(|i| !controls[*i].actionable()));
     keep
 }
 
@@ -880,7 +885,10 @@ async fn shortlist(
 ) -> Result<Option<Shortlist>> {
     let config = fitting.config;
     let protected_set: HashSet<usize> = (0..controls.len()).filter(|i| protected(&controls[*i])).collect();
-    let candidates: Vec<usize> = (0..controls.len()).filter(|i| !protected_set.contains(i)).collect();
+    // A disabled control is never picked, so its relevance is not paid for: it is kept unasked, beside the protected.
+    let inert: HashSet<usize> = (0..controls.len()).filter(|i| !controls[*i].actionable()).collect();
+    let candidates: Vec<usize> =
+        (0..controls.len()).filter(|i| !protected_set.contains(i) && !inert.contains(i)).collect();
     let state = json!({
         "rules": *RELEVANCE,
         "task": context.task,
@@ -950,11 +958,13 @@ async fn shortlist(
     });
     let kept = |prefix: usize| {
         let mut indices = protected_set.clone();
+        indices.extend(inert.iter().copied());
         indices.extend(ranked[..prefix].iter().copied());
         keep_indices(controls, &indices)
     };
     let max_offered = fitting.group_size() * fitting.options;
-    let (mut low, mut high) = (0, ranked.len().min(max_offered.saturating_sub(protected_set.len())));
+    let protected_offered = protected_set.iter().filter(|i| controls[**i].actionable()).count();
+    let (mut low, mut high) = (0, ranked.len().min(max_offered.saturating_sub(protected_offered)));
     while low < high {
         let middle = (low + high).div_ceil(2);
         if fits(&build_request(observation, &kept(middle), context, config, fitting.options), config) {
@@ -1073,7 +1083,7 @@ pub fn build_request(
         &observation.url,
         context.start_url.as_deref(),
         context.start_landing_url.as_deref(),
-        observation.controls.is_empty() || context.problem.is_some(),
+        !observation.controls.iter().any(Control::actionable) || context.problem.is_some(),
     );
     for known in &context.known_pages {
         if !urls.contains(known) && !fastbrowse_core::navigation::same_address(known, &observation.url) {
@@ -2451,6 +2461,34 @@ mod tests {
             _ => false,
         }));
         assert!(result.target.unwrap().id.starts_with("fresh-"));
+    }
+
+    #[test]
+    fn test_disabled_controls_take_no_offer_place_and_no_relevance_question() {
+        // Two options of two controls offer four at most. Disabled controls offer no operation, so they neither start
+        // a shortlist nor are asked about, and they stay in the elements Jev reads (#1415).
+        let config = Config { observation: ObservationLimits { group_size: 2 }, ..Config::default() };
+        let disabled = |i: usize| Control {
+            disabled: Some(true),
+            ..Control::new(&format!("d{i}"), "button", &format!("Off {i}"), [])
+        };
+        let trace = Trace::disabled();
+        let context = StepContext::new("press button 3");
+        let jev = Fake { options: 2, ..fake(&[("operation", "click")], "Button 3") };
+        let few = observation((0..3).map(button).chain((0..3).map(disabled)).collect());
+        block_on(decide(&jev, &few, &context, &config, None, &trace)).unwrap();
+        assert!(relevance_requests(&jev).is_empty(), "three offerable controls fit unshortlisted");
+        let jev = Fake { options: 2, ..fake(&[("operation", "click")], "Button 3") };
+        let many = observation((0..5).map(button).chain((0..2).map(disabled)).collect());
+        block_on(decide(&jev, &many, &context, &config, None, &trace)).unwrap();
+        let asked: Vec<String> =
+            relevance_requests(&jev).iter().flat_map(|r| r.values()).map(Question::dump_json).collect();
+        assert!(!asked.is_empty() && asked.iter().all(|q| !q.contains("Off ")), "{asked:?}");
+        let states = jev.states.lock().unwrap();
+        let chosen = states.last().expect("the action request");
+        let labels: Vec<&str> =
+            chosen["elements"].as_array().unwrap().iter().filter_map(|e| e["label"].as_str()).collect();
+        assert!(labels.contains(&"Off 0") && labels.contains(&"Off 1"), "{labels:?}");
     }
 
     #[test]

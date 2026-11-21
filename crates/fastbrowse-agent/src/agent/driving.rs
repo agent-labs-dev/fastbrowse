@@ -294,12 +294,13 @@ impl Agent {
             if bot_check || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above {
                 // A wall offering nothing to act on cannot be signed into, so it is waited on as a bot check is: for as
                 // long as the browser's CAPTCHA solver works on it or its document is still loading, and no longer.
-                if (bot_check || raw.controls.is_empty())
+                let offers_nothing = !raw.controls.iter().any(Control::actionable);
+                if (bot_check || offers_nothing)
                     && self.outwait(&raw, browsing_deadline(&state.ledger, state.compose)).await?
                 {
                     continue;
                 }
-                if bot_check && raw.controls.is_empty() && self.reload_challenge(state, &raw).await? {
+                if bot_check && offers_nothing && self.reload_challenge(state, &raw).await? {
                     continue;
                 }
                 // A bot check that does not clear ends the route, not the run.
