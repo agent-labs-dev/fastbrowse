@@ -93,9 +93,10 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
         Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
         // Jev held off filling a field whose text the task adds to, scrolling to its end first, since fill read as
-        // typing or replacing only (#1427). The written value replaces the field's whole text, keeping what it holds.
+        // typing or replacing only (#1427), or takes from, scrolling to bring the words into view (#1429). The written
+        // value replaces the field's whole text, keeping what it holds, and is written from its value.
         Operation::Fill => {
-            "Set an editable field's whole text to what the task needs: type it, replace it, or keep the text it holds and add to it."
+            "Set an editable field's whole text to what the task needs: type it, replace it, or keep the text it holds and add to it or take from it. The new text is written from the field's value, so the part to change need not be in view."
         }
         Operation::Press => "Press the key or key chord the task gives in an editable field.",
         Operation::Blur => {
@@ -1139,9 +1140,10 @@ pub fn build_request(
                             known.join(", ")
                         )
                     }
-                    (Operation::Scroll, _) if indexed.contains_key(op) => {
-                        "Scroll the chosen vertical area down, or horizontal area right, to reveal more content.".into()
-                    }
+                    // Asked to remove words from the end of a long description, Jev scrolled the editor and the page
+                    // six times to bring them into view and never filled it, though the field's value held them; told
+                    // so here and in fill's criterion, it filled 6 times in 6 (#1429).
+                    (Operation::Scroll, _) if indexed.contains_key(op) => SCROLL_AREA.into(),
                     (Operation::ScrollUp, _) if indexed.contains_key(op) => {
                         "Scroll the chosen vertical area up, or horizontal area left, to reveal content in that direction."
                             .into()
@@ -1645,6 +1647,10 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext)
     }
     Value::Object(state)
 }
+
+/// The scroll operation's criterion when the page offers areas to scroll: a field's text is its value, never a reason to
+/// scroll it (#1429).
+const SCROLL_AREA: &str = "Scroll the chosen vertical area down, or horizontal area right, to reveal more content. Each element's value already gives its whole text, so a field need not be scrolled to edit or read it.";
 
 /// Said to the operation question with every step screenshot, which `step_images` marks so: without the marks Jev took a
 /// markdown editor's live preview for an overlay over it and pressed Escape instead of filling the editor (#1427). Said
@@ -2907,6 +2913,21 @@ mod tests {
         let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
         assert!(!operation.instructions.contains(FIELDS_OUTLINED));
+    }
+
+    /// Asked to take words from the end of a long field, Jev scrolled to bring them into view instead of filling it
+    /// (#1429): fill and scroll both say the field's value is its whole text.
+    #[test]
+    fn test_fill_and_scroll_say_a_fields_value_is_its_whole_text() {
+        let area = Control::new("area", "region", "Vertical scroll area: textarea", [Operation::Scroll]);
+        let field = Control::new("field", "textbox", "Description", [Operation::Fill]);
+        let page = observation(vec![area.clone(), field.clone()]);
+        let request =
+            build_request(&page, &[area, field], &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert!(operation.criteria["fill"].as_str().unwrap().ends_with("so the part to change need not be in view."));
+        assert_eq!(operation.criteria["scroll"], json!(SCROLL_AREA));
+        assert!(SCROLL_AREA.ends_with("so a field need not be scrolled to edit or read it."));
     }
 
     #[test]

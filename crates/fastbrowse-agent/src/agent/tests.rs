@@ -1869,11 +1869,12 @@ async fn test_a_requested_press_is_asked_about_its_chord() {
 }
 
 /// Asked whether the task asks to fill the element labelled "Description", Jev put the requested replacement at 0.11
-/// (#1004): a fill that the task rules other changes out around is asked about with the text it writes, a secret by
-/// its name.
+/// (#1004): a fill that the task rules other changes out around is asked about with the text the field holds and the
+/// text it writes, a secret by its name.
 #[tokio::test]
 async fn test_a_requested_fill_is_asked_about_its_text() {
-    let field = Control::new("d", "textbox", "Description", [Operation::Fill]);
+    let mut field = Control::new("d", "textbox", "Description", [Operation::Fill]);
+    field.value = Some("# Forever\nOld key: hunter2".into());
     let page = observation(std::slice::from_ref(&field));
     let jev = Arc::new(RequestedRecorder::default());
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
@@ -1885,6 +1886,8 @@ async fn test_a_requested_fill_is_asked_about_its_text() {
     assert!(gated.is_ok(), "{gated:?}");
     let asked = jev.0.lock().unwrap();
     assert_eq!(asked.len(), 1);
+    // What the field holds now too: from the new text alone Jev could not tell what a fill removes (#1432).
+    assert!(asked[0].contains("The field holds '# Forever\\nOld key: [secret:api_key]' now."), "{}", asked[0]);
     assert!(asked[0].contains("The field would then hold '# Forever\\nKey: [secret:api_key]'."), "{}", asked[0]);
     assert!(!asked[0].contains("hunter2"), "{}", asked[0]);
 }

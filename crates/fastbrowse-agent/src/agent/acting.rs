@@ -699,6 +699,12 @@ impl Agent {
         if edits == Edits::RequestedOnly {
             let mut action = control_action(decision.operation, control, None, &observation.controls);
             if let Some(typed) = typed {
+                // Shown only the text a fill would leave, Jev put removing the line a task named from a long
+                // description at 0.10 to 0.13, unable to tell what the fill took out; told what the field holds now
+                // too, 0.74 to 0.82, while a fill that wiped the field stayed refused (#1432).
+                if let Some(current) = control.value.as_deref().filter(|current| !current.is_empty()) {
+                    action.push_str(&format!("The field holds {} now.\n", text::repr(&self.redact(current))));
+                }
                 // A secret is named, never shown: the redactor puts its name where its value would be.
                 action.push_str(&format!("The field would then hold {}.\n", text::repr(&self.redact(typed))));
             }
