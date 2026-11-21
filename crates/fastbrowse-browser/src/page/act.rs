@@ -1399,7 +1399,11 @@ impl CdpPage {
                 Point::Gone | Point::Unsettled => {
                     return Ok((StepOutcome::Stale, Some("target disconnected".into()), None));
                 }
-                // A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused.
+                // A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused. A
+                // control that takes no pointer hits with nothing drawn over it (a sortable's picked-up card, set to
+                // pointer-events: none for the drag) is reached by keys all the same, and the arrows that move it
+                // must go to it.
+                Point::Covered if self.cover(&session_id, local_id).await? == Cover::None => {}
                 Point::Covered => {
                     if let Route::Refused(refusal) = self.route_around(target, false).await? {
                         return Ok(refusal);

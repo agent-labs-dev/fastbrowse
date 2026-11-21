@@ -2155,6 +2155,26 @@ async fn test_a_card_that_declares_itself_sortable_is_moved_by_keys() {
     h.close().await;
 }
 
+/// The same reorder on the real dnd-kit (KeyboardSensor, sortable list): the card picked up keeps focus and the arrows
+/// must reach it, though dnd-kit draws a live region and the sortable's own layers around it.
+#[tokio::test]
+async fn test_a_real_dnd_kit_card_is_lifted_moved_and_dropped_by_keys() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dndkit-sortable.html").await;
+    let order = || eval_active(&h.page, "document.getElementById('order').textContent");
+    assert_eq!(order().await, json!("Test image,Second image,Third image"));
+    for key in ["Space", "ArrowDown", "Space"] {
+        let now = h.observe().await;
+        let card = find(&now, "Test image");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        let result = h.page.act(&press, &now).await.expect("press");
+        assert_eq!(result.outcome, StepOutcome::Executed, "{key}: {result:?}");
+    }
+    assert_eq!(order().await, json!("Second image,Test image,Third image"));
+    h.close().await;
+}
+
 #[tokio::test]
 async fn test_role_keys_capture_orientation_and_count_custom_slider_progress() {
     let Some(h) = harness().await else { return };
