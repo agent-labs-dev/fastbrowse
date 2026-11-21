@@ -76,7 +76,7 @@ pub async fn description(page: &CdpPage, session: &BrowserSession, base: &str) {
 }
 
 /// Reply to one comment, in its own thread: Reply opens an editor inside that comment, prefilled with the author's
-/// name, beside the page's own comment box.
+/// name, beside the page's own comment box. Its author also replied in another thread, and another commenter wrote twice.
 pub async fn reply(page: &CdpPage, session: &BrowserSession, base: &str) {
     page.navigate(&format!("{base}/addon-comments.html"), None).await.expect("navigate");
     let observation = page.observe().await.expect("observe");
@@ -90,10 +90,15 @@ pub async fn reply(page: &CdpPage, session: &BrowserSession, base: &str) {
     let opened = page.observe().await.expect("observe");
     // The reply editor and its Post are the controls Reply added; the page's own box was there before.
     let added = |c: &Control| !before.contains(c.id.as_str());
+    // Each editor is named by the comment it belongs to: Nivlemoth_Nathrezim's name shows twice on the page, which
+    // once left the box and its Post named only by the comment's age, as every comment of that age is (#1411).
+    let theirs = |c: &Control| c.context.as_deref().is_some_and(|context| context.starts_with("Nivlemoth_Nathrezim"));
     let editor = find(&opened, |c| added(c) && c.role == "textbox", "the opened reply editor");
+    assert!(theirs(editor), "the reply editor names its comment: {:?}", editor.context);
     act(page, Operation::Fill, editor, Some(REPLY), &opened).await;
     let filled = page.observe().await.expect("observe");
     let post = find(&filled, |c| added(c) && c.label == "Post", "the reply editor's Post");
+    assert!(theirs(post), "the reply editor's Post names its comment: {:?}", post.context);
     act(page, Operation::Click, post, None, &filled).await;
     let placed = format!(
         "[...document.querySelectorAll('#thread > li')].map(li => [li.querySelector('.text').textContent, \
