@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 use super::finishing::UNREPORTED;
 use super::helpers::{decision_label, describe, doing, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
-use super::seeing::{cards, covers_viewport};
+use super::seeing::{cards, covers_viewport, outlined};
 use super::state::{
     FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
 };
@@ -1745,10 +1745,18 @@ impl Agent {
         // took the step's request over Jev's body limit (#1301). Only the box decides this: a small control's card is
         // widened to Jev's smallest image and can be the size of a small viewport, yet its outline still marks it. A
         // question sent no screenshot, as the gate is, still gets the card.
-        if pixels {
-            looks.retain(|id, _| !edges.get(id).is_some_and(covers_viewport));
+        if !pixels {
+            return Ok((None, looks));
         }
-        Ok((pixels.then_some(png), looks))
+        looks.retain(|id, _| !edges.get(id).is_some_and(covers_viewport));
+        let fields: Vec<String> = controls
+            .iter()
+            .filter(|control| control.operations.contains(&Operation::Fill))
+            .map(|control| control.id.clone())
+            .collect();
+        let places = if fields.is_empty() { IndexMap::new() } else { self.page.edges(&fields).await? };
+        let png = if places.is_empty() { png } else { outlined(&png, &places).unwrap_or(png) };
+        Ok((Some(png), looks))
     }
 
     /// The viewport for Jev, on a route that takes images and only within the sizes it accepts.

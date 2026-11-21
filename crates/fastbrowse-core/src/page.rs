@@ -758,10 +758,10 @@ pub trait Page: Send + Sync {
         Box::pin(async { Ok(IndexMap::new()) })
     }
 
-    /// Where control `id` of the last observation sits, as `pictures` measures a card. None out of view, gone, or in
-    /// another frame.
-    fn edges<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
-        Box::pin(async { Ok(None) })
+    /// Where each control among `ids` of the last observation sits, as `pictures` measures a card. One out of view,
+    /// gone, or in another frame has none.
+    fn edges<'a>(&'a self, _ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        Box::pin(async { Ok(IndexMap::new()) })
     }
 
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.

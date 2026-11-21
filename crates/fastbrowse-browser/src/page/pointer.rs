@@ -61,9 +61,9 @@ impl CdpPage {
         self.regions(ids, "pictured").await
     }
 
-    /// Where control `id` itself sits, as `pictures` measures a card.
-    pub async fn edges(&self, id: &str) -> Result<Option<Edges>, BrowserError> {
-        Ok(self.regions(&[id.to_string()], "nodes").await?.swap_remove(id))
+    /// Where each control among `ids` itself sits, as `pictures` measures a card.
+    pub async fn edges(&self, ids: &[String]) -> Result<IndexMap<String, Edges>, BrowserError> {
+        self.regions(ids, "nodes").await
     }
 
     /// The element `registry` holds for each of `ids` in the map named `map`, measured against the visual viewport.

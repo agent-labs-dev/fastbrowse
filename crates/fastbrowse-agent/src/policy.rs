@@ -92,7 +92,11 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Click => "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
         Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
-        Operation::Fill => "Put the value the task needs into an editable field, typing or replacing its text.",
+        // Jev held off filling a field whose text the task adds to, scrolling to its end first, since fill read as
+        // typing or replacing only (#1427). The written value replaces the field's whole text, keeping what it holds.
+        Operation::Fill => {
+            "Set an editable field's whole text to what the task needs: type it, replace it, or keep the text it holds and add to it."
+        }
         Operation::Press => "Press the key or key chord the task gives in an editable field.",
         Operation::Blur => {
             "Move keyboard focus out of the focused editable field without activating or submitting anything, so the page runs what it does when a field is left."
@@ -1116,7 +1120,10 @@ pub fn build_request(
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            HistoryEntry::told(&NEXT_ACTION, &context.history),
+            {
+                let rules = HistoryEntry::told(&NEXT_ACTION, &context.history);
+                if context.screenshot.is_some() { format!("{rules}\n{FIELDS_OUTLINED}") } else { rules }
+            },
             offered.iter().map(|op| {
                 // The operation is chosen apart from its target, and a choice of one address is answered without Jev
                 // at all, so the operation names where navigate goes: told only "another address", Jev searched the
@@ -1638,6 +1645,12 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext)
     }
     Value::Object(state)
 }
+
+/// Said to the operation question with every step screenshot, which `step_images` marks so: without the marks Jev took a
+/// markdown editor's live preview for an overlay over it and pressed Escape instead of filling the editor (#1427). Said
+/// in the state beside the screenshot instead, Jev filled once in six replays; in the instructions, six times in six.
+const FIELDS_OUTLINED: &str =
+    "In `viewport_screenshot`, each element whose operations include fill is outlined in magenta.";
 
 /// Jev reads an image wherever its reference appears, even inside page text, so the reference is one no page could
 /// contain by chance: the image's own digest.
@@ -2887,6 +2900,13 @@ mod tests {
         let reference = format!("screenshot-{}", sha256_hex(b"png"));
         assert_eq!(request.state["viewport_screenshot"], json!(reference));
         assert_eq!(request.images, Images::from([(reference, b"png".to_vec())]));
+        // The screenshot outlines each fillable field, and Jev is told so only beside it (#1427).
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert!(operation.instructions.ends_with(FIELDS_OUTLINED));
+        context.screenshot = None;
+        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert!(!operation.instructions.contains(FIELDS_OUTLINED));
     }
 
     #[test]

@@ -61,7 +61,11 @@ pub async fn description(page: &CdpPage, session: &BrowserSession, base: &str) {
     // a fill read as no Save at all (#1415).
     let unsaved = find(&observation, |c| c.label == "Save", "the disabled Save");
     assert!(unsaved.disabled == Some(true) && unsaved.operations.is_empty(), "{unsaved:?}");
-    let editor = find(&observation, |c| c.label == "Description" && c.role == "textbox", "description editor");
+    let editor = find(
+        &observation,
+        |c| c.role == "textbox" && c.value.as_deref().is_some_and(|v| v.starts_with("# Shortest Path Forever")),
+        "description editor",
+    );
     act(page, Operation::Fill, editor, Some(DESCRIPTION), &observation).await;
     assert_eq!(eval(page, session, "state.value").await, json!(DESCRIPTION), "the edit reached the page's state");
     let filled = page.observe().await.expect("observe");

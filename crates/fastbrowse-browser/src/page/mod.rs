@@ -2001,8 +2001,8 @@ impl Page for CdpPage {
         Box::pin(async move { seam(CdpPage::pictures(self, ids).await) })
     }
 
-    fn edges<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
-        Box::pin(async move { seam(CdpPage::edges(self, id).await) })
+    fn edges<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        Box::pin(async move { seam(CdpPage::edges(self, ids).await) })
     }
 
     fn withhold_frames(&self, withheld: bool) {

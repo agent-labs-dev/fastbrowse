@@ -1643,13 +1643,17 @@ impl Agent {
         // write choice names that case too: on a field that already held the lines, with the items in the task and in
         // what was read, the task choice won 0.88 to 0.09 and its span loop could only end on one of the items, where
         // saying the items set out as lines are written took the write choice 6 times in 6 (#1189).
+        // Both say the value is the field's whole text: told the task states the text "as part of something longer", a
+        // task to add a line to a description, keeping the rest, took the task choice 0.7 to 0.22 and typed "1.15."
+        // over the whole description; said so, the write choice won 0.96 or more in each replay, and a task to replace
+        // the text outright kept the task choice (#1427).
         sources.insert(
             IN_TASK.into(),
-            "The task states the exact text to type, word for word, whole or as part of something longer.".into(),
+            "The task states word for word the whole text this field should hold, alone or as part of something longer, and none of the field's current text is to be kept.".into(),
         );
         sources.insert(
             WRITTEN.into(),
-            "The task asks for text it does not state word for word, such as a search query for what it looks for, or text it asks to be written or composed, including items it names set out as the lines, sentences or list it asks for, so it is written from the task.".into(),
+            "The task asks for text it does not state word for word, such as a search query for what it looks for, text it asks to be written or composed, including items it names set out as the lines, sentences or list it asks for, or the field's current text kept with the changes the task asks for, so it is written from the task.".into(),
         );
         if !read.is_empty() {
             sources

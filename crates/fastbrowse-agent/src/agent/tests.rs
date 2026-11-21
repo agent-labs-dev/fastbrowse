@@ -3338,7 +3338,7 @@ fn test_the_value_questions_say_which_record_a_field_sits_in() {
 /// A task to write a three-line list of three items it names had one item copied into the document: asked whether the
 /// task states the field's value word for word, Jev said it does, since the items are there, though not as the lines
 /// asked for. Told to type a quoted list and then say which item it lists second, it began the copy at that item
-/// (#1187). The value questions say the copy is the exact text to type, a value the task asks to be written is
+/// (#1187). The value questions say the copy is the field's whole text, a value the task asks to be written is
 /// written, and the value is never the answer to the task's question.
 #[test]
 fn test_the_value_questions_say_a_copy_is_the_exact_text_to_type() {
@@ -3356,8 +3356,11 @@ fn test_the_value_questions_say_a_copy_is_the_exact_text_to_type() {
         .collect();
     let source = choices.iter().find(|choice| choice.criteria.contains_key("write")).expect("the source question");
     let said = |key: &str| source.criteria[key].as_str().unwrap_or_default().to_string();
-    assert!(said("task").contains("states the exact text to type, word for word"), "{}", said("task"));
-    assert!(said("write").contains("or text it asks to be written or composed"), "{}", said("write"));
+    assert!(said("task").contains("states word for word the whole text this field should hold"), "{}", said("task"));
+    assert!(said("write").contains("text it asks to be written or composed"), "{}", said("write"));
+    // A task that adds to a field's text, keeping the rest, is written from it, not typed as the part it states (#1427).
+    assert!(said("task").ends_with("and none of the field's current text is to be kept."), "{}", said("task"));
+    assert!(said("write").contains("the field's current text kept with the changes the task asks for"));
     let words: Vec<_> = choices.iter().filter(|choice| choice.instructions.contains("which of its words")).collect();
     assert_eq!(words.len(), 2, "the beginning and the end are asked");
     for question in words {
@@ -3701,9 +3704,9 @@ impl Page for Screenshots {
         Box::pin(async move { Ok(clicked) })
     }
 
-    fn edges<'a>(&'a self, _: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
+    fn edges<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
         let edges = *self.5.lock().unwrap();
-        Box::pin(async move { Ok(edges) })
+        Box::pin(async move { Ok(ids.iter().filter_map(|id| Some((id.clone(), edges?))).collect()) })
     }
 
     fn pictures<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
@@ -10853,4 +10856,31 @@ async fn a_text_task_concluded_with_no_answer_is_not_complete() {
     assert_eq!(result.status, Status::Unverified);
     assert_eq!(result.failure_kind.as_deref(), Some("Done/unanswered"));
     assert_eq!(result.error.as_deref(), Some(super::finishing::UNANSWERED));
+}
+
+/// A markdown editor above a live preview of its text read to Jev as a page under an overlay, and it pressed Escape
+/// instead of filling the editor (#1427): the step screenshot outlines each field it can fill, and only those.
+#[tokio::test]
+async fn test_the_step_screenshot_outlines_each_field_jev_can_fill() {
+    let page = Arc::new(Screenshots(
+        Default::default(),
+        false,
+        Default::default(),
+        false,
+        None,
+        std::sync::Mutex::new(Some(Edges { left: 0.25, right: 0.75, top: 0.25, bottom: 0.75 })),
+        false,
+        false,
+    ));
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None, zoomed: None });
+    let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
+    let editor = Control { operations: [Operation::Fill].into(), ..button("Description") };
+    let seen = Observation { visual_content: true, ..observation(&[editor]) };
+    let (viewport, _) = agent.step_images(&seen, false).await.expect("the viewport");
+    let image = image::load_from_memory(&viewport.expect("a screenshot")).unwrap().to_rgba8();
+    let magenta = image.pixels().filter(|pixel| pixel.0[..3] == [255, 0, 255]).count();
+    assert!(magenta > 0, "the editor is outlined");
+    let seen = Observation { visual_content: true, ..observation(&[button("Save")]) };
+    let (viewport, _) = agent.step_images(&seen, false).await.expect("the viewport");
+    assert_eq!(viewport, Some(png(1280, 900)), "no field, no outline");
 }
