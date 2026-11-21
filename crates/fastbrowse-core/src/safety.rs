@@ -56,6 +56,23 @@ pub fn may_be_irreversible(operation: Operation) -> bool {
 
 /// What tells this control apart from another with the same label: where it sits, what it drops onto, the form it
 /// submits and the address it links to.
+/// What the page itself says a control is and how it works (`aria-roledescription`, `aria-describedby`), as page data.
+///
+/// A dnd-kit card's role is "button", so a Space press on it read as a stray edit (0.08 requested); with the page's
+/// own "draggable" and its instructions in the question, Jev put the same press at 0.65 to 0.75.
+pub fn page_description(control: &Control) -> Option<String> {
+    let role = control.role_description.as_deref().filter(|r| !r.is_empty());
+    let described = control.description.as_deref().filter(|d| !d.is_empty());
+    match (role, described) {
+        (None, None) => None,
+        (Some(role), None) => Some(format!("The page describes it as {}.\n", text::repr(role))),
+        (None, Some(text)) => Some(format!("The page says of it: {}\n", text::repr(text))),
+        (Some(role), Some(text)) => {
+            Some(format!("The page describes it as {}, and says: {}\n", text::repr(role), text::repr(text)))
+        }
+    }
+}
+
 fn describe_control(
     instructions: &mut String,
     operation: Operation,
@@ -66,6 +83,7 @@ fn describe_control(
     if let Some(context) = control.context.as_deref().filter(|c| !c.is_empty()) {
         instructions.push_str(&format!("It sits under {} on the page.\n", text::repr(context)));
     }
+    instructions.extend(page_description(control));
     if let Some(destination) = destination {
         instructions.push_str(&format!("Drop it onto the element labelled {}.\n", text::repr(&destination.label)));
         if let Some(context) = destination.context.as_deref().filter(|c| !c.is_empty()) {
@@ -1148,6 +1166,19 @@ mod tests {
         assert!(question.instructions.contains("It sits under 'Delete account' on the page.\n"));
         assert!(question.instructions.contains("The action submits this form: POST /account/delete\n"));
         assert!(question.instructions.contains("In the form, 'Message' holds 'Please close my account'.\n"));
+    }
+
+    #[test]
+    fn every_action_question_states_what_the_page_says_the_control_is() {
+        let mut card = Control::new("c", "button", "Card", [Operation::Press, Operation::Click]);
+        card.role_description = Some("draggable".into());
+        card.description = Some("To pick up a draggable item, press the space bar.".into());
+        let line =
+            "The page describes it as 'draggable', and says: 'To pick up a draggable item, press the space bar.'\n";
+        assert!(requested_question(&control_action(Operation::Press, &card, None, &[])).instructions.contains(line));
+        assert!(irreversible_question(Operation::Click, &card, None, &[]).instructions.contains(line));
+        assert!(lasting_question(Operation::Click, &card, None, &[]).instructions.contains(line));
+        assert_eq!(page_description(&button("Plain")), None);
     }
 
     #[test]

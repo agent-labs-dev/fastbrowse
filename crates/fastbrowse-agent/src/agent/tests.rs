@@ -1813,6 +1813,28 @@ async fn test_a_requested_press_is_asked_about_its_chord() {
     assert!(asked[0].contains("The exact key chord to press is 'ArrowRight'."), "{}", asked[0]);
 }
 
+/// A card whose role is "button" is a draggable: the page says so, and the press is asked about with that.
+#[tokio::test]
+async fn test_a_requested_press_states_what_the_page_calls_the_control() {
+    let mut card = Control::new("c", "button", "Card", [Operation::Press]);
+    card.role_description = Some("draggable".into());
+    card.description = Some("Press the space bar to pick up the item.".into());
+    let page = observation(std::slice::from_ref(&card));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Reorder the cards. Change nothing else.".into();
+    let decision = code_decision(Operation::Press, Some(card.clone()));
+    let gated = agent.gate_key_edit(&mut state, &page, &decision, &card, "Space").await;
+    assert!(gated.is_ok(), "{gated:?}");
+    let asked = jev.0.lock().unwrap();
+    assert!(
+        asked[0].contains("The page describes it as 'draggable', and says: 'Press the space bar to pick up the item.'"),
+        "{}",
+        asked[0]
+    );
+}
+
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
 /// of checkboxes would otherwise end the run stuck.
 #[test]
