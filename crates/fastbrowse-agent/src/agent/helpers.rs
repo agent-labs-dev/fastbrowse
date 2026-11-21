@@ -186,14 +186,57 @@ pub(crate) fn sent_facts(history: &[HistoryEntry], commits: &[usize]) -> Vec<Str
         .filter_map(|&at| history.get(at))
         .map(|entry| {
             let step = commit_step(entry);
-            if entry.put.is_empty() {
-                format!("The run's {step} was sent.")
-            } else {
-                let shown: Vec<String> = entry.put.iter().map(|piece| text::repr(piece)).collect();
-                format!("The run's {step} was sent, and the page then showed the text {}.", shown.join(", "))
+            match &entry.put {
+                Some((_, put)) if !put.is_empty() => {
+                    let shown: Vec<String> = put.iter().map(|piece| text::repr(piece)).collect();
+                    format!("The run's {step} was sent, and the page then showed the text {}.", shown.join(", "))
+                }
+                _ => format!("The run's {step} was sent."),
             }
         })
         .collect()
+}
+
+/// The fact, when there is one, naming text on this page that an earlier step of the run put there.
+///
+/// A notice stays on the page after the step that raised it: two threads to reply in, the first reply's "Your reply
+/// was posted." still showed beside the second thread's open, unsent reply box, and Jev judged both replies posted and
+/// let the run finish with one. Told which step put the text there, in these words, it judged the second reply still to
+/// do; told it as a list of steps and their text, or with "after the run's step", it did not. The same names the run's
+/// own posts, so a check whether a thread already holds a reply can tell them from the thread's.
+pub(crate) fn earlier_text_fact(history: &[HistoryEntry], observation: &Observation) -> Option<String> {
+    let (_, earlier) = history.split_last()?;
+    let lines: std::collections::HashSet<&str> = [&observation.viewport_text, &observation.offscreen_text]
+        .into_iter()
+        .flat_map(|text| text.lines())
+        .map(text::strip)
+        .collect();
+    let told: Vec<String> = earlier
+        .iter()
+        .filter(|entry| entry.outcome == StepOutcome::Executed)
+        .filter_map(|entry| {
+            let (_, put) = entry.put.as_ref().filter(|(url, _)| *url == observation.url)?;
+            let shown: Vec<String> =
+                put.iter().filter(|piece| lines.contains(piece.as_str())).map(|piece| format!("{piece:?}")).collect();
+            let target = entry.target.as_deref().map(text::repr).unwrap_or_default();
+            let did = match entry.operation {
+                Some(Operation::Click) => format!("clicked {target}"),
+                Some(Operation::Enter) => format!("pressed Enter in {target}"),
+                Some(Operation::Press) => format!("pressed a key in {target}"),
+                Some(Operation::Drag) => format!("dragged {target}"),
+                Some(Operation::Dialog) => "answered the dialog".to_string(),
+                Some(operation) => format!("took the step {operation} {target}"),
+                None => "opened the page".to_string(),
+            };
+            (!shown.is_empty()).then(|| {
+                format!(
+                    "The text {} appeared when the run {did}; it tells of that step, not of any later one.",
+                    shown.join(", ")
+                )
+            })
+        })
+        .collect();
+    (!told.is_empty()).then(|| told.join(" "))
 }
 
 /// The fields still empty here on a task to carry out, leaving out those the task gives no value for: Jev confirmed

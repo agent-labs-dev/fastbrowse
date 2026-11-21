@@ -1233,6 +1233,7 @@ impl Agent {
             );
         }
         facts.extend(helpers::unsent_fact(&state.history, observation));
+        facts.extend(helpers::earlier_text_fact(&state.history, observation));
         if state.to_carry_out {
             facts.extend(helpers::empty_fields_fact(&state.missing, observation));
         }

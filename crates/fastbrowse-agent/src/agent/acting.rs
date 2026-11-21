@@ -24,7 +24,8 @@ use serde_json::{Map, Value as JsonValue, json};
 use super::Agent;
 use super::driving::require;
 use super::helpers::{
-    caller_link, describe, dialog_question, empty_fields_fact, navigation_question, sent_facts, unsent_fact,
+    caller_link, describe, dialog_question, earlier_text_fact, empty_fields_fact, navigation_question, sent_facts,
+    unsent_fact,
 };
 use super::seeing::cards;
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
@@ -1052,6 +1053,7 @@ impl Agent {
             "tabs": observation.tabs.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
             "notes": self.decision_notes(state),
             "recent_actions": state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
+            "page_facts": earlier_text_fact(&state.history, observation).into_iter().collect::<Vec<_>>(),
         });
         self.mask_strings(&mut page);
         page["task"] = self.caller_task(state).into();
@@ -2115,6 +2117,7 @@ impl Agent {
         let untouched = (!state.history.iter().any(HistoryEntry::acted)).then(|| NOTHING_ACTED.to_string());
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
+            .chain(earlier_text_fact(&state.history, observation))
             .chain(state.to_carry_out.then(|| empty_fields_fact(&state.missing, observation)).flatten())
             .chain(sent_facts(&state.history, &state.commits))
             .chain(untouched)
