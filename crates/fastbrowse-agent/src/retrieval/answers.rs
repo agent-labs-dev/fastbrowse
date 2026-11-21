@@ -5033,6 +5033,28 @@ mod tests {
         );
     }
 
+    /// A plain list read composes one claim per item, each citing its own quote. Hosted runs ended `unverified` with
+    /// "A composed claim is unsupported by its cited quotes" on exactly this shape (#1108), but a list whose items
+    /// each carry support raises no problem and keeps every item.
+    #[tokio::test]
+    async fn a_list_of_items_from_separate_quotes_raises_no_problem() {
+        let notes = Notes::new([
+            fact(0, "A/B Testing".into()),
+            fact(1, "Accessibility Issues".into()),
+            fact(2, "Add/Remove Elements".into()),
+        ]);
+        let jev = Support::new(true);
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![
+            Claim::new("1. A/B Testing", vec!["e0".into()]),
+            Claim::new("2. Accessibility Issues", vec!["e1".into()]),
+            Claim::new("3. Add/Remove Elements", vec!["e2".into()]),
+        ]);
+        let answer = compose(&jev, &llm, "List the first three links", &notes, None, &[]).await.unwrap();
+        assert_eq!(answer.claims.len(), 3);
+        assert_eq!(answer.problem, None);
+    }
+
     /// A draft whose columns are `[]` is no table, so a tally's claim still gets its tally's checks.
     #[tokio::test]
     async fn an_empty_column_list_is_no_table() {
