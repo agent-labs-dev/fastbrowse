@@ -261,6 +261,10 @@ everyday Chrome use `--extension` instead, which needs no approval; see [Your ow
 `--extension` reaches Chrome through the fastbrowse extension, which Chrome connects to fastbrowse when the
 browser starts. When the run ends `unavailable` with `no browser has the fastbrowse extension connected`:
 
+- When the error continues `because the native host launcher ... is missing or not executable` or `runs <path>,
+  which is missing or not executable`, the run read back the launcher that `fastbrowse extension install` wrote
+  and Chrome cannot start it. Run `fastbrowse extension install` again, then restart Chrome or turn the
+  extension off and on.
 - Check that `fastbrowse extension install` ran for this user. Its launcher runs the fastbrowse it was run
   from, else another one that was on your `PATH` at install time, else `fastbrowse` on the browser's `PATH`.
   Run it again when none of those is left, and once after upgrading from a release whose launcher named only

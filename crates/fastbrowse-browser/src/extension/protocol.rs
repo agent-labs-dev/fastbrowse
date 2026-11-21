@@ -64,6 +64,107 @@ pub struct HostRecord {
     pub socket: PathBuf,
 }
 
+/// The user's home directory.
+pub fn home_dir() -> PathBuf {
+    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default()
+}
+
+/// Where `fastbrowse extension install` keeps the launcher, the host manifest and the unpacked extension.
+pub fn install_dir() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home_dir().join("Library/Application Support/fastbrowse")
+    } else if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA")
+            .map_or_else(|| home_dir().join("AppData/Local"), PathBuf::from)
+            .join("fastbrowse")
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .map_or_else(|| home_dir().join(".local/share"), PathBuf::from)
+            .join("fastbrowse")
+    }
+}
+
+/// The words a launcher quotes with single quotes, in order: the fastbrowse programs it tries. `install` writes them as
+/// `exec 'program' native-host` or `for fastbrowse in 'a' 'b'; do`, escaping a quote in a path as `'\''`.
+fn launcher_programs(text: &str) -> Vec<String> {
+    let mut programs = vec![];
+    for line in text.lines().filter(|l| l.starts_with("exec '") || l.starts_with("for fastbrowse in '")) {
+        let mut rest = line.find('\'').map_or("", |i| &line[i..]);
+        while let Some(after) = rest.strip_prefix('\'') {
+            let mut word = String::new();
+            let mut tail = after;
+            while let Some(i) = tail.find('\'') {
+                word.push_str(&tail[..i]);
+                if tail[i..].starts_with("'\\''") {
+                    word.push('\'');
+                    tail = &tail[i + 4..];
+                } else {
+                    tail = &tail[i + 1..];
+                    break;
+                }
+            }
+            programs.push(word);
+            rest = tail.trim_start();
+            if !rest.starts_with('\'') {
+                break;
+            }
+        }
+    }
+    programs
+}
+
+#[cfg(unix)]
+fn runnable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn runnable(path: &Path) -> bool {
+    path.is_file()
+}
+
+/// Why Chrome could not start the native host, read back from the files `extension install` wrote in `install`: the
+/// manifest, the launcher it names, and the fastbrowse programs that launcher tries. `None` when nothing is wrong
+/// with them, or when `install` was never run, which the caller reports as not installed.
+pub fn host_install_problem(install: &Path) -> Option<String> {
+    let manifest = std::fs::read(install.join(format!("{HOST_NAME}.json"))).ok()?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest).ok()?;
+    let launcher = PathBuf::from(manifest.get("path")?.as_str()?);
+    let Ok(text) = std::fs::read_to_string(&launcher) else {
+        return Some(format!("the native host launcher {} is missing", launcher.display()));
+    };
+    if !runnable(&launcher) {
+        return Some(format!("the native host launcher {} is not executable", launcher.display()));
+    }
+    let programs = launcher_programs(&text);
+    if programs.is_empty() || programs.iter().any(|p| runnable(Path::new(p))) {
+        return None;
+    }
+    Some(format!(
+        "the native host launcher {} runs {}, which is missing or not executable",
+        launcher.display(),
+        programs.join(", ")
+    ))
+}
+
+/// The error for a run that finds no connected browser. A host that Chrome cannot start is the cause worth naming:
+/// the generic text sends the user to install an extension that is already there.
+fn no_browser_error(dir: &Path, install: &Path) -> BrowserError {
+    if let Some(problem) = host_install_problem(install) {
+        return BrowserError::Unavailable(format!(
+            "no browser has the fastbrowse extension connected because {problem}. Run `fastbrowse extension install` \
+             again, then restart Chrome or turn the extension off and on"
+        ));
+    }
+    // Naming the directory shows a run and a host that disagree on it, which a reinstall does not fix.
+    BrowserError::Unavailable(format!(
+        "no browser has the fastbrowse extension connected (looked in {}). Run `fastbrowse extension install`, \
+         add the extension to Chrome, and keep that Chrome open",
+        dir.display()
+    ))
+}
+
 /// Where hosts put their sockets and records: a private per-user directory.
 pub fn host_dir() -> PathBuf {
     host_dir_from(|name| std::env::var_os(name), Path::new("/run/user"))
@@ -190,12 +291,7 @@ pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecor
         hosts.iter().map(|(_, r)| format!("{} ({} {})", r.label, r.browser, r.version)).collect::<Vec<_>>().join(", ")
     };
     if hosts.is_empty() {
-        // Naming the directory shows a run and a host that disagree on it, which a reinstall does not fix.
-        return Err(BrowserError::Unavailable(format!(
-            "no browser has the fastbrowse extension connected (looked in {}). Run `fastbrowse extension install`, \
-             add the extension to Chrome, and keep that Chrome open",
-            dir.display()
-        )));
+        return Err(no_browser_error(dir, &install_dir()));
     }
     match wanted {
         Some(wanted) => {
@@ -333,6 +429,43 @@ mod tests {
             socket: dir.join(format!("id{label}.sock")),
         };
         std::fs::write(dir.join(format!("id{label}.json")), serde_json::to_vec(&record).unwrap()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_launcher_whose_program_is_gone_is_named_instead_of_the_generic_install_text() {
+        use std::os::unix::fs::PermissionsExt;
+        let install = std::env::temp_dir().join(format!("fbx-launcher-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        let hosts = install.join("hosts");
+        let launcher = install.join("native-host");
+        let gone = install.join("it's/venv/bin/fastbrowse");
+        let quoted = gone.display().to_string().replace('\'', "'\\''");
+        std::fs::write(&launcher, format!("#!/bin/sh\nexec '{quoted}' native-host \"$@\"\n")).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Before `install` ran there is nothing to blame.
+        assert_eq!(host_install_problem(&install), None);
+        std::fs::write(install.join(format!("{HOST_NAME}.json")), serde_json::json!({"path": launcher}).to_string())
+            .unwrap();
+        let message = no_browser_error(&hosts, &install).to_string();
+        assert!(message.contains(&gone.display().to_string()) && message.contains("missing"), "{message}");
+        assert!(message.contains("fastbrowse extension install"), "{message}");
+        assert!(!message.contains("add the extension to Chrome"), "{message}");
+
+        // The fallback launcher is fine while any program it tries runs.
+        let good = install.join("fastbrowse");
+        std::fs::write(&good, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&good, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let both = format!("#!/bin/sh\nfor fastbrowse in '{quoted}' '{}'; do\n  :\ndone\n", good.display());
+        std::fs::write(&launcher, both).unwrap();
+        assert_eq!(host_install_problem(&install), None);
+
+        // A launcher Chrome cannot execute, and one that was deleted.
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(host_install_problem(&install).unwrap().contains("not executable"));
+        std::fs::remove_file(&launcher).unwrap();
+        assert!(host_install_problem(&install).unwrap().contains("is missing"));
+        let _ = std::fs::remove_dir_all(&install);
     }
 
     #[test]

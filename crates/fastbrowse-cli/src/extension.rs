@@ -42,18 +42,12 @@ const BROWSERS: [(&str, &str); 4] = [
 ];
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default()
+    fastbrowse_browser::extension::protocol::home_dir()
 }
 
 /// Where fastbrowse keeps the launcher, the host manifest and the unpacked extension.
 fn data_dir() -> PathBuf {
-    if cfg!(target_os = "macos") {
-        home().join("Library/Application Support/fastbrowse")
-    } else if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA").map_or_else(|| home().join("AppData/Local"), PathBuf::from).join("fastbrowse")
-    } else {
-        std::env::var_os("XDG_DATA_HOME").map_or_else(|| home().join(".local/share"), PathBuf::from).join("fastbrowse")
-    }
+    fastbrowse_browser::extension::protocol::install_dir()
 }
 
 #[cfg(not(windows))]
