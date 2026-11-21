@@ -1476,7 +1476,11 @@
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    return firstLine(linesOf(scope, element, label, own, furniture).join('\n'));
+    // A line kept though other controls share it, as a commenter's name link is under each of their comments, does
+    // not name the card alone: an "Edit" link in one card of several would name that card "Edit" and drop the
+    // product it edits. The card's next line goes beside it.
+    const [first = '', next] = linesOf(scope, element, label, own, furniture);
+    return repeated.has(first) && next ? `${first} / ${next}` : first;
   };
   // The lines of `scope` that can name `element`, in reading order. `furniture` holds the repeated controls' labels
   // that read the same in every repeat, so name none of them.
@@ -1694,9 +1698,8 @@
     }
     // A repeated control's label names none of the twins only where every twin's card shows it, as a datepicker's
     // Prev does. A commenter with two comments on a page has their name link twice, and dropping it as one of the
-    // page's repeated labels named their Reply button, reply box and Post by the comment's age ("2 days ago"): the
-    // task named the commenter, so the reply box read as unasked for, its fill was refused, and the run turned to
-    // the page's top-level box (#1411).
+    // page's repeated labels named their Reply button, reply box and Post by the comment's age alone ("2 days ago"),
+    // which a task that names the commenter cannot be matched against (#1411).
     const scopes = twins.map(twin => scopeOf(twin, holding));
     const shown = scopes.map(scope => (scope ? shownLines(scope) : new Set()));
     const furniture = new Set([...shown[0]].filter(line => repeated.has(line) && shown.every(lines => lines.has(line))));
