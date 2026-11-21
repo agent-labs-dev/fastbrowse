@@ -285,9 +285,11 @@ impl Agent {
             if committed
                 && !state.page_failed
                 && observation.dialog.is_none()
-                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
+                && let Some(entry) = state.history.last().filter(|entry| entry.outcome == StepOutcome::Executed)
             {
-                state.commits += 1;
+                let operation = entry.operation.map_or_else(String::new, |operation| operation.to_string());
+                let target = entry.target.as_deref().map(text::repr).unwrap_or_default();
+                state.commits.push([operation, target].join(" ").trim().to_string());
             }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
@@ -1811,11 +1813,51 @@ impl Agent {
         page_changed: Option<bool>,
         decided_by: Decider,
     ) -> Step {
+        let step = (operation, reason, target, confidence, page_changed, decided_by);
+        self.record_undone(state, observation, StepOutcome::Failed, step).await
+    }
+
+    /// Record a step the authorization gate did not take. Recorded as failed with no failure named, a Post held for
+    /// confirmation read as a failure the caller could not get past, and it asked a person to post by hand (#1413).
+    pub(super) async fn record_refusal(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        reason: &str,
+        label: &str,
+    ) -> Step {
+        let decided_by = if decision.replayed { Decider::Recipe } else { Decider::Jev };
+        let step = (
+            decision.operation,
+            reason,
+            Some(self.redact(label)),
+            Some(decision.confidence()),
+            Some(false),
+            decided_by,
+        );
+        self.record_undone(state, observation, StepOutcome::Refused, step).await
+    }
+
+    async fn record_undone(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        outcome: StepOutcome,
+        (operation, reason, target, confidence, page_changed, decided_by): (
+            Operation,
+            &str,
+            Option<String>,
+            Option<f64>,
+            Option<bool>,
+            Decider,
+        ),
+    ) -> Step {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation,
             decided_by,
-            outcome: StepOutcome::Failed,
+            outcome,
             failure: None,
             url: observation.url.clone(),
             target,

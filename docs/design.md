@@ -36,7 +36,9 @@ for it; otherwise the run stops at `needs_confirmation`. The irreversibility and
 A submission of a form that holds more than one password field changes an account's credentials whatever
 the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at
 `needs_confirmation`, and an authorized one proceeds only when Jev judges the task asked for it. A refusal
-is recorded as a failed step with a reason. The classifier can be wrong, so this gate is not a guarantee
+is recorded as a `refused` step with a reason. Once the run has carried out an irreversible step, a held one
+does not stop it when Jev judges from the run's steps and the page that the task is already done: that step is
+refused and the run picks again, so a run whose post went through does not end `needs_confirmation`. The classifier can be wrong, so this gate is not a guarantee
 that every externally visible change is detected.
 
 These questions are asked with the task and the page's origin only, never the page's content, so a page

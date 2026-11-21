@@ -578,14 +578,24 @@ const UNOBTAINABLE_INSTRUCTIONS: &str = "# Unavailable item\nA browser agent's t
 pub(super) const CHANGED: &str =
     "This run ended without finishing after changing fields on the page, which may still hold what it entered:";
 
+/// Said before the commits a run that ended without finishing carried out. Its two posts were live while its answer
+/// listed both reply boxes as if unsent, and a caller that trusted it would have posted a third copy (#1317).
+pub(super) const SENT: &str =
+    "This run ended without finishing after carrying out these steps, which the site keeps and which are not undone:";
+
+/// Said instead of [`CHANGED`] once a run has sent something: a commit can have sent what was typed, or not.
+pub(super) const CHANGED_SINCE: &str =
+    "It also changed fields on the page; any those steps did not send may still hold what it entered:";
+
 /// What a clicked option, box or switch is said to have left when the page changed without any field reporting a
 /// new value, checked or selected state, as a select that shows its choice only in its label does.
 pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports what it now holds";
 
-/// What a run's executed steps left in each field they changed, the latest change to each, as [`CHANGED`] says it:
-/// text typed or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field
-/// it changed, as the page read it after the click. None when no step changed a field.
-pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
+/// What a run that ended without finishing left behind: the commits it carried out, as [`SENT`] says them, then what
+/// its executed steps left in each field they changed, the latest change to each: text typed or an option chosen,
+/// quoted as recorded (a secret by its marker), and what a click left in each field it changed, as the page read it
+/// after the click. None when it sent nothing and changed no field.
+pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry], commits: &[String]) -> Option<String> {
     let mut changed: IndexMap<&str, String> = IndexMap::new();
     let mut put = |field, left| {
         changed.shift_remove(field);
@@ -597,10 +607,17 @@ pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<
             _ => entry.set.iter().for_each(|(field, left)| put(field, left.clone())),
         }
     }
-    (!changed.is_empty()).then(|| {
+    let fields = (!changed.is_empty()).then(|| {
         let lines: Vec<String> = changed.iter().map(|(field, left)| format!("- {field}: {left}")).collect();
-        format!("{CHANGED}\n{}", lines.join("\n"))
-    })
+        let said = if commits.is_empty() { CHANGED } else { CHANGED_SINCE };
+        format!("{said}\n{}", lines.join("\n"))
+    });
+    let sent = (!commits.is_empty()).then(|| {
+        let lines: Vec<String> = commits.iter().map(|step| format!("- {step}")).collect();
+        format!("{SENT}\n{}", lines.join("\n"))
+    });
+    let parts: Vec<String> = sent.into_iter().chain(fields).collect();
+    (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
 /// What the answer of a run that stopped with a step of its task undone says first: what it read can show what was

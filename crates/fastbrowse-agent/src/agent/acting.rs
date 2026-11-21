@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, Images, NoulQuestion, Question};
 use fastbrowse_core::keys::role_keys;
-use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
@@ -310,6 +310,15 @@ fn gate_questions(
     }
     (irreversible, action, lasting)
 }
+
+/// Why a held step is not taken once the run's steps carry out its task: no step is left that needs it.
+pub(super) const DONE_WITHOUT: &str =
+    "needs confirmation, and is not taken: the steps this run carried out already do what the task asks.";
+/// What a step held for confirmation in an unauthorized run says: which step, and how a caller lets the run take it.
+/// Told only that a Post "needs confirmation", a caller could not tell how to go on and asked a person to post (#1413).
+pub(super) const NOT_AUTHORIZED: &str = "needs confirmation: this run is not authorized to take actions that cannot be undone, so it stopped before taking it. Run the task again with authorization to let it.";
+/// What a step held for confirmation in an authorized run says: authorization covers only what the task asks for.
+pub(super) const NOT_ASKED: &str = "needs confirmation: it cannot be undone and the task, as judged, does not ask for it, so the run stopped before taking it.";
 
 /// The finish check's answer about the steps the task asks to be carried out.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -968,7 +977,7 @@ impl Agent {
             }
             // Asked unanswered, the condition is checked as if the task set one: the check costs a call, a missed
             // condition an irreversible commit.
-            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS) || state.commits > 0;
+            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS) || !state.commits.is_empty();
             if wanted
                 && (!reversible || keeps)
                 && conditional
@@ -994,19 +1003,18 @@ impl Agent {
             }
         }
         self.trace_authorization(state, decision, GateReason::ConfirmationRequired);
-        let reason = format!("{} {} needs confirmation", decision.operation, text::repr(label));
-        let confidence = Some(decision.confidence());
-        self.record_failure(
-            state,
-            observation,
-            decision.operation,
-            &self.redact(&reason),
-            Some(self.redact(label)),
-            confidence,
-            Some(false),
-            if decision.replayed { Decider::Recipe } else { Decider::Jev },
-        )
-        .await?;
+        let held = format!("{} {}", decision.operation, text::repr(label));
+        // After its posts went through, a run held at one more click the task never asked for stopped as if nothing
+        // had been sent, and a caller trusting that would post again (#1317). Once the run has sent something, Jev
+        // judges from its steps and the page whether the task is carried out; if it is, the held step is refused and
+        // the run picks again, so it can finish.
+        if !state.commits.is_empty() && self.actions_done(state, observation).await? == Carried::Done {
+            let reason = self.redact(&format!("{held} {DONE_WITHOUT}"));
+            self.record_refusal(state, observation, decision, &reason, label).await?;
+            return Err(Unsure::new(reason).into());
+        }
+        let reason = format!("{held} {}", if authorized { NOT_ASKED } else { NOT_AUTHORIZED });
+        self.record_refusal(state, observation, decision, &self.redact(&reason), label).await?;
         Err(Stop::new(Status::NeedsConfirmation, "Confirm/irreversible", reason).into())
     }
 
@@ -1111,17 +1119,7 @@ impl Agent {
     ) -> Step {
         let reason = format!("{} {} {why}", decision.operation, text::repr(label));
         let redacted = self.redact(&reason);
-        self.record_failure(
-            state,
-            observation,
-            decision.operation,
-            &redacted,
-            Some(self.redact(label)),
-            Some(decision.confidence()),
-            Some(false),
-            if decision.replayed { Decider::Recipe } else { Decider::Jev },
-        )
-        .await?;
+        self.record_refusal(state, observation, decision, &redacted, label).await?;
         Err(Unsure::new(redacted).into())
     }
 

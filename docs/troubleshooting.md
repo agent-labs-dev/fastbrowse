@@ -69,8 +69,10 @@ Configuration refusals also exit 1.
 send, because the run was not authorized to take it, or was authorized but Jev judged the task did not ask
 for it. That action was not taken.
 
-**Common causes.** The task leads to an irreversible action, and the run had no authorization. The error is
-`<operation> '<control>' needs confirmation`, and the refusal appears as a failed step.
+**Common causes.** The task leads to an irreversible action, and the run had no authorization. The error
+names the step and why it waits, such as `click 'Post' needs confirmation: this run is not authorized to take
+actions that cannot be undone`, and the refusal appears as a `refused` step. The answer lists the steps the run
+did carry out, which the site keeps, then the pending step.
 
 **Next step.** Read the step the run stopped on, since the irreversible check can be wrong. If the action is
 what you want, run again with authorization:

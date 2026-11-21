@@ -130,6 +130,9 @@ class StepOutcome(StrEnum):
     STALE = "stale"
     """The page changed between observation and dispatch; nothing was dispatched."""
     FAILED = "failed"
+    REFUSED = "refused"
+    """The run did not take the action: its authorization gate refused it or holds it for confirmation, as the step's
+    note says; nothing was dispatched."""
 
 
 class SourceControl(Frozen):

@@ -458,9 +458,10 @@ pub(crate) struct RunState {
     pub fetched: HashSet<String>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
     pub committing: bool,
-    /// Commits this run has carried out, each counted once the page after it did not fail. A later commit is checked
-    /// against the page and the run's own steps, so one the task asks for once is not sent again (#882).
-    pub commits: usize,
+    /// The commits this run has carried out, each the step that made it as its result names it ("click 'Post'"), kept
+    /// once the page after it did not fail. A later commit is checked against the page and the run's own steps, so one
+    /// the task asks for once is not sent again (#882), and a run that stops says what it sent (#1317).
+    pub commits: Vec<String>,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
@@ -803,7 +804,7 @@ impl RunState {
             changed_page: None,
             unchanged: 0,
             committing: false,
-            commits: 0,
+            commits: Vec::new(),
             redecided: false,
             last_page: None,
             surface_judged: None,
@@ -900,7 +901,7 @@ impl RunState {
             pager_followed: HashSet::new(),
             fetched: HashSet::new(),
             committing: false,
-            commits: 0,
+            commits: Vec::new(),
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),
             followed: None,

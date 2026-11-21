@@ -12,5 +12,7 @@ public enum StepOutcome {
     @JsonProperty("stale")
     STALE,
     @JsonProperty("failed")
-    FAILED
+    FAILED,
+    @JsonProperty("refused")
+    REFUSED
 }

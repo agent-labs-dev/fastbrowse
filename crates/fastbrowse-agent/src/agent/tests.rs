@@ -1372,9 +1372,14 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         assert_eq!(gates[0]["step"], 0);
         assert!(gates[0].get("target").is_none());
         assert!(gates[0].get("task").is_none());
-        // A refusal stops the run for confirmation rather than going round recovery.
+        // A refusal stops the run for confirmation rather than going round recovery, and says which step waits and how
+        // to let the run take it: told only that it "needs confirmation", a caller asked a person to post (#1413).
         if let Err(flow) = gated {
-            assert!(matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation), "{case}");
+            let Flow::Stop(stop) = flow else { panic!("{case}: not stopped") };
+            assert_eq!(stop.status, Status::NeedsConfirmation, "{case}");
+            let said = if authorized { super::acting::NOT_ASKED } else { super::acting::NOT_AUTHORIZED };
+            assert_eq!(stop.error.as_deref(), Some(format!("click 'Finish' {said}").as_str()), "{case}");
+            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused), "{case}");
         }
     }
 }
@@ -1510,7 +1515,7 @@ async fn gate_post_after_commits(
     let mut state = run_state();
     state.task = "Open the newest review. If nobody has answered it yet, write 'Thank you' and post it.".into();
     state.authorization = Authorization { irreversible_actions: true };
-    state.commits = commits;
+    state.commits = vec!["click 'Post'".to_string(); commits];
     let post = button("Post");
     let mut page = observation(std::slice::from_ref(&post));
     page.viewport_text = "Newest review: great product. Signed in with hunter2.".into();
@@ -1549,7 +1554,7 @@ async fn test_a_commit_the_task_makes_conditional_proceeds_only_when_the_page_sh
         if let Err(flow) = gated {
             let Flow::Unsure(unsure) = flow else { panic!("{case}: refused for another step, not stopped") };
             assert!(unsure.reason.contains("depends on a condition the task sets"), "{case}: {}", unsure.reason);
-            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Failed), "{case}");
+            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused), "{case}");
         }
     }
 }
@@ -1574,6 +1579,26 @@ async fn test_a_commit_after_the_runs_first_is_checked_against_the_steps_already
             assert!(unsure.reason.contains("already been done by this run"), "{case}: {}", unsure.reason);
         }
     }
+}
+
+/// An authorized one-reply run posted its reply, then was held at a click the task never asked for and stopped at
+/// `needs_confirmation`, its answer listing the reply boxes as if unsent though both posts were live (#1317). Once the
+/// run has sent something, a held step is refused, not stopped at, when Jev judges the task carried out; before any
+/// commit it still stops, and says which step waits and why.
+#[tokio::test]
+async fn test_a_step_held_after_the_run_has_sent_its_post_is_refused_when_the_task_is_done() {
+    let done = [("requested", 0.1), ("conditional", 0.1), ("carried", 0.9), ("refused", 0.0)];
+    let (gated, jev, state) = gate_post_after_commits(1, &done, &[]).await;
+    let Err(Flow::Unsure(unsure)) = gated else { panic!("the held step stopped the run: {gated:?}") };
+    assert!(unsure.reason.contains(super::acting::DONE_WITHOUT), "{}", unsure.reason);
+    assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused));
+    assert!(jev.asked.lock().unwrap().iter().any(|(_, questions)| questions.contains_key("carried")));
+    let (gated, jev, state) = gate_post_after_commits(0, &done, &[]).await;
+    let Err(Flow::Stop(stop)) = gated else { panic!("a held step before any commit did not stop: {gated:?}") };
+    assert_eq!(stop.status, Status::NeedsConfirmation);
+    assert!(stop.error.as_deref().is_some_and(|error| error.contains(super::acting::NOT_ASKED)), "{stop:?}");
+    assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused));
+    assert!(!jev.asked.lock().unwrap().iter().any(|(_, questions)| questions.contains_key("carried")));
 }
 
 /// A task can give values to use at first and others only once the site does something ("if the site rejects
@@ -9642,13 +9667,23 @@ fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
             ..HistoryEntry::new(Some(Operation::Click), Some("Notify followers"), StepOutcome::Executed, true)
         },
     ];
-    let answer = super::finishing::changed_fields(&history).expect("the changed fields are reported");
+    let answer = super::finishing::changed_fields(&history, &[]).expect("the changed fields are reported");
     assert!(answer.starts_with(super::finishing::CHANGED), "{answer}");
     assert!(answer.contains("Description (Edit 'Commissions Forever'): 'Save: disabled'"), "{answer}");
     assert!(answer.contains("Game version: 'Retail'"), "{answer}");
     assert!(answer.contains("Notify followers: checked"), "{answer}");
     assert!(!answer.contains("first draft") && !answer.contains("never typed"), "{answer}");
     assert!(!answer.contains("Markdown"), "{answer}");
+    // Once the run has sent something, the answer says what it sent, and no longer that every field still holds what
+    // was typed (#1317).
+    let commits = ["click 'Post (Nivlemoth_Nathrezim / 7 hours ago)'".to_string()];
+    let answer = super::finishing::changed_fields(&history, &commits).expect("the commit is reported");
+    assert!(answer.starts_with(super::finishing::SENT), "{answer}");
+    assert!(answer.contains("- click 'Post (Nivlemoth_Nathrezim / 7 hours ago)'"), "{answer}");
+    assert!(
+        answer.contains(super::finishing::CHANGED_SINCE) && !answer.contains(super::finishing::CHANGED),
+        "{answer}"
+    );
 }
 
 /// A custom select: clicking an option sets the field's value and closes the menu, so the option is gone after.

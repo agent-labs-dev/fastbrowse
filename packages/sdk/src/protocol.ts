@@ -57,7 +57,7 @@ export type Operation =
  * Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
  */
 export type Decider = 'jev' | 'code' | 'recipe';
-export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
+export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed' | 'refused';
 /**
  * A closed reason for a failed browser step; ``note`` remains diagnostic text.
  */
