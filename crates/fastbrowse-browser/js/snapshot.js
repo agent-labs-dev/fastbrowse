@@ -1396,10 +1396,9 @@
     }
     // Focus determines whether the widget can receive keys. A button, link, checkbox or switch answers Enter and
     // Space by activating, which a click already does, unless its page says it is something else: an
-    // `aria-roledescription` (a sortable card is a "button" that Space picks up and the arrows move) or the key
-    // focus already on it.
-    const activation = ['button', 'link', 'checkbox', 'switch'].includes(rname) &&
-      !e.hasAttribute('aria-roledescription') && !focused;
+    // `aria-roledescription` (a sortable card is a "button" that Space picks up and the arrows move). Focus alone
+    // does not say so: every button just clicked is focused, and each would add a press question to every step.
+    const activation = ['button', 'link', 'checkbox', 'switch'].includes(rname) && !e.hasAttribute('aria-roledescription');
     if (!base.operations.includes('fill') && e.tagName !== 'SELECT' && nativeProperty(source, 'type') !== 'file' &&
         !activation && !['textbox', 'searchbox'].includes(rname) &&
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
