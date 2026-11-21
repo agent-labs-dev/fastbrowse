@@ -2185,6 +2185,10 @@ async fn test_a_done_with_no_step_taken_on_a_task_that_asks_for_one_checks_the_t
             .any(|q| q.contains("asks for a step, other than finding, reading or reporting something, that has not")),
         "{asked:?}"
     );
+    // Both questions say a page to open or reload is a step: a run judged carried out the save before a reload the
+    // task listed (#1431).
+    let opening = asked.iter().filter(|q| q.contains(super::acting::OPENING_IS_A_STEP)).count();
+    assert_eq!(opening, 2, "{asked:?}");
 }
 
 /// Asked to start a demo and report the text it loads, a run's click on Start was covered, and it read the page's
@@ -2451,7 +2455,11 @@ async fn test_the_done_check_is_told_the_run_attaches_its_screenshot() {
         let asked = jev.5.lock().unwrap();
         let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
         assert_eq!(
-            carried.contains(&format!("been carried out? {}", crate::retrieval::SCREENSHOT_PICTURED)),
+            carried.contains(&format!(
+                "{} {}",
+                super::acting::OPENING_IS_A_STEP,
+                crate::retrieval::SCREENSHOT_PICTURED
+            )),
             told,
             "{intent:?}: {carried}"
         );

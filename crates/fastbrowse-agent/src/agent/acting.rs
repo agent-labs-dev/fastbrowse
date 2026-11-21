@@ -83,6 +83,11 @@ const NO_VALUE_SAID: &str = "The task asks for this field's value, and nothing g
 const LEAVE_SAID: &str = "The task asks nothing of this field, so it is left as it is.";
 
 /// Said to the question of whether the task's steps were carried out, when no step of the run has acted on a page.
+/// What the "other than finding, reading or reporting" steps leave in. A task to save a description, then reload the
+/// page and confirm it, was judged carried out after the save, the reload taken as part of confirming (#1431).
+pub(super) const OPENING_IS_A_STEP: &str =
+    "Going to a page, or reloading one, is a step to carry out even when it is there to read.";
+
 pub(super) const NOTHING_ACTED: &str =
     "This run has taken no step on any page, only looked at and read them, so what they show was there before it.";
 
@@ -2094,7 +2099,9 @@ impl Agent {
         // question held a screenshot of the release page undone on the release page itself, and a run that had read
         // every value ended stuck. It is part of the question because it is code's own fact about the run, not page
         // content.
-        let mut question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?".to_string();
+        let mut question = format!(
+            "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out? {OPENING_IS_A_STEP}"
+        );
         if self.screenshot(state.output_intent) == Screenshot::Attached {
             question.push_str(&format!(" {SCREENSHOT_PICTURED}"));
         }
@@ -2197,7 +2204,9 @@ impl Agent {
                 .ask_choice(
                     state,
                     observation,
-                    "Which sentence or clause of the task asks for a step, other than finding, reading or reporting something, that has not been carried out? Choose the task's own wording.",
+                    &format!(
+                        "Which sentence or clause of the task asks for a step, other than finding, reading or reporting something, that has not been carried out? {OPENING_IS_A_STEP} Choose the task's own wording."
+                    ),
                     criteria,
                 )
                 .await?;
