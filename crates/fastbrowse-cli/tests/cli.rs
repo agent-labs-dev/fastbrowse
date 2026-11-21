@@ -372,6 +372,27 @@ async fn test_attach_uses_the_default_extension() {
     assert!(call.task.extension && call.task.attach);
 }
 
+/// Every entry the binary has learns its arguments before it quotes one. Only the CLI did, and `fastbrowse-mcp` and
+/// `fastbrowse serve` printed a password holding a quote whole in their usage errors, since the structural scan ends
+/// an address at the quote.
+#[cfg(unix)]
+#[test]
+fn test_every_entry_masks_the_arguments_it_quotes() {
+    use std::os::unix::process::CommandExt;
+    let address = "https://ops:pw\"x-entry@h.test/";
+    let mut mcp = isolated_binary();
+    mcp.arg0("fastbrowse-mcp").args(["--port", address]);
+    let mut serve = isolated_binary();
+    serve.args(["serve", "--stdio", address]);
+    for mut command in [mcp, serve] {
+        let output = command.stdin(std::process::Stdio::null()).output().unwrap();
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{err}");
+        assert!(err.contains("https://ops:") && err.contains("@h.test/"), "the address is quoted: {err}");
+        assert!(!err.contains("pw\"x-entry") && !err.contains("x-entry"), "{err}");
+    }
+}
+
 #[test]
 fn test_only_serve_as_the_first_argument_is_the_subcommand() {
     // `serve` is taken as a subcommand in one position only, so every other command line is still a task. The

@@ -8,17 +8,17 @@ sig = "3db6607bc283ccf1"
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "ad938ccbe3ccda57"
+sig = "1e9bf3097d82f871"
 
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-cli/src/mcp/mod.rs"
-sig = "3916444f7393f54e"
+sig = "62cb49c58d4b6f3b"
 
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-core/src/safety.rs"
-sig = "982330067b901a77"
+sig = "f32d450e5f73f512"
 
 [[bindings]]
 doc = "blog/agent-credentials-scoped.md"
@@ -28,7 +28,7 @@ sig = "e9f9130a415ed07d"
 [[bindings]]
 doc = "blog/agent-credentials-scoped.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "ad938ccbe3ccda57"
+sig = "1e9bf3097d82f871"
 
 [[bindings]]
 doc = "blog/agent-skills-browser.md"
@@ -58,7 +58,7 @@ sig = "ddf71ecade53a369"
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "ad938ccbe3ccda57"
+sig = "1e9bf3097d82f871"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
@@ -68,7 +68,7 @@ sig = "570fa50ed0480c0f"
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "ad938ccbe3ccda57"
+sig = "1e9bf3097d82f871"
 
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
@@ -78,7 +78,7 @@ sig = "71a573c0f12f1fb5"
 [[bindings]]
 doc = "blog/mcp-browser-tool.md"
 target = "crates/fastbrowse-cli/src/mcp/mod.rs"
-sig = "3916444f7393f54e"
+sig = "62cb49c58d4b6f3b"
 
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
@@ -88,7 +88,7 @@ sig = "6a1f144bd1e89019"
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "ad938ccbe3ccda57"
+sig = "1e9bf3097d82f871"
 
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
@@ -98,7 +98,7 @@ sig = "1e4c0058e1c4543e"
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "ad938ccbe3ccda57"
+sig = "1e9bf3097d82f871"
 
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"

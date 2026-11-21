@@ -266,8 +266,8 @@ impl Http {
                 }
                 // An id is echoed whole to be matched, and the stream closes on it, so one holding a credential is
                 // refused here, before the server is asked to answer it.
-                if is_request && object.get("id").and_then(Value::as_str).is_some_and(|given| learnt.reveals(given)) {
-                    let message = "Invalid request: the id holds a credential; choose one that holds none";
+                if is_request && object.get("id").is_some_and(super::id_holds_credential) {
+                    let message = "Invalid request: the id is an address with a credential; choose one that is not";
                     return refused(server_error(StatusCode::BAD_REQUEST, -32600, message, Some(id)));
                 }
                 let line = json::write(&message, Style::PYDANTIC).into_bytes();

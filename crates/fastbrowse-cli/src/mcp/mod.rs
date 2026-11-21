@@ -622,11 +622,34 @@ pub struct McpServer {
     slots: Arc<Semaphore>,
 }
 
-/// One client's session: whether it has initialized, and its calls under way.
-#[derive(Default)]
+/// One client's session: whether it has initialized, its calls under way, and every string the client has sent in
+/// it, learnt as each message arrives (`McpServer::receive`) and counted among the process's live redactors so a log
+/// line is masked by it too.
 pub struct Session {
     initialized: Mutex<bool>,
     in_flight: Mutex<HashMap<String, crate::runner::Cancel>>,
+    learnt: Arc<Mutex<Redactor>>,
+}
+
+impl Default for Session {
+    fn default() -> Session {
+        let learnt = Arc::new(Mutex::new(Redactor::default()));
+        fastbrowse_core::safety::live(&learnt);
+        Session { initialized: Mutex::default(), in_flight: Mutex::default(), learnt }
+    }
+}
+
+impl Session {
+    fn learnt(&self) -> std::sync::MutexGuard<'_, Redactor> {
+        self.learnt.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Whether a request id is itself an address with a credential, which cannot be echoed to match a reply. Asked of the
+/// id alone: a short password learnt elsewhere in the session (`1`) is in many an ordinary id (`req-1`), which the
+/// envelope echoes unmasked.
+pub fn id_holds_credential(id: &Value) -> bool {
+    id.as_str().is_some_and(|id| fastbrowse_core::safety::learnt(&json!(id)).holds_credentials())
 }
 
 /// Why a `tools/call` returned `isError`, in the text it is shown with.
@@ -706,18 +729,27 @@ impl McpServer {
             crate::log::error("Received exception from stream: the line is not a JSON-RPC message");
             return outbox(internal());
         };
-        // Learnt before anything is said of the message: every reply and log line it causes is masked by what it
-        // holds. Masked after the fact by structure alone, a password holding a quote was quoted whole (#1381).
-        let learnt = Arc::new(fastbrowse_core::safety::learnt(&Value::Object(message.clone())));
-        if message.get("id").and_then(Value::as_str).is_some_and(|id| learnt.reveals(id)) {
-            // An id is echoed whole to be matched, so one holding a credential cannot be answered by it.
-            let message = "Invalid request: the id holds a credential; choose one that holds none";
+        // Learnt before anything is said of the message, whatever it is (a request, a notification, a reply), and kept
+        // for the session's life: every reply and log line after it is masked by what the client has sent. Masked
+        // after the fact by structure alone, a password holding a quote was quoted whole (#1381).
+        session.learnt().register_tree(&Value::Object(message.clone()));
+        let learnt = Arc::new(session.learnt().clone());
+        if message.get("id").is_some_and(id_holds_credential) {
+            let message = "Invalid request: the id is an address with a credential; choose one that is not";
             return outbox(error_response(&Value::Null, -32600, message, None));
         }
         let outbox: Outbox = {
-            let (outbox, learnt) = (outbox.clone(), learnt.clone());
+            let (outbox, session) = (outbox.clone(), session.clone());
             Arc::new(move |mut message: Value| {
-                learnt.mask_value(&mut message);
+                // What quotes the caller: a result, an error, a progress note's message and a log message's data.
+                let quoting: &[&[&str]] = &[
+                    &["result"],
+                    &["error", "message"],
+                    &["error", "data"],
+                    &["params", "message"],
+                    &["params", "data"],
+                ];
+                session.learnt().mask_members(&mut message, quoting);
                 outbox(message);
             })
         };

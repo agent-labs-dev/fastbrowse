@@ -839,7 +839,18 @@ async fn browser(
         return Ok((connection, Owned::Extension(Box::new(connected))));
     }
     let handed = match (&host.open_browser, &task.cdp_url, task.cdp_port) {
-        (Some(open), ..) => Some(open().await.map_err(|error| refused("OpenBrowser", &error))?),
+        (Some(open), ..) => {
+            let address = open().await.map_err(|error| refused("OpenBrowser", &error))?;
+            // The host's answer is an address the caller wrote, like `cdp_url`, and is learnt before anything quotes
+            // it: a connection error names the address, and its credentials reached the result whole.
+            if let Some(redactor) = http.trace.redactor() {
+                redactor
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .register_tree(&Value::from(&*address));
+            }
+            Some(address)
+        }
         (None, Some(url), _) => Some(url.clone()),
         (None, None, Some(port)) => Some(resolve_cdp_port(port, "127.0.0.1", http).await?),
         (None, None, None) => None,
@@ -1137,7 +1148,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
     let http = http.with_trace(trace);
     // Learned before anything reads the task: the consent check, the extension's tab group and the first frame all
     // come before the agent, and each took an address's credentials as the caller wrote them (#1381).
-    let credentialed = learn_credentials(&redactor, recipe.as_ref(), &settings);
+    learn_credentials(&redactor, recipe.as_ref(), &settings);
     let (warning_task, warning_tx, warning_stop_tx) = host
         .on_event
         .clone()
@@ -1302,7 +1313,8 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
         // the start page's address bar and content can show the credentials it was opened with.
         // A declared secret in the start is held only until a reading of the page shows it gone: from the first
         // reading on, the agent holds frames while the page shows it.
-        if credentialed {
+        // Asked once the browser is known: the address a host's `open_browser` answered is learnt with it.
+        if redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).holds_credentials() {
             opened.hold_images();
         } else if images_held {
             opened.set_frames_withheld(true);
@@ -1764,6 +1776,27 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    /// The address a host's `open_browser` answers is the caller's, like `cdp_url`, and is learnt as it is handed over:
+    /// unlearnt, a password in it holding a quote was quoted whole past the structural scan, and the run did not hold
+    /// its frames for a credential its address bar can show (#1381).
+    #[tokio::test]
+    async fn test_the_address_open_browser_answers_is_learnt_as_it_is_handed_over() {
+        let redactor: Arc<Mutex<Redactor>> = Arc::default();
+        let http = Http::hyper().with_trace(Trace::collecting().redacting(redactor.clone()));
+        let host = Host {
+            open_browser: Some(Arc::new(|| {
+                Box::pin(async { Ok("ws://ops:0pen\"pw@127.0.0.1:9222/devtools/browser/x".to_string()) })
+            })),
+            ..Host::default()
+        };
+        let task = RunTask { task: "Read the page".into(), browser: true, ..RunTask::default() };
+        let (connection, _) = browser(&task, &host, &LocalChrome::default(), &http, &mut None).await.ok().unwrap();
+        assert!(connection.cdp_url.contains("0pen"));
+        let learnt = redactor.lock().unwrap();
+        assert!(learnt.holds_credentials());
+        assert!(!learnt.mask("the browser at ws://ops:0pen\"pw@127.0.0.1:9222 refused").contains("pw"));
+    }
 
     /// The consent check, the extension's tab group and the result card each took the task as the caller wrote it,
     /// an address's credentials included, before the agent had masked anything (#1381).

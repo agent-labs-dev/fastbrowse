@@ -605,15 +605,35 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     Ok(exit_code(result.status))
 }
 
+/// What a command learns from how it was started, before it says anything about it: every argument and every value of
+/// the environment and of the `.env` file the settings are read from, each read as one whole address, and counted
+/// among the live runs so a log line is masked by them too. A usage error, a refusal or a settings error quotes them,
+/// and masked after the fact by structure alone, a password holding a quote was printed whole (#1381). Every entry the
+/// binary has (the CLI, `fastbrowse serve`, `fastbrowse-mcp` and the subcommands) learns through this one path; when
+/// only the CLI did, `fastbrowse-mcp --port 'https://ops:pw"x@h/'` printed the password.
+pub struct Invocation(Arc<Mutex<fastbrowse_core::safety::Redactor>>);
+
+impl Invocation {
+    pub fn learn(argv: &[String], environ: &HashMap<String, String>) -> Invocation {
+        let dotenv = std::fs::read_to_string(".env").map(|text| fastbrowse_clients::environment::parse_dotenv(&text));
+        let dotenv: Vec<String> = dotenv.unwrap_or_default().into_iter().map(|(_, value)| value).collect();
+        let environment: Vec<&String> = environ.values().collect();
+        let learnt =
+            Arc::new(Mutex::new(fastbrowse_core::safety::learnt(&serde_json::json!([argv, environment, dotenv]))));
+        fastbrowse_core::safety::live(&learnt);
+        Invocation(learnt)
+    }
+
+    pub fn mask(&self, text: &str) -> String {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).mask(text)
+    }
+}
+
 /// What follows the `serve` check: parse, run, and report a configuration error on both streams when `--json`
 /// was asked for, so a caller parsing stdout still gets a result.
 pub async fn main(argv: &[String], context: &Context) -> i32 {
-    // Learnt before anything is said of the arguments, each read as one whole address, and counted among the live
-    // runs so a log line is masked by them too: a usage error or a refusal quoted an argument, and masked after the
-    // fact by structure alone, a password holding a quote was printed whole (#1381).
-    let learnt = Arc::new(Mutex::new(fastbrowse_core::safety::learnt(&serde_json::json!(argv))));
-    fastbrowse_core::safety::live(&learnt);
-    let masked = |text: &str| learnt.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).mask(text);
+    let invocation = Invocation::learn(argv, &context.environ);
+    let masked = |text: &str| invocation.mask(text);
     let args = match parse(argv, &context.build) {
         Ok(args) => args,
         Err(Exit::Print(text)) => {

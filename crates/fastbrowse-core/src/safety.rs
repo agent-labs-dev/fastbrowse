@@ -1095,6 +1095,18 @@ impl Redactor {
         self.mask_tree(value, false);
     }
 
+    /// `mask_value` on the members of `message` at `paths`, each a path of object keys, leaving the rest as written. A
+    /// door's reply quotes the caller only in some members; its envelope (`jsonrpc`, `id`, `method`, an error's
+    /// `code`) is the protocol's and is matched as written, and masked whole, a password `0` turned `"2.0"` into
+    /// `"2.•"`.
+    pub fn mask_members(&self, message: &mut Value, paths: &[&[&str]]) {
+        for path in paths {
+            if let Some(member) = path.iter().try_fold(&mut *message, |value, key| value.get_mut(*key)) {
+                self.mask_value(member);
+            }
+        }
+    }
+
     fn mask_tree(&self, value: &mut Value, keys: bool) {
         match value {
             Value::String(text) if !self.kept.contains(text.as_str()) => *text = self.mask(text),
@@ -1326,14 +1338,63 @@ const SPECIAL_SCHEMES: [&str; 5] = ["http", "https", "ws", "wss", "ftp"];
 /// parses it when it is learnt (`register_address`), and its forms replaced wherever they show. Prose ends the host
 /// at the same characters, less a sentence's closing punctuation.
 fn authorities(text: &str) -> Vec<Authority> {
+    authorities_scanned(text).0
+}
+
+/// The next position at or after a start where a predicate holds, and the last `@` before it, found by scanning
+/// forward once: the starts `authorities` asks about only grow, so one scan answers every later start up to where it
+/// stopped, and the next scan resumes past that. Searched afresh from each address, `https://` with a long run after
+/// it and `http:a@"` repeated scanned the text once per address, quadratic in its length.
+#[derive(Default)]
+struct Ahead {
+    /// Where the last scan began and the position it stopped at (the text's length when nothing stopped it).
+    scanned: Option<(usize, usize)>,
+    last_at: Option<usize>,
+}
+
+impl Ahead {
+    fn find(
+        &mut self,
+        text: &str,
+        start: usize,
+        stops: impl Fn(char) -> bool,
+        count: &mut usize,
+    ) -> (usize, Option<usize>) {
+        if !self.scanned.is_some_and(|(from, stop)| from <= start && start <= stop) {
+            let mut stop = text.len();
+            self.last_at = None;
+            for (offset, c) in text[start..].char_indices() {
+                *count += 1;
+                if stops(c) {
+                    stop = start + offset;
+                    break;
+                }
+                if c == '@' {
+                    self.last_at = Some(start + offset);
+                }
+            }
+            self.scanned = Some((start, stop));
+        }
+        let stop = self.scanned.map_or(text.len(), |(_, stop)| stop);
+        (stop, self.last_at.filter(|at| *at >= start))
+    }
+}
+
+/// `authorities`, and how many characters it looked at, which a test bounds by the text's length.
+fn authorities_scanned(text: &str) -> (Vec<Authority>, usize) {
     let bytes = text.as_bytes();
     let mut found = Vec::new();
+    let mut count = 0;
+    // The authority of a special scheme ends at `\` too, so it has its own scan.
+    let (mut special_end, mut other_end, mut quote) = (Ahead::default(), Ahead::default(), Ahead::default());
     let mut at = 0;
     while at < bytes.len() {
+        count += 1;
         let (scheme, slashes_start) = if bytes[at].is_ascii_alphabetic() {
             let mut end = at + 1;
             while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'+' | b'.' | b'-'))
             {
+                count += 1;
                 end += 1;
             }
             if bytes.get(end) != Some(&b':') {
@@ -1355,6 +1416,7 @@ fn authorities(text: &str) -> Vec<Authority> {
         };
         let mut netloc_start = slashes_start;
         while netloc_start < bytes.len() && matches!(bytes[netloc_start], b'/' | b'\\') {
+            count += 1;
             netloc_start += 1;
         }
         let slashes = netloc_start - slashes_start;
@@ -1365,23 +1427,20 @@ fn authorities(text: &str) -> Vec<Authority> {
             at = netloc_start.max(at + 1);
             continue;
         }
-        let authority_end = text[netloc_start..]
-            .find(|c: char| text::is_space(c) || matches!(c, '/' | '?' | '#') || (special && c == '\\'))
-            .map_or(text.len(), |length| netloc_start + length);
-        // The last `@` with no delimiter before it, tried from the right: in `"https://u:secret@host.test","mail":
-        // "b@c.test"` the last `@` is the email's, and taking none masked nothing of the credential before it.
-        let last_at = text[netloc_start..authority_end]
-            .match_indices('@')
-            .map(|(offset, _)| netloc_start + offset)
-            .rev()
-            .find(|at| !text[netloc_start..*at].contains(DELIMITERS));
+        // The authority ends where a browser ends it; the userinfo, if any, before the last `@` ahead of the first
+        // delimiter. In `"https://u:secret@host.test","mail":"b@c.test"` the last `@` is the email's, and taking none
+        // masked nothing of the credential before it.
+        let ends = |c: char| {
+            text::is_space(c) || matches!(c, '/' | '?' | '#') || (special && c == '\\') || DELIMITERS.contains(&c)
+        };
+        let ahead = if special { &mut special_end } else { &mut other_end };
+        let (stop, last_at) = ahead.find(text, netloc_start, ends, &mut count);
         let userinfo = last_at.filter(|at| *at > netloc_start).map(|at| (netloc_start, at));
         let host_start = last_at.map_or(netloc_start, |at| at + 1);
         // Prose ends the host where an address in it cannot go on, and a sentence's full stop or a closing bracket is
         // not part of the host it follows.
-        let host_end = text[host_start..authority_end]
-            .find(|c: char| c == '\'' || DELIMITERS.contains(&c))
-            .map_or(authority_end, |length| host_start + length);
+        let host_end = quote.find(text, host_start, |c| c == '\'', &mut count).0.min(stop);
+        count += host_end - host_start;
         let host = text[host_start..host_end].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', '}', '\'', '"']);
         let netloc_end = host_start + host.len();
         if netloc_end > netloc_start {
@@ -1390,7 +1449,7 @@ fn authorities(text: &str) -> Vec<Authority> {
         // An address after a quote that ended this one's host is read on its own, the credential before it or not.
         at = host_end.max(netloc_start + 1);
     }
-    found
+    (found, count)
 }
 
 /// The hosts of the addresses in `text` and the origins they belong to, as byte ranges.
@@ -1411,8 +1470,8 @@ fn hosts(text: &str) -> Vec<((usize, usize), String)> {
 /// in the text decoded, again as often as decoding changes it, and its range mapped back to the text as written.
 fn userinfos(text: &str) -> Vec<(usize, usize, String)> {
     // A userinfo ends at an `@`, by URL syntax, and decoding makes an `@` only out of a `%` escape, so text with
-    // neither holds none at any level of encoding. Every value the run masks passes here, most of them page text
-    // without either, and each was scanned whole for addresses.
+    // neither holds none at any level of encoding. The check skips the userinfo scan for text with no `@` or `%`;
+    // `mask` still allocates the text it returns, so the cost it saves is the scan alone.
     if !text.contains(['@', '%']) {
         return Vec::new();
     }
@@ -1464,6 +1523,25 @@ mod tests {
     //! The behavior WHATWG changes, pinned.
     use super::*;
     use crate::testing::block_on;
+
+    /// Finding addresses looks at each character a bounded number of times, whatever the text: the main cursor, the
+    /// two authority scans, the quote scan and the hosts each pass over a character at most once. Each address
+    /// searched to its end afresh, these texts took time quadratic in their length.
+    #[test]
+    fn test_finding_addresses_is_linear_in_the_text() {
+        let n = 20_000;
+        let texts = [
+            format!("https://{}\"{}", "x".repeat(n), "@".repeat(n)),
+            "http:a@\"".repeat(n),
+            "http:a'".repeat(n),
+            "//a@b'".repeat(n),
+            format!("https://{}", "a@".repeat(n)),
+        ];
+        for text in texts {
+            let (_, scanned) = authorities_scanned(&text);
+            assert!(scanned <= 5 * text.len(), "{scanned} for {} bytes", text.len());
+        }
+    }
 
     /// A warning a run writes to stderr names what the browser said, which can repeat a credential the run learnt
     /// outside any address; every live run's credentials are redacted from it, and a finished run's are not kept.
@@ -1906,6 +1984,26 @@ mod tests {
             both.redact("at https://admin:Pw9w@shop.test/"),
             "at https://[secret:address_credentials]@shop.test/"
         );
+    }
+
+    /// A lone user name is a credential by structure, since nothing in an address tells a token from a login, so
+    /// `ssh://git@github.com` blanks `git` for the run as a token's address blanks the token (docs/design.md). `,` and
+    /// `)` are sub-delims a userinfo may hold (RFC 3986), so prose that runs one address into an `@` reads as one
+    /// userinfo by grammar; both are stated limits.
+    #[test]
+    fn test_a_lone_user_name_is_the_secret_and_sub_delims_stay_inside_the_userinfo() {
+        let git = learnt(&serde_json::json!("ssh://git@github.com/o/r"));
+        assert!(git.holds_credentials());
+        assert_eq!(git.mask("run git pull"), "run ••• pull");
+        let token = learnt(&serde_json::json!("https://ghp_T0ken9w@github.com/o/r"));
+        assert_eq!(token.mask("the key ghp_T0ken9w"), "the key •••••••••••");
+        for (text, userinfo) in
+            [("see https://a.test,b@c.test", "a.test,b"), ("[x](https://a.test)b@c.test", "a.test)b")]
+        {
+            let found: Vec<String> = userinfos(text).into_iter().map(|(_, _, written)| written).collect();
+            assert_eq!(found, [userinfo], "{text}");
+            assert!(learnt(&serde_json::json!(text)).holds_credentials(), "{text}");
+        }
     }
 
     /// A browser answering a 401 sends `Authorization: Basic` with base64 of `user:password`, and a page or log that

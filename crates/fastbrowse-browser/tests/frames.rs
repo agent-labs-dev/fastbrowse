@@ -717,9 +717,13 @@ mod cursor {
     use fastbrowse_core::models::{Operation, StepOutcome};
     use fastbrowse_core::page::Action;
 
+    // A cursor test that passed without Chrome checked nothing of the page it reads, so it fails by name; CI's rust
+    // job installs Chrome for Testing.
+    const NEEDS_CHROME: &str = "this cursor test needs Chrome";
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_geometry_rejects_a_point_from_another_tab() {
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         h.goto("/").await;
         let observation = h.observe().await;
         let active = h.session.active_session_id().unwrap();
@@ -731,7 +735,7 @@ mod cursor {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_geometry_rejects_a_point_from_the_previous_document() {
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         h.goto("/").await;
         let before = h.observe().await;
         let session_id = h.session.active_session_id().unwrap();
@@ -775,7 +779,7 @@ for line in sys.stdin:
     async fn test_driver_failure_does_not_repeat_or_change_a_browser_action() {
         use std::os::unix::fs::PermissionsExt;
 
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         let dir = temp_dir("cursor");
         let binary = dir.join("cua-driver");
         std::fs::write(&binary, FAILING_DRIVER).unwrap();
