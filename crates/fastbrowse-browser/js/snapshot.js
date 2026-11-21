@@ -1394,9 +1394,14 @@
       // every <a> and <img> by default, which would offer the whole page as draggable.
       if (e.getAttribute('draggable') === 'true') base.operations.push('drag');
     }
-    // Focus determines whether the widget can receive keys.
+    // Focus determines whether the widget can receive keys. A button, link, checkbox or switch answers Enter and
+    // Space by activating, which a click already does, unless its page says it is something else: an
+    // `aria-roledescription` (a sortable card is a "button" that Space picks up and the arrows move) or the key
+    // focus already on it.
+    const activation = ['button', 'link', 'checkbox', 'switch'].includes(rname) &&
+      !e.hasAttribute('aria-roledescription') && !focused;
     if (!base.operations.includes('fill') && e.tagName !== 'SELECT' && nativeProperty(source, 'type') !== 'file' &&
-        !['button', 'link', 'checkbox', 'switch', 'textbox', 'searchbox'].includes(rname) &&
+        !activation && !['textbox', 'searchbox'].includes(rname) &&
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
       base.operations.push('press');
     controls.push(base);

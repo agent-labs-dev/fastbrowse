@@ -212,6 +212,37 @@ fn standard_key(value: &str) -> Option<&str> {
     (value.chars().count() == 1).then_some(value)
 }
 
+/// The keys a Press offers on any control, whatever its role: the W3C UI Events navigation and editing keys
+/// (https://www.w3.org/TR/uievents-key/) that move a caret, a selection or a picked-up item, and one chord that
+/// registers a programmatic edit with an editor. Widgets such as a sortable list pick an item up with Space, move
+/// it with the arrows and drop it with Space, and declare no role that lists those keys. Tab is Blur, and a
+/// printable character is text.
+pub const STANDARD_KEYS: &[&str] = &[
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "Space",
+    "Enter",
+    "Escape",
+    "Backspace",
+    "Delete",
+    "Ctrl+Home",
+    "Ctrl+End",
+];
+
+/// What a Press on `role` may send: the keys its role defines, then the standard keys it does not repeat.
+pub fn press_keys(role: &str) -> Vec<&'static str> {
+    let mut keys = role_keys(role).to_vec();
+    let own = keys.clone();
+    keys.extend(STANDARD_KEYS.iter().filter(|key| !own.contains(key)));
+    keys
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +269,21 @@ mod tests {
         assert_eq!(chord("document."), Err(ChordError::NotAKey("document.".into())));
         assert_eq!(chord("Ctrl+Ctrl+a"), Err(ChordError::RepeatedModifier));
         assert_eq!(chord("Ctrl+B"), Ok(Chord { modifiers: 2, key: "B".into() }));
+    }
+
+    #[test]
+    fn every_role_presses_the_standard_keys_once() {
+        for role in ["slider", "option", "button", "textbox", "generic"] {
+            let keys = press_keys(role);
+            assert!(keys.contains(&"Space") && keys.contains(&"Ctrl+End"), "{role}");
+            let unique: std::collections::HashSet<_> = keys.iter().collect();
+            assert_eq!(unique.len(), keys.len(), "{role}");
+        }
+        assert_eq!(&press_keys("slider")[..2], &["ArrowRight", "ArrowUp"]);
+        // The browser presses only what the chord grammar parses, so a standard key it refused would end the run.
+        for key in STANDARD_KEYS {
+            assert!(chord(key).is_ok(), "{key}");
+        }
     }
 
     #[test]

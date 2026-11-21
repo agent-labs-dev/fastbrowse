@@ -256,7 +256,7 @@ others as they were. Jev is asked which option to toggle and told which are sele
 selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
 option, so choosing or removing any one of them is a change.
 
-Press sends a key Jev selects from the target control's ARIA role, or a key chord copied from the task.
+Press sends a key Jev selects from the keys the target control's ARIA role defines followed by the standard navigation and editing keys (arrows, Home, End, Space, Enter, Escape, Backspace, Delete, Ctrl+Home, Ctrl+End), or a key chord copied from the task. A `button`, `link`, `checkbox` or `switch` is offered a press only when it is focused or declares an `aria-roledescription`, so a sortable card can be picked up with Space, moved with the arrows and dropped with Space.
 Sliders, spin buttons, tabs, lists, trees, menus and grids offer their standard WAI-ARIA keyboard interactions
 when focus can reach them. An explicit `aria-orientation` on a widget or its owning composite is included in its context, so the key chooser knows its direction. Widget value changes count as progress. A composite container is indexed for keyboard use when it has a `tabindex`.
 An active descendant keeps DOM focus on its owner while receiving the chosen key. Native selects keep their

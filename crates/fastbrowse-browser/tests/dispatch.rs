@@ -2104,6 +2104,49 @@ async fn test_role_keys_step_a_native_slider_and_focus_a_composite_widget() {
     h.close().await;
 }
 
+/// A sortable list's cards are `button`s that Space picks up, the arrows move and Space drops. Their role lists no
+/// keys, so the cards were offered a click and nothing else and the order could not be changed from the keyboard.
+#[tokio::test]
+async fn test_a_card_that_declares_itself_sortable_is_moved_by_keys() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = '<ul id="cards">'
+          + ['One', 'Two', 'Three'].map(n => `<li><div role="button" tabindex="0" aria-roledescription="sortable" aria-label="${n}">${n}</div></li>`).join('')
+          + '</ul><button>Save</button>';
+        let lifted = null;
+        const list = document.getElementById('cards');
+        list.addEventListener('keydown', e => {
+          const card = e.target.closest('li');
+          if (e.key === ' ') { lifted = lifted ? null : card; e.preventDefault(); }
+          else if (lifted && e.key === 'ArrowDown' && card.nextElementSibling) card.nextElementSibling.after(card);
+          if (lifted) setTimeout(() => card.querySelector('[role=button]').focus());
+        });
+        true
+    "#,
+    )
+    .await;
+    let before = h.observe().await;
+    assert!(!find(&before, "Save").operations.contains(&Operation::Press));
+    let one = find(&before, "One");
+    assert!(one.operations.contains(&Operation::Press), "{one:?}");
+    for key in ["Space", "ArrowDown", "Space"] {
+        let now = h.observe().await;
+        let card = find(&now, "One");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        let result = h.page.act(&press, &now).await.expect("press");
+        assert_eq!(result.outcome, StepOutcome::Executed, "{key}: {result:?}");
+    }
+    assert_eq!(
+        eval_active(&h.page, "[...document.querySelectorAll('#cards [role=button]')].map(e => e.textContent)").await,
+        json!(["Two", "One", "Three"])
+    );
+    h.close().await;
+}
+
 #[tokio::test]
 async fn test_role_keys_capture_orientation_and_count_custom_slider_progress() {
     let Some(h) = harness().await else { return };

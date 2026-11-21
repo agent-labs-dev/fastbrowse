@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, Images, NoulQuestion, Question};
-use fastbrowse_core::keys::role_keys;
+use fastbrowse_core::keys::press_keys;
 use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
@@ -1094,8 +1094,8 @@ impl Agent {
         self.text_with_scope(state, observation, decision, target, false).await
     }
 
-    /// The key a press sends to `target`. A control whose ARIA role defines keys has Jev pick one of them, or say the
-    /// task gives the key instead; any other key is copied from the task, so Jev never writes one.
+    /// The key a press sends to `target`: Jev picks one the control's role defines or a standard navigation or editing
+    /// key, or says the task gives the key instead, so Jev never writes one.
     async fn key(
         &self,
         state: &mut RunState,
@@ -1103,13 +1103,13 @@ impl Agent {
         decision: &Decision,
         target: &Control,
     ) -> Step<String> {
-        let supported = role_keys(&target.role);
-        if supported.is_empty() || decision.replayed && self.recorded_key(state, observation, target).is_some() {
+        if decision.replayed && self.recorded_key(state, observation, target).is_some() {
             return self.task_key(state, observation, decision, target).await;
         }
-        let options: Vec<String> = supported.iter().map(|key| key.to_string()).collect();
+        let options: Vec<String> = press_keys(&target.role).iter().map(|key| key.to_string()).collect();
         let question = format!(
-            "Which key should be pressed in {}? Each is one a {} supports, named as W3C UI Events key values.",
+            "Which key should be pressed in {}? Each is named as a W3C UI Events key value; a {} supports the ones listed \
+             first, and the standard keys follow.",
             text::repr(&describe(target)),
             target.role
         );
