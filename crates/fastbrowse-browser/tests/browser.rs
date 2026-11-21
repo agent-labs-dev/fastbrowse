@@ -1100,7 +1100,15 @@ async fn test_transparent_choice_exception_does_not_admit_hidden_or_disabled_con
         eval_active(&h, &format!("const e = document.querySelectorAll('input')[1]; {change}")).await;
         let result = act(&h.page, click(target), &before).await;
         assert_eq!(result.outcome, StepOutcome::Stale, "{change}");
-        assert!(!h.observe().await.controls.iter().any(|c| c.id == target.id), "{change}");
+        // A disabled toggle stays on the page, marked and offering nothing (#1415); a hidden one is gone.
+        let after = h.observe().await;
+        let kept = after.controls.iter().find(|c| c.id == target.id);
+        if change.contains("disabled") {
+            let kept = kept.unwrap_or_else(|| panic!("{change}: the disabled toggle is still observed"));
+            assert!(kept.disabled == Some(true) && kept.operations.is_empty(), "{change}: {kept:?}");
+        } else {
+            assert!(kept.is_none(), "{change}");
+        }
         assert!(!truthy(&eval_active(&h, "e.checked").await), "{change}");
         h.close().await;
     }
@@ -1147,7 +1155,9 @@ async fn test_styled_choice_uses_visible_label_and_native_state() {
             assert_eq!(find(&h.observe().await, "Direct service").checked, Some(true), "{style}-{kind}");
 
             eval_active(&h, "document.querySelector('input').disabled = true").await;
-            assert!(!h.observe().await.controls.iter().any(|c| c.label == "Direct service"), "{style}-{kind}");
+            let disabled = h.observe().await;
+            let kept = find(&disabled, "Direct service");
+            assert!(kept.disabled == Some(true) && kept.operations.is_empty(), "{style}-{kind}: {kept:?}");
             h.close().await;
         }
     }

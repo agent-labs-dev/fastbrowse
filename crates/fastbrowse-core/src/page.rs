@@ -111,6 +111,10 @@ pub struct Control {
     pub sensitive: bool,
     #[serde(default, deserialize_with = "lax::boolean")]
     pub offscreen: bool,
+    /// A control the page has disabled (`disabled`, or inside `aria-disabled="true"`). It offers no operation until
+    /// the page enables it, and is shown so a Save that stays disabled after an edit is not read as no Save (#1415).
+    #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
     /// A field the page marks required (`required` or `aria-required`).
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub required: Option<bool>,
@@ -172,6 +176,7 @@ impl Control {
             expanded: None,
             sensitive: false,
             offscreen: false,
+            disabled: None,
             required: None,
             invalid: None,
             validation_message: None,

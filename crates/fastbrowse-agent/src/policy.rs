@@ -1701,7 +1701,8 @@ pub fn element(control: &Control) -> Map<String, Value> {
     if control.offscreen {
         element.insert("offscreen".into(), true.into());
     }
-    for (key, marked) in [("required", control.required), ("invalid", control.invalid)] {
+    for (key, marked) in [("required", control.required), ("invalid", control.invalid), ("disabled", control.disabled)]
+    {
         if marked == Some(true) {
             element.insert(key.into(), true.into());
         }
@@ -2716,6 +2717,10 @@ mod tests {
         assert_eq!(element(&field)["validation_message"], "Please fill in this field.");
         assert!(!element(&button(2)).contains_key("required"));
         assert!(!element(&button(2)).contains_key("invalid"));
+        let mut save = button(3);
+        save.disabled = Some(true);
+        assert_eq!(element(&save)["disabled"], true);
+        assert!(!element(&button(2)).contains_key("disabled"));
     }
 
     #[test]

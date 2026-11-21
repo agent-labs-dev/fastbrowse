@@ -158,6 +158,7 @@ struct SnapshotControl {
     sensitive: bool,
     #[serde(default)]
     offscreen: bool,
+    disabled: Option<bool>,
     required: Option<bool>,
     invalid: Option<bool>,
     validation_message: Option<String>,
@@ -514,6 +515,7 @@ fn control_from_raw(
         expanded: c.expanded,
         sensitive: c.sensitive,
         offscreen: c.offscreen,
+        disabled: c.disabled,
         required: c.required,
         invalid: c.invalid,
         validation_message: c.validation_message.clone(),
