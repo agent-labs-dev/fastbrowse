@@ -1269,7 +1269,7 @@ impl CdpPage {
         };
         local_id = handed;
         if !secret && native_date {
-            return self.fill_native_date(session_id, local_id, text).await;
+            return self.fill_native_date(target, local_id, text).await;
         }
         let mut suggests = false;
         for attempt in 0..2 {
@@ -1395,7 +1395,8 @@ impl CdpPage {
     /// Typed keystrokes land in whichever locale-formatted segment the picker's shadow UI has focused, so the value the
     /// field writer produces (told the type's form by `native_date_form`) is set directly through the property setter
     /// React and friends also patch over, then the input/change events a form's own handlers expect to see.
-    async fn fill_native_date(&self, session_id: &str, local_id: i64, value: &str) -> Result<Outcome, BrowserError> {
+    async fn fill_native_date(&self, target: &Target, local_id: i64, value: &str) -> Result<Outcome, BrowserError> {
+        let session_id = target.0.as_str();
         let script = format!(
             "((id, value) => {{ const e = window.__fastbrowse?.nodes.get(id); \
              if (!e?.isConnected) return null; \
@@ -1409,7 +1410,11 @@ impl CdpPage {
         let result = self.session.input_window(session_id, self.evaluate(session_id, &script)).await?;
         Ok(match result {
             Value::Null => (StepOutcome::Stale, Some("target disconnected".into()), Some(StepFailure::TargetGone)),
-            Value::Bool(true) => (StepOutcome::Executed, None, None),
+            Value::Bool(true) => {
+                // The value was set on this field directly, so it is the one that took it.
+                self.state.lock().unwrap().fill_receiver = Some(format!("{}:{local_id}", target.1));
+                (StepOutcome::Executed, None, None)
+            }
             _ => (
                 StepOutcome::Failed,
                 Some("field did not retain the supplied ISO value".into()),

@@ -1417,3 +1417,47 @@ async fn a_fill_in_a_same_origin_frame_reports_the_field_inside_it() {
     assert_eq!(result.landed.as_deref(), Some(notes.id.as_str()));
     h.close().await;
 }
+
+/// A contenteditable host is a field the capture names as it names a native one: the same identity and document as the
+/// fill reports for it, and its text as the raw value, so a report typed into it is told as the run's own typing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fill_into_a_contenteditable_reports_the_host_the_capture_names() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<div contenteditable="true" aria-label="Report"></div>"#).await;
+    let observed = h.observe().await;
+    let report = observed.controls.iter().find(|c| c.label == "Report").expect("editable host");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(report.id.clone()),
+        text: Some("typed words".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_deref(), Some(report.id.as_str()));
+    let capture = h.page.capture().await.expect("capture");
+    let block =
+        capture.blocks.iter().find(|b| capture.block_text(b) == "Report: typed words").expect("host block");
+    let control = block.control_context.as_ref().expect("control");
+    assert_eq!(control.element, result.landed);
+    assert_eq!(control.document.as_deref(), Some(observed.document_key.as_str()));
+    assert_eq!(control.value.as_deref(), Some("typed words"));
+    h.close().await;
+}
+
+/// A native date or time fill returns before the typing path, and reports its field all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_native_date_fill_reports_the_field() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<label>Day <input type="date"></label>"#).await;
+    let observed = h.observe().await;
+    let day = observed.controls.iter().find(|c| c.label == "Day").expect("date field");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(day.id.clone()),
+        text: Some("2026-11-22".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_deref(), Some(day.id.as_str()));
+    h.close().await;
+}

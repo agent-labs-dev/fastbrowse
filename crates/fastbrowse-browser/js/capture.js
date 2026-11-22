@@ -424,15 +424,25 @@
         '',
     );
   };
+  const isHost = e => !CONTROLS.has(e.tagName) && e.isContentEditable && !e.parentElement?.isContentEditable;
   const fieldValue = e => {
     if (e.tagName === 'SELECT') return [...e.selectedOptions].map(o => clean(o.label || o.text)).join(', ');
+    if (isHost(e)) return clean(e.innerText ?? '');
     if (UNFILLED.has(e.type) || e.dataset?.fastbrowseSecret === '1') return '';
     return clean(e.value ?? '');
   };
-  const fields = el =>
-    (CONTROLS.has(el.tagName) ? [el] : [...el.querySelectorAll('input,select,textarea')])
+  // A contenteditable host is a field too: what a run typed into it reads back as its text, and is told apart as the
+  // run's typing the same way, by the host's identity. Only the host counts, not the editable nodes inside it.
+  const fields = (el, own = false) =>
+    (CONTROLS.has(el.tagName)
+      ? [el]
+      : [
+          ...(isHost(el) ? [el] : []),
+          ...(own ? [] : [...el.querySelectorAll('input,select,textarea,[contenteditable]')].filter(e => CONTROLS.has(e.tagName) || isHost(e))),
+        ]
+    )
       .filter(visible)
-      .map(e => [e, nameOf(e), fieldValue(e)])
+      .map(e => [e, isHost(e) ? clean(e.getAttribute('aria-label') || e.getAttribute('title') || '') : nameOf(e), fieldValue(e)])
       .filter(([, , value]) => value)
       // The field is named as the observation names it, by its identity, so a step that typed into it is the same
       // control here: provenance is never read back from the words.
@@ -441,7 +451,7 @@
         control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
         control_element: String(identity(e)),
         // The value as the page holds it: the text above is collapsed, so only this tells what was typed.
-        ...(e.tagName === 'SELECT' ? {} : { control_value: e.value }),
+        ...(e.tagName === 'SELECT' ? {} : { control_value: isHost(e) ? (e.innerText ?? '') : e.value }),
       }));
 
   const renderTable = table => {
@@ -665,6 +675,7 @@
       return;
     }
     walk(el);
+    if (isHost(el)) for (const { text, ...control } of fields(el, true)) push('paragraph', text, control);
   }
 
   // A same-origin frame is read where it stands, under the headings above it: read after the whole page, an
