@@ -245,27 +245,8 @@
     return found;
   };
   const rendered = new WeakMap();
-  const containsHost = e => [...e.querySelectorAll('[contenteditable]')].some(h => isHost(h));
-  const hostOf = a => {
-    for (let p = a.parentElement; p; p = p.parentElement) if (isHost(p)) return p;
-    return null;
-  };
   const renderedOf = e => {
     if (rendered.has(e)) return rendered.get(e);
-    // An editing host's text is read once, as its field block: whatever holds one reads without it.
-    if (containsHost(e)) {
-      const text = [...e.childNodes]
-        .map(n =>
-          n.nodeType === 3
-            ? n.textContent
-            : n.nodeType === 1 && !isHost(n) && !SKIP.has(n.tagName) && !hidden(n)
-              ? isBlock(n) ? ` ${renderedOf(n)} ` : renderedOf(n)
-              : '',
-        )
-        .join('');
-      rendered.set(e, text);
-      return text;
-    }
     let text = e.innerText ?? e.textContent ?? '';
     if (!hasGenerated(e)) {
       rendered.set(e, text);
@@ -330,11 +311,6 @@
       .flatMap(e => [...(e.matches('a[href]') ? [e] : []), ...e.querySelectorAll('a[href]')])
       // An SVG link's `href` is an animated value, not an address.
       .filter(readableLink)
-      // A link inside an editing host belongs to the host's field block alone.
-      .filter(a => {
-        const host = hostOf(a);
-        return !host || elements.some(e => e === host || host.contains(e));
-      })
       .map(a => ({ text: textOf(a), href: a.href }))
       .filter(link => link.text);
   const controlOf = nodes => {
@@ -370,9 +346,10 @@
       text = `${text} (title: ${title})`;
       linkTitles.add(link);
     }
+    const { hosts = hostsOf(nodes), ...rest } = extra;
     blocks.push({
       kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath,
-      control_context: controlOf(nodes), ...extra,
+      control_context: controlOf(nodes), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
       ...(inherited ? { href: hrefOf(link), links: [{ text, href: link.href }, ...(extra.links ?? [])] } : {}),
     });
   };
@@ -406,8 +383,7 @@
     }
     return '';
   };
-  // A cell that is itself an editing host is read as its field block after the table, never twice.
-  const cellText = c => (isHost(c) ? '' : textOf(c) || drawn(c));
+  const cellText = c => textOf(c) || drawn(c);
 
   // What a form holds is in its controls' values, which no text node carries: a task that asked for dates to be
   // chosen was refused as unanswered because "the dates chosen" had nothing to quote. A filled control reads as
@@ -455,57 +431,44 @@
     (e.ownerDocument.designMode === 'on' ? e === e.ownerDocument.body : !e.parentElement?.isContentEditable);
   const fieldValue = e => {
     if (e.tagName === 'SELECT') return [...e.selectedOptions].map(o => clean(o.label || o.text)).join(', ');
-    // A host reads as every other block does, so its links are found by the text the field block quotes.
-    if (isHost(e)) return textOf(e);
     if (UNFILLED.has(e.type) || e.dataset?.fastbrowseSecret === '1') return '';
     return clean(e.value ?? '');
   };
-  // A contenteditable host is a field too: what a run typed into it reads back as its text, and is told apart as the
-  // run's typing the same way, by the host's identity. Only the host counts, not the editable nodes inside it.
-  // A field in a table cell is told apart by where it sits: its row's first cell and its column's header. Without
-  // them two editable "Price" cells read as the same field.
-  const cellPlace = e => {
-    const cell = e.closest('td,th');
-    const row = cell?.parentElement;
-    const table = row?.closest('table');
-    if (!table) return '';
-    const cells = r => [...r.querySelectorAll(':scope > th, :scope > td')];
-    const index = cells(row).indexOf(cell);
-    const rows = [...table.querySelectorAll('tr')].filter(r => r.closest('table') === table);
-    const head = table.querySelector('thead tr') || (rows[0] && cells(rows[0]).every(c => c.tagName === 'TH') ? rows[0] : null);
-    const first = cells(row)[0];
-    // A header that is an editing host, or inside one, is text the page lets anyone change: it names nothing.
-    const named = c => (c && !c.isContentEditable ? clean(textOf(c)) : '');
-    const rowName = first !== cell && row !== head ? named(first) : '';
-    const columnName = head && head !== row ? named(cells(head)[index]) : '';
-    return [rowName && `row ${rowName}`, columnName && `column ${columnName}`].filter(Boolean).join(', ');
+  // What a field holds is reported with it, in the capture's list of held values: the control as the observation names
+  // it, and its value as the page holds it, before the whitespace collapse. A step that typed into a control is told
+  // from a read of it by that identity, never by the words.
+  const heldValue = e => (CONTROLS.has(e.tagName) ? e.value : (e.innerText ?? ''));
+  const held = [];
+  const heldAt = new Map();
+  const hold = e => {
+    if (!heldAt.has(e)) heldAt.set(e, held.push({ element: String(identity(e)), value: heldValue(e) }) - 1);
+    return heldAt.get(e);
   };
-  // scope: 'all' is every field under el, 'self' only el, 'inside' every field under el but el itself.
-  const fields = (el, scope = 'all') =>
-    (CONTROLS.has(el.tagName)
-      ? [el]
-      : [
-          ...(isHost(el) && scope !== 'inside' ? [el] : []),
-          ...(scope === 'self' ? [] : [...el.querySelectorAll('input,select,textarea,[contenteditable]')].filter(e => CONTROLS.has(e.tagName) || isHost(e))),
-        ]
-    )
+  const fields = el =>
+    (CONTROLS.has(el.tagName) ? [el] : [...el.querySelectorAll('input,select,textarea')])
       .filter(visible)
-      .map(e => [e, isHost(e) ? clean(e.getAttribute('aria-label') || e.getAttribute('title') || '') : nameOf(e), fieldValue(e)])
+      .map(e => [e, nameOf(e), fieldValue(e)])
       .filter(([, , value]) => value)
-      // The field is named as the observation names it, by its identity, so a step that typed into it is the same
-      // control here: provenance is never read back from the words.
-      .map(([e, name, value]) => ({ e, name, value, place: cellPlace(e) }))
-      .map(({ e, name, value, place }) => ({
-        text: `${[name, place && `(${place})`].filter(Boolean).join(' ')}${name || place ? ': ' : ''}${value}`,
+      .map(([e, name, value]) => ({
+        text: name ? `${name}: ${value}` : value,
         control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
-        control_element: String(identity(e)),
-        ...(isHost(e) ? { links: linksIn([e]) } : {}),
-        // The value as the page holds it: the text above is collapsed, so only this tells what was typed.
-        ...(e.tagName === 'SELECT' ? {} : { control_value: isHost(e) ? (e.innerText ?? '') : e.value }),
+        ...(e.tagName === 'SELECT' ? {} : { hosts: [e] }),
       }));
-
-  // A host is one field block; native controls and editors nested inside it follow as their own, as elsewhere.
-  const hostFields = el => [...fields(el, 'self'), ...fields(el, 'inside')];
+  // The editing hosts a block holds or sits in: its text is read in place, as on any page, and the block carries each
+  // host's identity and value, so a quote from it is told as possibly typed.
+  const hostsOf = nodes => {
+    const found = new Set();
+    for (const node of nodes) {
+      const e = node.nodeType === 1 ? node : node.parentElement;
+      if (!e) continue;
+      for (let p = e.closest('[contenteditable]'); p; p = p.parentElement?.closest('[contenteditable]')) {
+        if (isHost(p)) found.add(p);
+      }
+      for (const h of e.querySelectorAll('[contenteditable]')) if (isHost(h)) found.add(h);
+      if (isHost(e.ownerDocument.body)) found.add(e.ownerDocument.body);
+    }
+    return [...found];
+  };
 
   const renderTable = table => {
     // A table filter hides what it excludes with `hidden`, display or visibility (`collapse` is the one CSS made
@@ -527,7 +490,8 @@
     // A row block is its text with the links of the rows it writes, in the order it writes them.
     const of = (written, headed) => ({
       text: [...(headed ? [...headers.map(line), divider] : []), ...written.map(line)].join('\n'),
-      links: linksIn([...(headed ? headers : []), ...written].flatMap(row => row.cells).filter(c => !isHost(c))),
+      links: linksIn([...(headed ? headers : []), ...written].flatMap(row => row.cells)),
+      hosts: hostsOf([...(headed ? headers : []), ...written].flatMap(row => row.cells)),
     });
     // Headerless comparison rows need leading cells for identity and separate source spans for counting.
     if (!headers.length) return rows.map((row, index) => of(index ? [rows[0], row] : [row], false));
@@ -657,7 +621,7 @@
         scope(node.shadowRoot, framePath, `${sourcePath}/shadow:${identity(node)}`, path);
         continue;
       }
-      if (!isHost(node) && !node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
+      if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
         run.push(node);
         continue;
       }
@@ -675,12 +639,6 @@
   }
 
   function block(el) {
-    // An editing host is decided before any other block kind: emitted once, as the field block that carries its
-    // identity and raw value, and never walked, so no copy of its text reads as an ordinary source.
-    if (isHost(el)) {
-      for (const { text, ...control } of hostFields(el)) push('paragraph', text, control);
-      return;
-    }
     if (el.matches('nav,[role="navigation"]')) {
       // Navigation help headings describe their menu, not product facts in the following main content.
       const surrounding = [path, headingLevels];
@@ -699,21 +657,15 @@
         path.push(text);
         headingLevels.push(level);
       }
-      // An editor inside the heading was read out of its text, so it reads here, as its field.
-      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
       return;
     }
     if (el.tagName === 'TABLE') {
-      for (const { text, links } of renderTable(el)) push('table', text, { links }, [el]);
+      for (const { text, links, hosts } of renderTable(el)) push('table', text, { links, hosts }, [el]);
       // A form laid out in a table: its cells render as text, which holds none of the controls' values.
       for (const { text, ...control } of fields(el)) push('paragraph', text, control);
       return;
     }
-    if (el.tagName === 'PRE') {
-      push('code', textOf(el), {}, [el]);
-      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
-      return;
-    }
+    if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
     const record = recordText(el);
     if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
       // A card's heading still ends an earlier sibling's heading, even when the card is read without walking it.
@@ -770,9 +722,7 @@
     headingLevels = [];
     framePath = frame;
     sourcePath = source;
-    // A body that is itself the editing host is the field block for the whole document, never walked as prose.
-    if (isHost(root)) for (const { text, ...control } of hostFields(root)) push('paragraph', text, control);
-    else walk(root);
+    walk(root);
     path = [...headings];
     headingLevels = [];
     for (const e of [...root.querySelectorAll(`input,select,textarea,button,${roleSelector(CONTROL_ROLES[0])}`)].filter(visible)) {
@@ -901,6 +851,7 @@
     inaccessible_frames: inaccessible,
     content_type: document.contentType,
     document_key: String(performance.timeOrigin),
+    held,
     ...(json && served ? { json_text: served.textContent } : {}),
   };
 })

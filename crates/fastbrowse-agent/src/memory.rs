@@ -294,8 +294,6 @@ pub struct Notes {
     masked: HashMap<CaptureIdentity, Arc<[(i64, i64)]>>,
     /// Each step that typed into a control, in order.
     typed: Vec<Typing>,
-    /// The value each captured native field held when it was read, by capture and the control's identity.
-    field_values: HashMap<(CaptureIdentity, String), String>,
 }
 
 /// A step's typing: its number among the run's steps that could change the site, where the browser reported the text
@@ -333,25 +331,30 @@ impl Notes {
         });
     }
 
-    /// The last step before this quote's read that typed, into the control it was read from, exactly the value the
-    /// control held when read, compared as typed and as held, whitespace and all. The control is the same one by its document and id, never by its URL (a same-document navigation keeps the document) or the quote's words;
-    /// a value the typing did not leave (the site replaced it, or another source wrote it) is not the run's typing.
+    /// The last step before this quote's read that typed, into an editable field its block holds, exactly the value the
+    /// field held when read, compared as typed and as held, whitespace and all. The field is the same one by its
+    /// document and id, never by its URL (a same-document navigation keeps the document) or the quote's words; a value
+    /// the typing did not leave (the site replaced it, or another source wrote it) is not the run's typing.
     pub fn typed_by_step(&self, evidence: &Evidence) -> Option<usize> {
         let control = evidence.control_context.as_ref()?;
-        let (element, document) = (control.element.as_deref()?, control.document.as_deref()?);
+        let document = control.document.as_deref()?;
         let taken = self.steps_taken(evidence)?;
-        let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
-        let held = self.field_values.get(&(key, element.to_string()))?;
-        self.typed
+        control
+            .held
             .iter()
-            .rev()
-            .find(|typed| {
-                typed.step <= taken
-                    && typed.document == document
-                    && typed.element == element
-                    && typed.text == *held
+            .filter_map(|held| {
+                self.typed
+                    .iter()
+                    .rev()
+                    .find(|typed| {
+                        typed.step <= taken
+                            && typed.document == document
+                            && typed.element == held.element
+                            && *typed.text == *held.value
+                    })
+                    .map(|typed| typed.step)
             })
-            .map(|typed| typed.step)
+            .max()
     }
 
     /// Remember a capture read once `steps_taken` of the run's steps that could change the site were taken.
@@ -365,15 +368,6 @@ impl Notes {
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
         let mut sources: HashMap<CaptureIdentity, Vec<SourceBlock>> = HashMap::new();
         for block in &capture.blocks {
-            if let Some(control) = &block.control_context
-                && let Some(element) = &control.element
-            {
-                // The value as the page held it, not the block's collapsed text: only that tells typing "A  B" from a
-                // site that replaced it with "A B".
-                if let Some(value) = &control.value {
-                    self.field_values.entry((key.clone(), element.clone())).or_insert_with(|| value.clone());
-                }
-            }
             let url = block.source_url.as_ref().unwrap_or(&capture.url);
             let identity = (capture.sha256.clone(), url.clone(), capture.captured_at);
             sources.entry(identity).or_default().push(SourceBlock {
@@ -1269,9 +1263,8 @@ mod tests {
                 role: "figure".into(),
                 label: "Avatar".into(),
                 context: Some(position.into()),
-                element: None,
                 document: None,
-                value: None,
+                held: Vec::new(),
             };
             let evidence = Evidence { control_context: Some(control), ..span("capture", 0, 4) };
             assert!(notes.add(Fact::read("fact", evidence, FactReader::JevChoice)));

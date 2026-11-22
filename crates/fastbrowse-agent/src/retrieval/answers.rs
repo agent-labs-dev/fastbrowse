@@ -3735,9 +3735,8 @@ mod tests {
             role: "button".into(),
             label: "Record B".into(),
             context: Some("right panel".into()),
-            element: None,
             document: None,
-            value: None,
+            held: Vec::new(),
         });
         let notes = Notes::new([source]);
         let llm = RecordingLlm {
@@ -5765,9 +5764,8 @@ mod tests {
                 role: "textarea".into(),
                 label: "Notes".into(),
                 context: None,
-                element: Some(element.into()),
                 document: Some(document.into()),
-                value: Some(value.into()),
+                held: vec![fastbrowse_core::models::Held { element: element.into(), value: value.into() }],
             });
             let page = Page::new(&captured);
             let block = &captured.blocks[0];
@@ -5806,7 +5804,9 @@ mod tests {
 
         // A history-API navigation changes the URL, not the document: the typing is still the run's own.
         let (_, moved) = asked_for_support(read("https://a.test/doc?id=42", Some("main:7"), Some(1)), None).await;
-        let Question::Noul(support) = moved["claim0"].clone() else { panic!("support is asked after a same-document URL change") };
+        let Question::Noul(support) = moved["claim0"].clone() else {
+            panic!("support is asked after a same-document URL change")
+        };
         assert!(support.instructions.contains(r#""typed_by_step": 1"#), "{}", support.instructions);
 
         for (case, notes) in [

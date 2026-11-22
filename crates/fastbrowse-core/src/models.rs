@@ -168,19 +168,24 @@ pub struct SourceControl {
     pub label: String,
     #[serde(default)]
     pub context: Option<String>,
-    /// The control's identity as the observation names it (a `Control`'s `id`), for a native form field: the same
-    /// control a step acts on has the same value here. Unset for a control known only by its label. The run's own
-    /// bookkeeping, held in process: never part of the protocol, so never written or read.
-    #[serde(skip)]
-    pub element: Option<String>,
-    /// The document that control was read from (its `document_key`): ids are numbered within a document, so the
-    /// same id after a reload names another control. Held with `element`, and as unwritten.
+    /// The document those controls were read from (its `document_key`): ids are numbered within a document, so the
+    /// same id after a reload names another control. The run's own bookkeeping, held in process: never part of the
+    /// protocol, so never written or read.
     #[serde(skip)]
     pub document: Option<String>,
-    /// For a native text field, exactly the value the control held when read (the block's text is the whitespace
-    /// collapsed form), so a run compares it with the text it typed as typed. Held with `element`, and as unwritten.
+    /// The editable fields this block is the value of, or holds or sits in (a native field, or a contenteditable host
+    /// a paragraph, row or heading contains), each as the observation names it, with the value the page held. A quote
+    /// from the block may be text a run typed into one of them. Held as `document` is, and unwritten.
     #[serde(skip)]
-    pub value: Option<String>,
+    pub held: Vec<Held>,
+}
+
+/// An editable field as a capture read it: its identity as the observation names a control, and its value exactly as
+/// the page held it, before the capture's whitespace collapse.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Held {
+    pub element: String,
+    pub value: std::sync::Arc<str>,
 }
 
 impl Schema for SourceControl {

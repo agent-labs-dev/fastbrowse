@@ -19,7 +19,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{Edges, JEV_IMAGE_SIDE};
-use fastbrowse_core::models::{Artifact, ArtifactKind, Link, Operation, SourceControl};
+use fastbrowse_core::models::{Artifact, ArtifactKind, Held, Link, Operation, SourceControl};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::json as json_document;
 use fastbrowse_core::page::{
@@ -273,12 +273,9 @@ struct SnapshotBlock {
     #[serde(default)]
     heading_path: Vec<String>,
     control_context: Option<SourceControl>,
-    /// The id the observation gives the native field this block is the value of.
+    /// The editable fields this block is the value of or holds, as indexes into the frame's `held`.
     #[serde(default)]
-    control_element: Option<String>,
-    /// That field's value exactly as the page holds it, before the capture's whitespace collapse.
-    #[serde(default)]
-    control_value: Option<String>,
+    held: Vec<usize>,
     frame_path: Option<String>,
     #[serde(default)]
     source_path: String,
@@ -289,6 +286,13 @@ struct SnapshotBlock {
     /// The block is a record's whole text, its textless parts named.
     #[serde(default)]
     whole_record: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotHeld {
+    element: String,
+    value: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -312,6 +316,9 @@ struct CaptureSnapshot {
     content_type: String,
     /// The frame document's key, as an observation of it names it.
     document_key: String,
+    /// Each editable field the blocks name, by the id the observation gives it and its value as the page holds it.
+    #[serde(default)]
+    held: Vec<SnapshotHeld>,
     /// The served text of a JSON document, as Chrome renders it into the body's first `pre`.
     #[serde(default)]
     json_text: Option<String>,
@@ -1229,6 +1236,16 @@ impl CdpPage {
                 }
                 continue;
             }
+            // A field's identity is the one the observation gives it: its frame's key and its node's id.
+            let held: Vec<Held> = frame
+                .raw
+                .held
+                .iter()
+                .map(|field| Held {
+                    element: format!("{frame_key}:{}", field.element),
+                    value: field.value.as_str().into(),
+                })
+                .collect();
             for block in &frame.raw.blocks {
                 let start = offset;
                 let found: Vec<(String, String)> =
@@ -1251,14 +1268,21 @@ impl CdpPage {
                     start: int(start),
                     end: int(end),
                     heading_path: block.heading_path.clone(),
-                    // A native field's identity is the one the observation gives it: its frame's key and its node's id.
-                    control_context: block.control_context.clone().map(|mut control| {
-                        control.element =
-                            block.control_element.as_ref().map(|element| format!("{frame_key}:{element}"));
+                    // A block that only holds an editable field is no control of its own, but its quotes may be typed text.
+                    control_context: if block.held.is_empty() {
+                        block.control_context.clone()
+                    } else {
+                        let mut control = block.control_context.clone().unwrap_or_else(|| SourceControl {
+                            role: "editable".into(),
+                            label: String::new(),
+                            context: None,
+                            document: None,
+                            held: Vec::new(),
+                        });
                         control.document = document_key.clone();
-                        control.value = block.control_value.clone();
-                        control
-                    }),
+                        control.held = block.held.iter().filter_map(|index| held.get(*index).cloned()).collect();
+                        Some(control)
+                    },
                     href: block.href.clone(),
                     links,
                     whole_record: block.whole_record,

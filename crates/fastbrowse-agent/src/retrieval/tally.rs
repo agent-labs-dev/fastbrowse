@@ -404,8 +404,9 @@ fn distinct(
 }
 
 /// Every note read, once each. A note holding what the run typed stays a candidate, marked `typed_by_step`, so the
-/// decision model judges whether the task's own input belongs in the tally. A superseded read is a past state, and a note whose whole text a note before it
-/// already gave is the same record read again, from a later visit or another listing of it. Within one capture the
+/// decision model judges whether the task's own input belongs in the tally; a typed and an untyped note of the same
+/// text are both kept. A superseded read is a past state, and a note whose whole text a note before it already gave
+/// is the same record read again, from a later visit or another listing of it. Within one capture the
 /// same text twice is two records, such as a row two tables both hold, so a note is keyed by its text and which
 /// occurrence of that text it is on its capture. A note from a table says
 /// which of its page's tables it is in, counted by code, since a task names a table by its place on the page and a
@@ -432,7 +433,8 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
         .filter(|(_, evidence)| {
             let quote = text::squash(&evidence.quote);
             let place = starts[&(evidence.capture_sha256.as_str(), quote.clone())].range(..evidence.start).count();
-            !deduplicate || seen.insert((quote, place))
+            // The same text typed and published is two readings: the notes are kept apart by who wrote them.
+            !deduplicate || seen.insert((quote, place, notes.typed_by_step(evidence)))
         })
         .map(|(id, evidence)| {
             let span = (evidence.capture_sha256.clone(), evidence.start, evidence.end);
@@ -2532,14 +2534,14 @@ mod tests {
         use fastbrowse_core::models::{FactReader, SourceControl};
         use fastbrowse_core::page::BlockKind;
 
-        let mut captured = capture(&[(BlockKind::Paragraph, "Item A £10"), (BlockKind::Paragraph, "Notes: Item B £99")]);
+        let mut captured =
+            capture(&[(BlockKind::Paragraph, "Item A £10"), (BlockKind::Paragraph, "Notes: Item B £99")]);
         captured.blocks[1].control_context = Some(SourceControl {
             role: "textarea".into(),
             label: "Notes".into(),
             context: None,
-            element: Some("main:7".into()),
             document: Some("doc-1".into()),
-            value: Some("Item B £99".into()),
+            held: vec![fastbrowse_core::models::Held { element: "main:7".into(), value: "Item B £99".into() }],
         });
         let page = Page::new(&captured);
         let note = |index: usize| {
@@ -2556,6 +2558,39 @@ mod tests {
         assert_eq!(found[1].note["typed_by_step"], 1);
         assert!(typed_rule(&found[0].note).is_empty());
         assert!(typed_rule(&found[1].note).contains("typed_by_step N holds text that step N of this run typed"));
+    }
+
+    /// A typed draft and an identical published listing are independent evidence: dedup keeps both, marked apart.
+    #[test]
+    fn a_typed_note_and_an_identical_untyped_note_are_both_candidates() {
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::models::{FactReader, Held, SourceControl};
+        use fastbrowse_core::page::BlockKind;
+
+        let mut draft = capture(&[(BlockKind::Paragraph, "Price: $25")]);
+        draft.blocks[0].control_context = Some(SourceControl {
+            role: "editable".into(),
+            label: String::new(),
+            context: None,
+            document: Some("doc-1".into()),
+            held: vec![Held { element: "main:7".into(), value: "Price: $25".into() }],
+        });
+        let published = capture(&[(BlockKind::Paragraph, "Listing"), (BlockKind::Paragraph, "Price: $25")]);
+        let mut notes = Notes::default();
+        for (captured, index) in [(&draft, 0), (&published, 1)] {
+            let page = Page::new(captured);
+            let block = &captured.blocks[index];
+            notes.add(Fact::read("note", evidence(&page, block, block.start, block.end), FactReader::JevChoice));
+            notes.remember_capture(captured, 1);
+        }
+        notes.remember_typing(1, "doc-1", "main:7", "Price: $25");
+        let found = candidates(&notes);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].note["typed_by_step"], 1);
+        assert!(found[1].note.get("typed_by_step").is_none());
     }
 
     #[tokio::test]

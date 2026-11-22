@@ -10738,9 +10738,8 @@ fn typed_by(state: &RunState, url: &str, document: &str, element: &str, value: &
         role: "textarea".into(),
         label: "Date".into(),
         context: None,
-        element: Some(element.into()),
         document: Some(document.into()),
-        value: Some(value.into()),
+        held: vec![fastbrowse_core::models::Held { element: element.into(), value: value.into() }],
     };
     page.blocks[1].control_context = Some(control.clone());
     let mut quote = block_evidence(&page, "s1");
