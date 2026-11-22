@@ -354,7 +354,28 @@ def test_a_slot_cannot_be_both_graded_and_blocked(candidate):
     group["rows"].append({**group["rows"][0], "task": group["blocked"][0]["task"]})
     group["rows"].pop(0)
     group["blocked"].append(dict(group["blocked"][0]))
-    with pytest.raises(ValidationError, match="exactly one measured row"):
+    with pytest.raises(ValidationError, match="slot with several rows"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_slot_mismatch_names_the_group_the_arm_and_the_slots(candidate):
+    """A targeted rerun that leaves a task with no row said only "every scheduled slot must have exactly one measured
+    row", so finding which of 146 slots was missing took a diff by hand (#1251)."""
+    group = candidate["groups"][0]
+    task = group["rows"][0]["task"]
+    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "fastbrowse" and r["task"] == task)]
+    pattern = rf"internal-hosted/fastbrowse: 3 slots with no row \(first: {task} r0, {task} r1, {task} r2\)"
+    with pytest.raises(ValidationError, match=pattern) as raised:
+        Candidate.model_validate(candidate)
+    assert f"1 task with no row in any repeat: {task}" in str(raised.value)
+
+
+def test_a_duplicated_slot_is_named(candidate):
+    group = candidate["groups"][0]
+    row = next(r for r in group["rows"] if r["arm"] == "fastbrowse")
+    group["rows"].append(dict(row))
+    pattern = rf"internal-hosted/fastbrowse: 1 slot with several rows \(first: {row['task']} r{row['repeat']}\)"
+    with pytest.raises(ValidationError, match=pattern):
         Candidate.model_validate(candidate)
 
 
@@ -1363,7 +1384,7 @@ def test_a_partial_arm_runs_exactly_its_part_of_the_head_to_head(candidate):
     group = data["groups"][0]
     dropped = next(r["task"] for r in group["rows"] if r["arm"] == "browser-harness")
     group["rows"] = [r for r in group["rows"] if not (r["arm"] == "browser-harness" and r["task"] == dropped)]
-    with pytest.raises(ValidationError, match="every scheduled slot"):
+    with pytest.raises(ValidationError, match="slots with no row"):
         Candidate.model_validate(data)
     # Listing the dropped task as excluded fills the grid, but the catalog says browser-harness can run it.
     group["excluded"] = sorted(
@@ -1379,7 +1400,7 @@ def test_a_full_arm_cannot_skip_a_task_of_the_set(candidate):
     group = data["groups"][0]
     task = group["task_ids"][0]
     group["rows"] = [r for r in group["rows"] if not (r["arm"] == "fastbrowse" and r["task"] == task)]
-    with pytest.raises(ValidationError, match="every scheduled slot"):
+    with pytest.raises(ValidationError, match="slots with no row"):
         Candidate.model_validate(data)
 
 
@@ -1504,7 +1525,7 @@ def test_an_unjudged_slot_fills_its_place_in_the_grid_and_stays_out_of_the_rows(
     regressions(published, baseline)
     group = candidate["groups"][0]
     group["unjudged"].append(dict(group["unjudged"][0]))
-    with pytest.raises(ValidationError, match="exactly one measured row"):
+    with pytest.raises(ValidationError, match="slot with several rows"):
         Candidate.model_validate(candidate)
 
 

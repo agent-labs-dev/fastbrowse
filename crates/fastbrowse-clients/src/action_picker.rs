@@ -10,9 +10,9 @@
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
-    NO_IMAGES, NoulAnswer, Question, ScoreAnswer,
+    JevCause, JevFault, NO_IMAGES, NoulAnswer, Question, ScoreAnswer,
 };
-use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema};
+use fastbrowse_core::llm::{Fault, FaultClass, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{Bytes, CostComponent, JevPurpose, LLMPurpose};
 use fastbrowse_core::py::json::dumps;
 use indexmap::IndexMap;
@@ -118,22 +118,34 @@ impl LlmDecisionClient {
         if let Some((key, _)) =
             questions.iter().find(|(_, q)| matches!(q, Question::Choice(c) if c.criteria.is_empty()))
         {
-            return Err(DecisionError::Rejected(format!("{key} offers no options")));
+            return Err(DecisionError::rejected(format!("{key} offers no options")));
         }
         let schema = Picks { questions: questions.clone() };
         // A failed generation records what it was billed into this ledger; a success hands its cost back here.
         let ledger = JevSpend::current().and_then(|spend| spend.ledger());
         let generated =
             self.llm.generate_value(LLMPurpose::Action, &messages, &schema, ledger.as_deref()).await.map_err(
-                |error| match error {
-                    LLMError::Failed(message) => DecisionError::Failed(message),
-                    LLMError::RetriesExhausted(message) => DecisionError::TransportFailed(message),
-                    LLMError::Rejected(message) => DecisionError::Rejected(message),
-                    LLMError::Budget(exceeded) => DecisionError::Budget(exceeded),
-                    LLMError::Superseded => DecisionError::Superseded,
+                |error| {
+                    // The LLM's fault names its provider and class; dropped here, a failed pick read only `Jev.Failed`.
+                    let jev = |fault: Fault| JevFault {
+                        message: fault.message,
+                        cause: JevCause {
+                            class: Some(fault.class),
+                            provider: fault.provider,
+                            purpose: current_jev_purpose(),
+                        },
+                    };
+                    match error {
+                        LLMError::Failed(fault) => DecisionError::Failed(jev(fault)),
+                        LLMError::RetriesExhausted(fault) => DecisionError::TransportFailed(jev(fault)),
+                        LLMError::Rejected(fault) => DecisionError::Rejected(jev(fault)),
+                        LLMError::Budget(exceeded) => DecisionError::Budget(exceeded),
+                        LLMError::Superseded => DecisionError::Superseded,
+                    }
                 },
             )?;
-        let answers = answers(questions, &generated.data).map_err(DecisionError::Failed)?;
+        let answers = answers(questions, &generated.data)
+            .map_err(|error| DecisionError::failed(error).classed(FaultClass::Schema))?;
         Ok(Evaluation {
             model: self.model.clone(),
             answers,
@@ -321,6 +333,7 @@ mod tests {
 
     use fastbrowse_core::decision::{ChoiceQuestion, NoulQuestion, reserve};
     use fastbrowse_core::llm::Generation;
+    use fastbrowse_core::models::FailureKind;
     use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Limits};
     use fastbrowse_core::telemetry::Ledger;
 
@@ -369,7 +382,9 @@ mod tests {
         ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
             self.purposes.lock().unwrap().push(purpose);
             self.sent.lock().unwrap().extend_from_slice(messages);
-            let data = schema.validate_json(&self.reply.to_string()).map_err(LLMError::Failed);
+            let data = schema
+                .validate_json(&self.reply.to_string())
+                .map_err(|error| LLMError::failed(FaultClass::Schema, error));
             Box::pin(async move {
                 let mut cost = CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.001));
                 cost.purpose = Some(purpose);
@@ -442,8 +457,33 @@ mod tests {
             sent: Arc::default(),
         };
         let client = LlmDecisionClient::new(Box::new(llm), "m");
-        let error = client.evaluate(&json!({}), &questions()).await.unwrap_err();
-        assert_eq!(error, DecisionError::Failed("next names no option".to_string()));
+        let error = jev_purpose(JevPurpose::Action, client.evaluate(&json!({}), &questions())).await.unwrap_err();
+        assert_eq!(error.to_string(), "next names no option");
+        assert_eq!(error.failure_kind(), "Failed/unknown/action/schema");
+    }
+
+    /// An LLM whose provider refused the call.
+    struct Refused;
+
+    impl LLMClient for Refused {
+        fn generate_value<'a>(
+            &'a self,
+            purpose: LLMPurpose,
+            _messages: &'a [Message],
+            _schema: &'a dyn ResponseSchema,
+            _ledger: Option<&'a Ledger>,
+        ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+            let error = LLMError::failed(FaultClass::Http(500), "LLM HTTP 500").from_call("openrouter", purpose);
+            Box::pin(async move { Err(error) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_llm_pick_keeps_the_provider_and_class_of_the_llm_fault() {
+        // Mapped by message alone, a pick the LLM's provider refused was named only `Failed`.
+        let client = LlmDecisionClient::new(Box::new(Refused), "m");
+        let error = jev_purpose(JevPurpose::Action, client.evaluate(&json!({}), &questions())).await.unwrap_err();
+        assert_eq!(error.failure_kind(), "Failed/openrouter/action/http-500");
     }
 
     #[tokio::test]

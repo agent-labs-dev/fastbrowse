@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::llm::{Generation, LLMError, Message, ResponseSchema};
+use fastbrowse_core::llm::{Fault, FaultClass, Generation, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, LLMPurpose, combined_basis};
 use fastbrowse_core::py::{self, base64, text};
 use fastbrowse_core::schema::{flat_optional_objects, nest_flat_objects, strict_schema};
@@ -16,6 +16,7 @@ use tokio::time::Instant;
 
 use crate::anthropic::{self, ANTHROPIC_VERSION};
 use crate::http::{Http, Response, scrub};
+use crate::providers::LLMProvider;
 use crate::validation::{
     Attempts, LLM_ATTEMPT_SECONDS, RetryStop, Usage, body_excerpt, describe, dollars, errors_json, json_invalid,
     json_object, known_total, object_value, post_with_retry, retryable, token_count, with_discarded,
@@ -90,7 +91,7 @@ pub(crate) fn image_type(content: &[u8]) -> Result<&'static str, LLMError> {
     } else if content.starts_with(b"\xff\xd8\xff") {
         Ok("image/jpeg")
     } else {
-        Err(LLMError::Failed("Only PNG and JPEG images are supported".into()))
+        Err(LLMError::failed(FaultClass::Request, "Only PNG and JPEG images are supported"))
     }
 }
 
@@ -155,7 +156,7 @@ fn truncated(payload: &Map<String, Value>) -> Result<bool, String> {
 /// asked once more: the runaways measured were a provider's decoder writing whitespace inside the JSON
 /// or one paragraph of reasoning repeated until the maximum, and the same request asked again answered.
 fn truncation(purpose: LLMPurpose) -> LLMError {
-    LLMError::Failed(format!("LLM response was cut off before its JSON ended ({purpose})"))
+    LLMError::failed(FaultClass::Truncated, format!("LLM response was cut off before its JSON ended ({purpose})"))
 }
 
 /// Never fails: usage we cannot read is an unknown cost, which a dollar cap treats as unaffordable.
@@ -434,15 +435,20 @@ pub struct OpenAICompatibleLLM {
     base_url: String,
     models: HashMap<LLMPurpose, String>,
     reasoning_effort: Option<ReasoningEffort>,
+    reasoning_default: Option<ReasoningEffort>,
     provider_routing: Option<Value>,
     cache_breakpoints: bool,
     ceilings: Mutex<HashMap<String, Ceiling>>,
+    provider: LLMProvider,
 }
 
 /// Options past the endpoint and its models, defaulting as Python's keyword arguments do.
 #[derive(Debug, Clone)]
 pub struct LLMOptions {
+    /// The effort the user set. It is sent as it is, for every purpose.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// The effort the model runs at when the user set none. A purpose may raise it, as the field reader does.
+    pub reasoning_default: Option<ReasoningEffort>,
     pub reasoning_field: ReasoningField,
     pub provider_routing: Option<Value>,
     pub strict: bool,
@@ -453,12 +459,15 @@ pub struct LLMOptions {
     /// cache only up to such a mark. A provider's own endpoint may refuse the field, and caches without it.
     pub cache_breakpoints: bool,
     pub extra_body: Map<String, Value>,
+    /// The provider this endpoint is, named in each failure's cause.
+    pub provider: LLMProvider,
 }
 
 impl Default for LLMOptions {
     fn default() -> Self {
         LLMOptions {
             reasoning_effort: None,
+            reasoning_default: None,
             reasoning_field: ReasoningField::OpenRouter,
             provider_routing: Some(openrouter_provider_routing()),
             strict: true,
@@ -466,6 +475,7 @@ impl Default for LLMOptions {
             auth_header: None,
             cache_breakpoints: true,
             extra_body: Map::new(),
+            provider: LLMProvider::OpenRouter,
         }
     }
 }
@@ -517,9 +527,9 @@ impl Drop for Billing<'_> {
         }
         if let Some(usage) = self.in_flight.take() {
             let offset = self.charge_unanswered(&usage);
-            // Drop cannot wait on a price lookup, so only a ceiling already read bounds what was dropped.
-            let cached = self.llm.cached_ceiling(&self.model);
-            if let Some(ceiling) = cached {
+            // Drop cannot wait on a price lookup, so only a ceiling already read bounds what was dropped: a capped call
+            // reads it before it sends.
+            if let Some(ceiling) = self.llm.cached_ceiling(&self.model) {
                 for line in &mut self.costs[offset..] {
                     if line.dollars.is_none() {
                         *line = bound(line.clone(), ceiling, self.sent.as_ref().unwrap_or(&Map::new()));
@@ -585,9 +595,11 @@ impl OpenAICompatibleLLM {
             base_url: base_url.trim_end_matches('/').to_string(),
             models,
             reasoning_effort: options.reasoning_effort,
+            reasoning_default: options.reasoning_default,
             provider_routing: options.provider_routing,
             cache_breakpoints: options.cache_breakpoints,
             ceilings: Mutex::new(HashMap::new()),
+            provider: options.provider,
         })
     }
 
@@ -638,33 +650,41 @@ impl OpenAICompatibleLLM {
             Ok(response) => response,
             Err(RetryStop::Budget(error)) => return Err(LLMError::Budget(error)),
             Err(RetryStop::Fatal(name)) => {
-                return Err(LLMError::Failed(format!("LLM request could not be sent ({name})")));
+                return Err(LLMError::failed(FaultClass::Transport, format!("LLM request could not be sent ({name})")));
             }
-            Err(RetryStop::Split { .. }) => return Err(LLMError::Failed("LLM request split".into())),
+            Err(RetryStop::Split { .. }) => return Err(LLMError::failed(FaultClass::Request, "LLM request split")),
         };
         let history = || usage.lock().history(started.elapsed().as_secs_f64());
         let Some(response) = response else {
             let last = usage.lock().failures.last().cloned().unwrap_or_default();
-            return Err(LLMError::RetriesExhausted(format!("LLM transport failed after {}; last: {last}", history())));
+            return Err(LLMError::RetriesExhausted(Fault::new(
+                FaultClass::Transport,
+                format!("LLM transport failed after {}; last: {last}", history()),
+            )));
         };
         if retryable(&response) {
-            return Err(LLMError::RetriesExhausted(format!(
-                "LLM request failed after {}; last: {}",
-                history(),
-                describe(&response)
+            return Err(LLMError::RetriesExhausted(Fault::new(
+                FaultClass::Http(response.status),
+                format!("LLM request failed after {}; last: {}", history(), describe(&response)),
             )));
         }
         if matches!(response.status, 401 | 403) {
             let host = self.host().unwrap_or_else(|| self.base_url.clone());
-            return Err(LLMError::Rejected(format!("LLM {} ({host} rejected the API key)", describe(&response))));
+            return Err(LLMError::Rejected(Fault::new(
+                FaultClass::Http(response.status),
+                format!("LLM {} ({host} rejected the API key)", describe(&response)),
+            )));
         }
         if !response.is_success() {
-            return Err(LLMError::Failed(format!("LLM {}", describe(&response))));
+            return Err(LLMError::failed(FaultClass::Http(response.status), format!("LLM {}", describe(&response))));
         }
         let payload = json_object(&response).map_err(|_| {
             // A successful response can be billed even when its receipt cannot be parsed.
             usage.lock().unaccounted_requests += 1;
-            LLMError::Failed(format!("Invalid LLM response; HTTP {}: {}", response.status, body_excerpt(&response)))
+            LLMError::failed(
+                FaultClass::Envelope,
+                format!("Invalid LLM response; HTTP {}: {}", response.status, body_excerpt(&response)),
+            )
         })?;
         Ok(match self.wire {
             Wire::ChatCompletions => payload,
@@ -765,7 +785,7 @@ impl OpenAICompatibleLLM {
         ledger: Option<&Ledger>,
     ) -> Result<Generation<Value>, LLMError> {
         let Some(model) = self.models.get(&purpose) else {
-            return Err(LLMError::Failed(format!("No model configured for {purpose}")));
+            return Err(LLMError::failed(FaultClass::Request, format!("No model configured for {purpose}")));
         };
         let mut wire_messages = messages
             .iter()
@@ -774,7 +794,8 @@ impl OpenAICompatibleLLM {
         // Strict mode needs every property required and no defaults; a decoder without strict support (some local
         // vLLM builds) gets the model's own schema instead.
         let json_schema = if self.strict {
-            strict_schema(&schema.json_schema()).map_err(|error| LLMError::Failed(error.to_string()))?
+            strict_schema(&schema.json_schema())
+                .map_err(|error| LLMError::failed(FaultClass::Request, error.to_string()))?
         } else {
             schema.json_schema()
         };
@@ -816,7 +837,15 @@ impl OpenAICompatibleLLM {
         if deepseek(model) {
             body.entry("temperature").or_insert(0.0.into());
         }
-        if let Some(effort) = self.reasoning_effort {
+        // Reading a field's value off a record is a judgment whether the text holds it, and at `low` GPT-6 Luna
+        // answered null for a title that was there in 14% of 80 replays of one captured request, against 0 of 80 at
+        // `medium`. Every other purpose passes at `low`, so only this one's default is raised; an effort the user
+        // set is theirs.
+        let default = match (purpose, self.reasoning_default) {
+            (LLMPurpose::Groups, Some(ReasoningEffort::Low)) => Some(ReasoningEffort::Medium),
+            (_, default) => default,
+        };
+        if let Some(effort) = self.reasoning_effort.or(default) {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
         self.billed(body, purpose, schema, ledger, model).await
@@ -831,6 +860,12 @@ impl OpenAICompatibleLLM {
         ledger: Option<&Ledger>,
         model: &str,
     ) -> Result<Generation<Value>, LLMError> {
+        if ledger.is_some_and(|ledger| ledger.limits.max_dollars.is_some()) {
+            // A call dropped in flight is bounded only by a ceiling already read, since Drop cannot wait on a lookup.
+            // Unbounded, it stopped a capped run whose first call to a model was cancelled before any listing was read
+            // (#1291). The listing is read once per model, before anything is sent.
+            self.listed_ceiling(model).await;
+        }
         let mut billing = Billing {
             llm: self,
             ledger,
@@ -886,10 +921,18 @@ impl OpenAICompatibleLLM {
             // would let an unaccounted request pass a dollar cap. A request sent but never delivered carried the same
             // prompt, so it is charged as the answer was; charging it as unknown instead made every run with one slow
             // call stop at its dollar cap.
-            billing.costs.push(with_discarded(cost(&payload, purpose), &usage));
+            //
+            // The receipt lookup below may be dropped, and Drop cannot wait on a price, so the line it would leave is
+            // bounded now from the ceiling a capped call read before it sent: per request, before the requests it stands
+            // for are counted in.
+            let unsettled = match (cost(&payload, purpose), self.cached_ceiling(&billing.model)) {
+                (line, Some(ceiling)) if line.dollars.is_none() => bound(line, ceiling, body),
+                (line, _) => line,
+            };
+            billing.costs.push(with_discarded(unsettled, &usage));
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
-            if truncated(&payload).map_err(LLMError::Failed)? {
+            if truncated(&payload).map_err(|error| LLMError::failed(FaultClass::Envelope, error))? {
                 if attempt == 0 {
                     continue;
                 }
@@ -901,10 +944,10 @@ impl OpenAICompatibleLLM {
                 // An empty completion comes back intermittently (a dropped or refused generation); ask once more.
                 Err(_) if attempt == 0 => continue,
                 Err(error) => {
-                    return Err(LLMError::Failed(format!(
-                        "Invalid completion envelope: {}",
-                        text::prefix(&scrub(&error, &self.api_key), 400)
-                    )));
+                    return Err(LLMError::failed(
+                        FaultClass::Envelope,
+                        format!("Invalid completion envelope: {}", text::prefix(&scrub(&error, &self.api_key), 400)),
+                    ));
                 }
             };
             let (detail, ends_mid_json) = match serde_json::from_str::<Value>(&content) {
@@ -947,7 +990,10 @@ impl OpenAICompatibleLLM {
                 return Err(truncation(purpose));
             }
             if attempt == 1 {
-                return Err(LLMError::Failed(format!("LLM schema validation failed after one retry: {detail}")));
+                return Err(LLMError::failed(
+                    FaultClass::Schema,
+                    format!("LLM schema validation failed after one retry: {detail}"),
+                ));
             }
             if let Some(Value::Array(messages)) = body.get_mut("messages") {
                 messages.push(json!({"role": "assistant", "content": content}));
@@ -957,7 +1003,7 @@ impl OpenAICompatibleLLM {
                 }));
             }
         }
-        Err(LLMError::Failed("unreachable".into()))
+        Err(LLMError::failed(FaultClass::Schema, "unreachable"))
     }
 
     /// Price the requests of an attempt that returned nothing usable.
@@ -1025,7 +1071,9 @@ impl fastbrowse_core::llm::LLMClient for OpenAICompatibleLLM {
             let mut fields = Map::new();
             fields.insert("schema".into(), schema.name().into());
             let call = format!("llm:{purpose}");
-            self.http.trace.call_span(&call, fields, self.generate(purpose, messages, schema, ledger)).await
+            let generated = self.generate(purpose, messages, schema, ledger);
+            let generated = self.http.trace.call_span(&call, fields, generated).await;
+            generated.map_err(|error| error.from_call(self.provider.as_str(), purpose))
         })
     }
 

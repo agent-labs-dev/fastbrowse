@@ -36,7 +36,8 @@ ARM_BINDINGS: tuple[ArmBinding, ...] = (
     ArmBinding("browser-use-oss", "browser-use-oss", "bu-4.0"),
     # Codex on Luna, price-matched with the Claude Code arm (browser-harness-claude-code on Haiku 5.5, diagnostic).
     ArmBinding("browser-harness", "browser-harness", "openai/gpt-6-luna"),
-    ArmBinding("cua-codex", "cua-codex"),
+    # Codex on Luna, as browser-harness; Parallax forwards the trial model to the CUA command.
+    ArmBinding("cua-codex", "cua-codex", "openai/gpt-6-luna"),
     # The desktop arms run files-desktop-report-cross-app in a Hyprland box (.github/workflows/desktop-eval.yml), outside
     # every published group. claude-code on Haiku 5.5, as the browser-harness baseline.
     ArmBinding("fastbrowse-desktop", "fastbrowse-desktop"),
@@ -49,6 +50,7 @@ LEGACY: dict[tuple[str, str | None], PublicArm] = {
     ("browser-use-cloud", None): "browser-use",
     ("browser-use-oss", "bu-fast"): "browser-use-oss",
     ("browser-harness", None): "browser-harness",
+    ("cua-codex", None): "cua-codex",
 }
 BY_PARALLAX = LEGACY | {(binding.harness, binding.model): binding.public for binding in ARM_BINDINGS}
 
@@ -62,7 +64,7 @@ def binding(public: str) -> ArmBinding:
 
 # Harnesses whose public arm is one model: a run on any other model is not that arm. Rows recorded before the arm
 # pinned its model carry none and match their model-less entry exactly.
-ONE_MODEL: frozenset[str] = frozenset({"browser-harness"})
+ONE_MODEL: frozenset[str] = frozenset({"browser-harness", "cua-codex"})
 
 
 def public_arm(harness: str, model: str | None) -> PublicArm | None:

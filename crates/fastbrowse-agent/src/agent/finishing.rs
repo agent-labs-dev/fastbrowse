@@ -17,11 +17,24 @@ use super::{Agent, Outcome};
 use std::collections::HashSet;
 
 use crate::memory::Notes;
-use crate::retrieval::{ComposedAnswer, Draft, compose_reviewed, draft_answer, draft_reviewed, noticed, page_quotes};
+use crate::retrieval::{
+    ComposedAnswer, Draft, Screenshot, compose_reviewed, draft_answer, draft_reviewed, noticed, page_quotes,
+};
 use crate::support::generate;
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
+/// The rejected drafts a run sends back to gather evidence, however much progress it makes between them. One run sent
+/// three different ones back over 53 steps and 455 Jev calls ($0.39) before its time limit.
+const MAX_REWRITES: i64 = 3;
+
 impl Agent {
+    /// Whether the answer goes out with a screenshot of the page the run ends on, which the checks that judge it are
+    /// told: the task asks for one and there is a browser page to picture. A run over HTTP has no rendered page, and
+    /// one stopped there on a screenshot task was told a screenshot came with its answer when none could.
+    pub(super) fn screenshot(&self, intent: OutputIntent) -> Screenshot {
+        if intent.attaches_screenshot() && !self.page.over_http() { Screenshot::Attached } else { Screenshot::Absent }
+    }
+
     async fn observe_if_changed(&self, observation: &Observation) -> Step<Observation> {
         let raw = self.raw().unwrap_or_else(|| observation.clone());
         if self.page.document_changed(&raw).await? {
@@ -42,10 +55,10 @@ impl Agent {
         if let Some(unsent) = unsent_fact(&state.history, observation)
             && self.stops_to_confirm(state, observation).await?
         {
-            return Err(Stop::new(Status::NeedsConfirmation, unsent).into());
+            return Err(Stop::new(Status::NeedsConfirmation, "Confirm/unsent-form", unsent).into());
         }
         let intent = self.output_intent(state).await?;
-        if matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage) && self.page.over_http() {
+        if intent.attaches_screenshot() && self.page.over_http() {
             return Err(self
                 .page
                 .needs_browser("The requested output needs a screenshot of the rendered page.".into())
@@ -148,7 +161,7 @@ impl Agent {
 
     /// The caller's schema, filled from a capture taken inside this branch so it overlaps the answer, each field chosen
     /// to agree with `answer`'s claims.
-    async fn schema_fields(
+    pub(super) async fn schema_fields(
         &self,
         state: &RunState,
         output_schema: Option<&RecordSchema>,
@@ -317,6 +330,7 @@ impl Agent {
                         Some(&ledger),
                         state.composition_feedback.as_deref(),
                         intent != OutputIntent::CarriedOut,
+                        self.screenshot(intent),
                         &steps,
                     ),
                 )
@@ -325,27 +339,31 @@ impl Agent {
             Some(reviewed.answer)
         } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
             let (notes, task, ledger) = (state.notes.clone(), self.model_task(state), state.ledger.clone());
-            let reviewed =
-                match self.trace.phase("coverage", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
-                    Some(Draft::Reviewed(reviewed)) => Some(reviewed),
-                    // The picks hold the answer among other page text, which only a writer can narrow: it writes the
-                    // answer from them now, and their claim check holds it to their quotes.
-                    Some(Draft::Write(feedback)) => {
-                        let steps = state.executed_steps();
-                        let written = compose_reviewed(
-                            &*self.jev,
-                            &*self.llm,
-                            &task,
-                            &notes,
-                            Some(&ledger),
-                            Some(&feedback),
-                            true,
-                            &steps,
-                        );
-                        Some(self.trace.phase("compose", written).await?)
-                    }
-                    None => None,
-                };
+            let reviewed = match self
+                .trace
+                .phase("coverage", draft_reviewed(&*self.jev, &task, self.screenshot(intent), &notes, Some(&ledger)))
+                .await?
+            {
+                Some(Draft::Reviewed(reviewed)) => Some(reviewed),
+                // The picks hold the answer among other page text, which only a writer can narrow: it writes the
+                // answer from them now, and their claim check holds it to their quotes.
+                Some(Draft::Write(feedback)) => {
+                    let steps = state.executed_steps();
+                    let written = compose_reviewed(
+                        &*self.jev,
+                        &*self.llm,
+                        &task,
+                        &notes,
+                        Some(&ledger),
+                        Some(&feedback),
+                        true,
+                        self.screenshot(intent),
+                        &steps,
+                    );
+                    Some(self.trace.phase("compose", written).await?)
+                }
+                None => None,
+            };
             reviewed.map(|reviewed| {
                 // A pick that falls short is written up next time, from everything read by then.
                 state.compose |= reviewed.rejection.is_some() || reviewed.answer.problem.is_some();
@@ -369,6 +387,14 @@ impl Agent {
             && !repeated
             && let Some(rejection) = rejection
         {
+            // Progress renews the recovery budget, as the one stall rule has it, so a navigator sent back for
+            // evidence that never settles the draft earns a fresh budget with every new page. A run may still
+            // improve its draft as evidence arrives, so a few rewrites are free of the stall budget; past them the
+            // next rejection is the recovery that runs out.
+            if state.rewrites >= MAX_REWRITES {
+                state.recoveries = state.recoveries.max(self.config.stall.max_recoveries);
+            }
+            state.rewrites += 1;
             let reason = rejection_reason(&rejection, false);
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()
@@ -416,6 +442,8 @@ impl Agent {
         }
         let mut data = Value::Null;
         let mut status = if answer_problem.is_some() { Status::Unverified } else { Status::Complete };
+        // Each check that leaves the answer unverified names itself, and the first, as with `error`, is the kind.
+        let mut kind = answer_problem.is_some().then_some("Done/answer-problem");
         // A problem can quote a withheld claim, which can hold what the run typed.
         let mut error = answer_problem.map(|problem| self.redact(&problem));
         // A whole-list answer from part of the list is not the whole: a limit or a refused page left one unread. The same
@@ -433,14 +461,17 @@ impl Agent {
                 ),
             };
             error.get_or_insert_with(|| self.redact(&message));
+            kind.get_or_insert("Done/list-unread");
         }
         if unanswered {
             status = Status::Unverified;
             error.get_or_insert_with(|| UNANSWERED.to_string());
+            kind.get_or_insert("Done/unanswered");
         }
         if state.refused {
             status = Status::Unverified;
             error.get_or_insert_with(|| self.redact(REFUSED));
+            kind.get_or_insert("Done/refused");
         }
         if let Some(extraction) = extraction {
             data = extraction.data.unwrap_or(Value::Null);
@@ -449,6 +480,7 @@ impl Agent {
                 status = Status::Unverified;
                 // An unverified result says what could not be verified, never `error: null`.
                 error.get_or_insert_with(|| self.redact(problem));
+                kind.get_or_insert("Done/extraction-problem");
             }
         }
         // The answer's notes and each schema field cite independently; the same words on the same page are one
@@ -468,8 +500,9 @@ impl Agent {
         if let Some(observed) = self.observed() {
             self.observe_if_changed(&observed).await?;
         }
-        let result = self.result(Some(state), &state.ledger.clone(), status, outcome);
-        Ok(Some(self.ending_frame(result, matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage)).await))
+        let mut result = self.result(Some(state), &state.ledger.clone(), status, outcome);
+        result.failure_kind = kind.map(Into::into);
+        Ok(Some(self.ending_frame(result, intent.attaches_screenshot()).await))
     }
 
     /// The stop of a run whose page Jev judged to say an item the task requires cannot be bought. Jev made that
@@ -500,13 +533,16 @@ impl Agent {
         let url = &observation.url;
         let Some((named, evidence)) = cited else {
             let error = format!("{url} says an item the task requires cannot be bought.");
-            return Ok(Stop::new(Status::Unavailable, self.redact(&error)));
+            return Ok(Stop::new(Status::Unavailable, UNOBTAINABLE, self.redact(&error)));
         };
         let (item, reason) = (named.item.trim(), named.reason.trim().trim_end_matches('.'));
         let error = format!("The task needs {item}, which {url} says cannot be bought: {reason}.");
-        Ok(Stop { status: Status::Unavailable, error: Some(self.redact(&error)), evidence, wall: None })
+        Ok(Stop { evidence, ..Stop::new(Status::Unavailable, UNOBTAINABLE, self.redact(&error)) })
     }
 }
+
+/// The rule of a stop Jev's judgement that a required item cannot be bought decided.
+const UNOBTAINABLE: &str = "Unobtainable";
 
 pub(super) const UNANSWERED: &str = "Nothing read so far answers the task, so it is not done.";
 

@@ -157,3 +157,19 @@ def test_an_arm_pooled_from_several_runs_shows_every_model_and_refuses_split_ver
     assert write(version) == {"browser-use": {"version": version, "models": ["b", "a"]}}
     with pytest.raises(ValueError, match="different versions"):
         write("browser-use-sdk==3.13.0 API v4")
+
+
+def test_the_solo_group_an_earlier_release_published_becomes_the_previous_release() -> None:
+    earlier = {"id": "live-suite-fastbrowse", "measured": {"campaign_id": "release-0.11.1"}, "published": []}
+    files = group_files(STAGED.read_bytes(), FACTS, {**CURRENT, "live-suite-fastbrowse": earlier})
+    assert json.loads(files["data/previous-release.json"]) == earlier
+    assert files["data/previous-release.json"].endswith(b"\n")
+
+
+def test_republishing_a_campaign_keeps_the_previous_release_the_site_already_holds() -> None:
+    campaign = json.loads(STAGED.read_bytes())["campaign_id"]
+    same = {"measured": {"campaign_id": campaign}, "published": []}
+    unmeasured = {"measured": None, "published": []}
+    for held in (same, unmeasured):
+        files = group_files(STAGED.read_bytes(), FACTS, {**CURRENT, "live-suite-fastbrowse": held})
+        assert "data/previous-release.json" not in files

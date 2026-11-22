@@ -150,3 +150,29 @@ def test_negative_fixture_cost_cannot_increase_available_funds(tmp_path: Path) -
         budget.settle(CostBreakdown(lines=(malformed,)))
     assert budget.receipt.reserved_usd == 1
     assert budget.receipt.known_usd == 0
+
+
+async def test_a_provider_refusal_stops_the_runner_naming_the_cause_and_leaves_no_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from contextlib import nullcontext
+    from unittest.mock import AsyncMock, Mock
+
+    import httpx
+
+    from fastbrowse.evals import runner
+    from fastbrowse.evals.judge import ProviderError
+
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/systemone")
+    refused = ProviderError(httpx.Response(403, request=request))
+    monkeypatch.setattr(runner, "run_task", AsyncMock(side_effect=refused))
+    monkeypatch.setattr(runner, "provenance", lambda **_: {})
+    monkeypatch.setattr(runner, "fixture_server", lambda: nullcontext(("https://example.test", Mock())))
+    monkeypatch.setattr(runner, "chrome", lambda: nullcontext("ws://unused"))
+    output = tmp_path / "rows.jsonl"
+    task = runner.TASKS[0].id
+    assert await main(["--suite", "local", "--only", task, "--out", str(output)]) == 2
+    out = capsys.readouterr().out
+    assert f"PROVIDER 403 openrouter.ai on {task}: " in out
+    assert "limit or credit" in out
+    assert output.read_text() == ""

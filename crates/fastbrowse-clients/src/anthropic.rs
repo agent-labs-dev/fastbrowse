@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 
 use crate::http::Http;
 use crate::openai_compatible::{LLMOptions, OpenAICompatibleLLM, ReasoningEffort, Wire, image_type};
+use crate::providers::LLMProvider;
 
 /// The API version every request names; the Messages API refuses a request without one.
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -202,7 +203,12 @@ impl AnthropicLLM {
         if !clashes.is_empty() {
             return Err(format!("extra request fields replace ones fastbrowse sets: {}", clashes.join(", ")));
         }
-        let options = LLMOptions { reasoning_effort: effort, provider_routing: None, ..LLMOptions::default() };
+        let options = LLMOptions {
+            reasoning_effort: effort,
+            provider_routing: None,
+            provider: LLMProvider::Anthropic,
+            ..LLMOptions::default()
+        };
         OpenAICompatibleLLM::with_wire(api_key, http, base_url, models, options, Wire::AnthropicMessages, extra_body)
             .map(AnthropicLLM)
     }

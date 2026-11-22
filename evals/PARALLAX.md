@@ -1,8 +1,9 @@
 # Parallax pin
 
 The eval plugin pins `parallax-evals[browser]==2.0.0.dev54` in
-`evals/pyproject.toml` and `evals/uv.lock`. The dependency resolves directly
-from PyPI. No local source override is used.
+`evals/pyproject.toml` and `evals/uv.lock`, and the root `evals` extra and dev
+group pin the same version in `pyproject.toml` and `uv.lock`. The dependency
+resolves directly from PyPI. No local source override is used.
 
 The pinned version supplies:
 
@@ -12,7 +13,9 @@ The pinned version supplies:
 - judge identity and retry handling for `environment interruption: `;
 - typed timing, cost components, and harness details;
 - campaign budgets, reserves, `budget.jsonl`, processes, and run artifacts;
-- the browser harnesses and the `plain-cdp` final-page observer.
+- the browser harnesses and the `plain-cdp` final-page observer;
+- `cloud_browser(minutes=...)` and `browser_minutes`, so a cloud browser stops itself when its turn ends;
+- trial assets (`Trial.assets`), which retain a trial's binary evidence by content hash;
 - the official `bu-bench` and `online-mind2web` sources, their upstream grading
   bridges, and their interruption handling.
 
