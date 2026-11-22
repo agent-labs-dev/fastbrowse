@@ -595,6 +595,10 @@ async fn a_window_an_action_opens_becomes_the_active_tab() {
     let result = page.act(&click, &before).await.unwrap();
     // The editor's own window did not change; the dialog is the change.
     assert!(result.page_changed, "{result:?}");
+    // The editor's observation names elements of the window before: acting on it again sends nothing to the dialog.
+    let retry = page.act(&click, &before).await.unwrap();
+    assert_eq!(retry.outcome, StepOutcome::Stale, "{retry:?}");
+    assert_eq!(calls(&fake, "click").len(), 1);
     let after = page.observe().await.unwrap();
     assert_eq!(tabs(&after), [("0xabc", false), ("0xdef", false), ("0x123", true)]);
     assert_eq!(after.title, "Save As");

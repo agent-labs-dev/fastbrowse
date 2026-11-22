@@ -313,8 +313,12 @@ impl DeskpilotPage {
         Ok(listed.iter().filter(here).filter_map(read_window).collect())
     }
 
-    /// Makes `window` the active one.
+    /// Makes `window` the active one. A different window invalidates every earlier observation: its ids name elements
+    /// of the window before, and must not be sent to this one.
     fn activate(&self, window: Window) {
+        if self.window.lock().unwrap().address != window.address {
+            *self.latest.lock().unwrap() = None;
+        }
         let mut visited = self.visited.lock().unwrap();
         visited.retain(|address| *address != window.address);
         visited.push(window.address.clone());
@@ -872,8 +876,6 @@ impl DeskpilotPage {
             let opened = tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), self.follow_opened()).await;
             if let Ok(Ok(Some(_))) = opened {
                 self.generation.fetch_add(1, Ordering::Relaxed);
-                // Every earlier observation was of the window before: its ids must not be sent to the new one.
-                *self.latest.lock().unwrap() = None;
                 return Ok(ActResult {
                     outcome: StepOutcome::Stale,
                     failure: None,
