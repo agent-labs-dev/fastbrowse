@@ -9,9 +9,9 @@ use fastbrowse_browser::session::CheckAccess;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::Operation;
-use fastbrowse_core::page::{Action, BlockKind, BrowserError, Page};
+use fastbrowse_core::page::{Action, BlockKind, BrowserError, Page, Unread};
 use fastbrowse_core::py::sha256_hex;
-use fastbrowse_run::fetch::html::blocks;
+use fastbrowse_run::fetch::html::{ELEMENT_HANDLERS, WINDOW_HANDLERS, blocks, scripts};
 use fastbrowse_run::fetch::{FetchedPage, NotFetched, eligible, fetch_document};
 use serde_json::Value;
 
@@ -699,6 +699,38 @@ async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
     assert_eq!(capture.inaccessible_frames, 1);
 }
 
+/// A script in a frame read into the page, or an event handler a load fires, can build a link as a `<script>` of the
+/// page's own can, so the fetched page records unrun scripts for each (#1380). A frame it never reads, such as one
+/// nested in a frame, may hold links too: the page states it unread rather than free of scripts.
+#[tokio::test]
+async fn test_scripts_a_frame_or_handler_carries_are_unrun_scripts_of_the_page() {
+    let http = serving(|request| {
+        let body = match request.url.rsplit('/').next().unwrap() {
+            "inner" => "<p>Inner note</p><script src=/links.js></script>",
+            "framed" => "<p>Outer text</p><iframe src=/inner></iframe>",
+            "inline" => "<p>Outer text</p><iframe srcdoc='<p>Note</p><script>add()</script>'></iframe>",
+            "handler" => "<body onload=addLink()><p>Outer text</p></body>",
+            "nesting" => "<p>Outer text</p><iframe src=/middle></iframe>",
+            "middle" => "<p>Middle text</p><iframe src=/deep></iframe>",
+            _ => "<p>Outer text</p><iframe srcdoc='<p>Note</p>'></iframe>",
+        };
+        Response::new(200, body.to_string()).with_header("content-type", "text/html")
+    });
+    for (path, scripts) in [("framed", true), ("inline", true), ("handler", true), ("plain", false)] {
+        let fetched = fetch_document(&http, &format!("https://docs.example.test/{path}"), None, 15.0).await;
+        assert_eq!(fetched.expect("read").scripts, scripts, "{path}");
+    }
+    let unread = |page: FetchedPage, path: &'static str| async move {
+        page.navigate(&format!("https://docs.example.test/{path}"), None).await.unwrap();
+        page.unread()
+    };
+    let page = || FetchedPage::new(http.clone(), None, None);
+    let nested = Unread { scripts: false, frames: 1, browser: true };
+    assert_eq!(unread(page(), "nesting").await, Some(nested));
+    assert_eq!(unread(page().without_browser(), "nesting").await, Some(Unread { browser: false, ..nested }));
+    assert_eq!(unread(page(), "plain").await, None);
+}
+
 #[tokio::test]
 async fn a_fetched_document_title_is_citable_separately_from_its_heading() {
     let capture =
@@ -714,4 +746,85 @@ async fn a_fetched_document_title_is_citable_separately_from_its_heading() {
     assert_eq!(capture.sha256, sha256_hex(capture.text.as_bytes()));
     let shell = fetched(&html("<title>Script shell</title><script>render()</script>"), "https://docs.test/").await;
     assert!(shell.is_err(), "metadata does not establish that a script-rendered body was read");
+}
+
+/// A handler attribute from a spec that extends `GlobalEventHandlers`, not from the HTML standard's own table, still
+/// runs script: a CSS animation fires `onanimationstart` after load with no step taken. Missing them told Jev a page
+/// whose handler adds a link led nowhere (#1380).
+#[test]
+fn test_standard_css_and_pointer_handler_attributes_count_as_scripts() {
+    let mut missing = Vec::new();
+    for handler in [
+        "onanimationstart",
+        "onanimationiteration",
+        "onanimationend",
+        "onanimationcancel",
+        "ontransitionrun",
+        "ontransitionstart",
+        "ontransitionend",
+        "ontransitioncancel",
+        "onpointerover",
+        "onpointerenter",
+        "onpointerdown",
+        "onpointermove",
+        "onpointerrawupdate",
+        "onpointerup",
+        "onpointercancel",
+        "onpointerout",
+        "onpointerleave",
+        "ongotpointercapture",
+        "onlostpointercapture",
+    ] {
+        if scripts(&format!("<p {handler}=\"this.append('More')\">Text</p>")) != 1 {
+            missing.push(handler);
+        }
+    }
+    assert!(missing.is_empty(), "standard handlers left uncounted: {missing:?}");
+}
+
+/// A CSS animation fires this handler after load, so its link is missing from an HTTP read (#1380).
+#[tokio::test]
+async fn test_an_animation_handler_is_an_unrun_script_of_the_page() {
+    let markup = "<style>@keyframes show { from { opacity: 0 } to { opacity: 1 } } \
+                  p { animation: show 0.01s }</style>\
+                  <p onanimationstart=\"this.insertAdjacentHTML('afterend', \
+                  '<a href=/next>Learn more</a>')\">An introduction</p>";
+    let http = Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+        Box::pin(async move { Ok(Response::new(200, markup).with_header("content-type", "text/html")) })
+    }));
+    let page = FetchedPage::new(http, None, None);
+    page.navigate("https://docs.example.test/", None).await.unwrap();
+    assert!(page.observe().await.unwrap().controls.is_empty());
+    assert_eq!(page.unread(), Some(Unread { scripts: true, frames: 0, browser: true }));
+}
+
+/// The handler lists are the names `golden/event_handlers.json` records from each spec's IDL and from Chrome, no
+/// more and no fewer, and each counts on HTML, SVG and MathML elements alike, as each includes `GlobalEventHandlers`.
+#[test]
+fn test_the_handler_lists_are_every_spec_and_chrome_handler() {
+    let golden: Value =
+        serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/event_handlers.json")))
+            .unwrap();
+    let names = |kind: &str| {
+        let mut names: Vec<String> = golden[kind]["specs"].as_object().unwrap().keys().cloned().collect();
+        names.extend(golden[kind]["chrome"].as_array().unwrap().iter().map(|name| name.as_str().unwrap().to_owned()));
+        names.sort();
+        names.dedup();
+        names
+    };
+    assert_eq!(names("element"), ELEMENT_HANDLERS);
+    assert_eq!(names("window"), WINDOW_HANDLERS);
+    for handler in ELEMENT_HANDLERS {
+        for markup in [
+            format!("<p {handler}=go()>Text</p>"),
+            format!("<svg><circle {handler}=go() r=1></circle></svg>"),
+            format!("<math><mi {handler}=go()>x</mi></math>"),
+        ] {
+            assert_eq!(scripts(&markup), 1, "{markup}");
+        }
+    }
+    for handler in WINDOW_HANDLERS {
+        assert_eq!(scripts(&format!("<body {handler}=go()><p>Text</p></body>")), 1, "{handler}");
+        assert_eq!(scripts(&format!("<p {handler}=go()>Text</p><svg {handler}=go()></svg>")), 0, "{handler}");
+    }
 }

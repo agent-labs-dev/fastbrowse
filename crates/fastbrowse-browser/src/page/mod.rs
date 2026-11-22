@@ -37,7 +37,7 @@ use tokio::time::{Instant, sleep, timeout};
 
 use crate::PdfUnread;
 use crate::cdp::secs;
-use crate::error::BrowserError;
+use crate::error::{BrowserError, Failure};
 use crate::pdf::PARSE_SECONDS;
 use crate::session::{
     BrowserSession, CAPTURE_JS, LISTENERS_UNREAD, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json,
@@ -98,6 +98,8 @@ fn site_unreachable(name: &str) -> bool {
 
 /// The error a document navigation ends with when its response turned out to be a download, not a page.
 const ABORTED: &str = "net::ERR_ABORTED";
+/// The error a document navigation ends with when the server answered an error status with no body.
+const RESPONSE_CODE_FAILURE: &str = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
 /// The site or the connection to it gave nothing: the-internet.herokuapp.com answered ERR_EMPTY_RESPONSE for a
 /// quarter hour of one eval. Not ERR_NAME_NOT_RESOLVED, which a mistyped address also gives.
 const UNREACHABLE: [&str; 9] = [
@@ -167,9 +169,10 @@ struct SnapshotControl {
     pictured: Option<bool>,
 }
 
-pub(crate) trait FrameText: DeserializeOwned {
+pub(crate) trait FrameText: DeserializeOwned + Clone {
     const SHAPE: &'static str;
     fn url(&self) -> &str;
+    fn set_url(&mut self, url: String);
     fn title(&self) -> &str;
     /// A shape that keeps reads serves the validated parse of its named baseline.
     fn from_kept(_kept: &KeptRead) -> Option<Arc<Self>> {
@@ -186,6 +189,16 @@ pub(crate) trait FrameText: DeserializeOwned {
 pub(crate) struct DocumentResponse {
     url: String,
     response_status: Option<i64>,
+    document_key: String,
+}
+
+/// The status read as the page answers it: its address, and the address and status its navigation entry names.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StatusRead {
+    url: String,
+    entry: Option<String>,
+    status: Option<i64>,
     document_key: String,
 }
 
@@ -246,6 +259,9 @@ impl FrameText for Snapshot {
     const SHAPE: &'static str = "_Snapshot";
     fn url(&self) -> &str {
         &self.url
+    }
+    fn set_url(&mut self, url: String) {
+        self.url = url;
     }
 }
 
@@ -311,6 +327,9 @@ impl FrameText for CaptureSnapshot {
     const SHAPE: &'static str = "_CaptureSnapshot";
     fn url(&self) -> &str {
         &self.url
+    }
+    fn set_url(&mut self, url: String) {
+        self.url = url;
     }
 }
 
@@ -537,7 +556,7 @@ pub(crate) fn sha256_bytes(bytes: &[u8]) -> String {
 fn parse<T: DeserializeOwned>(raw: Value, shape: &str) -> Result<T, BrowserError> {
     // Our own page script produced this, so a mismatch is a bug in one side of the contract.
     serde_json::from_value(raw)
-        .map_err(|e| BrowserError::Failed(format!("page script returned an unexpected {shape}: {e}")))
+        .map_err(|e| BrowserError::failed("script/shape", format!("page script returned an unexpected {shape}: {e}")))
 }
 
 /// A length or offset as core's models hold it, the `int` Python writes.
@@ -1048,7 +1067,7 @@ impl CdpPage {
             }
         }
         let was_served = served.is_some();
-        let parsed: Arc<T> = match served {
+        let mut parsed: Arc<T> = match served {
             Some(parsed) => parsed,
             None => Arc::new(parse(raw.clone(), T::SHAPE)?),
         };
@@ -1066,6 +1085,12 @@ impl CdpPage {
                 None => {
                     state.kept.remove(&key);
                 }
+            }
+        }
+        if is_main {
+            let address = self.session.page_address(session_id, parsed.url().to_owned());
+            if address != parsed.url() {
+                Arc::make_mut(&mut parsed).set_url(address);
             }
         }
         // The text and the address it came from were read in one evaluation, so this cannot be raced.
@@ -1374,7 +1399,7 @@ impl CdpPage {
         };
         BASE64
             .decode(shot["data"].as_str().unwrap_or_default().as_bytes())
-            .map_err(|_| BrowserError::Failed("Page.captureScreenshot failed (Error)".into()))
+            .map_err(|_| BrowserError::failed("Page.captureScreenshot/Error", "Page.captureScreenshot failed (Error)"))
     }
 
     pub async fn origin(&self) -> Result<String, BrowserError> {
@@ -1383,7 +1408,12 @@ impl CdpPage {
 
     async fn origin_once(&self) -> Result<String, BrowserError> {
         // An observation already reading again calls this, so it reads once rather than nesting a second allowance.
-        self.address_once().await?; // refuses a document outside the grant before its origin is read
+        let (href, address) = self.located_once().await?; // refuses a document outside the grant before its origin is read
+        // Chrome's error page for an empty-body error status has its own opaque origin, so the page's origin is the
+        // one of the address it stands in for, or `address()` and `origin()` would disagree.
+        if href != address {
+            return Ok(origin_of(&address).unwrap_or_else(|| "null".to_owned()));
+        }
         let raw = self.evaluate(&self.session.active_session_id()?, "location.origin").await?;
         Ok(value_str(&raw))
     }
@@ -1393,16 +1423,22 @@ impl CdpPage {
     }
 
     async fn address_once(&self) -> Result<String, BrowserError> {
+        Ok(self.located_once().await?.1)
+    }
+
+    /// The document's own `location.href` and the address the page stands for, refused outside the grant.
+    async fn located_once(&self) -> Result<(String, String), BrowserError> {
         self.session.check_access().await?;
-        let raw = self.evaluate(&self.session.active_session_id()?, "location.href").await?;
-        let address = value_str(&raw);
+        let session_id = self.session.active_session_id()?;
+        let href = value_str(&self.evaluate(&session_id, "location.href").await?);
+        let address = self.session.page_address(&session_id, href.clone());
         if let Some(grant) = self.session.grant()
             && !address.is_empty()
             && !grant.allows(&address)
         {
             return Err(BrowserError::OriginNotAllowed);
         }
-        Ok(address)
+        Ok((href, address))
     }
 
     /// Whether the current URL or document differs, without indexing the page's controls again.
@@ -1412,16 +1448,16 @@ impl CdpPage {
         if dialog.is_some() || observation.dialog.is_some() {
             return Ok(dialog != observation.dialog);
         }
-        let check = format!(
-            "location.href !== {} || String(performance.timeOrigin) !== {}",
-            py_json(&json!(observation.url)),
-            py_json(&json!(observation.document_key))
-        );
-        match self.evaluate(&self.session.active_session_id()?, &check).await {
+        let session_id = self.session.active_session_id()?;
+        match self.evaluate(&session_id, "[location.href, String(performance.timeOrigin)]").await {
             // The document this asks about was replaced while it asked, which is the answer.
             Err(BrowserError::ContextLost(_)) => Ok(true),
             Err(error) => Err(error),
-            Ok(raw) => Ok(raw != Value::Bool(false)),
+            Ok(Value::Array(read)) if read.len() == 2 => {
+                Ok(self.session.page_address(&session_id, value_str(&read[0])) != observation.url
+                    || value_str(&read[1]) != observation.document_key)
+            }
+            Ok(_) => Err(act::bad("tuple[str, str]")),
         }
     }
 
@@ -1430,8 +1466,7 @@ impl CdpPage {
         let session_id = self.session.active_session_id()?;
         let read = "(() => { const navigation = performance.getEntriesByType('navigation')[0]; \
                     return {url: location.href, document_key: String(performance.timeOrigin), \
-                    response_status: navigation?.name.split('#')[0] === location.href.split('#')[0] \
-                    ? navigation.responseStatus || null : null}; })()";
+                    entry: navigation?.name ?? null, status: navigation?.responseStatus || null}; })()";
         // Making the world took two round trips more than reading it, on every observation, so one is kept until its
         // document goes. It is kept by the unique id Chrome gives each context, never by its context id: Chrome reuses
         // context ids across renderer processes, so a kept context id could name another document's world, even the
@@ -1439,9 +1474,9 @@ impl CdpPage {
         let kept = self.state.lock().unwrap().status_worlds.get(&session_id).cloned();
         if let Some(kept) = kept {
             if let Ok(raw) = self.evaluate_in(&session_id, read, None, Some(&kept)).await
-                && let Ok(response) = parse::<DocumentResponse>(raw, "_DocumentResponse")
+                && let Ok(response) = parse::<StatusRead>(raw, "_DocumentResponse")
             {
-                return Ok(response);
+                return Ok(self.answered(&session_id, response));
             }
             self.state.lock().unwrap().status_worlds.remove(&session_id);
         }
@@ -1457,9 +1492,18 @@ impl CdpPage {
         let context = world["executionContextId"].as_i64().unwrap_or_default();
         let raw = self.evaluate_in(&session_id, read, Some(context), None).await?;
         if let Some(unique) = self.session.status_context(&session_id, context) {
-            self.state.lock().unwrap().status_worlds.insert(session_id, unique);
+            self.state.lock().unwrap().status_worlds.insert(session_id.clone(), unique);
         }
-        parse(raw, "_DocumentResponse")
+        Ok(self.answered(&session_id, parse(raw, "_DocumentResponse")?))
+    }
+
+    /// A status read as the document it names: the status counts only when the navigation entry is that document's
+    /// own address, as a same-document move to another address leaves the entry naming the first.
+    fn answered(&self, session_id: &str, read: StatusRead) -> DocumentResponse {
+        let url = self.session.page_address(session_id, read.url);
+        let page = |address: &str| address.split('#').next().unwrap_or_default().to_owned();
+        let own = read.entry.as_deref().is_some_and(|entry| page(entry) == page(&url));
+        DocumentResponse { url, response_status: read.status.filter(|_| own), document_key: read.document_key }
     }
 
     /// The HTTP status the current document was served with, or None when the browser does not say.
@@ -1543,9 +1587,14 @@ impl CdpPage {
                 if error == ABORTED && self.session.download_settled(downloads_before, 3.0).await {
                     return Ok(());
                 }
-                failure = if net_error(error) { error.to_owned() } else { "NavigationError".to_owned() };
-                timed_out = false;
-                continue;
+                // An error status with no body: the site answered, and Chrome committed its own page for the answer,
+                // which `page_address` reads as the address asked for, with its status. It is a page like any error
+                // page with a body, never retried here: the agent sees the status and decides what it means.
+                if error != RESPONSE_CODE_FAILURE {
+                    failure = if net_error(error) { error.to_owned() } else { "NavigationError".to_owned() };
+                    timed_out = false;
+                    continue;
+                }
             }
             if self.ready(&session_id, load_timeout_seconds * f64::from(1u32 << attempt)).await? {
                 // Unsettled by the deadline is still a usable page, and a redirect destroys the promise mid-wait.
@@ -1560,12 +1609,12 @@ impl CdpPage {
         // caller's own, and a run that failed before its first step has no other record of where it was going.
         let message = format!("Page.navigate failed ({failure}) for {url}");
         if timed_out {
-            return Err(BrowserError::NavigationTimeout(message));
+            return Err(BrowserError::NavigationTimeout(Failure::new(format!("Page.navigate/{failure}"), message)));
         }
         if failure.strip_prefix("net::ERR_").is_some_and(site_unreachable) {
-            return Err(BrowserError::SiteUnreachable(message));
+            return Err(BrowserError::SiteUnreachable(Failure::new(format!("Page.navigate/{failure}"), message)));
         }
-        Err(BrowserError::Failed(message))
+        Err(BrowserError::failed(format!("Page.navigate/{failure}"), message))
     }
 
     #[doc(hidden)]
@@ -1720,7 +1769,10 @@ impl CdpPage {
             {
                 Ok((*stable, fingerprint.as_str().map(str::to_owned)))
             }
-            _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None, str]".into())),
+            _ => Err(BrowserError::failed(
+                "script/shape",
+                "page script returned an unexpected tuple[bool, str | None, str]",
+            )),
         }
     }
 
@@ -1872,7 +1924,10 @@ impl Page for CdpPage {
             let sink = &self.session.0.artifact_sink;
             match sink.put(ArtifactKind::Capture, name, "text/plain; charset=utf-8", text.as_bytes()).await {
                 Ok(artifact) => Ok(Some(artifact)),
-                Err(error) => Err(fastbrowse_core::page::BrowserError::Failed(format!("keeping {name}: {error}"))),
+                Err(error) => Err(fastbrowse_core::page::BrowserError::failed(
+                    "artifact/keep",
+                    format!("keeping {name}: {error}"),
+                )),
             }
         })
     }
@@ -1882,7 +1937,10 @@ impl Page for CdpPage {
             let sink = &self.session.0.artifact_sink;
             match sink.put(ArtifactKind::Screenshot, name, "image/png", png).await {
                 Ok(artifact) => Ok(Some(artifact)),
-                Err(error) => Err(fastbrowse_core::page::BrowserError::Failed(format!("keeping {name}: {error}"))),
+                Err(error) => Err(fastbrowse_core::page::BrowserError::failed(
+                    "artifact/keep",
+                    format!("keeping {name}: {error}"),
+                )),
             }
         })
     }
@@ -2024,10 +2082,15 @@ fn csv_rows(text: &str) -> Vec<&str> {
 /// 0.6 s in front (#771). The failure says so, since nothing else points at the option.
 fn held_in_background(error: BrowserError, foreground: bool) -> BrowserError {
     match error {
-        BrowserError::PageUnresponsive(message) if !foreground => BrowserError::PageUnresponsive(format!(
-            "{message}. The tab was opened behind the window's current tab, where a browser profile can hold a \
-             navigation; --foreground opens it in front"
-        )),
+        BrowserError::PageUnresponsive(Failure { reason, message }) if !foreground => {
+            BrowserError::PageUnresponsive(Failure::new(
+                reason,
+                format!(
+                    "{message}. The tab was opened behind the window's current tab, where a browser profile can hold a \
+                 navigation; --foreground opens it in front"
+                ),
+            ))
+        }
         other => other,
     }
 }
@@ -2040,7 +2103,10 @@ mod tests {
     // loaded in 0.6 s (#771), and the run ended unavailable with nothing pointing at --foreground.
     #[test]
     fn a_navigation_held_in_a_background_tab_names_the_foreground_option() {
-        let held = BrowserError::PageUnresponsive("Page.navigate exceeded its command deadline".into());
+        let held = BrowserError::PageUnresponsive(Failure::new(
+            "Page.navigate/deadline",
+            "Page.navigate exceeded its command deadline",
+        ));
         let told = held_in_background(held.clone(), false).to_string();
         assert!(matches!(held_in_background(held.clone(), false), BrowserError::PageUnresponsive(_)));
         assert!(told.contains("--foreground"), "{told}");

@@ -68,7 +68,7 @@ A reviewer rejects a change that breaks one.
 - **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE, a return to a seen page
   state with nothing read since, and any return after the first since the last new evidence are each no progress;
   `unchanged_actions` of them in a row ask Jev again without the stalled action. An unseen page state or new evidence
-  renews that budget. Rewriting a field's current value never counts as progress.
+  renews that budget. Rewriting a field's current value never counts as progress. A run sends at most three rejected drafts back to gather, progress or not.
 
 ## Prompts and models
 
@@ -92,6 +92,10 @@ the candidate schema that `evals/` and the site share.
 
 ## Changes and prose
 
+- A PR that adds a feature or an eval carries a video of it working: a real run recorded with
+  `fastbrowse --record clip.mp4` (for an eval, one of its tasks run the same way), kept short and under 10 MB, and
+  attached with `gh pr edit <n> --attach clip.mp4`, which GitHub plays inline. Never a mock; when no run is
+  possible, the body says why.
 - PR titles are Conventional Commits and become the squash subject. Update a branch by rebasing on `origin/main` and
   `git push --force-with-lease`, never `gh pr update-branch`.
 - A user-visible change updates `README.md`, `docs/`, `skills/fastbrowse/`, `packages/sdk/README.md`,

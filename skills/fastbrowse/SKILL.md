@@ -21,8 +21,9 @@ workflows go through the SDKs. Read [references/browser-access.md](references/br
 Use a connected fastbrowse MCP `browse` tool when its browser configuration matches that choice. Inspect its
 schema and pass `task` and `start` when known. Pass resource limits when the user supplies them or an
 existing task budget requires them. Server ceilings still apply. If the server's browser configuration is unknown,
-use the CLI to make the browser choice explicit. The tool returns `status`, `answer`, `citations`, and
-`next_step` when the task is unfinished.
+use the CLI to make the browser choice explicit. The tool returns `status`, `answer`, `citations`, `dollars`,
+`cost_complete`, `browser` (how the browser was reached and which profile ran), and `next_step` when the task is
+unfinished. Check `browser` when the run had to happen in a particular browser.
 
 Otherwise use the CLI. Check `fastbrowse --help` if installed; otherwise check `uvx --from fastbrowse fastbrowse
 --help`. Run the installed command or the `uvx` form below. In a fastbrowse source checkout, use `uv run fastbrowse`.
@@ -87,6 +88,10 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 | `budget_exceeded` | Report the exhausted resource; respect the user's total budget across retries. |
 | `observation_limit` | Narrow the task or required evidence to fit the observation limit. |
 | `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. Present any answer as partial, whether or not it starts with `Partial evidence only.`. |
+
+A result short of `complete` also has `failure_kind`, the cause without page text or secrets (`Budget/dollars`,
+`Wall/sign-in`, `Llm.Rejected/openrouter/action/http-401`). Quote it when reporting a failure, and read `error`
+for the detail.
 
 For every status other than `complete`, preserve any returned answer and citations as partial alongside the
 status and its recovery instructions. Checked partial claims can survive stops such as a sign-in wall,

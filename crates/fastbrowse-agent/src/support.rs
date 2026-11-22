@@ -24,7 +24,7 @@ where
 {
     let schema = Typed::<T>::default();
     let generated = llm.generate_value(purpose, messages, &schema, ledger).await?;
-    let data = serde_json::from_value(generated.data).map_err(|error| LLMError::Failed(error.to_string()))?;
+    let data = serde_json::from_value(generated.data).map_err(|error| LLMError::schema(error.to_string()))?;
     Ok(Generation { data, cost: generated.cost })
 }
 
@@ -70,6 +70,60 @@ pub(crate) async fn try_join_all<'a, T, E>(futures: Vec<BoxFuture<'a, Result<T, 
         Poll::Ready(Ok(std::mem::take(&mut results).into_iter().flatten().collect()))
     })
     .await
+}
+
+/// Runs long synchronous `work`, such as reading a page of megabytes, without holding up the runtime's other tasks.
+/// A task this one woke last waits in this worker's next-task slot, which an idle worker cannot take: on the Python
+/// module's two-worker runtime, one run's read held another run's clicks unpolled, their deadlines never armed, for
+/// fifteen minutes (#1284). `block_in_place` hands that slot and the worker on before `work` starts. A current-thread
+/// runtime has no other worker to hand them to, and refuses `block_in_place`; outside a runtime there is nothing to
+/// hold up.
+pub(crate) fn compute<R>(work: impl FnOnce() -> R) -> R {
+    match tokio::runtime::Handle::try_current().map(|handle| handle.runtime_flavor()) {
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(work),
+        _ => work(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use tokio::sync::Notify;
+
+    use super::compute;
+
+    #[test]
+    fn long_work_leaves_a_task_it_woke_to_another_worker() {
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        runtime.block_on(async {
+            let notify = Arc::new(Notify::new());
+            let woken = notify.clone();
+            let waiter = tokio::spawn(async move {
+                woken.notified().await;
+                Instant::now()
+            });
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let busy = tokio::spawn(async move {
+                notify.notify_one();
+                compute(|| {
+                    let end = Instant::now() + Duration::from_secs(2);
+                    while Instant::now() < end {
+                        std::hint::spin_loop();
+                    }
+                });
+                Instant::now()
+            });
+            let (woke, done) = (waiter.await.unwrap(), busy.await.unwrap());
+            assert!(woke + Duration::from_secs(1) < done, "the woken task waited out the work");
+        });
+    }
+
+    #[tokio::test]
+    async fn long_work_runs_in_place_on_a_current_thread_runtime() {
+        assert_eq!(compute(|| 1), 1);
+    }
 }
 
 #[cfg(test)]
