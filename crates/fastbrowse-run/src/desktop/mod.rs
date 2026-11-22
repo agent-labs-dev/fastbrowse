@@ -909,7 +909,9 @@ impl DeskpilotPage {
                 moved: false,
             });
         }
-        *self.sent.lock().unwrap() = Some(step_name(action, observation));
+        // Only an action that sends input to the app can be what closes it: a wait sends nothing, so a window lost
+        // during one is not the run's own close.
+        *self.sent.lock().unwrap() = (action.operation != Operation::Wait).then(|| step_name(action, observation));
         let sent = self.dispatch(action, observation).await;
         let measured = if action.operation == Operation::SwitchTab && matches!(sent, Ok(None)) {
             // Another window is read next, so the step changed what the run sees whatever that window shows.

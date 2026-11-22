@@ -43,14 +43,14 @@ impl Element {
     /// read the agent observed. Ids are the tree's order and deskpilot gives an element no identity of its own, so a
     /// read cannot prove which of two elements of one role and name an id names: two fixed-size rows named alike swap,
     /// and every field but the file behind them matches. Only an element no other shares its role and name with is
-    /// told by them, and by where it lies, and it must be so in both reads: were it a twin when observed, the agent
+    /// told by them and the text it displays, and by where it lies, and it must be so in both reads: were it a twin when observed, the agent
     /// chose between two, and were it alone only now, the one it chose may be gone and a sibling have taken its row.
     pub fn still_in(&self, fresh: &Element, id: &str) -> bool {
         let (Some(was), Some(now)) = (find(self, id), find(fresh, id)) else { return false };
-        (&was.role, &was.name, was.x, was.y, was.width, was.height)
-            == (&now.role, &now.name, now.x, now.y, now.width, now.height)
-            && count_named(self, &was.role, &was.name) == 1
-            && count_named(fresh, &now.role, &now.name) == 1
+        (&was.role, &was.name, &was.text, was.x, was.y, was.width, was.height)
+            == (&now.role, &now.name, &now.text, now.x, now.y, now.width, now.height)
+            && count_named(self, was) == 1
+            && count_named(fresh, now) == 1
     }
 
     fn has(&self, state: &str) -> bool {
@@ -304,9 +304,10 @@ pub fn aim(root: &Element, id: &str) -> Option<(f64, f64, f64, f64)> {
     Some((centre(element.x, element.width), centre(element.y, element.height), root.width as f64, root.height as f64))
 }
 
-fn count_named(element: &Element, role: &str, name: &str) -> usize {
-    usize::from(element.role == role && element.name == name)
-        + element.children.iter().map(|child| count_named(child, role, name)).sum::<usize>()
+/// How many elements of `of`'s role, name and displayed text lie in the tree, `of` included if it does.
+fn count_named(element: &Element, of: &Element) -> usize {
+    usize::from((&element.role, &element.name, &element.text) == (&of.role, &of.name, &of.text))
+        + element.children.iter().map(|child| count_named(child, of)).sum::<usize>()
 }
 
 pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {

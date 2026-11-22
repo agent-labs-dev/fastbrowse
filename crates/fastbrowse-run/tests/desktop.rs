@@ -937,6 +937,63 @@ async fn a_drag_end_whose_twin_was_gone_from_the_fresh_read_is_stale() {
     assert!(calls(&fake, "drag").is_empty());
 }
 
+/// A drag from an unnamed cell to a named one: the unnamed cell's identity is its role, its name and the text it displays.
+async fn drag_between_unnamed_cells(
+    name: &str,
+    dest: &str,
+    observed: [&str; 2],
+    fresh: [&str; 2],
+) -> (StepOutcome, usize) {
+    let fake = editor(name, &[launch_tool(), shot_tool()]);
+    fake.replies("wait_for", [ok(&window(false))]);
+    let tree = |texts: [&str; 2]| {
+        let cell = |id: &str, text: &str, y: i64| {
+            let name = if id == "e3" { dest } else { "" };
+            json!({"id": id, "role": "grid cell", "name": name, "text": text, "states": ["showing", "enabled", "selectable"],
+                "x": 100, "y": y, "width": 80, "height": 20})
+        };
+        json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "width": 800, "height": 600,
+            "children": [cell("e2", texts[0], 40), cell("e3", texts[1], 200)]})
+    };
+    fake.replies("elements", [ok(&tree(observed))]);
+    fake.replies("shot", [shot(&fake, "placed", b"placed")]).replies("drag", [ok(&json!({"x": 1, "y": 1}))]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    fake.replies("elements", [ok(&tree(fresh))]);
+    let mut drag = Action::new(Operation::Drag);
+    drag.target_id = Some("e2".into());
+    drag.destination_id = Some("e3".into());
+    let result = page.act(&drag, &before).await.unwrap();
+    (result.outcome, calls(&fake, "drag").len())
+}
+
+#[tokio::test]
+async fn a_drag_end_whose_displayed_text_changed_is_stale() {
+    let (outcome, dragged) =
+        drag_between_unnamed_cells("drag-text-changed", "dest", ["a.txt", "dest"], ["b.txt", "dest"]).await;
+    assert_eq!((outcome, dragged), (StepOutcome::Stale, 0));
+}
+
+#[tokio::test]
+async fn unnamed_cells_with_different_text_are_not_twins() {
+    let (outcome, dragged) =
+        drag_between_unnamed_cells("drag-text-told", "", ["a.txt", "dest"], ["a.txt", "dest"]).await;
+    assert_eq!((outcome, dragged), (StepOutcome::Executed, 1));
+}
+
+#[tokio::test]
+async fn a_window_lost_during_a_wait_is_not_the_runs_own_close() {
+    let fake = editor("wait-lost", &[launch_tool()]);
+    let button = json!({"id":"e2", "role":"push button", "name":"No", "states":["showing", "enabled"]});
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "children": [button]});
+    fake.replies("wait_for", [ok(&window(false)), refused("not_found", "no window 0xabc")]);
+    fake.replies("elements", [ok(&root)]).replies("windows", [list(&[window(false)]), list(&[])]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    let error = page.act(&Action::new(Operation::Wait), &before).await.unwrap_err();
+    assert!(matches!(error, BrowserError::Unavailable(_)), "{error:?}");
+}
+
 #[tokio::test]
 async fn a_drag_whose_window_was_reordered_since_the_observation_is_stale() {
     // GNOME Files sorted a new file in between the decision and the act: e2 is now another file, so dragging by the
