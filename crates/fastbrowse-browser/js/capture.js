@@ -495,6 +495,9 @@
         control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
         ...(e.tagName === 'SELECT' ? {} : { hosts: [e] }),
       }));
+  const pushFields = root => {
+    for (const { text, ...control } of fields(root)) push('paragraph', text, control);
+  };
   // The editing hosts a block holds or sits in: its text is read in place, as on any page, and the block carries each
   // host's identity and value, so a quote from it is told as possibly typed. A host the capture would not show holds
   // nothing the block reads, so it is not one of them.
@@ -565,7 +568,7 @@
     const links = linksIn(elements);
     if (onlyLink) push('link', text, { href: hrefOf(elements[0]), links }, run);
     else push('paragraph', text, { links }, run);
-    for (const e of elements) for (const { text, ...control } of fields(e)) push('paragraph', text, control);
+    for (const e of elements) pushFields(e);
     run.length = 0;
   }
 
@@ -705,7 +708,7 @@
     if (el.tagName === 'TABLE') {
       for (const { text, links, hosts } of renderTable(el)) push('table', text, { links, hosts }, [el]);
       // A form laid out in a table: its cells render as text, which holds none of the controls' values.
-      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
+      pushFields(el);
       return;
     }
     if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
@@ -727,11 +730,11 @@
         },
         [el],
       );
-      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
+      pushFields(el);
       return;
     }
     if (CONTROLS.has(el.tagName)) {
-      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
+      pushFields(el);
       return;
     }
     walk(el);
@@ -768,7 +771,7 @@
     sourcePath = source;
     if (text) walk(root);
     // The values of its controls were not read with the text, so they are read here.
-    else for (const field of fields(root)) push('paragraph', field);
+    else pushFields(root);
     path = [...headings];
     headingLevels = [];
     for (const e of [...root.querySelectorAll(`input,select,textarea,button,${roleSelector(CONTROL_ROLES[0])}`)].filter(visible)) {
