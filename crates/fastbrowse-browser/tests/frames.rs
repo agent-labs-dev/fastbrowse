@@ -279,6 +279,8 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
         emit_frame(&session, 2, b"next jpeg", "session");
         settle(&session).await;
         session.switch_tab("owned").await.unwrap();
+        // The retry and the stop run in the background; close() would race them.
+        settle(&session).await;
         session.close().await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2, "{failure}");
         let calls = fake.calls();
