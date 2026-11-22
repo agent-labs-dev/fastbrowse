@@ -98,6 +98,55 @@ async fn inline_shadow_text_stays_in_its_sentence() {
     h.close().await;
 }
 
+/// Reading an inline host's shadow text in its sentence must keep what the skipped shadow walk supplied: a filled
+/// control's value and a link's destination, and the line and block boundaries innerText holds within an element.
+#[tokio::test(flavor = "multi_thread")]
+async fn composed_shadow_text_keeps_values_destinations_and_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate("about:blank", None).await.expect("navigate");
+    let cases: &[(&str, &str, &str, &str)] = &[
+        (
+            "field",
+            "<p>Before <span id=host></span> after</p>",
+            "root.innerHTML = '<input aria-label=Quantity value=42>'",
+            "Quantity: 42",
+        ),
+        (
+            "link-break",
+            "<p><a href=https://example.test/target>One<br>Two <span id=host></span></a></p>",
+            "root.textContent = 'Label'",
+            "One\nTwo Label",
+        ),
+        (
+            "cell-blocks",
+            "<table><tr><td><div>First</div><div>Price: <span id=host></span> total</div></td></tr></table>",
+            "root.textContent = 'pre'",
+            "First\nPrice: pre total",
+        ),
+    ];
+    for (name, body, shadow, expected) in cases {
+        set_body(&h.session, body).await;
+        eval_active(
+            &h.session,
+            &format!("{{ const root = document.querySelector('#host').attachShadow({{mode:'open'}}); {shadow} }}"),
+        )
+        .await;
+        let capture = h.page.capture().await.expect("capture");
+        let all: Vec<_> = capture.blocks.iter().map(|b| text_of(&capture, b)).collect();
+        assert!(all.iter().any(|t| t.contains(expected)), "{name}: {all:?}");
+    }
+    set_body(&h.session, "<p>Before <span id=host></span> after</p>").await;
+    eval_active(
+        &h.session,
+        "document.querySelector('#host').attachShadow({mode:'open'}).innerHTML = '<a href=https://example.test/docs>Docs</a>'",
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let hrefs: Vec<_> = capture.blocks.iter().flat_map(|b| b.links.iter().map(|l| l.href.clone())).collect();
+    assert!(hrefs.iter().any(|href| href == "https://example.test/docs"), "{hrefs:?}");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn generated_separators_preserve_inline_boundaries() {
     let Some(h) = harness().await else { return };

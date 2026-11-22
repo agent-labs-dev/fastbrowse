@@ -303,7 +303,16 @@
     if (node.shadowRoot) hosts?.add(node);
     const [before, after] = generatedOf(node);
     const children = node.shadowRoot?.childNodes ?? (assigned.length ? assigned : node.childNodes);
-    return before + [...children].map(child => composedOf(child, hosts)).join('') + after;
+    // innerText's line and block boundaries hold only within one element, so a composed read puts them back between
+    // its parts: a break is a line and a block child is a line of its own.
+    let composed = before;
+    for (const child of children) {
+      const text = composedOf(child, hosts);
+      if (child.tagName === 'BR') composed += '\n';
+      else if (child.nodeType === 1 && isBlock(child)) composed += `${composed.endsWith('\n') ? '' : '\n'}${text}\n`;
+      else composed += text;
+    }
+    return composed + after;
   };
   const composedText = (e, hosts) => titled(e, clean(dated(e, unnoted(e, composedOf(e, hosts)))));
   const isBlock = e => {
@@ -330,9 +339,18 @@
   // had their texts and no address to give. Each link is kept with its block as its text and address, which code
   // places in the block's text. A footnote reference is no part of the text it marks, and a script link leads nowhere.
   const readableLink = a => typeof a.href === 'string' && !a.href.startsWith('javascript:') && !(a.matches(IN_PAGE) && noteReference(a));
+  // A host read through its shadow tree in a sentence owns that tree's links too, which querySelectorAll does not reach.
+  const anchorsIn = root => [
+    ...root.querySelectorAll('a[href]'),
+    ...[...root.querySelectorAll('*')].flatMap(e => (composedHosts.has(e) ? anchorsIn(e.shadowRoot) : [])),
+  ];
   const linksIn = elements =>
     elements
-      .flatMap(e => [...(e.matches('a[href]') ? [e] : []), ...e.querySelectorAll('a[href]')])
+      .flatMap(e => [
+        ...(e.matches('a[href]') ? [e] : []),
+        ...(composedHosts.has(e) ? anchorsIn(e.shadowRoot) : []),
+        ...anchorsIn(e),
+      ])
       // An SVG link's `href` is an animated value, not an address.
       .filter(readableLink)
       .map(a => ({ text: composedText(a), href: a.href }))
@@ -714,6 +732,8 @@
     framePath = frame;
     sourcePath = source;
     if (text) walk(root);
+    // The values of its controls were not read with the text, so they are read here.
+    else for (const field of fields(root)) push('paragraph', field);
     path = [...headings];
     headingLevels = [];
     for (const e of [...root.querySelectorAll(`input,select,textarea,button,${roleSelector(CONTROL_ROLES[0])}`)].filter(visible)) {
