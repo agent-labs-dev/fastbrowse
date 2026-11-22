@@ -26,7 +26,7 @@ use super::state::{
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Commit, Decision, Form, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
+use crate::policy::{Commit, Decision, FieldChange, Form, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -981,7 +981,7 @@ impl Agent {
         let mut typed: Option<String> = None;
         let mut effect_now: Option<String> = None;
         let mut setting = false;
-        let mut set: Vec<(String, String)> = Vec::new();
+        let mut set: Vec<FieldChange> = Vec::new();
         let frames = self.on_event.is_some() && self.config.step_frames;
         let act: ActResult;
         let changed: bool;
@@ -1238,8 +1238,8 @@ impl Agent {
                 set = done
                     .set
                     .iter()
-                    .filter_map(|(id, held)| Some((describe(landed.controls.iter().find(|c| c.id == *id)?), held)))
-                    .map(|(field, held)| {
+                    .filter_map(|(id, held)| {
+                        let field = landed.controls.iter().find(|c| c.id == *id)?;
                         let left = match held {
                             Setting::Value(Some(value)) => text::repr(value),
                             Setting::Value(None) => "empty".to_string(),
@@ -1248,14 +1248,14 @@ impl Agent {
                                 (if *selected { "selected" } else { "not selected" }).to_string()
                             }
                         };
-                        (field, left)
+                        Some(FieldChange { label: describe(field), value: left, form: Form::of(&landed, field) })
                     })
                     .collect();
                 // A page that shows a choice only in a label or in text holds it in no field it reports, so the run
                 // cannot say which field it set: it says what it clicked.
                 let stayed = observation.url == landed.url && observation.document_key == landed.document_key;
                 if set.is_empty() && done.set_something && stayed {
-                    set.push((describe(target), UNREPORTED.to_string()));
+                    set.push(FieldChange { label: describe(target), value: UNREPORTED.to_string(), form: None });
                 }
                 effect_now = Some(done.summary);
             }
@@ -1271,13 +1271,7 @@ impl Agent {
         let form = if decision.operation == Operation::Dialog && act.outcome == StepOutcome::Executed {
             state.dialog_form.take().filter(|_| sent)
         } else {
-            decision.target.as_ref().and_then(|target| {
-                Some(Form {
-                    document: observation.document_key.clone(),
-                    frame: target.frame_id.clone(),
-                    id: target.form_id.clone()?,
-                })
-            })
+            decision.target.as_ref().and_then(|target| Form::of(observation, target))
         };
         if act.outcome == StepOutcome::Executed && observation.dialog.is_none() {
             state.dialog_form.clone_from(&form);

@@ -178,7 +178,7 @@ pub struct HistoryEntry {
     /// Each field a click on an option, checkbox, radio or switch changed, described, with what the page reads it as
     /// holding after the click. Kept out of what models are shown: it is the run's own record of what it changed.
     #[serde(skip)]
-    pub set: Vec<(String, String)>,
+    pub set: Vec<FieldChange>,
     /// The task step a click placed inside a drawn surface was made for. Kept apart from `target`, which actions are
     /// withheld and counted by.
     #[serde(skip)]
@@ -204,6 +204,24 @@ pub struct Form {
     pub(crate) document: String,
     pub(crate) frame: Option<String>,
     pub(crate) id: String,
+}
+
+impl Form {
+    pub(crate) fn of(observation: &Observation, control: &Control) -> Option<Self> {
+        Some(Self {
+            document: observation.document_key.clone(),
+            frame: control.frame_id.clone(),
+            id: control.form_id.clone()?,
+        })
+    }
+}
+
+/// A field changed by a click, with the value and form the page reports for that field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldChange {
+    pub(crate) label: String,
+    pub(crate) value: String,
+    pub(crate) form: Option<Form>,
 }
 
 /// A commit a step sent, and whether the run saw the page take it.

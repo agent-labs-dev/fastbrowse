@@ -611,14 +611,16 @@ pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<
     let mut committed = Vec::new();
     for (index, entry) in history.iter().enumerate().filter(|(_, entry)| entry.outcome == StepOutcome::Executed) {
         let form = entry.form.as_ref();
-        let mut put = |field, left| {
+        let mut put = |form, field, left| {
             let key = (form, field);
             changed.shift_remove(&key);
             changed.insert(key, (index, left));
         };
         match (entry.operation, &entry.text, entry.target.as_deref()) {
-            (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => put(target, text::repr(text)),
-            _ => entry.set.iter().for_each(|(field, left)| put(field, left.clone())),
+            (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => {
+                put(form, target, text::repr(text))
+            }
+            _ => entry.set.iter().for_each(|field| put(field.form.as_ref(), field.label.as_str(), field.value.clone())),
         }
         let Some(commit) = entry.commit else { continue };
         let step = match (entry.operation, entry.target.as_deref()) {

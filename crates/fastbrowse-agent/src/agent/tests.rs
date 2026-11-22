@@ -9823,7 +9823,11 @@ fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
         },
         filled("Description (Edit 'Commissions Forever')", "Save: disabled", StepOutcome::Executed),
         HistoryEntry {
-            set: vec![("Notify followers".into(), "checked".into())],
+            set: vec![crate::policy::FieldChange {
+                label: "Notify followers".into(),
+                value: "checked".into(),
+                form: None,
+            }],
             ..HistoryEntry::new(Some(Operation::Click), Some("Notify followers"), StepOutcome::Executed, true)
         },
     ];
