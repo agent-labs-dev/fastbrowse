@@ -273,6 +273,9 @@ struct SnapshotBlock {
     #[serde(default)]
     heading_path: Vec<String>,
     control_context: Option<SourceControl>,
+    /// The id the observation gives the native field this block is the value of.
+    #[serde(default)]
+    control_element: Option<String>,
     frame_path: Option<String>,
     #[serde(default)]
     source_path: String,
@@ -1238,7 +1241,12 @@ impl CdpPage {
                     start: int(start),
                     end: int(end),
                     heading_path: block.heading_path.clone(),
-                    control_context: block.control_context.clone(),
+                    // A native field's identity is the one the observation gives it: its frame's key and its node's id.
+                    control_context: block.control_context.clone().map(|mut control| {
+                        control.element =
+                            block.control_element.as_ref().map(|element| format!("{frame_key}:{element}"));
+                        control
+                    }),
                     href: block.href.clone(),
                     links,
                     whole_record: block.whole_record,

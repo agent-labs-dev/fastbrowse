@@ -1263,6 +1263,14 @@ impl Agent {
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
+        if let (Some(entry), Some(target)) = (state.history.last(), &decision.target)
+            && entry.text.is_some()
+            && entry.changed_site()
+        {
+            // The control and page are the ones the observation named, which a later read of that control reports.
+            let step = state.history.iter().filter(|entry| entry.changed_site()).count();
+            state.notes.remember_typing(step, &self.mask(&observation.url), &target.id);
+        }
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {
             self.event("typed", || {
                 Map::from_iter([("step".into(), state.steps.len().into()), ("value".into(), value.into())])
@@ -1675,6 +1683,7 @@ impl Agent {
                     role: mask(&context.role),
                     label: mask(&context.label),
                     context: context.context.as_deref().map(mask),
+                    element: context.element.clone(),
                 }),
                 href: block.href.as_deref().map(mask),
                 // An address can carry a token in its query, and a link's text is page text like the rest.

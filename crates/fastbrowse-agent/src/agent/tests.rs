@@ -10687,3 +10687,46 @@ async fn a_text_task_concluded_with_no_answer_is_not_complete() {
     assert_eq!(result.failure_kind.as_deref(), Some("Done/unanswered"));
     assert_eq!(result.error.as_deref(), Some(super::finishing::UNANSWERED));
 }
+
+/// A step that typed into a control records the page and the control as the observation names them, so a later read
+/// of that control, and no other, is told apart as the run's own typing (#1398).
+#[tokio::test]
+async fn test_a_fill_records_the_page_and_control_it_typed_into() {
+    let page = LeavingPage {
+        expected: Operation::Fill,
+        now: std::sync::Mutex::new(observation(&[field("Date")])),
+        left: observation(&[Control { value: Some("2026-11-04".into()), ..field("Date") }]),
+    };
+    let agent = Agent::new(Arc::new(page), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let mut state = RunState::new(
+        "Book a table for input date".into(),
+        IndexMap::from([("date".to_string(), "2026-11-04".to_string())]),
+        Vec::new(),
+        Authorization::default(),
+        Arc::new(Ledger::new(Limits::default())),
+    );
+    state.edits = Some(Edits::Allowed);
+    let observed = agent.observe().await.expect("observed");
+    agent.settle(&mut state, &observed).await.expect("settled");
+    let target = observed.controls[0].clone();
+    agent.step(&mut state, &observed, &code_decision(Operation::Fill, Some(target))).await.expect("stepped");
+    assert_eq!(state.history.last().and_then(|entry| entry.text.as_deref()), Some("2026-11-04"));
+
+    let read = |url: &str, element: &str| {
+        let page = results_page_720(url, "Date: 2026-11-04");
+        let mut quote = block_evidence(&page, "s1");
+        quote.control_context = Some(fastbrowse_core::models::SourceControl {
+            role: "textarea".into(),
+            label: "Date".into(),
+            context: None,
+            element: Some(element.into()),
+        });
+        let mut notes = state.notes.clone();
+        notes.remember_capture(&page, 1);
+        notes.typed_by_step(&quote)
+    };
+    assert_eq!(read("https://example.test/", "field"), Some(1));
+    assert_eq!(read("https://example.test/#details", "field"), Some(1));
+    assert_eq!(read("https://example.test/", "other"), None);
+    assert_eq!(read("https://example.test/elsewhere", "field"), None);
+}

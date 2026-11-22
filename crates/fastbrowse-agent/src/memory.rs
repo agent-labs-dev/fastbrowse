@@ -292,6 +292,9 @@ pub struct Notes {
     source_blocks: HashMap<CaptureIdentity, Arc<[SourceBlock]>>,
     /// Where code blanked a secret value in each capture's text.
     masked: HashMap<CaptureIdentity, Arc<[(i64, i64)]>>,
+    /// Each step that typed into a control, in order: its number among the run's steps, the page it was on and the
+    /// control as the observation names it.
+    typed: Vec<(usize, String, String)>,
 }
 
 impl fmt::Debug for Notes {
@@ -311,6 +314,24 @@ impl Notes {
 
     /// Remember a capture read once `steps_taken` of the run's steps that could change the site were taken.
     #[doc(hidden)]
+    /// Step number `step` typed into the control `element` of the page at `url`.
+    pub fn remember_typing(&mut self, step: usize, url: &str, element: &str) {
+        self.typed.push((step, address(url), element.to_string()));
+    }
+
+    /// The last step before this quote's read that typed into the control it was read from, on the page it was read
+    /// from. Both are structured identities: the page's address and the control's id, never the quote's words.
+    pub fn typed_by_step(&self, evidence: &Evidence) -> Option<usize> {
+        let element = evidence.control_context.as_ref()?.element.as_deref()?;
+        let taken = self.steps_taken(evidence)?;
+        let page = address(&evidence.url);
+        self.typed
+            .iter()
+            .rev()
+            .find(|(step, url, control)| *step <= taken && *url == page && control == element)
+            .map(|typed| typed.0)
+    }
+
     pub fn remember_capture(&mut self, capture: &Capture, steps_taken: usize) {
         let key = (capture.sha256.clone(), capture.url.clone(), capture.captured_at);
         self.steps_taken.entry(key.clone()).or_insert(steps_taken);
@@ -1211,8 +1232,12 @@ mod tests {
     fn test_equal_quoted_values_from_different_controls_keep_separate_evidence() {
         let mut notes = Notes::default();
         for position in ["1 of 2", "2 of 2"] {
-            let control =
-                SourceControl { role: "figure".into(), label: "Avatar".into(), context: Some(position.into()) };
+            let control = SourceControl {
+                role: "figure".into(),
+                label: "Avatar".into(),
+                context: Some(position.into()),
+                element: None,
+            };
             let evidence = Evidence { control_context: Some(control), ..span("capture", 0, 4) };
             assert!(notes.add(Fact::read("fact", evidence, FactReader::JevChoice)));
         }

@@ -168,6 +168,11 @@ pub struct SourceControl {
     pub label: String,
     #[serde(default)]
     pub context: Option<String>,
+    /// The control's identity as the observation names it (a `Control`'s `id`), for a native form field: the same
+    /// control a step acts on has the same value here. Unset for a control known only by its label. The run's own
+    /// bookkeeping, held in process: never part of the protocol, so never written or read.
+    #[serde(skip)]
+    pub element: Option<String>,
 }
 
 impl Schema for SourceControl {

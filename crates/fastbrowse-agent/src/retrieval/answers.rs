@@ -2017,7 +2017,7 @@ fn quote_states<'a>(ids: impl Iterator<Item = &'a String>, notes: &Notes, steps:
                     whole_record,
                     source_kind: notes.source_kind(quote),
                     whole_element: notes.whole_element(quote),
-                    typed_by_step: typed_by_step(quote, notes, steps),
+                    typed_by_step: notes.typed_by_step(quote),
                 })
             })
         })
@@ -2039,34 +2039,11 @@ struct QuoteState<'a> {
     source_kind: Option<BlockKind>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     whole_element: bool,
+    /// The last step of this run that typed into the control the quote was read from, before the read: a page shows back
+    /// what the run typed into it, and a run that typed its own report into a document, then read the document, cited
+    /// that read as what the document says (#1398). Provenance is the control's identity and its page, never the words.
     #[serde(skip_serializing_if = "Option::is_none")]
     typed_by_step: Option<usize>,
-}
-
-/// The last step, numbered from 1, that typed into the control this quote was read from before the read, when one
-/// did. A page shows back what the run typed into it: a run that typed its own report into a document, then read the
-/// document, cited that read as what the document says, and its answer passed as the source's content (#1398).
-///
-/// Provenance is the control, never the words: the quote's `control_context` names the control it lies in, and a step
-/// records the control it acted on as that control's label and context, the form `describe` gives it. A quote read
-/// outside any control, or from a read with no recorded step count, is not the run's typing, however much its text
-/// overlaps what the run typed. The steps record no role, so two controls sharing a label and context cannot be told
-/// apart; one such control is the only residue.
-fn typed_by_step(quote: &Evidence, notes: &Notes, steps: &[Value]) -> Option<usize> {
-    let control = quote.control_context.as_ref()?;
-    let taken = notes.steps_taken(quote)?;
-    let described = match control.context.as_deref() {
-        Some(context) if !context.is_empty() => format!("{} ({context})", control.label),
-        _ => control.label.clone(),
-    };
-    steps
-        .iter()
-        .take(taken)
-        .rposition(|step| {
-            step.get("text").is_some_and(Value::is_string)
-                && step.get("target").and_then(Value::as_str) == Some(&described)
-        })
-        .map(|index| index + 1)
 }
 
 const SUPPORTED: &str =
@@ -3758,6 +3735,7 @@ mod tests {
             role: "button".into(),
             label: "Record B".into(),
             context: Some("right panel".into()),
+            element: None,
         });
         let notes = Notes::new([source]);
         let llm = RecordingLlm {
@@ -5764,10 +5742,11 @@ mod tests {
     }
 
     /// A run typed its report into a document, read the document back and picked that read as the answer: the draft's
-    /// note was taken for the document's own statement and passed (#1398). The quote read from the control the run
-    /// typed into is shown with the step that typed it, and the claim's support is asked. The same words read from
-    /// the page outside that control, a read made before the typing, or a read with no recorded step are not the
-    /// run's typing, whatever they overlap.
+    /// note was taken for the document's own statement and passed (#1398). The browser reports a native field's value
+    /// with the control's identity as the observation names it, and the page's address; the quote read from the control
+    /// the run typed into, on that page, is shown with the step that typed it and the claim's support is asked. The
+    /// same words in another control of the same label and context, on another page, outside any control, read before
+    /// the typing or with no recorded step are not the run's typing, whatever they overlap.
     #[tokio::test]
     async fn a_pick_read_from_the_control_the_run_typed_into_is_asked_for_support() {
         use crate::retrieval::chunks::evidence;
@@ -5775,16 +5754,16 @@ mod tests {
         use crate::retrieval::text::Page;
 
         let typed = "Order 49309 shipped successfully; no error code is listed.";
-        let steps = [json!({"operation": "fill", "target": "Document body (Notes)", "text": typed})];
-        let read = |taken: Option<usize>, in_control: bool| {
+        // Step 1 typed into the control `main:7` of the page `https://a.test/doc`.
+        let read = |url: &str, element: Option<&str>, taken: Option<usize>| {
             let mut captured = capture(&[(BlockKind::Paragraph, typed)]);
-            if in_control {
-                captured.blocks[0].control_context = Some(fastbrowse_core::models::SourceControl {
-                    role: "textbox".into(),
-                    label: "Document body".into(),
-                    context: Some("Notes".into()),
-                });
-            }
+            captured.url = url.into();
+            captured.blocks[0].control_context = element.map(|element| fastbrowse_core::models::SourceControl {
+                role: "textarea".into(),
+                label: "Notes".into(),
+                context: None,
+                element: Some(element.into()),
+            });
             let page = Page::new(&captured);
             let block = &captured.blocks[0];
             let mut notes =
@@ -5793,8 +5772,10 @@ mod tests {
             if let Some(taken) = taken {
                 notes.remember_capture(&captured, taken);
             }
+            notes.remember_typing(1, "https://a.test/doc#top", "main:7");
             notes
         };
+        let steps = [json!({"operation": "fill", "target": "Notes", "text": typed})];
         let task = "Report the order's status and error code from the document";
         let asked_for_support = |notes: Notes, rejected: Option<String>| {
             let steps = steps.clone();
@@ -5806,7 +5787,8 @@ mod tests {
             }
         };
 
-        let (drafted, asked) = asked_for_support(read(Some(1), true), Some("claim0".into())).await;
+        let (drafted, asked) =
+            asked_for_support(read("https://a.test/doc", Some("main:7"), Some(1)), Some("claim0".into())).await;
         let Some(Draft::Reviewed(reviewed)) = drafted else { panic!("an unsupported pick stands as it is") };
         assert!(reviewed.answer.problem.unwrap().contains("text the run typed"));
         let rejection: Value = serde_json::from_str(&reviewed.rejection.unwrap()).unwrap();
@@ -5816,9 +5798,11 @@ mod tests {
         assert!(support.instructions.contains("never that the source stated it"));
 
         for (case, notes) in [
-            ("the page's own text", read(Some(1), false)),
-            ("a read before the typing", read(Some(0), true)),
-            ("a read with no recorded step", read(None, true)),
+            ("the page's own text", read("https://a.test/doc", None, Some(1))),
+            ("another control with the same label and context", read("https://a.test/doc", Some("main:8"), Some(1))),
+            ("a prefilled control of another page", read("https://a.test/other", Some("main:7"), Some(1))),
+            ("a read before the typing", read("https://a.test/doc", Some("main:7"), Some(0))),
+            ("a read with no recorded step", read("https://a.test/doc", Some("main:7"), None)),
         ] {
             let (_, asked) = asked_for_support(notes, None).await;
             assert!(!asked.contains_key("claim0"), "{case}");

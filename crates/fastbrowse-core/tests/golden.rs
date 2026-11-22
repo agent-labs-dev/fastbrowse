@@ -163,7 +163,7 @@ fn floats_and_strings_are_spelled_as_python_spells_them() {
         assert_eq!(dumps(&Value::from(value)), text_of(case, "dumps"));
         assert_eq!(write(&Value::from(value), Style::DUMPS.unicode()), text_of(case, "unicode"));
         assert_eq!(text::repr(value), text_of(case, "repr"), "repr of {value:?}");
-        let control = SourceControl { role: "r".into(), label: value.into(), context: None };
+        let control = SourceControl { role: "r".into(), label: value.into(), context: None, element: None };
         assert_eq!(control.dump_json(), text_of(case, "pydantic"));
     }
     for case in functions["dollars"].as_array().unwrap() {

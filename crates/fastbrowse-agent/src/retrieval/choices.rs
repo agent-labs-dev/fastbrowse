@@ -923,6 +923,7 @@ mod tests {
                         role: "figure".into(),
                         label: "Avatar".into(),
                         context: Some((*position).into()),
+                        element: None,
                     }),
                     ..base.clone()
                 },

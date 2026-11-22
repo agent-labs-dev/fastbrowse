@@ -432,9 +432,15 @@
   const fields = el =>
     (CONTROLS.has(el.tagName) ? [el] : [...el.querySelectorAll('input,select,textarea')])
       .filter(visible)
-      .map(e => [nameOf(e), fieldValue(e)])
-      .filter(([, value]) => value)
-      .map(([name, value]) => (name ? `${name}: ${value}` : value));
+      .map(e => [e, nameOf(e), fieldValue(e)])
+      .filter(([, , value]) => value)
+      // The field is named as the observation names it, by its identity, so a step that typed into it is the same
+      // control here: provenance is never read back from the words.
+      .map(([e, name, value]) => ({
+        text: name ? `${name}: ${value}` : value,
+        control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
+        control_element: String(identity(e)),
+      }));
 
   const renderTable = table => {
     // A table filter hides what it excludes with `hidden`, display or visibility (`collapse` is the one CSS made
@@ -488,7 +494,7 @@
     const links = linksIn(elements);
     if (onlyLink) push('link', text, { href: hrefOf(elements[0]), links }, run);
     else push('paragraph', text, { links }, run);
-    for (const e of elements) for (const field of fields(e)) push('paragraph', field);
+    for (const e of elements) for (const { text, ...control } of fields(e)) push('paragraph', text, control);
     run.length = 0;
   }
 
@@ -627,7 +633,7 @@
     if (el.tagName === 'TABLE') {
       for (const { text, links } of renderTable(el)) push('table', text, { links }, [el]);
       // A form laid out in a table: its cells render as text, which holds none of the controls' values.
-      for (const field of fields(el)) push('paragraph', field);
+      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
       return;
     }
     if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
@@ -649,11 +655,11 @@
         },
         [el],
       );
-      for (const field of fields(el)) push('paragraph', field);
+      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
       return;
     }
     if (CONTROLS.has(el.tagName)) {
-      for (const field of fields(el)) push('paragraph', field);
+      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
       return;
     }
     walk(el);

@@ -1287,3 +1287,29 @@ async fn test_a_kept_capture_goes_to_the_sessions_artifact_sink() {
     assert!(h.sink.artifacts.lock().unwrap().contains(&kept));
     h.close().await;
 }
+
+/// A native field's value is reported with the control's identity as the observation names it, so a step that typed
+/// into a control and a read of its value name the same control without comparing words (#1398).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_field_value_names_the_control_the_observation_gives_it() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<label>Notes <textarea>first draft</textarea></label>
+        <label>Notes <textarea>second draft</textarea></label>"#,
+    )
+    .await;
+    let observed = h.observe().await;
+    let named: Vec<_> = observed.controls.iter().filter(|c| c.label == "Notes").collect();
+    assert_eq!(named.len(), 2);
+    let capture = h.page.capture().await.expect("capture");
+    for control in named {
+        let value = control.value.as_deref().expect("value");
+        let block =
+            capture.blocks.iter().find(|b| capture.block_text(b) == format!("Notes: {value}")).expect("field block");
+        let reported = block.control_context.as_ref().and_then(|context| context.element.as_deref());
+        assert_eq!(reported, Some(control.id.as_str()), "{value}");
+    }
+    h.close().await;
+}
