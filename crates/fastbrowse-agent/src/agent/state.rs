@@ -397,6 +397,8 @@ pub(crate) struct RunState {
     pub replied: bool,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
+    /// Jev's word that the task tells the agent not to take some action, asked once the gate first asks about one.
+    pub prohibits: Option<bool>,
     /// Jev's word on which changes to the page's fields and settings the task allows, asked once an edit is in play.
     pub edits: Option<Edits>,
     /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
@@ -880,6 +882,7 @@ impl RunState {
             look: None,
             replied: false,
             downloads_forbidden: None,
+            prohibits: None,
             edits: None,
             read_documents: HashMap::new(),
             read_tries: HashMap::new(),
