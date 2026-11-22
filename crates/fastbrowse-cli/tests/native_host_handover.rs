@@ -52,3 +52,44 @@ fn an_unregistered_native_host_exits_naming_the_registry_when_no_install_starts(
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("installs.json"), "{}", String::from_utf8_lossy(&out.stderr));
 }
+
+fn host(host_dir: &Path, started: Option<&Path>) -> std::process::Output {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_fastbrowse"));
+    command
+        .args(["native-host", "chrome-extension://x/"])
+        .env("FASTBROWSE_HOST_DIR", host_dir)
+        .env_remove("FASTBROWSE_HOST_DELEGATED")
+        .env_remove("FASTBROWSE_HOST_PATH")
+        .stdin(std::process::Stdio::null());
+    if let Some(started) = started {
+        command.env("FASTBROWSE_HOST_PATH", started);
+    }
+    command.output().unwrap()
+}
+
+#[test]
+fn the_host_identity_is_the_path_the_launcher_started_not_this_executable() {
+    let root = std::env::temp_dir().join(format!("fastbrowse-identity-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let host_dir = root.join("host");
+    std::fs::create_dir_all(&host_dir).unwrap();
+    // A Python install: the registered script is not the executable that runs it.
+    let started = root.join("tool/bin/fastbrowse");
+    let registry = serde_json::json!([{"path": started, "version": "0.0.1"}]);
+    std::fs::write(host_dir.join("installs.json"), registry.to_string()).unwrap();
+    let registered = host(&host_dir, Some(&started));
+    let unregistered = host(&host_dir, Some(&root.join("stray/fastbrowse")));
+    // No registry at all: a launcher from before installs were recorded.
+    std::fs::remove_file(host_dir.join("installs.json")).unwrap();
+    let before_registry = host(&host_dir, None);
+    // A registry that cannot be parsed is an error that names it.
+    std::fs::write(host_dir.join("installs.json"), "{").unwrap();
+    let corrupt = host(&host_dir, Some(&started));
+    let _ = std::fs::remove_dir_all(&root);
+    let said = |out: &std::process::Output| String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!said(&registered).contains("not registered"), "{}", said(&registered));
+    assert!(said(&unregistered).contains("not registered"), "{}", said(&unregistered));
+    assert!(!said(&before_registry).contains("not registered"), "{}", said(&before_registry));
+    assert_eq!(corrupt.status.code(), Some(1));
+    assert!(said(&corrupt).contains("installs.json"), "{}", said(&corrupt));
+}

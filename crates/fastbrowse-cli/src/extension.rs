@@ -23,6 +23,10 @@ const INSTALLS: &str = "installs.json";
 /// The variable the launcher sets to the folder it is in, which holds the registry.
 const HOST_DIR: &str = "FASTBROWSE_HOST_DIR";
 
+/// The variable the launcher sets to the registered path it starts, which is the host's identity: a Python install
+/// runs inside the interpreter, so the process's own executable says nothing about which install this is.
+const HOST_PATH: &str = "FASTBROWSE_HOST_PATH";
+
 /// One fastbrowse that ran `install`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Install {
@@ -273,7 +277,7 @@ fn write_launcher(dir: &Path, commands: &[PathBuf]) -> std::io::Result<PathBuf> 
             // In a batch file a `%` in a path would start a variable, so each is doubled. `name\` exists only for a folder.
             let command = command.display().to_string().replace('%', "%%");
             text.push_str(&format!(
-                "if exist \"{command}\" if not exist \"{command}\\\" (\r\n  \"{command}\" native-host %*\r\n  exit /b\r\n)\r\n"
+                "if exist \"{command}\" if not exist \"{command}\\\" (\r\n  set \"{HOST_PATH}={command}\"\r\n  \"{command}\" native-host %*\r\n  exit /b\r\n)\r\n"
             ));
         }
         text.push_str(&format!("echo {NONE} 1>&2\r\nexit /b 1\r\n"));
@@ -284,7 +288,7 @@ fn write_launcher(dir: &Path, commands: &[PathBuf]) -> std::io::Result<PathBuf> 
     let quoted: Vec<String> =
         commands.iter().map(|command| format!("'{}'", command.display().to_string().replace('\'', r"'\''"))).collect();
     let text = format!(
-        "#!/bin/sh\n{HOST_DIR}=$(dirname \"$0\"); export {HOST_DIR}\nfor fastbrowse in {}; do\n    if [ -f \"$fastbrowse\" ] && [ -x \"$fastbrowse\" ]; then exec \"$fastbrowse\" native-host \"$@\"; fi\ndone\necho '{NONE}' >&2\nexit 127\n",
+        "#!/bin/sh\n{HOST_DIR}=$(dirname \"$0\"); export {HOST_DIR}\nfor fastbrowse in {}; do\n    if [ -f \"$fastbrowse\" ] && [ -x \"$fastbrowse\" ]; then {HOST_PATH}=$fastbrowse; export {HOST_PATH}; exec \"$fastbrowse\" native-host \"$@\"; fi\ndone\necho '{NONE}' >&2\nexit 127\n",
         quoted.join(" ")
     );
     write_atomic(&launcher, text.as_bytes(), true)?;
@@ -330,6 +334,21 @@ fn without_handover(registered: bool, dir: &Path) -> Option<i32> {
     Some(1)
 }
 
+/// Whether `own` is registered and the installs to hand over to first; None when there is no registry, which is a
+/// launcher from before installs were recorded: it serves as it always did. A registry that cannot be read is an error.
+fn plan(
+    dir: &Path,
+    own: &Path,
+    own_version: &str,
+    query: &dyn Fn(&Path) -> Option<String>,
+) -> Result<Option<(bool, Vec<Install>)>, String> {
+    if !dir.join(INSTALLS).exists() {
+        return Ok(None);
+    }
+    let installs = read_installs(dir)?;
+    Ok(Some((is_registered(&installs, own), newer_installs(&installs, own, own_version, query))))
+}
+
 /// The folder holding the registry: the launcher's, when Chrome started this through it.
 fn host_dir() -> PathBuf {
     std::env::var_os(HOST_DIR).map_or_else(data_dir, PathBuf::from)
@@ -338,7 +357,7 @@ fn host_dir() -> PathBuf {
 /// The command that runs `install` as the host in this one's place, with Chrome's arguments.
 fn handover_command(install: &Install, args: &[String]) -> std::process::Command {
     let mut command = std::process::Command::new(&install.path);
-    command.arg("native-host").args(args).env(GUARD, "1");
+    command.arg("native-host").args(args).env(GUARD, "1").env(HOST_PATH, &install.path);
     command
 }
 
@@ -346,22 +365,24 @@ const GUARD: &str = "FASTBROWSE_HOST_DELEGATED";
 
 /// Run the newest registered fastbrowse as the host instead of this one, when one is newer; its exit code. Newer
 /// installs are tried newest first until one starts. `None` runs this one: it is registered and the newest (or no newer
-/// one starts), or the registry cannot be read. An unregistered one exits 1 instead of serving (see [`without_handover`]).
+/// one starts), or there is no registry yet. An unregistered one, or an unreadable registry, exits 1 instead of serving
+/// (see [`without_handover`]).
 pub fn delegate(args: &[String]) -> Option<i32> {
     if std::env::var_os(GUARD).is_some() {
         return None;
     }
     let dir = host_dir();
-    let installs = match read_installs(&dir) {
-        Ok(installs) => installs,
+    // The identity is the path the launcher started; run directly, without a launcher, it is this executable.
+    let own = std::env::var_os(HOST_PATH).map(PathBuf::from).or_else(|| std::env::current_exe().ok())?;
+    let (registered, candidates) = match plan(&dir, &own, env!("CARGO_PKG_VERSION"), &reported_version) {
+        Ok(Some(plan)) => plan,
+        Ok(None) => return None,
         Err(error) => {
             eprintln!("fastbrowse native-host: {error}");
-            return None;
+            return Some(1);
         }
     };
-    let own = std::env::current_exe().ok()?;
-    let registered = is_registered(&installs, &own);
-    for newer in newer_installs(&installs, &own, env!("CARGO_PKG_VERSION"), &reported_version) {
+    for newer in candidates {
         let mut command = handover_command(&newer, args);
         #[cfg(unix)]
         {
@@ -864,6 +885,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(registered_serves, None);
         assert_eq!(stray_exits, Some(1));
+    }
+
+    #[test]
+    fn the_plan_serves_without_a_registry_and_fails_on_a_corrupt_one_and_keys_on_the_started_path() {
+        let dir = scratch("plan");
+        let (started, other) = (dir.join("tool/bin/fastbrowse"), dir.join("other/fastbrowse"));
+        let none = |_: &Path| None;
+        // No registry: a launcher from before installs were recorded.
+        assert_eq!(plan(&dir, &started, "0.15.0", &none), Ok(None));
+        // A Python install: the started script is registered whatever executable runs it.
+        let installs = vec![at(&started, "0.15.0")];
+        write_host(&dir, &installs).unwrap();
+        let Ok(Some((registered, candidates))) = plan(&dir, &started, "0.15.0", &none) else { panic!("no plan") };
+        assert!(registered && candidates.is_empty());
+        let Ok(Some((registered, _))) = plan(&dir, &other, "0.15.0", &none) else { panic!("no plan") };
+        assert!(!registered);
+        std::fs::write(dir.join(INSTALLS), "{").unwrap();
+        let corrupt = plan(&dir, &started, "0.15.0", &none);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(corrupt.unwrap_err().contains("installs.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_launcher_tells_the_host_which_registered_path_it_started() {
+        let dir = scratch("identity-env");
+        let real = dir.join("real/fastbrowse");
+        script(&real, "echo $FASTBROWSE_HOST_PATH");
+        let launcher = write_launcher(&dir, std::slice::from_ref(&real)).unwrap();
+        let out = std::process::Command::new(launcher).output().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{}\n", real.display()));
     }
 
     #[cfg(unix)]
