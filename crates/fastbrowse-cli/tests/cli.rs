@@ -10,8 +10,9 @@ use std::sync::{Arc, Mutex};
 use common::{Call, Recorder, isolated_binary, model_settings, result, runner};
 use fastbrowse_agent::agent::RecipeOutcome;
 use fastbrowse_cli::cli::{self, Build, Context, Streams};
-use fastbrowse_cli::runner::Runner;
+use fastbrowse_cli::runner::{Host, RunError, RunTask, Runner};
 use fastbrowse_clients::environment::{Secret, Settings};
+use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
 use fastbrowse_core::recipe::{RECIPE_VERSION, Recipe};
 use serde_json::Value;
@@ -526,10 +527,19 @@ async fn test_a_run_that_ends_short_of_complete_keeps_its_trace_and_names_it() {
     assert_eq!(complete.json().get("trace"), None);
     assert_eq!(listed(), 1, "a complete run leaves nothing behind");
 
+    // A run that fails without a result still names what it kept, in its JSON as well as on stderr.
+    let failing: Arc<dyn Runner> = Arc::new(|_: RunTask, _: Host| -> BoxFuture<'static, Result<RunResult, RunError>> {
+        Box::pin(async { Err(RunError::Invalid("the model refused the schema".into())) })
+    });
+    let failed = cli_run_by(&["t", "--json"], model_settings(), &environ, failing, Build::default()).await;
+    let named = std::path::PathBuf::from(failed.json()["trace"].as_str().expect("the failed run's trace is named"));
+    assert!(named.is_file() && failed.err.contains(&format!("  trace: {}", named.display())));
+    assert_eq!((failed.code, listed()), (1, 2));
+
     // A destination the caller chose replaces the kept one; `0` keeps none at all.
     let chosen = [("HOME", "/nonexistent"), ("XDG_STATE_HOME", state_text.as_str()), ("FASTBROWSE_TRACE", "0")];
     let opted_out = cli_with(&["t", "--json"], model_settings(), &chosen, result(Status::Stuck)).await;
     assert_eq!(opted_out.json().get("trace"), None);
-    assert_eq!(listed(), 1);
+    assert_eq!(listed(), 2);
     std::fs::remove_dir_all(&state).unwrap();
 }

@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::ConfigurationError;
@@ -527,8 +527,10 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let extension = task.wants_extension();
     let recipe_sink =
         (args.recipe.is_some() || args.save_recipe.is_some()).then(fastbrowse_agent::agent::RecipeSink::default);
+    let browser_api_key = options::environment(&task, &settings)?;
     // Every local run writes its own trace, kept only when it ends short of complete, so a failure nobody traced can
-    // still be read afterwards (#1414).
+    // still be read afterwards (#1414). It starts after the last check that can refuse the run, so a refused run
+    // leaves no file behind that nothing names.
     let kept = crate::kept_trace::directory(args.trace.as_deref(), &context.environ)
         .and_then(|directory| crate::kept_trace::KeptTrace::start(&directory));
     if let Some(kept) = &kept {
@@ -536,7 +538,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     }
     let host = Host {
         recipe_sink: recipe_sink.clone(),
-        browser_api_key: options::environment(&task, &settings)?,
+        browser_api_key,
         secrets: secrets.map(|secrets| Arc::new(secrets) as _),
         on_event: Some(progress(context.streams.clone())),
         http: kept.as_ref().map(|kept| fastbrowse_clients::http::Http::hyper().with_trace(kept.trace())),
@@ -556,12 +558,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         Err(RunError::AfterSpending { error, receipt }) => {
             options::cancelled_result(error.failure_kind(), error.to_string(), receipt)
         }
-        Err(error) => {
-            if let Some(path) = &trace {
-                context.streams.eprint(&format!("  trace: {}", path.display()));
-            }
-            return Err(ConfigurationError(error.to_string()));
-        }
+        // Reported here rather than through `main`, which no longer has the kept trace's path to name.
+        Err(error) => return Ok(fail(args, context, &error.to_string(), trace.as_deref())),
     };
     // Replay accounting only for a run that replayed: a run that only saved one printed "0 actions reused" (#1342).
     if args.recipe.is_some()
@@ -651,17 +649,23 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
     Trace::disabled().event("build", || context.build.fields());
     match run(&args, context).await {
         Ok(code) => code,
-        Err(error) => {
-            if args.json {
-                context.streams.print(&json::write(
-                    &json_result(&options::error_result("Configuration", &error.0), None, &context.build),
-                    Style::PYDANTIC.indented(2),
-                ));
-            }
-            context.streams.eprint(&format!("fastbrowse: {}", error.0));
-            1
-        }
+        Err(error) => fail(&args, context, &error.0, None),
     }
+}
+
+/// Report a run that produced no result, naming the trace it kept, and return the exit code.
+fn fail(args: &Args, context: &Context, message: &str, trace: Option<&Path>) -> i32 {
+    if args.json {
+        context.streams.print(&json::write(
+            &json_result(&options::error_result("Configuration", message), trace, &context.build),
+            Style::PYDANTIC.indented(2),
+        ));
+    }
+    context.streams.eprint(&format!("fastbrowse: {message}"));
+    if let Some(path) = trace {
+        context.streams.eprint(&format!("  trace: {}", path.display()));
+    }
+    1
 }
 
 /// The result `--json` prints: its total cost beside its status, as the plain output and the MCP result give it, since
