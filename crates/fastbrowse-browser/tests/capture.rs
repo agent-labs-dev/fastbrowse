@@ -1444,6 +1444,28 @@ async fn a_fill_into_a_contenteditable_reports_the_host_the_capture_names() {
     h.close().await;
 }
 
+/// An editing host is read once, as its field block: no ordinary paragraph or code block repeats its text, so nothing
+/// the run typed reads as a source without its provenance.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_editing_host_is_read_once_as_its_field_block() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<div contenteditable="true" aria-label="Report">typed words</div><pre contenteditable="true" aria-label="Snippet">let x = 1;</pre><span contenteditable="true" aria-label="Inline">inline words</span>"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    for (words, field) in [("typed words", "Report"), ("let x = 1;", "Snippet"), ("inline words", "Inline")] {
+        let holding: Vec<_> = capture.blocks.iter().filter(|b| capture.block_text(b).contains(words)).collect();
+        assert_eq!(holding.len(), 1, "{words} is read once");
+        assert_eq!(capture.block_text(holding[0]), format!("{field}: {words}"));
+        let control = holding[0].control_context.as_ref().expect("field block carries its control");
+        assert_eq!(control.value.as_deref(), Some(words));
+    }
+    h.close().await;
+}
+
 /// A native date or time fill returns before the typing path, and reports its field all the same.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_native_date_fill_reports_the_field() {

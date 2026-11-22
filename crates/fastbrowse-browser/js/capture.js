@@ -604,7 +604,7 @@
         scope(node.shadowRoot, framePath, `${sourcePath}/shadow:${identity(node)}`, path);
         continue;
       }
-      if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
+      if (!isHost(node) && !node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
         run.push(node);
         continue;
       }
@@ -622,6 +622,12 @@
   }
 
   function block(el) {
+    // An editing host is decided before any other block kind: emitted once, as the field block that carries its
+    // identity and raw value, and never walked, so no copy of its text reads as an ordinary source.
+    if (isHost(el)) {
+      for (const { text, ...control } of fields(el, true)) push('paragraph', text, control);
+      return;
+    }
     if (el.matches('nav,[role="navigation"]')) {
       // Navigation help headings describe their menu, not product facts in the following main content.
       const surrounding = [path, headingLevels];
@@ -675,7 +681,6 @@
       return;
     }
     walk(el);
-    if (isHost(el)) for (const { text, ...control } of fields(el, true)) push('paragraph', text, control);
   }
 
   // A same-origin frame is read where it stands, under the headings above it: read after the whole page, an
