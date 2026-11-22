@@ -1649,7 +1649,7 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     let page = observation(&controls);
     assert_eq!(crate::policy::Submitted::of(Operation::Fill, &controls[2], &page), None, "a fill submits nothing");
     // Form ids are numbered per document: the same id on another page is another form.
-    let elsewhere = Observation { url: "https://example.test/other".into(), ..page.clone() };
+    let elsewhere = Observation { document_key: "later-document".into(), ..page.clone() };
     for (target, seen) in [(&top, &page), (&post, &page), (&post, &elsewhere)] {
         state.history.push(HistoryEntry {
             submitted: crate::policy::Submitted::of(Operation::Click, target, seen),
@@ -1662,7 +1662,7 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     let actions = &asked[1].0["recent_actions"];
     assert_eq!(
         actions[0]["form"],
-        "a different form from the one the action now asked about submits; every field in it was empty"
+        "a different form from the one the action now asked about submits; the observation recorded no field values"
     );
     assert_eq!(
         actions[1]["form"],

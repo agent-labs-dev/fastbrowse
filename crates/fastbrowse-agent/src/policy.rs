@@ -228,8 +228,9 @@ impl Submitted {
             true => "the same form the action now asked about submits",
             false => "a different form from the one the action now asked about submits",
         };
+        // The observation can omit fields in the submitted form, so no recorded values is not proof of emptiness.
         match self.held.is_empty() {
-            true => format!("{which}; every field in it was empty"),
+            true => format!("{which}; the observation recorded no field values"),
             false => format!("{which}; in it, {}", self.held.join("; ")),
         }
     }
