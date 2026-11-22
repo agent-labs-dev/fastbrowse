@@ -5,7 +5,7 @@
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, JEV_REQUEST_BYTES, NO_IMAGES, Question,
-    questions_without_images, referenced, without_images,
+    image_tokens, questions_without_images, referenced, without_images,
 };
 use fastbrowse_core::models::CostLine;
 use fastbrowse_core::py::base64;
@@ -249,6 +249,19 @@ impl DecisionClient for SystemOneClient {
 
     fn profile(&self) -> DecisionProfile {
         self.profile.clone()
+    }
+
+    /// What `request` sends: Jev every reference in place, another model only the top-level pictures it is given as
+    /// items, with each option's picture left out.
+    fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
+        if !self.profile.images || images.is_empty() {
+            return 0;
+        }
+        if reads_references_in_place(&self.model) {
+            return image_tokens(images, state, questions);
+        }
+        let (state, questions) = (media_as_items(state, images), questions_without_images(questions, images));
+        image_tokens(&referenced(images, &state, &questions), &state, &questions)
     }
 }
 

@@ -873,6 +873,13 @@ pub trait DecisionClient: Send + Sync {
     /// The model this client asks, whose limits fit every request sent to it.
     fn profile(&self) -> DecisionProfile;
 
+    /// The image tokens the model is sent for this request: none on a route that takes no image, otherwise every
+    /// reference the request makes. A client that sends a model fewer pictures than the request names says so here,
+    /// so the text is not cut for pictures that never go out.
+    fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
+        if self.profile().images { image_tokens(images, state, questions) } else { 0 }
+    }
+
     /// The ledger counter a caller reserves before a call for `purpose`, or `None` when the client that answers it
     /// reserves each of its own requests (an LLM, whose repairs and re-asks only it can count).
     fn reserves(&self, _purpose: JevPurpose) -> Option<CostComponent> {

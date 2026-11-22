@@ -370,6 +370,32 @@ async fn test_direct_encodes_all_question_types_and_estimates_usage() {
     assert_eq!(score.score, 1.99);
 }
 
+#[test]
+fn test_a_model_is_charged_for_the_pictures_its_route_sends_it() {
+    let png = |side: u32| {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend(side.to_be_bytes());
+        png.extend(side.to_be_bytes());
+        png
+    };
+    let images = Images::from([("ref-1".to_string(), png(280)), ("ref-2".to_string(), png(560))]);
+    let state = json!({"viewport_screenshot": "ref-1"});
+    let asked = questions([(
+        "target",
+        ChoiceQuestion::new("Which?", IndexMap::from([("e1".into(), json!({"what": "Buy", "look": "ref-2"}))])).into(),
+    )]);
+    let http = answering(|_| unreachable!("nothing is sent"));
+    let tokens = |model: &str| {
+        SystemOneClient::new("key", http.clone(), OPENROUTER_URL, model)
+            .openrouter()
+            .image_tokens(&state, &asked, &images)
+    };
+    // Jev reads the option's picture in place; another model is given only the screenshot.
+    assert_eq!(tokens("jev-1.14"), 213 + 813);
+    assert_eq!(tokens("google/gemini-decision-1"), 213);
+    assert_eq!(tokens("parallel/decisions-fast"), 0, "a route OpenRouter lists without image input");
+}
+
 #[tokio::test]
 async fn test_question_keys_go_out_legal_and_answers_come_back_under_the_keys_asked() {
     let long = "x".repeat(70);

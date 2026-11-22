@@ -46,6 +46,10 @@ impl DecisionClient for Decisions {
         self.0.profile()
     }
 
+    fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
+        self.0.image_tokens(state, questions, images)
+    }
+
     fn reserves(&self, purpose: JevPurpose) -> Option<CostComponent> {
         self.0.reserves(purpose)
     }

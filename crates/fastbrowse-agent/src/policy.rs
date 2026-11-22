@@ -13,7 +13,7 @@ use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
     Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images,
-    JEV_REQUEST_BYTES, NoulQuestion, Question, asset_bytes, image_tokens, referenced,
+    JEV_REQUEST_BYTES, NoulQuestion, Question, asset_bytes, referenced,
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::keys::role_keys;
@@ -608,9 +608,8 @@ pub async fn decide(
     ledger: Option<&Ledger>,
     trace: &Trace,
 ) -> Result<Decision> {
-    let profile = jev.profile();
-    let (options, images) = (profile.max_choice_options, profile.images);
-    let fitting = Fitting { config, options, images };
+    let options = jev.profile().max_choice_options;
+    let fitting = Fitting { config, options, jev };
     let (mut observation, mut context) = (Cow::Borrowed(observation), Cow::Borrowed(context));
     let mut controls: Vec<Control> = observation.controls.clone();
     let mut reduction = Reduction::None;
@@ -705,8 +704,8 @@ pub async fn decide(
 struct Fitting<'a> {
     config: &'a Config,
     options: usize,
-    /// Whether the route is sent the request's pictures, which then take room from its text.
-    images: bool,
+    /// The client the request goes to, which says what its pictures cost it.
+    jev: &'a dyn DecisionClient,
 }
 
 impl Fitting<'_> {
@@ -722,11 +721,16 @@ impl Fitting<'_> {
     }
 
     fn tokens(&self, request: &Request) -> fastbrowse_core::config::TokenBudget {
-        request_tokens(request, self.config, self.images)
+        self.config.tokens.beside_images(self.pictured(request))
+    }
+
+    /// The image tokens the client sends for `request`, which take room from its text.
+    fn pictured(&self, request: &Request) -> i64 {
+        self.jev.image_tokens(&request.state, &request.questions, &request.images)
     }
 
     fn request_fits(&self, request: &Request) -> bool {
-        fits(request, self.config, self.images)
+        fits(request, self.config, self.pictured(request))
     }
 
     fn fits(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> bool {
@@ -1347,16 +1351,10 @@ pub fn build_request(
 /// slower and less accurate. An image puts a request there too. Questions asked ahead save a round trip only below it.
 const LONG_CONTEXT_BYTES: usize = 32_000;
 
-/// The budget for `request`, less the room its pictures take on a route that is sent them (`images`).
-fn request_tokens(request: &Request, config: &Config, images: bool) -> fastbrowse_core::config::TokenBudget {
-    let pictured = if images { image_tokens(&request.images, &request.state, &request.questions) } else { 0 };
-    config.tokens.beside_images(pictured)
-}
-
-/// Whether `request` fits the route's context, its pictures counted when the route is sent them.
-pub fn fits(request: &Request, config: &Config, images: bool) -> bool {
+/// Whether `request` fits the route's context beside the `pictured` image tokens its client sends with it.
+pub fn fits(request: &Request, config: &Config, pictured: i64) -> bool {
     let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-    text::len(&dumps(&request.state)) as i64 <= request_tokens(request, config, images).input_chars(&written)
+    text::len(&dumps(&request.state)) as i64 <= config.tokens.beside_images(pictured).input_chars(&written)
 }
 
 /// The bytes the request's body takes as the Jev client sends it: its state and questions as JSON, and each picture

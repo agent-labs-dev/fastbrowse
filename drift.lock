@@ -43,7 +43,7 @@ sig = "b4ce19ecb1d99786"
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"
 target = "crates/fastbrowse-core/src/config.rs"
-sig = "f739511953505e3f"
+sig = "d6276ca88c3226d7"
 
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"

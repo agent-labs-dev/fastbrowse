@@ -860,6 +860,10 @@ impl DecisionClient for Sourced {
         self.client.profile()
     }
 
+    fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
+        self.client.image_tokens(state, questions, images)
+    }
+
     fn reserves(&self, purpose: JevPurpose) -> Option<CostComponent> {
         self.client.reserves(purpose)
     }
