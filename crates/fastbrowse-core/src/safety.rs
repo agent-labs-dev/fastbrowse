@@ -416,7 +416,7 @@ pub fn changes_a_value(operation: Operation, control: &Control) -> bool {
         Operation::Fill | Operation::Press | Operation::Select => {
             control.role != "searchbox" && control.input_type.as_deref() != Some("search")
         }
-        Operation::Click => SETTING_ROLES.contains(&control.role.as_str()) || control.checked.is_some(),
+        Operation::Click | Operation::DoubleClick => SETTING_ROLES.contains(&control.role.as_str()) || control.checked.is_some(),
         _ => false,
     }
 }
@@ -1082,6 +1082,7 @@ mod tests {
             (Operation::Click, Control::new("m", "menuitemcheckbox", "Wrap", [Operation::Click]), true),
             (Operation::Click, pressed, true),
             (Operation::Click, button("Next"), false),
+            (Operation::DoubleClick, Control::new("c2", "checkbox", "Email me", [Operation::DoubleClick]), true),
             (Operation::Fill, Control::new("t", "textbox", "Name", [Operation::Fill]), true),
             // A key pressed in a field can type into it or delete from it (#937).
             (Operation::Press, Control::new("t", "textbox", "Name", [Operation::Fill]), true),

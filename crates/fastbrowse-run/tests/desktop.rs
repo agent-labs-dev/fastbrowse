@@ -641,6 +641,25 @@ async fn when_the_active_window_closes_the_one_active_before_it_is_active_again(
 }
 
 #[tokio::test]
+async fn a_tab_switch_sends_no_input_so_a_window_lost_after_it_is_not_the_runs_close() {
+    let fake = Fake::new("switch-not-input", &[launch_tool()]);
+    fake.replies("launch", [ok(&window(false)), ok(&calculator())]);
+    fake.replies("wait_for@0xabc", [ok(&window(false)), refused("not_found", "no window 0xabc")]);
+    fake.replies("elements@0xabc", [ok(&frame("s1"))]);
+    // Both windows are gone by the read after the switch.
+    fake.replies("wait_for@0xdef", [refused("not_found", "no window 0xdef")]);
+    let both = list(&[window(false), calculator()]);
+    fake.replies("windows", [both, list(&[])]);
+    let page = open_both(&fake).await;
+    let before = page.observe().await.unwrap();
+    let mut switch = Action::new(Operation::SwitchTab);
+    switch.tab_id = Some("0xdef".into());
+    page.act(&switch, &before).await.unwrap();
+    let error = page.observe().await.unwrap_err();
+    assert!(matches!(error, BrowserError::Unavailable(_)), "{error:?}");
+}
+
+#[tokio::test]
 async fn a_run_whose_every_window_closed_ends_its_page() {
     let fake = editor("all-closed", &[launch_tool()]);
     fake.replies("wait_for", [refused("not_found", "no window 0xabc")]).replies("windows", [list(&[])]);
@@ -792,9 +811,9 @@ async fn a_wait_ends_at_its_deadline_though_the_window_list_is_slow() {
     let before = page.observe().await.unwrap();
     std::fs::write(fake.dir().join("windows.delay"), "3").unwrap();
     let wait = Action::new(Operation::Wait);
-    let result = tokio::time::timeout(std::time::Duration::from_millis(1800), page.wait(&wait, &before, 0.3))
+    let result = tokio::time::timeout(std::time::Duration::from_millis(700), page.wait(&wait, &before, 0.3))
         .await
-        .expect("a pending window list must not hold the WAIT")
+        .expect("a pending window list must not outlast the WAIT's own deadline")
         .unwrap();
     assert_eq!((result.outcome, result.page_changed), (StepOutcome::Executed, false), "{result:?}");
 }

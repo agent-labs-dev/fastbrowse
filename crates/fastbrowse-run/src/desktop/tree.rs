@@ -12,7 +12,7 @@ use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::{sha256_hex, text};
 use fastbrowse_core::safety::origin_of;
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Element {
     pub id: String,
     pub role: String,
@@ -51,6 +51,7 @@ impl Element {
             == (&now.role, &now.name, &now.text, now.x, now.y, now.width, now.height)
             && count_named(self, was) == 1
             && count_named(fresh, now) == 1
+            && shown_in(fresh, id, Size::of(fresh))
     }
 
     fn has(&self, state: &str) -> bool {
@@ -302,6 +303,15 @@ pub fn aim(root: &Element, id: &str) -> Option<(f64, f64, f64, f64)> {
     }
     let centre = |at: i64, size: i64| at as f64 + size as f64 / 2.0;
     Some((centre(element.x, element.width), centre(element.y, element.height), root.width as f64, root.height as f64))
+}
+
+/// Whether the element `id` and every element above it show in `root`: a row of a tab that is no longer the one
+/// shown keeps its identity and its bounds and is still not on screen.
+fn shown_in(root: &Element, id: &str, window: Size) -> bool {
+    if !root.showing(window) {
+        return false;
+    }
+    root.id == id || root.children.iter().any(|child| find(child, id).is_some() && shown_in(child, id, window))
 }
 
 /// How many elements of `of`'s role, name and displayed text lie in the tree, `of` included if it does.
@@ -771,6 +781,42 @@ mod tests {
         assert!(controls.iter().all(|c| c.operations.contains(&Operation::Click)));
         // What the window says names them too, so a quote of a file name is found in it.
         assert!(capture(&window, &root).text.contains("IMG_4471.txt. File"));
+    }
+
+    #[test]
+    fn a_drag_end_must_still_show_with_every_element_above_it() {
+        let tree = |tab: &str, row: &str| Element {
+            id: "e1".into(),
+            role: "frame".into(),
+            states: vec!["showing".into()],
+            width: 800,
+            height: 600,
+            children: vec![Element {
+                id: "e2".into(),
+                role: "page tab".into(),
+                states: vec![tab.into()],
+                width: 800,
+                height: 600,
+                children: vec![Element {
+                    id: "e3".into(),
+                    role: "list item".into(),
+                    name: "report.pdf".into(),
+                    states: vec![row.into()],
+                    x: 10,
+                    y: 10,
+                    width: 80,
+                    height: 20,
+                    ..Element::default()
+                }],
+                ..Element::default()
+            }],
+            ..Element::default()
+        };
+        let observed = tree("showing", "showing");
+        assert!(observed.still_in(&observed, "e3"));
+        // The row keeps its identity and bounds and its own state; its tab no longer shows.
+        assert!(!observed.still_in(&tree("visible", "showing"), "e3"));
+        assert!(!observed.still_in(&tree("showing", "visible"), "e3"));
     }
 
     #[test]

@@ -867,6 +867,7 @@ impl DeskpilotPage {
     }
 
     async fn act_within(&self, action: &Action, observation: &Observation, seconds: f64) -> PageResult<ActResult> {
+        let started = Instant::now();
         if self.still_closed().await? {
             return Err(self.ended());
         }
@@ -909,9 +910,10 @@ impl DeskpilotPage {
                 moved: false,
             });
         }
-        // Only an action that sends input to the app can be what closes it: a wait sends nothing, so a window lost
-        // during one is not the run's own close.
-        *self.sent.lock().unwrap() = (action.operation != Operation::Wait).then(|| step_name(action, observation));
+        // Only an action that sends input to the app can be what closes it: a wait sends nothing, and a tab switch
+        // only chooses which window is read, so a window lost during either is not the run's own close.
+        let sends_input = !matches!(action.operation, Operation::Wait | Operation::SwitchTab);
+        *self.sent.lock().unwrap() = sends_input.then(|| step_name(action, observation));
         let sent = self.dispatch(action, observation).await;
         let measured = if action.operation == Operation::SwitchTab && matches!(sent, Ok(None)) {
             // Another window is read next, so the step changed what the run sees whatever that window shows.
@@ -924,21 +926,28 @@ impl DeskpilotPage {
                 moved: false,
             })
         } else {
-            self.followed(self.measured(sent, observation, seconds).await).await
+            let measured = self.measured(sent, observation, seconds).await;
+            // A WAIT's window discovery is bound by what is left of its own deadline, a step's by a settle.
+            let discovery = if action.operation == Operation::Wait {
+                Duration::from_secs_f64(seconds).saturating_sub(started.elapsed())
+            } else {
+                Duration::from_secs_f64(SETTLE_SECONDS)
+            };
+            self.followed(measured, discovery).await
         };
         self.hold_frame().await;
         measured
     }
 
     /// `measured`, moved to a window the action opened: the step changed what the run sees.
-    async fn followed(&self, measured: PageResult<ActResult>) -> PageResult<ActResult> {
+    async fn followed(&self, measured: PageResult<ActResult>, limit: Duration) -> PageResult<ActResult> {
         let measured = measured?;
         if measured.outcome != StepOutcome::Executed {
             return Ok(measured);
         }
-        // The step's own time is spent by now: a window list that does not answer within a settle leaves the step as
+        // The step's own time is spent by now: a window list that does not answer within `limit` leaves the step as
         // measured, and a window it opened is followed by the next read of the list.
-        let opened = tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), self.follow_opened()).await;
+        let opened = tokio::time::timeout(limit, self.follow_opened()).await;
         if !matches!(opened, Ok(Ok(Some(_)))) {
             match opened {
                 Ok(Err(error)) => return Err(error),
@@ -1074,7 +1083,7 @@ impl Page for DeskpilotPage {
             });
             self.point(Operation::Click, (x * shot.width, y * shot.height, shot.width, shot.height));
             let sent = self.tool("click", point).await.map(|()| None);
-            let measured = self.followed(self.measured(sent, &before, SETTLE_SECONDS).await).await;
+            let measured = self.followed(self.measured(sent, &before, SETTLE_SECONDS).await, Duration::from_secs_f64(SETTLE_SECONDS)).await;
             self.hold_frame().await;
             measured
         })
