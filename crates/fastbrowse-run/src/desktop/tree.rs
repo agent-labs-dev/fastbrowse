@@ -410,9 +410,12 @@ pub fn controls(root: &Element) -> Vec<Control> {
 }
 
 /// The text an element shows of its own: an editable field's value is the control's, and a control's name is its
-/// label, so only elements that are neither add text.
+/// label, so only elements that are neither add text. A multi-line text view is the exception: what it holds is the
+/// document the window shows, as GNOME Text Editor's body is, and left to its control's value alone the page read as
+/// its title bar and status line while the run was asked about the document (#1398). A password field never adds its.
 fn own_text(element: &Element) -> Option<&str> {
-    if !operations(element).is_empty() {
+    let document = element.has("editable") && element.has("multi line") && element.role != "password text";
+    if !operations(element).is_empty() && !document {
         return None;
     }
     element.text.as_deref().filter(|text| !text.trim().is_empty())
@@ -943,6 +946,32 @@ mod tests {
                 row("button", "Save", None),
             ]
         );
+    }
+
+    #[test]
+    fn a_text_views_whole_document_is_the_text_the_window_shows() {
+        // As deskpilot read GNOME Text Editor holding a long document (#1398): the text view is the window's body, and
+        // the page text was its title alone.
+        let body: String = (1..=240).map(|line| format!("line {line}: item, qty, price\n")).collect();
+        let view = Element {
+            y: 47,
+            width: 1238,
+            height: 711,
+            ..node("e2", "text box", "", &shown(&["editable", "focusable", "multi line"]), Some(&body), vec![])
+        };
+        let entry = node("e3", "text", "Search", &shown(&["editable", "focusable"]), Some("qty"), vec![]);
+        let status = node("e4", "label", "", &SHOWN, Some("Ln 1, Col 1"), vec![]);
+        let root = Element {
+            width: 1238,
+            height: 758,
+            ..node("e1", "window", "invoice.txt - Text Editor", &SHOWN, None, vec![view, entry, status])
+        };
+        let window =
+            Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "invoice.txt".into() };
+        let observation = observation(&window, &root, &[]);
+        assert_eq!(observation.viewport_text, format!("{body}\nLn 1, Col 1"));
+        // The view is still a field to write in, holding the same text.
+        assert_eq!(observation.controls[0].value.as_deref(), Some(body.as_str()));
     }
 
     #[test]

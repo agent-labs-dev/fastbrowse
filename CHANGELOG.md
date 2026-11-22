@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A desktop run reads the document a text view holds as the text the window shows ([#1398](https://github.com/agent-labs-dev/fastbrowse/issues/1398)). A multi-line text view, such as GNOME Text Editor's body, was read only as a field's value, so the page text was the window's title bar and status line, and a question about the document was judged against them. A single-line field and a password field still add nothing to the page text.
+
 - A desktop run no longer offers an element the app places past the right or bottom edge of its window ([#1395](https://github.com/agent-labs-dev/fastbrowse/issues/1395)). A window tiled smaller than its content leaves the app reporting elements beyond it, and every click on one was refused as a point outside the window. An element whose centre, the point deskpilot clicks, lies outside the window is no longer a control, and text past the edge reads as out of view.
 
 - A desktop recording no longer stretches a window of another size to the size of the first frame, as when a second window opens and the first is tiled to half its width ([#1395](https://github.com/agent-labs-dev/fastbrowse/issues/1395)). Each window is shrunk to fit and centred on a black frame of the first window's size, so its text keeps its shape.
