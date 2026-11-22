@@ -1098,7 +1098,7 @@ impl Agent {
                         } else if action.operation == Operation::Wait {
                             // A WAIT lasts until the page changes, which may be later than a few seconds: a status line
                             // rewritten every ten seconds was never seen to move. The run's own deadline bounds it, and
-                            // with no deadline the browser ends it after one armed watch.
+                            // with no deadline the page ends it after one armed watch, a browser's or a desktop window's.
                             let seconds = browsing_deadline(&state.ledger, state.compose)
                                 .map_or(f64::INFINITY, |until| {
                                     until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64()
@@ -1312,6 +1312,7 @@ impl Agent {
             });
         }
         let note = self.redact(act.detail.as_deref().unwrap_or_default());
+        let refused = (act.outcome == StepOutcome::Failed && !note.is_empty()).then(|| note.clone());
         let facts: Vec<_> = state.notes.facts()[facts_before.min(state.notes.facts().len())..]
             .iter()
             .map(|fact| self.public_fact(fact, &state.notes))
@@ -1334,7 +1335,7 @@ impl Agent {
         self.record_step(state, step, false, frame).await?;
         match progressed {
             Some(progressed) => {
-                let stalled = Idle { action: withheld(decision), outcome: act.outcome };
+                let stalled = Idle { action: withheld(decision), outcome: act.outcome, refused };
                 self.count_progress(state, progressed, observation, stalled, Status::Stuck).await
             }
             None => {
