@@ -295,8 +295,8 @@ impl DeskpilotPage {
     async fn refresh(&self) -> PageResult<Window> {
         let address = self.address();
         if let Ok(found) = self.client.call_json("wait_for", json!({"window": address, "timeout": 0})).await {
-            let window =
-                read_window(&found).ok_or_else(|| BrowserError::Failed("deskpilot described no window".into()))?;
+            let window = read_window(&found)
+                .ok_or_else(|| BrowserError::failed("deskpilot/no-window", "deskpilot described no window"))?;
             *self.window.lock().unwrap() = window.clone();
             return Ok(window);
         }
@@ -321,17 +321,26 @@ impl DeskpilotPage {
             .call_json("elements", self.client.placed("elements", json!({"window": window.address, "peek": peek})))
             .await
             .map_err(|error| match error {
-                ToolError::Refused { code, message } if code == "no_tree" => BrowserError::Failed(message),
+                ToolError::Refused { code, message } if code == "no_tree" => {
+                    BrowserError::failed("deskpilot/no_tree", message)
+                }
                 // Two windows share the title deskpilot finds the window's tree by: a run's own windows, or an app
                 // left open by an earlier one. deskpilot works, so this is not an outage (#1345).
-                ToolError::Refused { code, message } if code == "ambiguous" => BrowserError::Failed(format!(
-                    "deskpilot cannot tell the window {} from another window with the same title: {message}",
-                    window.address
-                )),
+                ToolError::Refused { code, message } if code == "ambiguous" => BrowserError::failed(
+                    "deskpilot/ambiguous",
+                    format!(
+                        "deskpilot cannot tell the window {} from another window with the same title: {message}",
+                        window.address
+                    ),
+                ),
                 error => unavailable(error),
             })?;
-        let root: Element = serde_json::from_value(value)
-            .map_err(|error| BrowserError::Failed(format!("deskpilot sent a tree fastbrowse cannot read: {error}")))?;
+        let root: Element = serde_json::from_value(value).map_err(|error| {
+            BrowserError::failed(
+                "deskpilot/unreadable-tree",
+                format!("deskpilot sent a tree fastbrowse cannot read: {error}"),
+            )
+        })?;
         Ok((window, tree::in_reading_order(root)))
     }
 
@@ -699,7 +708,7 @@ impl Page for DeskpilotPage {
     }
 
     fn navigate<'a>(&'a self, _url: &'a str, _back_to: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
-        Box::pin(async { Err(BrowserError::Failed("a desktop window has no addresses to open".into())) })
+        Box::pin(async { Err(BrowserError::failed("desktop/navigate", "a desktop window has no addresses to open")) })
     }
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {

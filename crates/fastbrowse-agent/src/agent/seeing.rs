@@ -72,7 +72,12 @@ impl Agent {
         // it first: the drag itself then scrolls nothing.
         self.page.reveal(&target.id).await?;
         let Some(png) = self.screenshots().await?.into_iter().next() else {
-            return Err(Stop::new(Status::NeedsInput, "a screenshot is required to draw the drag path").into());
+            return Err(Stop::new(
+                Status::NeedsInput,
+                "Drag/no-screenshot",
+                "a screenshot is required to draw the drag path",
+            )
+            .into());
         };
         // A surface inside a cross-origin frame has no box in the top viewport; the screenshot still shows where it is.
         let target_box = self.page.edges(&target.id).await?.map_or_else(

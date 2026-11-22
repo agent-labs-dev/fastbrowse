@@ -20,7 +20,7 @@ impl CdpPage {
         let metrics = self.session.send("Page.getLayoutMetrics", json!({}), Some(&session_id)).await?;
         let viewport = &metrics["cssVisualViewport"];
         let (Some(width), Some(height)) = (viewport["clientWidth"].as_f64(), viewport["clientHeight"].as_f64()) else {
-            return Err(BrowserError::Failed("the page reported no viewport size".into()));
+            return Err(BrowserError::failed("viewport/unknown", "the page reported no viewport size"));
         };
         let (x, y) = (x * width, y * height);
         if let Some(control) = within

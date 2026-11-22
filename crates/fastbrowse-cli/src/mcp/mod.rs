@@ -370,6 +370,8 @@ pub fn browse_result(result: &RunResult, live_url: Option<&str>, config: &Server
         "steps": result.steps.len(),
         "dollars": fastbrowse_core::py::round(result.cost.known_dollars(), 6),
         "cost_complete": !result.cost.has_unknown(),
+        // Which browser and profile ran, as `--json` reports it, so a caller can check it ran where it asked (#1342).
+        "browser": result.browser.as_ref().map(Dump::dump),
         "downloads": downloads,
         "screenshot": screenshot,
     })
@@ -523,7 +525,7 @@ pub fn configure(
         extension_browser: args.extension_browser.clone(),
         ..RunTask::default()
     };
-    fastbrowse_run::check(&operator).map_err(|error| ConfigurationError(error.to_string()))?;
+    fastbrowse_run::check(&operator, false).map_err(|error| ConfigurationError(error.to_string()))?;
     if !options::on_cloud(&operator) && chrome.profile.is_some() && args.max_concurrent > 1 {
         return refuse("a --profile can be open in one Chrome at a time: drop --max-concurrent or --profile".into());
     }
