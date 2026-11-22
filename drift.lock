@@ -93,7 +93,7 @@ sig = "101da5863eb30faa"
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
 target = "crates/fastbrowse-cli/src/extension.rs"
-sig = "ccaf6aa7ba8d60f3"
+sig = "3900fe912c266fb4"
 
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"
