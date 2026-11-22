@@ -1041,7 +1041,8 @@ impl Agent {
     pub(super) async fn step(&self, state: &mut RunState, observation: &Observation, decision: &Decision) -> Step {
         let started = Instant::now();
         let facts_before = state.notes.facts().len();
-        let label = decision_label(decision);
+        let mut label = decision_label(decision);
+        let mut place = decision.target.as_ref().and_then(fastbrowse_core::safety::item_place);
         let mut typed: Option<String> = None;
         let mut effect_now: Option<String> = None;
         let mut setting = false;
@@ -1089,6 +1090,18 @@ impl Agent {
                 // closing the tab would abort it (#748). Handed over here, not when built: a read can discard the built
                 // action, and the tab would stay handed over for a commit never sent.
                 self.page.hand_over_tab();
+            }
+            // A press the next key question carried to another control pressed that one, so the entry names it and its
+            // place: the key after it is asked in the control this press set going.
+            if action.operation == Operation::Press
+                && let Some(pressed) =
+                    action.target_id.as_ref().and_then(|id| observation.controls.iter().find(|c| c.id == *id))
+            {
+                let named = describe(pressed);
+                // Keys that carry a lift on keep the place it started from.
+                let carrying = state.history.last().filter(|last| last.target.as_deref() == Some(named.as_str()));
+                place = carrying.and_then(|last| last.place).or_else(|| fastbrowse_core::safety::item_place(pressed));
+                label = Some(named);
             }
             if action.operation == Operation::Fill
                 && action.text.as_deref().is_none_or(str::is_empty)
@@ -1365,6 +1378,7 @@ impl Agent {
             text: typed,
             effect: effect_now,
             look: state.look.take(),
+            place,
             setting: setting.then_some(true),
             set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),

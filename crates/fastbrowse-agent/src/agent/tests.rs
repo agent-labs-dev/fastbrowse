@@ -11319,6 +11319,48 @@ async fn test_the_next_key_is_asked_in_the_control_the_last_press_set_going() {
     assert!(asked.iter().any(|q| q.contains("Which key should be pressed in 'Barrens'")), "{asked:?}");
 }
 
+/// Jev does not count, so code says whether the lifted item has moved since the press that lifted it.
+#[tokio::test]
+async fn test_the_carried_key_question_says_whether_the_item_has_moved() {
+    let destination = Control::new("b", "button", "Barrens", [Operation::Click, Operation::Press]);
+    let asked_with = |lift: Option<(u32, u32)>, now: Option<u32>| {
+        let mut lifted = Control::new("a", "button", "Test image", [Operation::Click, Operation::Press]);
+        lifted.focused = Some(true);
+        lifted.item_position = now;
+        lifted.item_count = now.map(|_| 6);
+        let page = observation(&[lifted, destination.clone()]);
+        let destination = destination.clone();
+        async move {
+            let jev = Arc::new(FirstChoice { wants: Some("ArrowUp"), noul: Some(0.0), ..Default::default() });
+            let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+            let mut state = run_state();
+            state.edits = Some(Edits::Allowed);
+            let mut last = executed(Some(Operation::Press), Some("Test image"), true);
+            last.text = Some("Space".into());
+            last.place = lift;
+            state.history.push(last);
+            let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(destination))).await;
+            let asked = jev.asked.lock().unwrap();
+            asked
+                .iter()
+                .find(|q| q.contains("Which key should be pressed in 'Test image'"))
+                .cloned()
+                .unwrap_or_default()
+        }
+    };
+    let unmoved = asked_with(Some((6, 6)), Some(6)).await;
+    assert!(
+        unmoved.contains("Since the press that set it going, it has not moved: it is still item 6 of the 6."),
+        "{unmoved}"
+    );
+    let moved = asked_with(Some((6, 6)), Some(2)).await;
+    assert!(moved.contains("it has moved from item 6 to item 2 of the 6."), "{moved}");
+    let unknown = asked_with(None, Some(6)).await;
+    assert!(!unknown.contains("Since the press that set it going"), "{unknown}");
+    let unseen = asked_with(Some((6, 6)), None).await;
+    assert!(!unseen.contains("Since the press that set it going"), "{unseen}");
+}
+
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.
 #[tokio::test]
 async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {

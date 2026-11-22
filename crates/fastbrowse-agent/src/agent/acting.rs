@@ -1373,8 +1373,20 @@ impl Agent {
         if let Some(effect) = &last.effect {
             did.push_str(&format!(" and {}", effect.trim_end_matches('.')));
         }
+        // Code compares the places: Jev does not count, and without this nothing says the item is still where it was.
+        let moved = match (last.place, item_place(carried)) {
+            (Some((from, _)), Some((now, count))) if from == now => {
+                format!(" Since the press that set it going, it has not moved: it is still item {now} of the {count}.")
+            }
+            (Some((from, _)), Some((now, count))) => {
+                format!(
+                    " Since the press that set it going, it has moved from item {from} to item {now} of the {count}."
+                )
+            }
+            _ => String::new(),
+        };
         let preface = format!(
-            "{did}. That control still holds keyboard focus, and a press in another control moves focus away from it. "
+            "{did}. That control still holds keyboard focus, and a press in another control moves focus away from it.{moved} "
         );
         let (question, options) = key_question(carried, &preface);
         match self.choose_among(state, observation, &question, &options, &[(OTHER_CONTROL, OTHER_CONTROL_SAID)]).await?
