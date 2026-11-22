@@ -1,0 +1,183 @@
+name: Cassette refill
+
+# When the `replay` check of a pull request finds missed model requests, this fills only those tasks' bench
+# cassettes under a small cap, commits them to the pull request's branch as a GitHub-signed commit, and reports the
+# result on the pull request. The commit starts CI again, which then replays them.
+#
+# Trigger: `workflow_run` on CI, not a label. It reacts to the result of the check itself, so there is no step for the
+# author to remember and no label to fall out of date; the label route still needs a person to notice the failure
+# first. The cost is that a `workflow_run` workflow runs with the secrets of the base repository, so the guards below
+# are the whole of the trust model:
+#   - only a pull request whose head is in this repository is run (`head_repository`, then checked again from the API
+#     in `plan`); a fork's code is never run with the model key, and its CI run can only upload a list of task ids.
+#   - the code that decides, comments and commits is this repository's default branch, checked out by the trusted jobs;
+#     the pull request's code runs only in `fill`, which holds the model key, `contents: read` and no write token.
+#   - the commit token is held by `publish` alone, which reads the fill's artifact as data: it judges the fill report
+#     itself and takes only `bench/cassettes/<requested task>.jsonl` files that parse as cassettes with no error response.
+#   - at most one refill per head commit (claimed in a pull request comment before any spend), none for a refill commit,
+#     and none for a head the check was not run on. A commit that changes the head starts a new check and a new refill.
+#   - the spend is capped by the repository variable CASSETTE_REFILL_BUDGET (default 1 dollar), checked before each
+#     model request is sent. Paid requests go one at a time, since a price is known only from its response, so only
+#     the last one can pass the cap; a response with no price stops the spending.
+#
+# `workflow_dispatch` (or a call from another workflow here) reruns it by hand for a pull request (`retry` lifts only the one-refill-per-head guard).
+# Repository configuration: secrets OPENROUTER_API_KEY and AUR_SYNC_TOKEN (a token with contents and pull request
+# write access to this repository; a push made with the run's own token starts no checks). Without the token the fill
+# still runs and the pull request is told why nothing was committed.
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] guarded as the header describes; the pull request's code runs only in `fill`
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number whose latest finished CI run missed cassettes
+        required: true
+        type: string
+      retry:
+        description: Refill again although this head commit was already tried
+        required: false
+        type: boolean
+        default: false
+  # Another workflow of this repository may call it with the same two inputs (and `secrets: inherit`).
+  workflow_call:
+    inputs:
+      pr:
+        required: true
+        type: string
+      retry:
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  # One group per pull request, whichever way it started, so a rerun reads the claim an earlier run has made.
+  group: cassette-refill-${{ github.event.workflow_run.pull_requests[0].number || inputs.pr }}
+  cancel-in-progress: false
+
+env:
+  REFILL_BUDGET: ${{ vars.CASSETTE_REFILL_BUDGET || '1' }}
+
+jobs:
+  plan:
+    if: >-
+      github.repository == 'agent-labs-dev/fastbrowse' && (github.event_name != 'workflow_run' || (
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      tasks: ${{ steps.plan.outputs.tasks }}
+      pr: ${{ steps.resolve.outputs.pr }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      # The default branch's code whatever started the run: a dispatch or a call checks out its own ref otherwise.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - id: resolve
+        run: python3 scripts/cassette_refill.py resolve
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          INPUT_PR: ${{ inputs.pr }}
+      - name: Download the missed task ids
+        # A run with no miss uploads none, which is the answer.
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: replay-misses
+          path: replay-misses
+          run-id: ${{ steps.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - id: plan
+        run: python3 scripts/cassette_refill.py plan
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.resolve.outputs.pr }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+          MISSES_DIR: replay-misses
+          RETRY: ${{ inputs.retry }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  fill:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # This job runs the pull request's code with the model key, so it holds nothing else.
+    permissions: {contents: read}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The head the replay check missed on, from this repository (`plan` refused any other).
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with: {shared-key: python-core}
+      - run: uv sync --locked
+      - name: Fill the missed cassettes
+        # FASTBROWSE_CHROME makes the replay use this Chrome, so it cannot be skipped for want of one.
+        run: |
+          FASTBROWSE_CHROME=$(npx -y @puppeteer/browsers@3.2.6 install chrome@stable --path "$RUNNER_TEMP/cft" --format '{{path}}')
+          export FASTBROWSE_CHROME
+          uv run --no-sync python scripts/cassette_refill.py fill
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REFILL_TASKS: ${{ needs.plan.outputs.tasks }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: refill-result
+          path: artifacts/refill
+          if-no-files-found: warn
+          retention-days: 7
+
+  publish:
+    needs: [plan, fill]
+    if: always() && needs.plan.outputs.run == 'true'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      pull-requests: write
+    timeout-minutes: 15
+    steps:
+      # The default branch's code whatever started the run, never the pull request's or a dispatched branch's: this
+      # job holds the commit token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: refill-result
+          path: refill-result
+      - name: Judge the fill, commit the cassettes if accepted, and tell the pull request
+        run: python3 scripts/cassette_refill.py publish
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_TOKEN: ${{ secrets.AUR_SYNC_TOKEN }}
+          PR: ${{ needs.plan.outputs.pr }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          REFILL_TASKS: ${{ needs.plan.outputs.tasks }}
+          ARTIFACT_DIR: refill-result
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
