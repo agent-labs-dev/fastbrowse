@@ -1515,7 +1515,8 @@ async fn gate_post_after_commits(
     let mut state = run_state();
     state.task = "Open the newest review. If nobody has answered it yet, write 'Thank you' and post it.".into();
     state.authorization = Authorization { irreversible_actions: true };
-    state.commits = vec!["click 'Post'".to_string(); commits];
+    state.history = vec![HistoryEntry::new(Some(Operation::Click), Some("Post"), StepOutcome::Executed, true); commits];
+    state.commits = (0..commits).collect();
     let post = button("Post");
     let mut page = observation(std::slice::from_ref(&post));
     page.viewport_text = "Newest review: great product. Signed in with hunter2.".into();
@@ -2210,21 +2211,29 @@ async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opene
 }
 
 /// A reply posted on a signed-in page was missing after a reload, because the site served the copy from before the
-/// post for a minute, and the carried-out check scored the step 0.18 and 0.11. It is told which commits the run sent,
-/// and only those.
+/// post for a minute, and the carried-out check scored the step 0.22. It is told each commit the run sent and the text
+/// the page showed in answer to it, which moved its score where a claim about the site did not; with no commit, nothing.
 #[tokio::test]
-async fn test_the_done_check_is_told_each_commit_the_run_sent_and_nothing_when_none() {
-    for (commits, expected) in [
+async fn test_the_done_check_is_told_each_commit_the_run_sent_and_what_the_page_then_showed() {
+    let post = |put: &[&str]| HistoryEntry {
+        put: put.iter().map(|piece| piece.to_string()).collect(),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post (cjber / Author)"), StepOutcome::Executed, true)
+    };
+    for (history, commits, expected) in [
         (
-            vec!["click 'Post (cjber / Author)'".to_string()],
-            vec!["The run's click 'Post (cjber / Author)' was sent, and the site keeps what it sent."],
+            vec![post(&["Your reply was posted."])],
+            vec![0],
+            vec![
+                "The run's click 'Post (cjber / Author)' was sent, and the page then showed the text 'Your reply was posted.'.",
+            ],
         ),
-        (Vec::new(), Vec::new()),
+        (vec![post(&[])], vec![0], vec!["The run's click 'Post (cjber / Author)' was sent."]),
+        (vec![post(&["Your reply was posted."])], Vec::new(), Vec::new()),
     ] {
         let mut state = run_state();
         state.task = "Reply to the comment with: Glad it helps!".into();
+        state.history = history;
         state.commits = commits;
-        state.history.push(HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Executed, true));
         let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
         let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
         agent.actions_done(&mut state, &observation(&[])).await.expect("the done check answers");
@@ -9704,7 +9713,14 @@ fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
     assert!(!answer.contains("Markdown"), "{answer}");
     // Once the run has sent something, the answer says what it sent, and no longer that every field still holds what
     // was typed (#1317).
-    let commits = ["click 'Post (Nivlemoth_Nathrezim / 7 hours ago)'".to_string()];
+    let mut history = history;
+    history.push(HistoryEntry::new(
+        Some(Operation::Click),
+        Some("Post (Nivlemoth_Nathrezim / 7 hours ago)"),
+        StepOutcome::Executed,
+        true,
+    ));
+    let commits = [history.len() - 1];
     let answer = super::finishing::changed_fields(&history, &commits).expect("the commit is reported");
     assert!(answer.starts_with(super::finishing::SENT), "{answer}");
     assert!(answer.contains("- click 'Post (Nivlemoth_Nathrezim / 7 hours ago)'"), "{answer}");

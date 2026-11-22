@@ -285,11 +285,9 @@ impl Agent {
             if committed
                 && !state.page_failed
                 && observation.dialog.is_none()
-                && let Some(entry) = state.history.last().filter(|entry| entry.outcome == StepOutcome::Executed)
+                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
             {
-                let operation = entry.operation.map_or_else(String::new, |operation| operation.to_string());
-                let target = entry.target.as_deref().map(text::repr).unwrap_or_default();
-                state.commits.push([operation, target].join(" ").trim().to_string());
+                state.commits.push(state.history.len() - 1);
             }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
@@ -970,6 +968,7 @@ impl Agent {
         let label = decision_label(decision);
         let mut typed: Option<String> = None;
         let mut effect_now: Option<String> = None;
+        let mut put_now: Vec<String> = Vec::new();
         let mut setting = false;
         let mut set: Vec<(String, String)> = Vec::new();
         let frames = self.on_event.is_some() && self.config.step_frames;
@@ -1247,6 +1246,7 @@ impl Agent {
                 if set.is_empty() && done.set_something && stayed {
                     set.push((describe(target), UNREPORTED.to_string()));
                 }
+                put_now = done.put;
                 effect_now = Some(done.summary);
             }
             progressed = judged;
@@ -1260,6 +1260,7 @@ impl Agent {
         state.history.push(HistoryEntry {
             text: typed,
             effect: effect_now,
+            put: put_now,
             look: state.look.take(),
             setting: setting.then_some(true),
             set,
@@ -1538,6 +1539,7 @@ impl Agent {
                 added: false,
                 changed: false,
                 shown: Vec::new(),
+                put: Vec::new(),
             }
         } else if (state.committing || keeping || sighted.is_some() || last.look.is_some())
             && last.outcome == StepOutcome::Executed
@@ -1582,6 +1584,7 @@ impl Agent {
             }
             state.read_tries.remove(&page);
         }
+        last.put.extend(done.put.iter().cloned());
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),
             None => done.summary,

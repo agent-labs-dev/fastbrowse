@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::acting::Carried;
-use super::helpers::unsent_fact;
+use super::helpers::{commit_step, unsent_fact};
 use super::recovery::{DONE, Idle};
 use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
@@ -595,7 +595,7 @@ pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports w
 /// its executed steps left in each field they changed, the latest change to each: text typed or an option chosen,
 /// quoted as recorded (a secret by its marker), and what a click left in each field it changed, as the page read it
 /// after the click. None when it sent nothing and changed no field.
-pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry], commits: &[String]) -> Option<String> {
+pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry], commits: &[usize]) -> Option<String> {
     let mut changed: IndexMap<&str, String> = IndexMap::new();
     let mut put = |field, left| {
         changed.shift_remove(field);
@@ -613,7 +613,8 @@ pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry], commits: &
         format!("{said}\n{}", lines.join("\n"))
     });
     let sent = (!commits.is_empty()).then(|| {
-        let lines: Vec<String> = commits.iter().map(|step| format!("- {step}")).collect();
+        let lines: Vec<String> =
+            commits.iter().filter_map(|&at| history.get(at)).map(|entry| format!("- {}", commit_step(entry))).collect();
         format!("{SENT}\n{}", lines.join("\n"))
     });
     let parts: Vec<String> = sent.into_iter().chain(fields).collect();

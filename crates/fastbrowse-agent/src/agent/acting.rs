@@ -2116,7 +2116,7 @@ impl Agent {
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
             .chain(state.to_carry_out.then(|| empty_fields_fact(&state.missing, observation)).flatten())
-            .chain(sent_facts(&state.commits))
+            .chain(sent_facts(&state.history, &state.commits))
             .chain(untouched)
             .collect();
         if !facts.is_empty() {

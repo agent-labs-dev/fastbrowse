@@ -178,6 +178,10 @@ pub struct HistoryEntry {
     /// judged not to have made the text bold, and pressed Bold again.
     #[serde(skip)]
     pub look: Option<Look>,
+    /// The text the page added after the step, as the effect quotes it, kept apart so a fact about it is not read back
+    /// out of `effect`'s wording.
+    #[serde(skip)]
+    pub put: Vec<String>,
 }
 
 /// What the place a step acted on looked like: the card the decision saw and, for a click placed in pixels, the same
@@ -214,6 +218,7 @@ impl HistoryEntry {
             set: Vec::new(),
             for_step: None,
             look: None,
+            put: Vec::new(),
         }
     }
 

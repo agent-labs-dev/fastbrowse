@@ -165,16 +165,34 @@ pub(crate) fn unsent_fact(history: &[HistoryEntry], observation: &Observation) -
     })
 }
 
-/// One fact per commit the run has sent, each worded as the step's result names it ("click 'Post'").
+/// A commit's step as its result names it: the operation, then the quoted target ("click 'Post'").
+pub(crate) fn commit_step(entry: &HistoryEntry) -> String {
+    let operation = entry.operation.map_or_else(String::new, |operation| operation.to_string());
+    let target = entry.target.as_deref().map(text::repr).unwrap_or_default();
+    [operation, target].join(" ").trim().to_string()
+}
+
+/// One fact per commit the run has sent, with the text the page then showed, as the step's own record has it.
 ///
 /// A site can serve the copy from before a send for a while: a reply posted on a signed-in page was missing after a
-/// reload, the carried-out question scored its step 0.18 and 0.11, and the run ended stuck on a reply that was live.
-/// Replayed on the real request, the question scored 0.41 to 0.60 as sent and 0.62 to 0.75 told that the click was
-/// sent and the site keeps what it sent.
-pub(crate) fn sent_facts(commits: &[String]) -> Vec<String> {
-    unique(commits.iter().cloned())
-        .into_iter()
-        .map(|step| format!("The run's {step} was sent, and the site keeps what it sent."))
+/// reload, the carried-out question scored its step 0.22, and the run ended stuck over a reply that was live. Replayed
+/// on the real request with its screenshot, five times each, the question scored 0.29 to 0.48 as sent, 0.32 to 0.54
+/// told only that the click was sent, and 0.48 to 0.63 told also that the page then showed "Your reply was posted."
+/// The site's own answer to the send moves it; a claim that the site keeps what it sent did not, and code does not
+/// know that.
+pub(crate) fn sent_facts(history: &[HistoryEntry], commits: &[usize]) -> Vec<String> {
+    commits
+        .iter()
+        .filter_map(|&at| history.get(at))
+        .map(|entry| {
+            let step = commit_step(entry);
+            if entry.put.is_empty() {
+                format!("The run's {step} was sent.")
+            } else {
+                let shown: Vec<String> = entry.put.iter().map(|piece| text::repr(piece)).collect();
+                format!("The run's {step} was sent, and the page then showed the text {}.", shown.join(", "))
+            }
+        })
         .collect()
 }
 
