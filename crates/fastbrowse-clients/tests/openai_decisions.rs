@@ -87,6 +87,31 @@ async fn the_questions_go_as_the_decisions_api_takes_them_and_the_answers_come_b
 }
 
 #[tokio::test]
+async fn predicate_names_round_trip_through_wire_renaming() {
+    let questions: IndexMap<String, Question> = ["field/check", "field_check"]
+        .map(|key| (key.to_string(), NoulQuestion::new("Green?", None, None).into()))
+        .into_iter()
+        .collect();
+    let script = Script::new([reply(
+        200,
+        json!({
+            "answers": [
+                {"type": "predicate", "name": "field_check", "probability": 0.2},
+                {"type": "predicate", "name": "field_check_1", "probability": 0.8},
+            ],
+            "usage": {"input_tokens": 30},
+        }),
+    )]);
+    let client = OpenAIDecisionsClient::new("sk", script.http(), OPENAI_URL, "gpt-6-luna");
+    let result = client.evaluate(&json!("page"), &questions).await.unwrap();
+    let body = &script.bodies()[0]["questions"];
+    assert_eq!(body[0]["name"], "field_check_1");
+    assert_eq!(body[1]["name"], "field_check");
+    assert_eq!(result.answers["field/check"].probability(), Some(0.8));
+    assert_eq!(result.answers["field_check"].probability(), Some(0.2));
+}
+
+#[tokio::test]
 async fn text_state_is_sent_as_text() {
     let mut answer = answered();
     answer["answers"] = json!([{"type": "predicate", "name": "green", "probability": 1.0}]);

@@ -65,7 +65,7 @@ pub fn jev_takes_png(png: &[u8]) -> bool {
 }
 
 /// A PNG's width and height in pixels, read from its header.
-fn png_size(png: &[u8]) -> Option<(u64, u64)> {
+pub fn png_size(png: &[u8]) -> Option<(u64, u64)> {
     if png.len() < 24 || !png.starts_with(b"\x89PNG\r\n\x1a\n") {
         return None;
     }
@@ -73,13 +73,24 @@ fn png_size(png: &[u8]) -> Option<(u64, u64)> {
     Some((side(16), side(20)))
 }
 
-/// The input tokens Jev counts for one use of the image `png`: two for each 28 pixel square it covers, each side
-/// rounded up, and 15 more. Measured against Jev 1.14 through OpenRouter on 2026-11-19, one request each beside a
-/// 284 token state: 280x280 added 215 tokens, 560x280 415, 800x600 1,291, 1000x1000 2,607, 1568x882 3,599 and
-/// 1568x1568 6,287, each exactly this count; two images and one image referred to twice both added 7,198. Left
-/// uncounted, a step showing eight cards was sent past Jev's limit and refused with `max_tokens_exceeded` (#1303).
+/// The input tokens Jev counts for one PNG: two for each 28-pixel tile it covers, rounded up on each side, and 13 for
+/// the image itself. TypeSafe publishes no image rate and says each image counts toward the context, so this was
+/// measured against Jev 1.14 through OpenRouter on 2026-11-22, reading `usage.input_tokens` against the same request
+/// without the image: 280x280 added 213, 560x560 813, 1568x882 3,597 and four at 800x600 5,156, each exactly this rule.
+/// A step that pictured eight cards was refused with `max_tokens_exceeded` while its text fitted, because nothing
+/// counted the pictures ([#1303](https://github.com/agent-labs-dev/fastbrowse/issues/1303)).
 pub fn jev_image_tokens(png: &[u8]) -> i64 {
-    png_size(png).map_or(0, |(width, height)| (2 * width.div_ceil(28) * height.div_ceil(28) + 15) as i64)
+    png_size(png).map_or(0, |(width, height)| (2 * width.div_ceil(28) * height.div_ceil(28) + 13) as i64)
+}
+
+/// The image tokens a request carries: each image Jev is sent, once for every place the state or a question refers to
+/// it, since Jev counts a picture again for each place it is used.
+pub fn image_tokens(images: &Images, state: &Value, questions: &IndexMap<String, Question>) -> i64 {
+    if images.is_empty() {
+        return 0;
+    }
+    let written = format!("{state}{}", serde_json::to_string(questions).unwrap_or_default());
+    images.iter().map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png)).sum()
 }
 
 /// `state` with every value that is an image reference left out, for a route that takes no image.
@@ -723,6 +734,32 @@ impl DecisionProfile {
         }
     }
 
+    /// Cached profile for use when OpenRouter's catalog is unavailable or has no entry for the model.
+    pub fn on_openrouter(model: &str) -> DecisionProfile {
+        let bare = model.strip_prefix("typesafe/").or_else(|| model.strip_prefix("~typesafe/")).unwrap_or(model);
+        if bare == "jev" || bare.starts_with("jev-") {
+            return DecisionProfile { images: true, ..DecisionProfile::for_model(model).long_context() };
+        }
+        let Some((_, context, dollars_per_million, images)) =
+            OPENROUTER_DECISION_MODELS.iter().find(|(id, ..)| *id == model)
+        else {
+            return DecisionProfile::unknown();
+        };
+        DecisionProfile::listed_on_openrouter(model, *context, Some(dollars_per_million / 1_000_000.0), *images)
+    }
+
+    fn listed_on_openrouter(model: &str, context: i64, price: Option<f64>, images: bool) -> DecisionProfile {
+        DecisionProfile {
+            max_largest_tokens: context,
+            max_total_tokens: context,
+            // OpenRouter caps no decision body below TypeSafe's own limit, which it passes Jev requests through at.
+            max_request_bytes: Some(JEV_REQUEST_BYTES as i64),
+            dollars_per_input_token: price,
+            images,
+            ..DecisionProfile::for_model(model)
+        }
+    }
+
     /// This model at Jev's long context, for a route that serves it.
     pub fn long_context(self) -> DecisionProfile {
         DecisionProfile {
@@ -773,6 +810,108 @@ impl DecisionProfile {
     }
 }
 
+/// OpenRouter's model list from `GET /api/v1/models?output_modalities=decisions`.
+#[derive(Deserialize)]
+pub struct OpenRouterDecisionCatalog {
+    data: Vec<OpenRouterModel>,
+}
+
+#[derive(Deserialize)]
+struct OpenRouterModel {
+    id: String,
+    canonical_slug: String,
+    alias_target: Option<OpenRouterAliasTarget>,
+    context_length: Option<i64>,
+    architecture: OpenRouterArchitecture,
+    pricing: OpenRouterPricing,
+}
+
+#[derive(Deserialize)]
+struct OpenRouterAliasTarget {
+    slug: String,
+}
+
+#[derive(Deserialize)]
+struct OpenRouterArchitecture {
+    input_modalities: Vec<String>,
+    output_modalities: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenRouterPricing {
+    prompt: Option<String>,
+}
+
+impl OpenRouterDecisionCatalog {
+    /// Return the concrete model and the limits and price of the requested route. An alias can move, so its
+    /// context must come from its own listing before a request is fitted.
+    pub fn resolve(&self, model: &str) -> Option<(&str, DecisionProfile)> {
+        let entry = self
+            .data
+            .iter()
+            .find(|entry| entry.id == model)
+            .or_else(|| self.data.iter().find(|entry| entry.canonical_slug == model))?;
+        if !entry.architecture.output_modalities.iter().any(|modality| modality == "decisions") {
+            return None;
+        }
+        let context = entry.context_length.filter(|&tokens| tokens > 0)?;
+        let concrete = entry.alias_target.as_ref().map_or(entry.id.as_str(), |target| target.slug.as_str());
+        let price = entry
+            .pricing
+            .prompt
+            .as_ref()
+            .and_then(|price| price.parse::<f64>().ok())
+            .filter(|price| price.is_finite() && *price >= 0.0);
+        let images = entry.architecture.input_modalities.iter().any(|modality| modality == "image");
+        Some((concrete, DecisionProfile::listed_on_openrouter(concrete, context, price, images)))
+    }
+}
+
+/// Each decision model OpenRouter lists, as `GET /api/v1/models?output_modalities=decisions` returned it on
+/// 2026-11-22: its id, context length in tokens, dollars per million input tokens, and whether it takes image input.
+/// Jev is profiled as Jev. Respan's span models (no context listed, conversation spans only) and Clairic (extractions,
+/// not decisions) answer no fastbrowse request, so they are left out and fall to the unknown profile.
+pub const OPENROUTER_DECISION_MODELS: &[(&str, i64, f64, bool)] = &[
+    ("baseten/bison-1", 32768, 0.1, true),
+    ("baseten/elephant-1", 16384, 0.035, true),
+    ("baseten/groundhog-1", 16384, 0.035, true),
+    ("baseten/joey-1", 16384, 0.01, true),
+    ("baseten/mammoth-1", 16384, 0.1, true),
+    ("cloudflare/clef", 65537, 0.192, true),
+    ("cloudflare/clef-flash", 24576, 0.019, true),
+    ("cloudflare/clef-omni", 65536, 0.15, true),
+    ("google/gemini-decision-1", 262144, 0.1, true),
+    ("heygen/heygen-decision-1", 262144, 0.07, true),
+    ("heygen/heygen-decision-1-turbo", 262144, 0.042, true),
+    ("jaredpalmer/kev-4b", 8192, 0.042, false),
+    ("liquid/d1-ultra", 32768, 0.042, true),
+    ("liquid/d1.1", 65536, 0.02, true),
+    ("liquid/d1.2", 65536, 0.02, true),
+    ("liquid/d1.2-ultra", 65536, 0.042, true),
+    ("~liquid/d1-latest", 65536, 0.02, true),
+    ("~liquid/d1-ultra-latest", 65536, 0.042, true),
+    ("microsoft/microsoft-decision-1", 32768, 0.042, false),
+    ("microsoft/microsoft-decision-1.1", 32768, 0.042, true),
+    ("morph/reflex", 65536, 0.042, true),
+    ("nace-ai/drex-max", 262144, 0.06, true),
+    ("nace-ai/drex-max-finance", 262144, 0.06, true),
+    ("nace-ai/drex-v1.5", 131072, 0.04, false),
+    ("nace-ai/drex-v2.0", 131072, 0.06, false),
+    ("openai/gpt-6-luna-decisions", 1050000, 0.1, true),
+    ("parallel/decisions-fast", 32000, 0.0, false),
+    ("perplexity/pplx-decider-flash-v1.2", 262144, 0.01, true),
+    ("perplexity/pplx-decider-flash-v1.3:free", 262144, 0.0, true),
+    ("perplexity/pplx-decider-v1.2", 262144, 0.02, true),
+    ("perplexity/pplx-decider-v1.3:free", 262144, 0.0, true),
+    ("~perplexity/pplx-decider-flash-latest", 262144, 0.01, true),
+    ("~perplexity/pplx-decider-latest", 262144, 0.02, true),
+    ("respan/span-02", 131072, 0.01, true),
+    ("scaledown/classify-1", 1000000, 0.04, true),
+    ("togethercomputer/tev1-4b-experimental", 32768, 0.042, false),
+    ("upstage/solar-decide", 524288, 0.05, false),
+    ("upstage/solar-decide-flash", 524288, 0.05, false),
+];
+
 pub trait DecisionClient: Send + Sync {
     /// Answer every question against one state. Fails with `InputTooLarge` or another `DecisionError`.
     fn evaluate<'a>(
@@ -796,6 +935,12 @@ pub trait DecisionClient: Send + Sync {
 
     /// The model this client asks, whose limits fit every request sent to it.
     fn profile(&self) -> DecisionProfile;
+
+    /// The local image token estimate for what this client sends with the request. The default client omits images.
+    /// A client that sends images supplies its model's estimate when the tokenization rule is known.
+    fn image_tokens(&self, _state: &Value, _questions: &IndexMap<String, Question>, _images: &Images) -> i64 {
+        0
+    }
 
     /// The ledger counter a caller reserves before a call for `purpose`, or `None` when the client that answers it
     /// reserves each of its own requests (an LLM, whose repairs and re-asks only it can count).
@@ -874,19 +1019,34 @@ mod tests {
     }
 
     #[test]
-    fn an_images_tokens_are_counted_as_jev_counted_them() {
-        let measured = [
-            ((280, 280), 215),
-            ((560, 280), 415),
-            ((800, 600), 1291),
-            ((1000, 1000), 2607),
-            ((1568, 882), 3599),
-            ((1568, 1568), 6287),
-        ];
-        for ((width, height), tokens) in measured {
+    fn jev_counts_an_image_at_two_tokens_a_tile_as_measured() {
+        // Measured against Jev 1.14 through OpenRouter on 2026-11-22: the input tokens each image added.
+        for ((width, height), tokens) in [((280, 280), 213), ((560, 560), 813), ((1568, 882), 3597), ((800, 600), 1289)]
+        {
             assert_eq!(jev_image_tokens(&png(width, height)), tokens, "{width}x{height}");
         }
         assert_eq!(jev_image_tokens(b"not a png"), 0);
+        let images = Images::from([("ref-1".to_string(), png(280, 280))]);
+        let state = json!({"screenshot": "ref-1", "cards": ["ref-1"]});
+        assert_eq!(image_tokens(&images, &state, &IndexMap::new()), 2 * 213, "counted for each place it is used");
+    }
+
+    #[test]
+    fn pictures_take_their_tokens_from_the_room_left_for_text() {
+        let fitted = DecisionProfile::jev().long_context().fit(None).tokens;
+        let room = fitted.input_chars(&[""]);
+        assert!((room - fitted.beside_images(3597).input_chars(&[""]) - 3957).abs() <= 1);
+    }
+
+    #[test]
+    fn openrouter_fits_each_model_to_the_context_it_lists() {
+        let fitted = |model: &str| DecisionProfile::on_openrouter(model).fit(None).tokens;
+        let microsoft = fitted("microsoft/microsoft-decision-1.1");
+        assert_eq!((microsoft.state_plus_largest_question, microsoft.decision_chars), (32_000, Some((36_044, 36_044))));
+        assert_eq!(fitted("cloudflare/clef-flash").state_plus_largest_question, 24_576);
+        assert_eq!(DecisionProfile::on_openrouter("jev-1.14").max_largest_tokens, JEV_LONG_CONTEXT_TOKENS);
+        assert_eq!(DecisionProfile::on_openrouter("google/gemini-decision-1").max_largest_tokens, 262_144);
+        assert_eq!(DecisionProfile::on_openrouter("vendor/unlisted"), DecisionProfile::unknown());
     }
 
     #[test]

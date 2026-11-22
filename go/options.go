@@ -100,8 +100,8 @@ type RunOptions struct {
 	Recipe string
 	// SaveRecipe writes completed steps to a recipe file.
 	SaveRecipe string
-	// Cursor is the agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: nil draws it
-	// wherever it can be placed, true also brings the window to the front for it, false turns it off.
+	// Cursor is the agent's cursor, drawn inside the page so a watcher or recording sees each action land: nil
+	// draws it wherever the page can be seen, true in every run, false never. The model never sees it.
 	Cursor *bool
 	// AllowedOrigins are the only http(s)://host[:port] origins whose documents the run may open, read and control,
 	// each exact. A navigation, redirect, frame or popup elsewhere is refused before it is sent. It scopes documents,

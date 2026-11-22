@@ -23,7 +23,7 @@ use tokio::time::Instant;
 
 use crate::http::Http;
 use crate::validation::{
-    AskError, Usage, asking_open, asking_split, estimated_cost, invalid_response, json_object, object_value,
+    AskError, Usage, WireKeys, asking_open, asking_split, estimated_cost, invalid_response, json_object, object_value,
     parse_answers, post, timed, token_count,
 };
 
@@ -49,8 +49,10 @@ fn description(key: &str, criterion: &Value) -> String {
 
 /// The questions as the Decisions API takes them.
 pub fn wire_questions(questions: &IndexMap<String, Question>) -> Value {
+    let keys = WireKeys::of(questions);
     let wire: Vec<Value> = questions
         .iter()
+        .map(|(key, question)| (keys.sent(key), question))
         .map(|(name, question)| match question {
             Question::Noul(q) => {
                 let mut instructions = q.instructions.clone();

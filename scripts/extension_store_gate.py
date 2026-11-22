@@ -24,8 +24,8 @@ def blocking(compat: dict) -> str | None:
     needs = store.get("needs", "a newer version")
     served = store.get("version", "an older version")
     return (
-        f"the Chrome Web Store serves extension {served}, which does not relay {', '.join(missing)}; a release now "
-        f"would refuse every run from a Store install. Publish extension {needs} and install it from the Store, then "
+        f"the Chrome Web Store serves extension {served}, which does not relay {', '.join(missing)}. "
+        f"Publish extension {needs} and install it from the Store, then "
         f"replace extension-store/published/{served} with the approved package's files and empty store.missing in "
         f"extension-store/compat.json. Tracking: {store.get('issue', 'no issue recorded')}"
     )

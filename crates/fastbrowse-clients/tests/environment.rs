@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use common::{Script, answer_model, answering, body, config_error, one, settings};
 use fastbrowse_clients::environment::{DEFAULT_LLM, DecisionSource, LLMProvider, Settings};
-use fastbrowse_clients::http::{Http, Request, Response};
+use fastbrowse_clients::http::{Http, Method, Request, Response};
 use fastbrowse_clients::validation::jev_purpose;
-use fastbrowse_core::decision::DecisionError;
+use fastbrowse_core::decision::{DecisionError, DecisionProfile};
 use fastbrowse_core::llm::{Generation, Message};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, FailureKind, JevPurpose, LLMPurpose};
 use serde_json::{Value, json};
@@ -236,6 +236,54 @@ async fn test_jev_is_fitted_to_the_context_its_route_documents() {
         let sent = script.requests()[0].header("typesafe-danger-zone-long-context").map(str::to_string);
         assert_eq!(sent.as_deref(), header.then_some("true"), "{env:?}");
     }
+}
+
+#[tokio::test]
+async fn test_openrouter_fits_aliases_before_sending_and_falls_back_for_missing_models() {
+    let catalog = json!({"data": [
+        {
+            "id": "~liquid/d1-latest",
+            "canonical_slug": "~liquid/d1-latest",
+            "alias_target": {"name": "LiquidAI: d1.2", "slug": "liquid/d1.2"},
+            "context_length": 131072,
+            "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["decisions"]},
+            "pricing": {"prompt": "0.00000003", "completion": "0"}
+        },
+        {
+            "id": "~typesafe/jev-latest",
+            "canonical_slug": "~typesafe/jev-latest",
+            "alias_target": {"name": "TypeSafe: Jev 1.14", "slug": "typesafe/jev-1.14"},
+            "context_length": 262144,
+            "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["decisions"]},
+            "pricing": {"prompt": "0.000000042", "completion": "0"}
+        }
+    ]});
+    for (model, context, price, validated) in
+        [("~liquid/d1-latest", 131_072, 0.00000003, false), ("~typesafe/jev-latest", 262_144, 0.000000042, true)]
+    {
+        let response = json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}});
+        let script = Script::new([common::reply(200, catalog.clone()), common::reply(200, response)]);
+        let configured = settings(&[("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_DECISION_MODEL", model)]);
+        let jev = configured.resolve_decision(&script.http()).await.unwrap();
+        let profile = jev.profile();
+        assert_eq!((profile.max_largest_tokens, profile.max_total_tokens), (context, context));
+        assert_eq!(profile.dollars_per_input_token, Some(price));
+        assert!(profile.images);
+        assert_eq!(profile.validated(), validated);
+        jev.evaluate(&json!("page"), &one()).await.unwrap();
+        let requests = script.requests();
+        assert_eq!(requests[0].method, Method::Get);
+        assert_eq!(requests[0].url, "https://openrouter.ai/api/v1/models?output_modalities=decisions");
+        assert!(requests[0].header("authorization").is_none());
+        assert_eq!(body(&requests[1])["model"], model);
+    }
+    let script = Script::new([common::reply(200, catalog), common::text(503, "")]);
+    for model in ["vendor/unlisted", "cloudflare/clef-flash"] {
+        let configured = settings(&[("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_DECISION_MODEL", model)]);
+        let jev = configured.resolve_decision(&script.http()).await.unwrap();
+        assert_eq!(jev.profile(), DecisionProfile::on_openrouter(model));
+    }
+    assert_eq!(DecisionProfile::on_openrouter("vendor/unlisted"), DecisionProfile::unknown());
 }
 
 #[tokio::test]

@@ -40,6 +40,11 @@ A reviewer rejects a change that breaks one.
 - **Jev judges, code computes.** Jev does not count, do arithmetic, compare numbers or order dates, and reads
   instructions literally ([docs/jev.md](docs/jev.md#where-jev-is-not-used)). A count is one Jev question per item,
   summed in code; totals, comparisons and date order are computed from extracted values.
+- **Fix the limit, not the case.** An issue or a failing eval is evidence of a limit in the design: a count that
+  leaves something out, a model told less than it needs, a key format one provider refuses. The fix removes that
+  limit for every page, site and provider, and the evals confirm it; they are never what it is fitted to. Before
+  fixing, name the limit the case exposes and check which other open issues share it. A fix that only the failing
+  task or site would notice is a case patch: rework the part of the design that is too narrow instead.
 - **No caps.** Nothing a model reads or writes is cut short, except by a limit its provider documents, named as
   that provider's in the code (Jev's in `DecisionProfile`).
 - **Measure before claiming.** A claim about the agent rests on a run made for it, compared with a baseline on the

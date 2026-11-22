@@ -42,8 +42,8 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`, and say on stderr when it was not saved; naming the `--recipe` file repairs it after steps the agent had to decide |
-| `--no-cursor` | don't draw the agent's cursor. By default it is drawn over a Chrome window that shows the run (`--foreground`, or an attached front tab) with fastbrowse's focus marker through [Cua Driver](https://github.com/trycua/cua) 0.45.4 or later on X11, or with [deskpilot](https://github.com/cjber/deskpilot) on Hyprland, and skipped anywhere else |
-| `--cursor` | also bring the window to the front, including with `--extension`, so the live cursor can be drawn |
+| `--no-cursor` | don't draw the agent's cursor. By default fastbrowse draws its focus marker inside the page wherever the page can be seen: your own Chrome, a headed or attached browser, a cloud browser's live view, or a `--record` video. It glides to each action point, closes its brackets as it lands and pulses on each press, and is never in what the model reads |
+| `--cursor` | draw the cursor in every run, including a headless one nobody watches |
 
 Some flags are refused together, with exit status 1 before the run starts. `--fetch` starts no browser and its pages
 can only follow links, so it refuses every browser flag (`--browser`, `--cloud`, `--local`, `--extension`,
@@ -61,15 +61,6 @@ known page ordinals and unread pages; `authorization_gate` records the authoriza
 branch outcome; `run_finished` records the final status after spend and screenshot checks. Page ordinals
 start where the run entered a list. These events describe internal state, not which facts a model saw;
 use the recorded model request for that. They add no page text, URLs or secret values.
-
-On X11, fastbrowse installs its own versioned Cua theme on first use and keeps the live marker visible between
-steps. To keep it upright and still at rest, run these with Cua Driver's daemon running. They apply to every Cua
-cursor:
-
-```sh
-cua-driver config set cursor.rotate off
-cua-driver config set cursor.float off
-```
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -93,7 +84,7 @@ shows the runs you can stop.
 You need Chrome, [uv](https://docs.astral.sh/uv/) and an [OpenRouter](https://openrouter.ai/) API key.
 Model calls are billed by your provider. You do not need a Browser Use Cloud key for this mode.
 
-The extension has to match the fastbrowse you install: the Store's **0.1.0** works with fastbrowse **0.10.x**, and fastbrowse **0.11.0 or later** requires extension **0.1.1 or later** with its supported-command list. A run that finds an older extension stops before it spends anything and names the version it needs. If the Store does not list the version you need yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
+Install extension **0.1.2 or later** for the full command set. Extension **0.1.1** can still run tasks. It releases request interception when the run closes. A run that finds an extension missing a required command stops before it spends anything and names the version to install. If the Store does not list the version you need yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
 
 1. Install fastbrowse and configure your model key:
 

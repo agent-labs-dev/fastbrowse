@@ -11,8 +11,6 @@ description = "fastbrowse's browser layer: Chrome over raw CDP, sessions, observ
 default = ["cloud"]
 # Browser Use Cloud: an HTTPS client on the TLS stack the websocket already links, so it adds no crates.
 cloud = []
-# The Cua Driver cursor overlay (Linux X11). A child process over stdio, no extra crates.
-cursor = []
 # Recording the active tab to MP4 through ffmpeg. A child process, no extra crates.
 recording = []
 

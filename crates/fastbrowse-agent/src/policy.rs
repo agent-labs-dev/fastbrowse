@@ -13,7 +13,7 @@ use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
     Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images,
-    JEV_REQUEST_BYTES, NoulQuestion, Question, asset_bytes, jev_image_tokens, referenced,
+    JEV_REQUEST_BYTES, NoulQuestion, Question, asset_bytes, referenced,
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::keys::role_keys;
@@ -105,7 +105,7 @@ pub fn operation_label(operation: Operation) -> &'static str {
         }
         Operation::DoubleClick => "Double-click an element to open it, such as a file, folder or list item.",
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
-        Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
+        Operation::Drag => "Drag a control onto a destination, or draw a pointer gesture on a drawn surface.",
         Operation::Fill => "Put the value the task needs into an editable field, typing or replacing its text.",
         Operation::Press => "Press the key or key chord the task gives in an editable field.",
         Operation::Blur => {
@@ -750,7 +750,7 @@ pub async fn decide(
     trace: &Trace,
 ) -> Result<Decision> {
     let options = jev.profile().max_choice_options;
-    let fitting = Fitting { config, options };
+    let fitting = Fitting { config, options, jev };
     let (mut observation, mut context) = (Cow::Borrowed(observation), Cow::Borrowed(context));
     let mut controls: Vec<Control> = observation.controls.clone();
     let mut reduction = Reduction::None;
@@ -779,14 +779,15 @@ pub async fn decide(
             drop_a_picture(context.to_mut());
             continue;
         }
-        if step_room(&request, config) >= 0 {
-            // Jev counts every picture's tokens, for each place it is used, on top of the text: a step whose text fits
-            // but whose pictures do not was sent anyway and refused with `max_tokens_exceeded` (#1303). The oldest
-            // card goes first, as for the body limit, until the first request sent fits.
-            if shows_pictures(&context) && !pictures_fit(&request, config) {
+        // A viewport can take the entire token budget on its own (#1303). Drop pictures before reducing text.
+        let fits = fitting.request_fits(&request);
+        if !fits && shows_pictures(&context) {
+            if context.to_mut().screenshot.take().is_none() {
                 drop_a_picture(context.to_mut());
-                continue;
             }
+            continue;
+        }
+        if fits {
             match evaluate(jev, &request, &controls, reduction, ledger).await {
                 Ok(mut decision) => {
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
@@ -852,6 +853,8 @@ pub async fn decide(
 struct Fitting<'a> {
     config: &'a Config,
     options: usize,
+    /// The client the request goes to, which says what its pictures cost it.
+    jev: &'a dyn DecisionClient,
 }
 
 impl Fitting<'_> {
@@ -862,7 +865,24 @@ impl Fitting<'_> {
     /// How many characters the request's state runs over Jev's limit; zero or less when it fits.
     fn excess(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> i64 {
         let request = build_request(observation, controls, context, self.config, self.options);
-        -step_room(&request, self.config)
+        -self.room(&request)
+    }
+
+    fn room(&self, request: &Request) -> i64 {
+        let state_chars = text::len(&dumps(&request.state)) as i64;
+        let room_for = |questions: &IndexMap<String, Question>| {
+            let pictured = self.jev.image_tokens(&request.state, questions, &request.images);
+            input_room(state_chars, questions, self.config, pictured)
+        };
+        request.groups.iter().fold(room_for(&request.questions), |room, (&operation, groups)| {
+            groups
+                .iter()
+                .fold(room, |room, group| room.min(room_for(&group_target_question(request, operation, group))))
+        })
+    }
+
+    fn request_fits(&self, request: &Request) -> bool {
+        self.room(request) >= 0
     }
 
     fn fits(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> bool {
@@ -1104,7 +1124,7 @@ async fn shortlist(
     let (mut low, mut high) = (0, ranked.len().min(max_offered.saturating_sub(protected_set.len())));
     while low < high {
         let middle = (low + high).div_ceil(2);
-        if fits(&build_request(observation, &kept(middle), context, config, fitting.options), config) {
+        if fitting.request_fits(&build_request(observation, &kept(middle), context, config, fitting.options)) {
             low = middle;
         } else {
             high = middle - 1;
@@ -1330,16 +1350,8 @@ pub fn build_request(
     }
     let drops: Vec<Control> = controls.iter().filter(|control| !control.label.is_empty()).cloned().collect();
     let mut drop_groups: Vec<Vec<Control>> = Vec::new();
-    if offered.contains(&Operation::Drag) {
-        if drops.len() <= limit {
-            questions.insert(keys::DRAG_DESTINATION.into(), destination_question(&drops).into());
-        } else {
-            drop_groups = chunks(&drops, size);
-            questions.insert(
-                keys::DRAG_DESTINATION_GROUP.into(),
-                group_question(Operation::Drag, &drop_groups, &DESTINATION).into(),
-            );
-        }
+    if offered.contains(&Operation::Drag) && drops.len() > limit {
+        drop_groups = chunks(&drops, size);
     }
     if offered.contains(&Operation::SwitchTab) {
         let instructions = dumps(&json!({"rules": *TARGET, "operation": Operation::SwitchTab.as_str()}));
@@ -1486,47 +1498,14 @@ pub fn build_request(
 /// slower and less accurate. An image puts a request there too. Questions asked ahead save a round trip only below it.
 const LONG_CONTEXT_BYTES: usize = 32_000;
 
-/// Whether the request's text fits Jev's input limit; its pictures are counted by `pictures_fit`.
-pub fn fits(request: &Request, config: &Config) -> bool {
-    room(text::len(&dumps(&request.state)) as i64, &request.questions, config) >= 0
+/// Whether the initial request fits beside the image tokens its client sends with it.
+pub fn fits(request: &Request, config: &Config, pictured: i64) -> bool {
+    input_room(text::len(&dumps(&request.state)) as i64, &request.questions, config, pictured) >= 0
 }
 
-/// Room in the tightest text request, including the target choices Jev may ask after choosing a group.
-fn step_room(request: &Request, config: &Config) -> i64 {
-    let state_chars = text::len(&dumps(&request.state)) as i64;
-    let initial = room(state_chars, &request.questions, config);
-    request.groups.iter().fold(initial, |room_left, (&operation, groups)| {
-        groups.iter().fold(room_left, |room_left, group| {
-            room_left.min(room(state_chars, &group_target_question(request, operation, group), config))
-        })
-    })
-}
-
-/// Whether the request, and each target question asked after a group is chosen, fits Jev's input limit with the tokens
-/// of every picture it refers to, once for each use. A group's question shows its members' cards, which the first
-/// request does not.
-fn pictures_fit(request: &Request, config: &Config) -> bool {
-    let state = request.state.to_string();
-    let state_chars = text::len(&dumps(&request.state)) as i64;
-    let asked = |questions: &IndexMap<String, Question>| {
-        let written = format!("{state}{}", serde_json::to_string(questions).unwrap_or_default());
-        let tokens: i64 = request
-            .images
-            .iter()
-            .map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png))
-            .sum();
-        room(state_chars, questions, config) >= config.tokens.decision_chars_of(tokens)
-    };
-    asked(&request.questions)
-        && request.groups.iter().all(|(&operation, groups)| {
-            groups.iter().all(|group| asked(&group_target_question(request, operation, group)))
-        })
-}
-
-/// The characters of Jev's input limit `state` leaves unused beside `questions`.
-fn room(state_chars: i64, questions: &IndexMap<String, Question>, config: &Config) -> i64 {
+fn input_room(state_chars: i64, questions: &IndexMap<String, Question>, config: &Config, pictured: i64) -> i64 {
     let written: Vec<String> = questions.values().map(Dump::dump_json).collect();
-    config.tokens.input_chars(&written) - state_chars
+    config.tokens.beside_images(pictured).input_chars(&written) - state_chars
 }
 
 /// The question that picks a target from `group` once Jev has chosen it for `operation`.
@@ -1660,13 +1639,19 @@ async fn evaluate(
         target_confidence = Some(group_confidence * target_answer.confidence);
     }
     let mut destination: Option<Control> = None;
-    if operation == Operation::Drag {
+    if operation == Operation::Drag && target.as_ref().is_none_or(|target| target.drawn != Some(true)) {
         let destination_confidence = if request.destination_groups.is_empty() {
-            let destination_answer = choice_answer(&evaluation, keys::DRAG_DESTINATION)?;
+            let key = keys::DRAG_DESTINATION.to_string();
+            let question = destination_question(&request.destinations);
+            let destination_evaluation = ask(&IndexMap::from([(key.clone(), question.into())])).await?;
+            let destination_answer = choice_answer(&destination_evaluation, &key)?;
             destination = Some(find_control(&request.destinations, &destination_answer.choice)?);
             destination_answer.confidence
         } else {
-            let group_answer = choice_answer(&evaluation, keys::DRAG_DESTINATION_GROUP)?;
+            let group_key = keys::DRAG_DESTINATION_GROUP.to_string();
+            let group_question = group_question(Operation::Drag, &request.destination_groups, &DESTINATION);
+            let group_evaluation = ask(&IndexMap::from([(group_key.clone(), group_question.into())])).await?;
+            let group_answer = choice_answer(&group_evaluation, &group_key)?;
             let group =
                 &request.destination_groups[group_index(&group_answer.choice, request.destination_groups.len())?];
             let questions = IndexMap::from([(keys::DRAG_DESTINATION.to_string(), destination_question(group).into())]);
@@ -2818,6 +2803,16 @@ mod tests {
     }
 
     impl DecisionClient for Counting {
+        fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
+            let written = format!("{state}{}", serde_json::to_string(questions).unwrap());
+            images
+                .iter()
+                .map(|(key, png)| {
+                    written.matches(key.as_str()).count() as i64 * fastbrowse_core::decision::jev_image_tokens(png)
+                })
+                .sum()
+        }
+
         fn profile(&self) -> DecisionProfile {
             self.inner.profile()
         }
@@ -2828,11 +2823,7 @@ mod tests {
             questions: &'a IndexMap<String, Question>,
             images: &'a Images,
         ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
-            let written = format!("{state}{}", serde_json::to_string(questions).unwrap());
-            let pictures: i64 = images
-                .iter()
-                .map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png))
-                .sum();
+            let pictures = self.image_tokens(state, questions, images);
             let largest = questions.values().map(|question| text::len(&question.dump_json())).max().unwrap_or(0);
             let text = (text::len(&dumps(state)) + largest) as f64 / fastbrowse_core::config::JSON_CHARS_PER_TOKEN;
             if text as i64 + pictures > 32_000 {
@@ -2883,6 +2874,38 @@ mod tests {
         let kept = carded.iter().filter(|carded| **carded).count();
         assert!((1..8).contains(&kept), "{carded:?}");
         assert!(carded[8 - kept..].iter().all(|carded| *carded), "the newest cards are kept: {carded:?}");
+    }
+
+    #[test]
+    fn test_a_screenshot_larger_than_the_step_budget_is_dropped_before_asking() {
+        let jev = Counting { inner: fake(&[("operation", "read_list")], ""), refused: Mutex::new(0) };
+        let mut png = Vec::new();
+        image::RgbaImage::new(1568, 882)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        assert_eq!(fastbrowse_core::decision::jev_image_tokens(&png), 3597);
+        let mut card = Vec::new();
+        image::RgbaImage::new(28, 28).write_to(&mut std::io::Cursor::new(&mut card), image::ImageFormat::Png).unwrap();
+        let mut entry = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, false);
+        entry.look = Some(Look { before: card, after: None });
+        let context = StepContext {
+            screenshot: Some(png),
+            history: vec![entry],
+            list_read: ListRead::Continue,
+            ..StepContext::new("Read all the results")
+        };
+        let page = observation(vec![button(1)]);
+        let mut config = Config::default();
+        config.tokens.state_plus_largest_question = 3000;
+
+        let decision = block_on(decide(&jev, &page, &context, &config, None, &Trace::disabled())).unwrap();
+
+        assert_eq!(decision.reduction, Reduction::None);
+        let states = jev.inner.states.lock().unwrap();
+        assert_eq!(states.len(), 1);
+        assert!(states[0].get("viewport_screenshot").is_none());
+        assert!(states[0]["recent_actions"][0].get("looks_like").is_some());
+        assert_eq!(states[0]["elements"].as_array().unwrap().len(), 1);
     }
 
     /// A group's follow-up shows its members' cards, which the request that chose the group did not: with the run's
@@ -3146,6 +3169,19 @@ mod tests {
             build_request(&page, &[button(1)], &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
         assert!(!request.questions.contains_key("drag_target"));
         assert!(!request.questions.contains_key("drag_destination"));
+    }
+
+    #[test]
+    fn test_drawn_drag_has_a_target_but_no_destination_question() {
+        let mut surface = button(1);
+        surface.drawn = Some(true);
+        surface.operations = [Operation::Drag].into_iter().collect();
+        let page = observation(vec![surface.clone()]);
+        let request =
+            build_request(&page, &[surface], &StepContext::new("draw on it"), &Config::default(), MAX_CHOICE_OPTIONS);
+        assert!(request.questions.contains_key(&keys::target(Operation::Drag)));
+        assert!(!request.questions.contains_key(keys::DRAG_DESTINATION));
+        assert!(!request.questions.contains_key(keys::DRAG_DESTINATION_GROUP));
     }
 
     fn assert_send<T: Send>(_: &T) {}

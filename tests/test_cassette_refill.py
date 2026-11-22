@@ -1,6 +1,7 @@
 """The decisions of the automatic cassette refill: which tasks missed, whether to spend, whether it worked."""
 
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -377,3 +378,77 @@ def test_what_bench_writes_beside_its_report_is_not_in_the_artifact_that_is_comm
     assert refill.fill() == 0
     assert [path.name for path in refill.validate_cassettes(refill.OUT, ["mock-basket"])] == ["mock-basket.jsonl"]
     assert json.loads((refill.OUT / "result.json").read_text())["report"]["tasks"][0]["task"] == "mock-basket"
+
+
+def publish_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refuse_commit: int | None) -> tuple[int, list, str]:
+    """`publish` of three cassettes, one per commit, with GitHub refusing commit number `refuse_commit`."""
+    tasks = ["mock-basket", "mock-swatch", "mock-sign-in"]
+    artifact, sha = tmp_path / "refill-result", "a" * 40
+    artifact.mkdir()
+    for task in tasks:
+        write_cassette(artifact, task, 200)
+    report = {"tasks": [entry(task, recorded_cost_usd=0.1) for task in tasks]}
+    (artifact / "result.json").write_text(json.dumps({"report": report, "exit_code": 0}))
+    env = {"REPO": REPO, "PR": "7", "SHA": sha, "GH_TOKEN": "t", "COMMIT_TOKEN": "c", "REFILL_TASKS": json.dumps(tasks)}
+    env |= {"REFILL_BUDGET": "1", "ARTIFACT_DIR": str(artifact), "RUN_URL": "u"}
+    for name, value in (env | {"GITHUB_STEP_SUMMARY": str(tmp_path / "summary")}).items():
+        monkeypatch.setenv(name, value)
+    # Room for the largest file's base64 alone, so each commit takes one file.
+    largest = max(4 * math.ceil((artifact / f"{task}.jsonl").stat().st_size / 3) for task in tasks)
+    monkeypatch.setattr(refill, "COMMIT_PAYLOAD_LIMIT", largest)
+    commits: list[dict[str, Any]] = []
+    posted: list[str] = []
+
+    def gh(*args: str, token: str, body: Any = None) -> Any:
+        if args[0] == "graphql":
+            commits.append(body["variables"]["input"])
+            if len(commits) == refuse_commit:
+                return {"errors": [{"message": "refused"}]}
+            oid = str(len(commits)) * 40
+            return {"data": {"createCommitOnBranch": {"commit": {"oid": oid, "url": f"c/{oid}"}}}}
+        if args[0].endswith("/pulls/7"):
+            repo = {"full_name": REPO}
+            return {"state": "open", "head": {"sha": sha, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
+        if "/commits/" in args[0]:
+            return {"commit": {"message": "fix: x"}}
+        if body is not None:
+            posted.append(body["body"])
+            return {}
+        return [[]]
+
+    monkeypatch.setattr(refill, "gh", gh)
+    return refill.publish(), commits, posted[-1]
+
+
+def test_a_refill_over_one_request_is_committed_as_a_chain_with_the_trailer_on_its_last_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, commits, comment = publish_split(tmp_path, monkeypatch, refuse_commit=None)
+    assert code == 0
+    assert [c["expectedHeadOid"] for c in commits] == ["a" * 40, "1" * 40, "2" * 40]
+    assert [[f["path"] for f in c["fileChanges"]["additions"]] for c in commits] == [
+        ["bench/cassettes/mock-basket.jsonl"],
+        ["bench/cassettes/mock-sign-in.jsonl"],
+        ["bench/cassettes/mock-swatch.jsonl"],
+    ]
+    trailers = [refill.is_refill_commit(c["message"]["body"]) for c in commits]
+    assert trailers == [False, False, True]
+    assert f"{refill.TRAILER}: {'a' * 40}" in commits[-1]["message"]["body"]
+    assert all(oid[:12] in comment for oid in ("1" * 40, "2" * 40, "3" * 40))
+
+
+def test_a_split_refill_stopped_partway_says_what_it_committed_and_leaves_the_rest_to_the_next_refill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, commits, comment = publish_split(tmp_path, monkeypatch, refuse_commit=2)
+    assert code == 1
+    assert not refill.is_refill_commit(commits[0]["message"]["body"])
+    assert "Committed [111111111111]" in comment and "refused" in comment
+    assert "Nothing was committed" not in comment
+
+
+def test_a_cassette_over_the_request_limit_on_its_own_is_refused_by_name(tmp_path: Path) -> None:
+    path = tmp_path / "mock-basket.jsonl"
+    path.write_bytes(b"x" * 300)
+    with pytest.raises(ValueError, match=r"mock-basket\.jsonl"):
+        refill.commit_batches([path], limit=100)

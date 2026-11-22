@@ -9,6 +9,13 @@
   const delta = mode.endsWith('-delta');
   const reuse = delta || mode.endsWith('-reuse');
   if (reuse) mode = mode.slice(0, -6);
+  // The run's own cursor (cursor.js) goes into the page and out again around actions and screenshots. That is the run
+  // drawing, not the page changing, so its host's records are left out of every observer below.
+  const cursorHost = node => node.nodeType === Node.ELEMENT_NODE && node.hasAttribute('data-fastbrowse-cursor');
+  const pageRecords = records =>
+    records.filter(
+      r => !cursorHost(r.target) && !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(cursorHost)),
+    );
   const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
   // Whether `read`, this document's `getEventListeners` (`listeners` below), finds a pointer listener on `e`.
   const hears = (read, e) => {
@@ -360,7 +367,7 @@
     registry.observeRoot = root => {
       if (observed.has(root)) return;
       observed.add(root);
-      new MutationObserver(bumped).observe(root, { subtree: true, characterData: true, childList: true, attributes: true });
+      new MutationObserver(records => pageRecords(records).length && bumped()).observe(root, { subtree: true, characterData: true, childList: true, attributes: true });
       const target = root.nodeType === Node.DOCUMENT_NODE ? root.defaultView : root;
       // Passive, as Chrome makes a wheel listener only on a window, document or body: one on a shadow root would hold
       // every scroll inside it to the main thread.
@@ -501,6 +508,8 @@
       addEventListener(type, input, true);
     }
     new MutationObserver(records => {
+      records = pageRecords(records);
+      if (!records.length) return;
       registry.lastMutation = performance.now();
       for (const r of records) {
         // An attribute change moves the page but rewrites no text, so it stamps the clock above and is not a changed
@@ -699,7 +708,7 @@
   const flushedTrees = new Set();
   const invalidateQueries = (records, root) => {
     const bumped = new Set();
-    for (const record of records) {
+    for (const record of pageRecords(records)) {
       for (let node = record.target; node && !bumped.has(node); node = node.parentNode) {
         bumped.add(node);
         own.queryResults.delete(node);
@@ -1462,8 +1471,9 @@
     // its own element and takes its own click, so it is pictured, not drawn: Leaflet's circle marked drawn had the run
     // asked whether the task needed a click inside it, and stop when it judged so. An image the page itself gives a
     // widget role is that one control: Leaflet's marker, role button, marked drawn drew the step to it as the surface
-    // that held the red circle beside it.
-    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role'))) base.drawn = true;
+    // that held the red circle beside it. An element that names itself draggable is a drag source for the page's own
+    // drag and drop, dragged onto a drop zone: drawn on, a drag would stay inside it and no zone would be reached.
+    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && e.getAttribute('draggable') !== 'true') base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
@@ -1495,9 +1505,9 @@
         ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow')) : null;
       base.value = reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
-      // Only an element that names itself draggable is offered as a drag source: `draggable` reports true for
-      // every <a> and <img> by default, which would offer the whole page as draggable.
-      if (e.getAttribute('draggable') === 'true') base.operations.push('drag');
+      // Only an element that names itself draggable, or a drawn surface to draw on, is offered as a drag source:
+      // `draggable` reports true for every <a> and <img> by default, which would offer the whole page as draggable.
+      if (e.getAttribute('draggable') === 'true' || base.drawn) base.operations.push('drag');
     }
     // Focus determines whether the widget can receive keys.
     if (!base.operations.includes('fill') && e.tagName !== 'SELECT' && nativeProperty(source, 'type') !== 'file' &&
@@ -2141,7 +2151,10 @@
       const inner = childDocument(frame);
       if (!inner || !granted(inner)) continue;
       const f = boxOf(frame);
-      read(inner, dx + f.left + nativeProperty(frame, 'clientLeft'), dy + f.top + nativeProperty(frame, 'clientTop'));
+      // The child document starts inside the frame's border and padding.
+      const left = nativeProperty(frame, 'clientLeft') + parseFloat(styleProperty(frame, 'paddingLeft'));
+      const top = nativeProperty(frame, 'clientTop') + parseFloat(styleProperty(frame, 'paddingTop'));
+      read(inner, dx + f.left + left, dy + f.top + top);
     }
   };
   // Size, the cheapest test, goes first.

@@ -484,9 +484,11 @@ mod tests {
 
     #[tokio::test]
     async fn failures_name_their_kind_and_never_the_request() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let closed = format!("http://user:secret@{}/x", listener.local_addr().unwrap());
-        drop(listener);
+        // A port bound but never listened on refuses connections and stays held: a dropped listener freed its port,
+        // which a test running alongside could bind before the request, so the request reached a live server.
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let closed = format!("http://user:secret@{}/x", reserved.local_addr().unwrap());
         let error = request("GET", &closed, &[("Key", "secret")], None, Duration::from_secs(5)).await.unwrap_err();
         assert_eq!(error.kind, HttpErrorKind::Connect);
         assert!(error.is_transient() && !error.to_string().contains("secret"));

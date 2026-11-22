@@ -15,7 +15,7 @@ use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Operation, StepOutcome};
-use fastbrowse_core::page::Action;
+use fastbrowse_core::page::{Action, DragPath, DragPoint};
 use serde_json::{Value, json};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -64,7 +64,8 @@ async fn test_click_uses_an_exposed_point_but_never_passes_through_a_cover() {
             if nested == "iframe" {
                 eval_active(
                     &h.page,
-                    "document.body.innerHTML = '<iframe width=700 height=300 src=/dispatch.html></iframe>'",
+                    // Padded, since a frame's document starts inside its padding as well as its border.
+                    "document.body.innerHTML = '<iframe width=700 height=300 style=padding:30px src=/dispatch.html></iframe>'",
                 )
                 .await;
                 observe_until(&h.page, "One way").await;
@@ -591,6 +592,66 @@ async fn test_pointer_entry_dialog_does_not_block_a_fresh_hit_test() {
 
 fn drag(source: &fastbrowse_core::page::Control, destination: &fastbrowse_core::page::Control) -> Action {
     Action { destination_id: Some(destination.id.clone()), ..action(Operation::Drag, source) }
+}
+
+fn drawn_drag(target: &fastbrowse_core::page::Control, shift: bool) -> Action {
+    Action {
+        drag_path: Some(DragPath {
+            press: DragPoint { x: 0.2, y: 0.5 },
+            points: vec![DragPoint { x: 0.4, y: 0.5 }, DragPoint { x: 0.6, y: 0.5 }, DragPoint { x: 0.8, y: 0.5 }],
+            release: DragPoint { x: 0.9, y: 0.5 },
+            shift,
+        }),
+        ..action(Operation::Drag, target)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_same_control_drag_dispatches_every_supplied_point_with_held_buttons() {
+    let Some(h) = harness().await else { return };
+    h.goto("/canvas-drag.html").await;
+    let obs = h.observe().await;
+    let target = find(&obs, "Drawing pad");
+    assert!(target.drawn == Some(true));
+    assert!(target.operations.contains(&Operation::Drag));
+    let result = h.page.act(&drawn_drag(target, false), &obs).await.expect("act");
+
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(eval_active(&h.page, "result.dataset.drawn").await, json!("5:plain"));
+    assert_eq!(eval_active(&h.page, "window.moveButtons").await, json!([1, 1, 1, 1]));
+    assert_eq!(eval_active(&h.page, "window.captureDuringMove").await, json!([true, true, true, true]));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_drawn_drag_with_the_cursor_on_still_draws_and_the_cursor_follows_it() {
+    let Some(h) = harness().await else { return };
+    let page = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Default::default()).with_cursor();
+    h.goto("/canvas-drag.html").await;
+    let obs = page.observe().await.expect("observe");
+    let result = page.act(&drawn_drag(find(&obs, "Drawing pad"), false), &obs).await.expect("act");
+
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(eval_active(&h.page, "result.dataset.drawn").await, json!("5:plain"));
+    // The cursor's host is in the page, and the page's own scripts see nothing inside it.
+    assert_eq!(
+        eval_active(&h.page, "[document.querySelectorAll('[data-fastbrowse-cursor]').length, document.querySelector('[data-fastbrowse-cursor]').shadowRoot]").await,
+        json!([1, null])
+    );
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_same_control_drag_keeps_shift_on_each_pointer_event() {
+    let Some(h) = harness().await else { return };
+    h.goto("/canvas-drag.html").await;
+    let obs = h.observe().await;
+    let result = h.page.act(&drawn_drag(find(&obs, "Drawing pad"), true), &obs).await.expect("act");
+
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(eval_active(&h.page, "result.dataset.drawn").await, json!("5:shift"));
+    assert_eq!(eval_active(&h.page, "window.shiftEvents").await, json!([true, true, true, true, true, true]));
+    h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

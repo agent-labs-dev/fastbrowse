@@ -76,6 +76,10 @@ impl DecisionClient for ActionPicker {
         self.jev.profile()
     }
 
+    fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
+        self.route().image_tokens(state, questions, images)
+    }
+
     /// The counter of whichever client answers `purpose`, so an LLM pick never spends a Jev call.
     fn reserves(&self, purpose: JevPurpose) -> Option<CostComponent> {
         self.client(Some(purpose)).reserves(purpose)

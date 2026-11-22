@@ -23,8 +23,8 @@ import java.util.function.Predicate;
  *     data is {@code RunResult.data()}
  * @param downloads a directory that keeps the files the run downloads
  * @param record where to write a video of the run; the server needs ffmpeg for it
- * @param cursor the agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: null draws it wherever
- *     it can be placed, true also brings the window to the front for it, false turns it off
+ * @param cursor the agent's cursor, drawn inside the page so a watcher or recording sees each action land: null
+ *     draws it wherever the page can be seen, true in every run, false never. The model never sees it
  * @param allowedOrigins the only {@code http(s)://host[:port]} origins whose documents the run may open, read and
  *     control, each exact; a navigation, redirect, frame or popup elsewhere is refused before it is sent. It scopes
  *     documents, not the network, and a scoped run sends no frames and cannot record. Null is unscoped
