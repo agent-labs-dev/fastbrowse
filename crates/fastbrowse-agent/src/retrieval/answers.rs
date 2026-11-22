@@ -2272,14 +2272,16 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
 /// Keep the newest capture of each record's quote on a page, and every distinct span within that capture. Reads arrive
 /// out of capture order (a schema field's evidence is appended after the notes'), and keeping the first cited a
 /// capture taken before the run's own edit (#1436); collapsing spans of one capture gave two records with the same
-/// words one record's provenance. The same quote under another heading or control is another record, so it is kept
-/// whatever its capture time. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
+/// words one record's provenance. The same quote under another heading, control, page location or link destination is
+/// another record, so it is kept whatever its capture time. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
 pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evidence>) -> Vec<T> {
     let same_record = |a: &Evidence, b: &Evidence| {
         a.url == b.url
             && a.quote == b.quote
             && a.heading_path == b.heading_path
             && a.control_context == b.control_context
+            && a.source_path() == b.source_path()
+            && a.links.iter().map(|link| &link.href).eq(b.links.iter().map(|link| &link.href))
     };
     let reads: Vec<Option<Evidence>> = items.iter().map(&evidence).collect();
     let newest = |e: &Evidence| {
@@ -3654,6 +3656,8 @@ mod tests {
     fn repeated_reads_of_one_quote_make_one_answer_citation() {
         let mut old = fact(0, "Save: disabled".into());
         let mut new = fact(1, "Save: disabled".into());
+        old.evidence.as_mut().unwrap().source_id = "main/div[1]:0".into();
+        new.evidence.as_mut().unwrap().source_id = "main/div[1]:4".into();
         old.evidence.as_mut().unwrap().captured_at = DateTime::new(2026, 1, 1, 0, 0, 0).utc();
         new.evidence.as_mut().unwrap().captured_at = DateTime::new(2026, 1, 1, 0, 0, 1).utc();
         let old_id = crate::memory::fact_id(&old);
