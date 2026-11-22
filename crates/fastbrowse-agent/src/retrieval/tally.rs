@@ -433,8 +433,9 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
         .filter(|(_, evidence)| {
             let quote = text::squash(&evidence.quote);
             let place = starts[&(evidence.capture_sha256.as_str(), quote.clone())].range(..evidence.start).count();
-            // The same text typed and published is two readings: the notes are kept apart by who wrote them.
-            !deduplicate || seen.insert((quote, place, notes.typed_by_step(evidence)))
+            // The same text typed and published is two readings: the notes are kept apart by who wrote them. Which
+            // step typed it does not make a reading, so two fills of one value are one.
+            !deduplicate || seen.insert((quote, place, notes.typed_by_step(evidence).is_some()))
         })
         .map(|(id, evidence)| {
             let span = (evidence.capture_sha256.clone(), evidence.start, evidence.end);
@@ -2591,6 +2592,36 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].note["typed_by_step"], 1);
         assert!(found[1].note.get("typed_by_step").is_none());
+    }
+
+    /// Two fills of one value leave one draft: the same typed reading is not counted twice for being typed again.
+    #[test]
+    fn a_value_typed_twice_is_one_candidate() {
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::models::{FactReader, Held, SourceControl};
+        use fastbrowse_core::page::BlockKind;
+
+        let mut notes = Notes::default();
+        for step in [1, 2] {
+            let visit = format!("Visit {step}");
+            let mut draft = capture(&[(BlockKind::Paragraph, visit.as_str()), (BlockKind::Paragraph, "Price: $25")]);
+            draft.blocks[1].control_context = Some(SourceControl {
+                role: "editable".into(),
+                label: String::new(),
+                context: None,
+                document: Some("doc-1".into()),
+                held: vec![Held { element: "main:7".into(), value: "Price: $25".into() }],
+            });
+            let page = Page::new(&draft);
+            let block = &draft.blocks[1];
+            notes.add(Fact::read("note", evidence(&page, block, block.start, block.end), FactReader::JevChoice));
+            notes.remember_capture(&draft, step);
+            notes.remember_typing(step, "doc-1", "main:7", "Price: $25");
+        }
+        assert_eq!(candidates(&notes).len(), 1);
     }
 
     #[tokio::test]

@@ -455,7 +455,8 @@
         ...(e.tagName === 'SELECT' ? {} : { hosts: [e] }),
       }));
   // The editing hosts a block holds or sits in: its text is read in place, as on any page, and the block carries each
-  // host's identity and value, so a quote from it is told as possibly typed.
+  // host's identity and value, so a quote from it is told as possibly typed. A host the capture would not show holds
+  // nothing the block reads, so it is not one of them.
   const hostsOf = nodes => {
     const found = new Set();
     for (const node of nodes) {
@@ -467,7 +468,7 @@
       for (const h of e.querySelectorAll('[contenteditable]')) if (isHost(h)) found.add(h);
       if (isHost(e.ownerDocument.body)) found.add(e.ownerDocument.body);
     }
-    return [...found];
+    return [...found].filter(visible);
   };
 
   const renderTable = table => {
