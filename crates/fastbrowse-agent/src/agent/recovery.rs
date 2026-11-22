@@ -31,19 +31,26 @@ pub(super) const DRAWN_UNREAD: &str = "This page shows a canvas, picture or vide
 pub(crate) struct Idle {
     pub action: Withheld,
     pub outcome: StepOutcome,
+    /// Why a failed action was not performed, in the words of the browser or app that refused it. Told only that a
+    /// click on a row out of view "did not move the task on", a desktop run pressed OK next and submitted the
+    /// dialog's default row; deskpilot had said to scroll the row into view (#1403).
+    pub refused: Option<String>,
 }
 
 impl Idle {
     pub(super) fn performed(action: Withheld) -> Idle {
-        Idle { action, outcome: StepOutcome::Executed }
+        Idle { action, outcome: StepOutcome::Executed, refused: None }
     }
 
     /// What is true of the action, stated after its name when an ask leaves it out.
-    fn why(&self) -> &'static str {
-        match self.outcome {
-            StepOutcome::Covered => COVERED,
-            StepOutcome::Stale => STALE,
-            _ => MOVED_NOTHING,
+    fn why(&self) -> String {
+        match (self.outcome, &self.refused) {
+            (StepOutcome::Covered, _) => COVERED.into(),
+            (StepOutcome::Stale, _) => STALE.into(),
+            (StepOutcome::Failed, Some(refused)) => {
+                format!("was not performed, so it is not offered this time. It was refused with: {refused}")
+            }
+            _ => MOVED_NOTHING.into(),
         }
     }
 }
