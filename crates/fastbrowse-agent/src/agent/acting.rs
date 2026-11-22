@@ -1259,14 +1259,14 @@ impl Agent {
             return Err(self.untouched(state, observation, target));
         }
         if source == WRITTEN {
-            let holds = holding(target);
+            let holds = target.value.as_deref().filter(|value| !target.sensitive && !value.trim().is_empty());
             let written = write_value(
                 &*self.llm,
                 &self.model_task(state),
                 &label,
                 target.input_type.as_deref(),
                 &typed_into(state, target),
-                holds.as_deref(),
+                holds,
                 &crate::dates::dated(observation.captured_at, &state.dates),
                 &state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
                 Some(&state.ledger),
@@ -1274,7 +1274,7 @@ impl Agent {
             .await?;
             state.ledger.record([written.cost])?;
             // Changes apply to the text the writer was shown, which is none for a field whose value it never saw.
-            let shown = holds.and(target.value.as_deref()).unwrap_or_default();
+            let shown = holds.unwrap_or_default();
             return match written.data.text(shown).filter(|value| !value.trim().is_empty()) {
                 Some(value) => {
                     // Words the task gives as they were typed are the task's value, however Jev got to them, so a
@@ -2143,7 +2143,10 @@ impl Agent {
             .chain(untouched)
             .collect();
         if !facts.is_empty() {
-            context.insert("page_facts".into(), facts.into());
+            // The text an earlier step put on the page is quoted from it, and may echo a secret the page shows.
+            let mut facts = JsonValue::from(facts);
+            self.mask_strings(&mut facts);
+            context.insert("page_facts".into(), facts);
         }
         // A drawn surface shows what was done to it only as pixels: the popup a click on an OpenLayers map opened read
         // as one bare line of page text, and the step was judged never carried out. A pictured control is named in
@@ -2329,5 +2332,22 @@ fn takes(field: CredentialField) -> &'static str {
         CredentialField::OneTimeCode => "a one-time code",
         CredentialField::Username => "an account name",
         CredentialField::Passkey => PASSKEY,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Entry, KEY_CHORD_SAID, word_question};
+
+    /// A press asked where its value begins was asked about text to type, and copied the description the task gave
+    /// to be typed (#1004): its question names a key chord and nothing typed.
+    #[test]
+    fn a_press_is_asked_for_a_key_chord_and_never_for_text_to_enter() {
+        let pressed = word_question(Entry::Pressed, ("the task", "'Description'"), "begins", "", "");
+        assert!(pressed.contains("names the key chord to press in 'Description'"));
+        assert!(pressed.ends_with(KEY_CHORD_SAID));
+        assert!(!pressed.contains("entered") && !pressed.contains("typed into"));
+        let typed = word_question(Entry::Typed, ("the task", "'Description'"), "begins", "", "");
+        assert!(typed.contains("text the task gives to be entered") && !typed.contains("key chord"));
     }
 }

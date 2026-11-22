@@ -70,14 +70,33 @@ impl FieldValue {
         if self.changes.is_empty() {
             return self.value;
         }
-        let mut text = holds.to_owned();
-        for change in self.changes {
-            let mut found = text.match_indices(&change.find);
-            let (at, _) = found.next().filter(|_| !change.find.is_empty())?;
-            if found.next().is_some() {
+        // A value beside changes leaves two answers to the one field, and the schema asks for one.
+        if self.value.is_some() {
+            return None;
+        }
+        // Every passage is found in the text the writer was shown, not in the text an earlier change produced: an
+        // insertion "a" -> "ab" made a later change's "b" occur twice, and a later find could land inside an earlier
+        // replacement. Overlapping hits count, so "aa" occurs twice in "aaa".
+        let mut spans = Vec::with_capacity(self.changes.len());
+        for change in &self.changes {
+            if change.find.is_empty() {
                 return None;
             }
-            text.replace_range(at..at + change.find.len(), &change.replace);
+            let mut hits =
+                (0..holds.len()).filter(|&at| holds.is_char_boundary(at) && holds[at..].starts_with(&change.find));
+            let at = hits.next()?;
+            if hits.next().is_some() {
+                return None;
+            }
+            spans.push((at, at + change.find.len(), change.replace.as_str()));
+        }
+        spans.sort_by_key(|&(start, ..)| start);
+        if spans.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+            return None;
+        }
+        let mut text = holds.to_owned();
+        for &(start, end, replace) in spans.iter().rev() {
+            text.replace_range(start..end, replace);
         }
         Some(text)
     }
@@ -128,8 +147,10 @@ fn fill_messages(
             &format!("\n\nAn HTML `{input_type}` input: its value is written as {form}, whatever the page displays.");
     }
     if let Some(holds) = holds {
+        // The text goes in as it is, between tags: quoted, a line break showed as a backslash and an n, which a
+        // writer copying a passage into `find` would type, and the field's own text never holds.
         field += &format!(
-            "\n\nThe field holds {holds} now. A value replaces all of it; changes keep what they do not touch."
+            "\n\nThe field holds the text between the <holds> tags now, exactly as it is. A value replaces all of it; changes keep what they do not touch.\n<holds>{holds}</holds>"
         );
     }
     if !typed.is_empty() {
@@ -209,10 +230,10 @@ mod tests {
     #[test]
     fn a_fill_ask_says_what_the_field_holds_now() {
         let [system, user] =
-            fill_messages("reply thanks after the mention", "Reply", None, &[], Some("'@ann '"), "today", &[]);
+            fill_messages("reply thanks after the mention", "Reply", None, &[], Some("@ann "), "today", &[]);
         assert!(
             user.content.contains(
-                "The field holds '@ann ' now. A value replaces all of it; changes keep what they do not touch."
+                "The field holds the text between the <holds> tags now, exactly as it is. A value replaces all of it; changes keep what they do not touch.\n<holds>@ann </holds>"
             ),
             "{}",
             user.content
@@ -237,9 +258,26 @@ mod tests {
         assert_eq!(edit(vec![change("|", "")]), None, "a passage found twice");
         assert_eq!(edit(vec![change("1.16", "")]), None, "a passage not there");
         assert_eq!(edit(vec![change("", "x")]), None, "an empty passage");
+        assert_eq!(
+            edit(vec![change("| a", "| a2"), change("1.15.", "1.16.")]).as_deref(),
+            Some("| a2     | b |\n\nUpdated for 1.16."),
+            "each passage is found in the text the writer saw"
+        );
+        assert_eq!(
+            FieldValue { value: None, changes: vec![change("a", "ab"), change("b", "x")] }.text("ab").as_deref(),
+            Some("abx"),
+            "an earlier insertion does not make a later passage occur twice"
+        );
+        assert_eq!(edit(vec![change("Updated", ""), change("dated for", "")]), None, "overlapping passages");
+        assert_eq!(FieldValue { value: None, changes: vec![change("aa", "")] }.text("aaa"), None, "overlapping hits");
+        assert_eq!(
+            FieldValue { value: Some("new".into()), changes: vec![change("1.15.", "")] }.text(holds),
+            None,
+            "a value beside changes"
+        );
         let whole = FieldValue { value: Some("new".into()), changes: vec![] };
         assert_eq!(whole.text(holds).as_deref(), Some("new"));
-        let [system, _] = fill_messages("t", "Description", None, &[], Some("'x'"), "today", &[]);
+        let [system, _] = fill_messages("t", "Description", None, &[], Some("x"), "today", &[]);
         assert!(system.content.contains("give `changes` and leave `value` null"), "{}", system.content);
     }
 }

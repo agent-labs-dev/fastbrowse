@@ -1041,7 +1041,10 @@ impl Agent {
         check_login: bool,
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
-        let mut page_facts = Self::page_facts(state, observation, self.page.unread());
+        // Facts quote page lines, as the text an earlier step put on the page, so a secret the page echoes is masked
+        // here like the rest of the page.
+        let mut page_facts: Vec<String> =
+            Self::page_facts(state, observation, self.page.unread()).iter().map(|fact| self.mask(fact)).collect();
         let page_origin = origin_of(&observation.url);
         let credential_origins: BTreeSet<_> = observation
             .controls

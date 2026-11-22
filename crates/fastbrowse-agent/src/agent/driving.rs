@@ -1755,8 +1755,10 @@ impl Agent {
             .map(|control| control.id.clone())
             .collect();
         let places = if fields.is_empty() { IndexMap::new() } else { self.page.edges(&fields).await? };
-        let png = if places.is_empty() { png } else { outlined(&png, &places).unwrap_or(png) };
-        Ok((Some(png), looks))
+        // Jev is told every field in the screenshot is outlined, so one the outline could not be drawn on, as a PNG
+        // that does not decode, is not sent as if it were.
+        let png = if places.is_empty() { Some(png) } else { outlined(&png, &places) };
+        Ok((png, looks))
     }
 
     /// The viewport for Jev, on a route that takes images and only within the sizes it accepts.
