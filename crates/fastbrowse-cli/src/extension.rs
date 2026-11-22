@@ -219,7 +219,7 @@ fn refreshed(installs: Vec<Install>, query: &dyn Fn(&Path) -> Option<String>) ->
 
 /// The registered installs whose program is still there, newest first by the version each reports now.
 fn present_installs(dir: &Path, query: &dyn Fn(&Path) -> Option<String>) -> Result<Vec<Install>, String> {
-    Ok(refreshed(read_installs(dir)?.into_iter().filter(|install| install.path.is_file()).collect(), query))
+    Ok(refreshed(read_installs(dir)?.into_iter().filter(|install| is_runnable(&install.path)).collect(), query))
 }
 
 /// One dot-separated pre-release identifier: numbers rank below words, as semver orders them.
