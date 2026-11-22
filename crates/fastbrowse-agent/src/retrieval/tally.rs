@@ -488,7 +488,12 @@ fn membership_state(task: &str, notes: &Notes, page: &str) -> serde_json::Value 
         .collect();
     // Named for what it holds: listed as the page's "notes", the labels left once its records were taken out read as
     // the records, and Jev called "Login" one quote and every quote none.
-    json!({"task": task, "labels_on_the_page": context})
+    let typed = context.iter().any(|note| !typed_rule(note).is_empty());
+    let mut state = json!({"task": task, "labels_on_the_page": context});
+    if typed {
+        state["typing_provenance"] = TYPED.trim_start().into();
+    }
+    state
 }
 
 type Answers = IndexMap<String, Answer>;
@@ -557,13 +562,13 @@ fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&ser
     } else {
         ""
     };
+    let typed = if example.is_some_and(|example| !typed_rule(example).is_empty()) { TYPED } else { typed_rule(note) };
     let example = example.map_or(String::new(), |example| {
         format!(
             " The claim counts entries such as this one: {}. A note is one only when it is an entry of that same kind, not a passage that mentions one.",
             dumps(example)
         )
     });
-    let typed = typed_rule(note);
     let question = format!(
         "Is this note exactly one whole {of}? A note holding several is not one, and nor is its tags, label or heading alone, or a value a page states across several, such as a total.{example}{proof}{typed}"
     );
