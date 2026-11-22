@@ -3,9 +3,9 @@ title: Run a browser agent in your own signed-in Chrome
 description: "Install the fastbrowse extension, check it is connected, run a read-only task with --extension, and stop it. What the run can reach and what Chrome shows."
 topic: Browsers and logins
 published: 2026-11-12
-updated: 2026-11-20
+updated: 2026-11-22
 verifiedAgainst: v0.11.0
-verifiedOn: 2026-11-20
+verifiedOn: 2026-11-22
 ---
 
 A fresh browser has none of your sign-ins. The fastbrowse extension lets a run work in the Chrome you already use, where you are signed in. The run opens tabs of its own in that browser; it does not use the tabs you already have open. No Browser Use key is involved: the run uses your own browser and your own model key.
@@ -20,7 +20,7 @@ export OPENROUTER_API_KEY=...
 fastbrowse extension install
 ```
 
-`fastbrowse extension install` registers fastbrowse with every Chromium browser it finds for your user, then prints the store link. It writes a small launcher and a native-messaging manifest into your user folders, and needs no admin rights. Run it again if you move or reinstall fastbrowse. Each fastbrowse that runs it stays registered, and the extension starts the newest one still present; `fastbrowse extension status` lists them.
+`fastbrowse extension install` registers fastbrowse with every Chromium browser it finds for your user, then prints the store link. It writes a small launcher and a native-messaging manifest into your user folders, and needs no admin rights. Run it again if you move or reinstall fastbrowse. Each fastbrowse that runs it stays registered, and the extension starts the newest one still present, by the version each reports when Chrome starts it; `fastbrowse extension status` lists them.
 
 Next, add the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), then restart Chrome or turn the extension off and on at `chrome://extensions` so it connects. The first task below is the check: with no browser connected, the run ends `unavailable`. Open fastbrowse from Chrome's Extensions menu to see active runs and their **Stop** buttons.
 

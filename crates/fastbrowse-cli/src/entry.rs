@@ -138,6 +138,9 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
         mcp_command(args)
     } else if args.first().is_some_and(|arg| arg == "native-host") {
         // Chrome starts this when the extension connects, with the extension's origin as the first argument.
+        if let Some(code) = crate::extension::delegate(&args[1..]) {
+            return code;
+        }
         let origin = args.get(1).map_or("", String::as_str);
         match runtime().block_on(fastbrowse_browser::extension::host::run(origin)) {
             Ok(()) => 0,

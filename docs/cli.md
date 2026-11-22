@@ -105,7 +105,8 @@ The extension has to match the fastbrowse you install: the Store's **0.1.0** wor
 2. Run `fastbrowse extension install`. It registers the installed program with the Chromium browsers it finds
    for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows. Every fastbrowse
    that runs `install`, such as an app's bundled copy and your own, stays registered: the extension starts the
-   newest one still present, and `fastbrowse extension status` lists them in that order.
+   newest one still present, judged by the version each reports now, and `fastbrowse extension status` lists them in that
+   order.
 3. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
    Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
 4. Run a task that reads a public page:
