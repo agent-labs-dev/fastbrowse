@@ -1,5 +1,8 @@
 //! A native desktop app as a `Page`, driven through deskpilot (<https://github.com/cjber/deskpilot>).
 //!
+//! The page reads and acts on an app only through its accessibility tree, so an app that exposes none, such as a
+//! terminal or an app that draws its own interface, cannot be driven: its first read fails as `deskpilot/no_tree`.
+//!
 //! The run starts its apps itself with deskpilot's `launch`, as a deskpilot agent of its own, so their windows open on
 //! that agent's hidden workspace and close when the run closes its `deskpilot mcp`. Every window on that workspace,
 //! the apps' first windows and the dialogs and windows they open later, is a tab of the page; one is active, and the
@@ -311,9 +314,17 @@ impl DeskpilotPage {
             .call_json("elements", self.client.placed("elements", json!({"window": window.address, "peek": peek})))
             .await
             .map_err(|error| match error {
-                ToolError::Refused { code, message } if code == "no_tree" => {
-                    BrowserError::failed("deskpilot/no_tree", message)
-                }
+                // deskpilot's words are about making a browser or Electron app expose its tree, and read as if a flag
+                // fixed every app; for a terminal or an app that draws its own interface nothing does (#1400). The
+                // run says what it needs first, and quotes deskpilot, which names the case a variable fixes.
+                ToolError::Refused { code, message } if code == "no_tree" => BrowserError::failed(
+                    "deskpilot/no_tree",
+                    format!(
+                        "{} exposes no accessibility tree, and a desktop run reads and acts on an app only through \
+                         its accessibility tree, so it cannot drive this app as it runs now. deskpilot says: {message}",
+                        window.class
+                    ),
+                ),
                 // Two windows share the title deskpilot finds the window's tree by: a run's own windows, or an app
                 // left open by an earlier one. deskpilot works, so this is not an outage (#1345).
                 ToolError::Refused { code, message } if code == "ambiguous" => BrowserError::failed(

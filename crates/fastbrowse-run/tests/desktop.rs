@@ -604,3 +604,17 @@ async fn a_line_that_is_not_json_is_quoted_in_the_error() {
     let error = client.call("noisy", json!({})).await.unwrap_err();
     assert!(error.message().contains("Gtk-WARNING: not a reply"), "{error:?}");
 }
+
+/// #1400: deskpilot's message for an app with no tree is about Chromium flags, and read as if a flag fixed a terminal.
+#[tokio::test]
+async fn an_app_with_no_accessibility_tree_is_named_as_one_a_desktop_run_cannot_drive() {
+    let fake = editor("no-tree", &[launch_tool()]);
+    let message = "Application PID 7 exposes no accessibility tree. Chromium and Electron join the bus only when...";
+    fake.replies("wait_for", [ok(&window(false))]).replies("elements", [refused("no_tree", message)]);
+    let page = open(&fake).await;
+    let BrowserError::Failed(failure) = page.observe().await.unwrap_err() else { panic!("an outage") };
+    assert_eq!(failure.reason, "deskpilot/no_tree");
+    assert!(failure.message.starts_with("org.gnome.TextEditor exposes no accessibility tree"), "{}", failure.message);
+    assert!(failure.message.contains("only through its accessibility tree"), "{}", failure.message);
+    assert!(failure.message.ends_with(message), "{}", failure.message);
+}

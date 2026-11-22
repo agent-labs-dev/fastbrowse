@@ -23,7 +23,7 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--cloud` | run in a Browser Use Cloud browser instead, which needs `BROWSER_USE_API_KEY` |
 | `--cloud-profile ID` | with `--cloud`, run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
-| `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); repeat it for each app to start in one run; see [Desktop apps](#desktop-apps) |
+| `--desktop APP` | start a Linux desktop app that exposes an accessibility tree and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); repeat it for each app to start in one run; see [Desktop apps](#desktop-apps) |
 | `--browser` | start a cloud browser from the first step, rather than reading over HTTP until the task needs one; extension runs already start in Chrome |
 | `--viewport WIDTHxHEIGHT` | with `--cloud`, the screen size requested from the cloud Chrome; does not emulate mobile, touch, device scale or user agent. Refused without `--cloud` |
 | `--attach` | with the extension, drive the window you have open instead of a tab of its own |
@@ -237,7 +237,10 @@ its own, so the window opens on that agent's hidden workspace. When the run ends
 deskpilot to stop its agent, which closes every app the run launched. A window that is already open is not driven: deskpilot sends input in the background only to an app its agent launched. It needs a
 deskpilot with `launch` ([cjber/deskpilot#86](https://github.com/cjber/deskpilot/pull/86)); with an older one the run
 ends `unavailable`. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types in the
-background, so the pointer and keyboard focus stay where you left them:
+background, so the pointer and keyboard focus stay where you left them. An app that exposes no accessibility tree,
+such as a terminal or an app that draws its own interface, cannot be driven: the run ends `error` before its first
+step, naming the app and quoting deskpilot, whose message says when a variable such as Chromium's makes the app
+expose one:
 
 ```sh
 fastbrowse --desktop gnome-text-editor "Write 'hello' in a new document."
