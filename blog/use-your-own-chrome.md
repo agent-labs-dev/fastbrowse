@@ -20,7 +20,7 @@ export OPENROUTER_API_KEY=...
 fastbrowse extension install
 ```
 
-`fastbrowse extension install` registers fastbrowse with every Chromium browser it finds for your user, then prints the store link. It writes a small launcher and a native-messaging manifest into your user folders, and needs no admin rights. Run it again if you move or reinstall fastbrowse.
+`fastbrowse extension install` registers fastbrowse with every Chromium browser it finds for your user, then prints the store link. It writes a small launcher and a native-messaging manifest into your user folders, and needs no admin rights. Run it again if you move or reinstall fastbrowse. Each fastbrowse that runs it stays registered, and the extension starts the newest one still present, by the version each reports when Chrome starts it; `fastbrowse extension status` lists them.
 
 Next, add the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), then restart Chrome or turn the extension off and on at `chrome://extensions` so it connects. The first task below is the check: with no browser connected, the run ends `unavailable`. Open fastbrowse from Chrome's Extensions menu to see active runs and their **Stop** buttons.
 
@@ -77,7 +77,7 @@ fastbrowse "What is the title of the top story?" \
 
 ## Remove it
 
-`fastbrowse extension uninstall` removes what `install` wrote. Remove the extension itself at `chrome://extensions`.
+`fastbrowse extension uninstall` unregisters the fastbrowse that runs it; the last one registered also removes the launcher and manifests that `install` wrote. Remove the extension itself at `chrome://extensions`.
 
 For other ways to reach a browser, see [attaching to a running Chrome](/blog/attach-to-running-chrome/).
 

@@ -133,11 +133,16 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
         return code;
     }
     let program_name = program;
+    let identity =
+        build.identity.as_ref().map_or_else(|| program_name.to_string(), |path| path.to_string_lossy().into_owned());
     let program = std::path::Path::new(program).file_stem();
     if program.is_some_and(|name| name == "fastbrowse-mcp") {
         mcp_command(args)
     } else if args.first().is_some_and(|arg| arg == "native-host") {
         // Chrome starts this when the extension connects, with the extension's origin as the first argument.
+        if let Some(code) = crate::extension::delegate(&args[1..]) {
+            return code;
+        }
         let origin = args.get(1).map_or("", String::as_str);
         match runtime().block_on(fastbrowse_browser::extension::host::run(origin)) {
             Ok(()) => 0,
@@ -147,7 +152,7 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
             }
         }
     } else if args.first().is_some_and(|arg| arg == "extension") {
-        let (text, code) = crate::extension::command(program_name, &args[1..]);
+        let (text, code) = crate::extension::command(&identity, &args[1..]);
         if code == 0 {
             print!("{text}");
         } else {

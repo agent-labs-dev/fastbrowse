@@ -19,6 +19,7 @@ import warnings
 import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, ClassVar, NoReturn, Protocol
 
 import httpcore
@@ -806,6 +807,20 @@ async def stop_cloud_browser(browser: CloudBrowser, browser_api_key: str, *, ori
         raise _cloud_error(exc) from None
 
 
+def program_path() -> str | None:
+    """The real path of the script this process runs, as the identity of this install; None when no script is known.
+
+    The core identifies the running fastbrowse by this path (the extension registry keys on it), so a bare name would
+    stand for whichever copy comes first on `PATH` instead of the one that is running. The script's name is never
+    consulted: a symlink or a renamed entry is the file it points to. Run as a module (`python -m`), there is no
+    script. The command to run is chosen by the program name, not by this path.
+    """
+    if getattr(sys.modules["__main__"], "__spec__", None) is not None:
+        return None
+    started = Path(sys.argv[0])
+    return str(started.resolve()) if started.is_file() else None
+
+
 def command(program: str) -> NoReturn:
     """Run the Rust core's `program` command in this process with this process's arguments, then exit with its code."""
     core: Any = importlib.import_module("fastbrowse._native")
@@ -813,4 +828,13 @@ def command(program: str) -> NoReturn:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     sys.stdout.flush()
     commit = build.identity()
-    sys.exit(core.cli_main(program, sys.argv[1:], commit["git_sha"], commit["git_dirty"], **build.install_facts()))
+    sys.exit(
+        core.cli_main(
+            program,
+            sys.argv[1:],
+            commit["git_sha"],
+            commit["git_dirty"],
+            identity=program_path(),
+            **build.install_facts(),
+        )
+    )
