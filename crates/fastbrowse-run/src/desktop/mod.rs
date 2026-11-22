@@ -39,6 +39,16 @@ use tree::{Element, Window};
 
 /// How long an action's effect is waited for before it is reported as having changed nothing.
 const SETTLE_SECONDS: f64 = 0.5;
+/// How long a WAIT watches the window when the run gives it no deadline: as long as one deskpilot call may take, as a
+/// browser's WAIT watches for one CDP reply. Unbounded, a run with no time limit polled a window that never changed
+/// until it was killed, spending nothing, so `--max-dollars` never ended it and the stall rule never counted the wait
+/// (#1406). Handed back unchanged, the step is counted, and Jev may wait again.
+const WATCH_SECONDS: f64 = 60.0;
+
+/// The seconds a WAIT given `seconds` watches the window for.
+fn watched(seconds: f64) -> f64 {
+    if seconds.is_finite() { seconds } else { WATCH_SECONDS }
+}
 const POLL: Duration = Duration::from_millis(100);
 /// Wheel clicks one SCROLL turns.
 const SCROLL_CLICKS: i64 = 5;
@@ -843,7 +853,7 @@ impl Page for DeskpilotPage {
 
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move {
-            let seconds = if action.operation == Operation::Wait { f64::INFINITY } else { SETTLE_SECONDS };
+            let seconds = if action.operation == Operation::Wait { WATCH_SECONDS } else { SETTLE_SECONDS };
             self.act_within(action, observation, seconds).await
         })
     }
@@ -854,7 +864,7 @@ impl Page for DeskpilotPage {
         observation: &'a Observation,
         seconds: f64,
     ) -> BoxFuture<'a, PageResult<ActResult>> {
-        Box::pin(async move { self.act_within(action, observation, seconds).await })
+        Box::pin(async move { self.act_within(action, observation, watched(seconds)).await })
     }
 
     fn redrawn<'a>(
@@ -948,5 +958,16 @@ impl Drop for RemoveOnDrop {
         if let Some(path) = self.0.take() {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wait_with_no_deadline_watches_the_window_for_one_call_and_hands_the_step_back() {
+        assert_eq!(watched(f64::INFINITY), WATCH_SECONDS);
+        assert_eq!(watched(0.15), 0.15);
     }
 }

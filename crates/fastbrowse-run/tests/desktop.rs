@@ -380,6 +380,29 @@ async fn a_click_is_traced_with_the_snapshot_and_element_it_names() {
 }
 
 #[tokio::test]
+async fn a_scroll_that_brings_lines_into_the_window_changed_it() {
+    // A scroll moves where the app places its lines, not their text or states: the window's bounds are what tell
+    // the lines shown from those below it, and the scroll was told it changed nothing (#1406).
+    let line = |id: &str, text: &str, y: i64, height: i64| {
+        json!({"id": id, "role": "label", "text": text, "states": ["showing", "visible"],
+            "x": 0, "y": y, "width": 400, "height": height})
+    };
+    let tree = |first: i64| {
+        json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "width": 400, "height": 100,
+            "children": [line("e2", "order 1", first, 250), line("e3", "order 49309 failed: E42", first + 300, 20)]})
+    };
+    let fake = editor("scrolled", &[launch_tool()]);
+    fake.replies("wait_for", [ok(&window(false))]).replies("elements", [ok(&tree(0)), ok(&tree(-230))]);
+    fake.replies("scroll", [ok(&json!({"x": 1, "y": 1}))]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    assert_eq!(before.viewport_text, "order 1");
+    let result = page.act(&Action::new(Operation::Scroll), &before).await.unwrap();
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(page.observe().await.unwrap().viewport_text, "order 1\norder 49309 failed: E42");
+}
+
+#[tokio::test]
 async fn a_frame_after_an_action_that_reveals_a_secret_is_never_filmed() {
     let fake = filmed("revealed");
     let (film, frames) = frames();
