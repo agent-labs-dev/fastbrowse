@@ -50,6 +50,9 @@ cause in `result.failure_kind`, which holds no page text or secret: `Budget/seco
 `Callback/run/event/error/-32603` when your `onEvent` callback threw, or a model failure's provider, purpose and status
 such as `Llm.Rejected/openrouter/action/http-401`.
 
+The SDK keeps no trace of a run, unlike the `fastbrowse` CLI, which keeps one for a run that ends short of `complete`.
+To write one, set `FASTBROWSE_TRACE` to a file path in the environment the SDK starts fastbrowse with.
+
 ## Processes and errors
 
 `Fastbrowse.start` starts one fastbrowse process and `run` sends it a task. The process serves one run at a time:

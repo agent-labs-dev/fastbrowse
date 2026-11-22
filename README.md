@@ -93,7 +93,9 @@ uv run fastbrowse "What is the title of the top story right now?" --start https:
 
 Steps go to stderr; the status, cost, step count, why a run stopped short, and the answer go to stdout. `--json`
 prints the full result: every step, the quotes behind the answer, cost by component, and the build that ran it. The
-exit code is the status, and only `complete` exits 0.
+exit code is the status, and only `complete` exits 0. A run that ends short of `complete` keeps its trace (every model request
+and reply, with the pages it read) in a file only you can read, names it as `trace:`, and removes it after 14 days;
+`FASTBROWSE_TRACE=0` in the environment keeps none ([docs/cli.md](docs/cli.md#results)).
 
 The starting address stays with the task in subsequent model decisions and reads, so references such as "the whole
 site" retain their starting context after navigation. Tasks can still ask to visit other sites.

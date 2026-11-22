@@ -36,7 +36,7 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--max-steps N`, `--max-dollars N` | bound steps and model and web-search spend; unlimited by default |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
-| `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
+| `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages. Without either, a run that ends short of `complete` keeps its trace anyway (see [Results](#results)) |
 | `--record FILE` | save a captioned MP4 of the run, and the same video without captions beside it with `.plain` before the extension (`run.mp4` and `run.plain.mp4`); needs `ffmpeg`. It shows what the pages showed, so watch it before sharing. A `--desktop` run is filmed from its window; `--fetch` starts no browser, so it cannot be combined with `--record` |
 | `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
 | `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
@@ -340,6 +340,13 @@ The JSON result says why a run stopped where a caller can act on it:
   (`Budget/seconds`), a callback that threw its method and the internal error code
   (`Callback/run/event/error/-32603`, the same from every SDK and transport), and a stop the rule that made it
   (`SiteFailure/http-503`, `Wall/sign-in`, `Done/unanswered`, `Recovery/exhausted`). A `complete` run has none.
+- `trace` is the file holding the run's trace, when it ended short of `complete` and neither `--trace` nor
+  `FASTBROWSE_TRACE` chose where traces go. The plain output names it on stderr as `trace:`. Every CLI and MCP run
+  writes its trace to a file of its own under `$XDG_STATE_HOME/fastbrowse/traces` (`~/.local/state` without it;
+  `~/Library/Application Support` on macOS, `%LOCALAPPDATA%` on Windows) as it goes, readable only by you, and
+  deletes it when the run completes, so a failure can be read afterwards without having run it traced. A kept trace
+  holds the pages the run read, like any trace, and is removed by the first CLI or MCP run started 14 days after it. `FASTBROWSE_TRACE=0` keeps none.
+  `serve`, the SDKs and the Python package keep no trace unless asked.
 - `browser` says which browser the run drove: `via` is `cloud`, `launched`, `attached` or `extension`, with the
   `profile` and the `browser` product and version where known. A run that read every page over HTTP has none.
 - `wall` describes a `needs_login` or `blocked` page: its `kind` (`password`, `one_time_code`, `sign_in` or

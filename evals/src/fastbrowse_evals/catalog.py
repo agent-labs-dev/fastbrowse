@@ -30,6 +30,7 @@ ARMS = {
     "browser-harness": ArmSpec(
         "browser-harness==0.1.13; codex-cli==0.169.0 on openai/gpt-6-luna; cli+skill", "A", False
     ),
+    "agent-browser": ArmSpec("agent-browser==0.43.0; codex-cli==0.169.0 on openai/gpt-6-luna; cli+skill", "A", False),
 }
 RETIRED = (
     {
