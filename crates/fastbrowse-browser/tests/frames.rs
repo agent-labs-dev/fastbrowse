@@ -391,11 +391,18 @@ async fn test_a_screencast_start_that_times_out_is_stopped_on_close() {
     let fake = FakeChrome::start().await;
     fake.block("Page.startScreencast");
     let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async {}));
-    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let (timed_out, mut timeouts) = tokio::sync::mpsc::unbounded_channel();
+    let on_warning = Arc::new(move |warning: BrowserWarningEvent| {
+        if warning.operation == BrowserWarningOperation::ScreencastStart && warning.failure == BrowserWarningFailure::Timeout
+        {
+            let _ = timed_out.send(());
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), on_warning: Some(on_warning), ..Default::default() };
     let session = fake.session_with(fake.connection(), options).await;
     fake.sent("Page.startScreencast").await;
-    // Outlast the command timeout so the start ends unanswered rather than cancelled.
-    tokio::time::sleep(Duration::from_millis(900)).await;
+    // The start must end unanswered, not cancelled by close.
+    tokio::time::timeout(Duration::from_secs(10), timeouts.recv()).await.unwrap().expect("start timeout warning");
     session.close().await.unwrap();
     assert!(fake.calls().iter().any(|m| m == "Page.stopScreencast"), "{:?}", fake.calls());
 }
