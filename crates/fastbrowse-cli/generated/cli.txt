@@ -88,18 +88,20 @@ options:
                         (implies --extension)
   --desktop APP         start the native desktop app APP (a command line) and
                         drive it instead of a browser, through deskpilot on
-                        Hyprland, without moving your pointer or focus;
-                        repeat it to start several apps, each window a tab;
-                        they close when the run ends
+                        Hyprland, without moving your pointer or focus; the
+                        app must expose an accessibility tree, so a terminal
+                        or an app that draws its own interface cannot be
+                        driven; repeat it to start several apps, each window
+                        a tab; they close when the run ends
   --trace FILE          append the run's trace to FILE as JSON lines, or - for
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every
                         check's scores (also FASTBROWSE_TRACE)
-  --cursor              bring the window to the front so the agent's cursor
-                        is always drawn
+  --cursor              draw the agent's cursor in every run, even one nobody
+                        watches
   --no-cursor           do not draw the agent's cursor (by default it is
-                        drawn over a visible Chrome with the Cua Driver on
-                        Linux X11, and skipped where unsupported)
+                        drawn in the page wherever the page can be seen: a
+                        visible Chrome, a live view or a recording)
 
 Refused together: --fetch starts no browser, so it refuses --browser, --cloud,
 --local, --extension, --extension-browser, --headed, --profile,

@@ -71,6 +71,9 @@ pub struct TokenBudget {
     /// takes a state far past what the budget allows an LLM prompt.
     #[serde(skip)]
     pub decision_chars: Option<(i64, i64)>,
+    /// Characters of room the request's pictures take, set by `beside_images` for one request.
+    #[serde(skip)]
+    pub pictured_chars: f64,
 }
 
 impl Default for TokenBudget {
@@ -81,11 +84,23 @@ impl Default for TokenBudget {
             batch_tokens: 8000,
             chars_per_token: 3.0,
             decision_chars: None,
+            pictured_chars: 0.0,
         }
     }
 }
 
 impl TokenBudget {
+    /// This budget for a request that also carries `image_tokens`, each converted to characters at the ratio the
+    /// request's text is fitted at, so the two together stay within the one context Jev counts them against.
+    pub fn beside_images(&self, image_tokens: i64) -> TokenBudget {
+        let ratio = if self.decision_chars.is_some() {
+            crate::decision::JEV_LONG_CONTEXT_CHARS_PER_TOKEN
+        } else {
+            JSON_CHARS_PER_TOKEN
+        };
+        TokenBudget { pictured_chars: image_tokens as f64 * ratio, ..self.clone() }
+    }
+
     /// Characters of decision state that fit beside `questions` within Jev's limits, measured as Python measures them,
     /// in code points.
     pub fn input_chars<S: AsRef<str>>(&self, questions: &[S]) -> i64 {
@@ -100,6 +115,8 @@ impl TokenBudget {
             |(most, all)| (most as f64, all as f64),
         );
         let biggest = sizes.iter().copied().fold(0.0_f64, f64::max);
+        // Pictures share the context with the text, so a request that carries them has that much less room for it.
+        let (largest, total) = (largest - self.pictured_chars, total - self.pictured_chars);
         let room = (largest - biggest).min(total - crate::py::sum(sizes.iter().copied()));
         // `int()` truncates toward zero before the floor at zero.
         (room.trunc() as i64).max(0)

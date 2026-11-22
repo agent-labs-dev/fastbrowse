@@ -34,7 +34,7 @@ pub const ALLOWED_METHODS: &str = include_str!("../../extension/allowed-methods.
 /// The extension version that relays every method [`required_methods`] names. The extension reaches users from the
 /// Chrome Web Store, on the Store's review schedule, while a fastbrowse release reaches them from PyPI hours after a
 /// tag: the two drift unless a release is held, so a run names this version when the browser's copy is older.
-pub const MIN_EXTENSION_VERSION: &str = "0.1.1";
+pub const MIN_EXTENSION_VERSION: &str = "0.1.2";
 
 /// Methods a run sends best-effort, which an older copy lacks and the run still works without. Each is logged as a
 /// warning when the extension does not relay it, never a reason to refuse the run before it starts.
@@ -58,9 +58,6 @@ pub struct HostRecord {
     pub version: String,
     pub protocol: u32,
     pub pid: u32,
-    /// Chrome starts the native host directly; its parent identifies the window for live cursor feedback.
-    #[serde(default)]
-    pub browser_pid: Option<u32>,
     pub socket: PathBuf,
 }
 
@@ -378,17 +375,6 @@ mod tests {
         assert_eq!(host_dir_from(var(None), &run_user), Path::new("/home/someone/.cache/fastbrowse/hosts"));
     }
 
-    #[test]
-    fn older_host_records_have_no_browser_pid() {
-        let old = serde_json::json!({"browserId":"b", "label":"Chrome", "browser":"Chrome",
-            "version":"150", "protocol":PROTOCOL, "pid":42, "socket":"b.sock"});
-        let record: HostRecord = serde_json::from_value(old).unwrap();
-        assert_eq!(record.browser_pid, None);
-        let record = HostRecord { browser_pid: Some(7), ..record };
-        let roundtrip: HostRecord = serde_json::from_slice(&serde_json::to_vec(&record).unwrap()).unwrap();
-        assert_eq!(roundtrip.browser_pid, Some(7));
-    }
-
     /// A host record in `dir`; `listening` binds its socket, as a running host does.
     #[cfg(unix)]
     fn write_record(dir: &Path, label: &str, pid: u32, listening: bool) -> Option<std::os::unix::net::UnixListener> {
@@ -399,7 +385,6 @@ mod tests {
             version: "150".into(),
             protocol: PROTOCOL,
             pid,
-            browser_pid: None,
             socket: dir.join(format!("id{label}.sock")),
         };
         std::fs::write(dir.join(format!("id{label}.json")), serde_json::to_vec(&record).unwrap()).unwrap();

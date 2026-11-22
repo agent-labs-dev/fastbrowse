@@ -180,9 +180,9 @@ class RunParams(Params):
     recipe: Path | None = None
     save_recipe: Path | None = None
     cursor: bool | None = None
-    """Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver. Unset draws it wherever
-    it can be placed, true also brings the window to the front for it, false turns it off. It is skipped, with the
-    run unchanged, where the driver or an X11 display is missing or the window cannot be placed exactly."""
+    """Draw the agent's cursor inside the page, so whoever watches the browser, its live view or a recording sees
+    where each action lands. Unset draws it wherever the page can be seen, true in every run, false never. The model
+    never sees it."""
     local: bool = False
     """A browser on this machine instead of a Browser Use Cloud browser: the user's own Chrome through the fastbrowse
     extension, or a Chrome the run starts when `launch`, a headed window or a kept profile asks for one."""

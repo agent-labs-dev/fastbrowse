@@ -51,6 +51,7 @@ impl Agent {
             Some(&ledger),
             &self.trace,
             shows,
+            self.reached_by(state, observation).as_deref(),
         )
         .await?;
         Ok(self.end_read(state, capture, observation, tries, known, read))
@@ -74,8 +75,18 @@ impl Agent {
         let tries = state.begin_read(observation);
         let known = read_sources(&state.notes);
         let (task, dates, ledger) = (self.model_task(state), state.dates.clone(), state.ledger.clone());
-        let tokens = &self.config.tokens;
-        let reading = read_page(&*self.jev, &capture, &task, &dates, tokens, Some(&ledger), &self.trace, shows);
+        let (tokens, reached_by) = (&self.config.tokens, self.reached_by(state, observation));
+        let reading = read_page(
+            &*self.jev,
+            &capture,
+            &task,
+            &dates,
+            tokens,
+            Some(&ledger),
+            &self.trace,
+            shows,
+            reached_by.as_deref(),
+        );
         let (read, done) = tokio::join!(self.trace.phase("read", reading), work(state));
         self.end_read(state, capture, observation, tries, known, read?);
         Ok(Some(done))
@@ -90,8 +101,11 @@ impl Agent {
         known: std::collections::BTreeSet<(String, Option<String>, String)>,
         read: PageRead,
     ) -> bool {
-        let PageRead { facts, compose, finished } = read;
+        let PageRead { facts, compose, finished, for_steps } = read;
         state.end_read(observation, finished, tries);
+        if for_steps {
+            state.step_pages.insert(capture.sha256.clone());
+        }
         let added = facts.len();
         // Jev's latest word on a read stands: one fact that alone answers the task needs nothing written around it.
         if added > 0 {
@@ -113,7 +127,9 @@ impl Agent {
         if added > 0 {
             self.seen().read_captures.entry(capture.sha256.clone()).or_insert_with(|| capture.text.clone());
         }
-        state.record_read(&capture, facts, compose);
+        // The trace keeps the typed capture and each fact's evidence, so `Notes::record` rebuilds these notes from it.
+        let read_facts = facts.clone();
+        let steps_taken = state.record_read(&capture, facts, compose);
         // A timer changes the capture hash, so only a new source quote is progress.
         // The same page read again in a browser after a fetch differs in small print, which is not new evidence.
         let again = state.fetched.remove(&capture.url);
@@ -124,9 +140,12 @@ impl Agent {
                 ("url".into(), capture.url.clone().into()),
                 ("title".into(), capture.title.clone().into()),
                 ("sha256".into(), capture.sha256.clone().into()),
-                ("text".into(), capture.text.clone().into()),
                 ("chars".into(), text::len(&capture.text).into()),
                 ("facts_added".into(), added.into()),
+                ("capture".into(), serde_json::to_value(&capture).unwrap_or_default()),
+                ("facts".into(), serde_json::to_value(&read_facts).unwrap_or_default()),
+                ("steps_taken".into(), steps_taken.into()),
+                ("compose".into(), compose.into()),
             ])
         });
         if progressed {

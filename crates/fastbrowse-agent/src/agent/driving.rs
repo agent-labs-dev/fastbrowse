@@ -26,9 +26,11 @@ use super::state::{
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
+use crate::policy::{
+    Commit, Decision, FieldChange, Form, HistoryEntry, ListRead, Look, Planned, ReadScope, Submitted, decide,
+};
 use crate::retrieval::page_quotes;
-use crate::start::{accept_start, propose_start};
+use crate::start::{accept_start, propose_readable_start, propose_start};
 use crate::verification::RecordSchema;
 
 pub(super) struct TaskJudgments {
@@ -182,7 +184,7 @@ impl Agent {
                     }
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
-                    state.mark_read_links(&mut offered);
+                    state.mark_links(&mut offered);
                     state.mark_shown(&mut offered);
                     // The next saved step, when its page and control are certain, is the one control Jev is offered:
                     // Jev still judges the page, and may read or stop instead, but has no target to choose and no
@@ -282,16 +284,25 @@ impl Agent {
             // Only a commit that was sent counts: one the page redrew, covered or replaced before it went is not one
             // the run has made. One that opened a dialog is not made yet: accepting the dialog makes it, through its
             // own gate.
-            if committed
+            let taken = committed
                 && !state.page_failed
                 && observation.dialog.is_none()
-                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
-            {
+                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed);
+            if taken {
                 state.commits += 1;
+            }
+            if observation.dialog.is_none() {
+                state.dialog_form = None;
+            }
+            if committed
+                && let Some(entry) = state.history.last_mut().filter(|entry| entry.commit == Some(Commit::Sent))
+            {
+                entry.commit = taken.then_some(Commit::Taken);
             }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
-            if bot_check || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above {
+            let walled = decision.login_required.unwrap_or(0.0) > thresholds.login_required_above;
+            if bot_check || walled {
                 // A wall offering nothing to act on cannot be signed into, so it is waited on as a bot check is: for as
                 // long as the browser's CAPTCHA solver works on it or its document is still loading, and no longer.
                 if (bot_check || raw.controls.is_empty())
@@ -396,9 +407,7 @@ impl Agent {
             }
             // A wall can be the answer to the task, but cannot authorize walking the list behind it.
             self.trace_read_context("list_continuation", state, &observation, &decision);
-            if decision.read_scope == ReadScope::List
-                && (state.page_failed || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above)
-            {
+            if decision.read_scope == ReadScope::List && (state.page_failed || walled) {
                 list_walk = None;
                 decision.read_scope = ReadScope::Page;
             }
@@ -412,6 +421,12 @@ impl Agent {
                 continue;
             }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision)
+                // A sign-in wall the run goes on to pass is read only when Jev says it shows the answer: a list's next
+                // page that asked for a sign-in was read as one more record of the answer being composed, and its text
+                // cited, before the run signed in. A run holding a secret is not asked again on the same page, so Jev's
+                // last reading of it stands.
+                && (!signing_in(state, &observation, thresholds.login_required_above)
+                    || decision.shows_answer.is_some_and(|probability| probability > EVEN_ODDS))
                 // The page the run began on is read for an answer only for a task that asks to be told something: a
                 // task that only carries something out would otherwise answer with whatever its start page showed.
                 && (shows || self.output_intent(state).await? != OutputIntent::CarriedOut)
@@ -700,6 +715,44 @@ impl Agent {
         Ok(Some(opening))
     }
 
+    /// Opens the page the run begins on. A start page the run chose itself that an HTTP read cannot use is replaced by
+    /// one proposed knowing why each address failed, until a page opens or none is known: a `--fetch` run has no other
+    /// way past it, and ended `blocked` before its first step (#1330). When none opens, `opening` is left the address
+    /// the run first chose, so a run that moves to a browser opens that page rather than a guess an HTTP read also
+    /// failed on, which may be an address the site does not serve.
+    pub(super) async fn open_start(
+        &self,
+        opening: &mut String,
+        chosen: bool,
+        task: &str,
+        ledger: &std::sync::Arc<fastbrowse_core::telemetry::Ledger>,
+    ) -> Step {
+        let first = opening.clone();
+        let mut unreadable: Vec<(String, String)> = Vec::new();
+        let mut first_error = None;
+        loop {
+            let error = match self.trace.phase("open", self.page.navigate(opening, None)).await {
+                Ok(()) => return Ok(()),
+                Err(error) if chosen && error.needs_browser() && self.page.over_http() => error,
+                Err(error) => return Err(error.into()),
+            };
+            self.event("start_page_unreadable", || {
+                Map::from_iter([("url".into(), opening.clone().into()), ("error".into(), error.to_string().into())])
+            });
+            unreadable.push((opening.clone(), error.to_string()));
+            let first_error = first_error.get_or_insert(error);
+            let proposal = propose_readable_start(&*self.llm, task, &unreadable, Some(ledger)).await?;
+            ledger.record([proposal.cost])?;
+            let tried = |url: &String| unreadable.iter().any(|(seen, _)| seen == url);
+            let Some(next) = accept_start(proposal.data.url.as_deref()).filter(|url| !tried(url)) else {
+                *opening = first;
+                return Err(first_error.clone().into());
+            };
+            self.event("start_page", || Map::from_iter([("url".into(), next.clone().into())]));
+            *opening = next;
+        }
+    }
+
     /// The pages the site is known to serve for the items the task names, asked while the first page opens (#983).
     /// Only a run with no runtime to send the request beside its first step waits for them here.
     pub(super) async fn known_pages(
@@ -968,7 +1021,7 @@ impl Agent {
         let mut typed: Option<String> = None;
         let mut effect_now: Option<String> = None;
         let mut setting = false;
-        let mut set: Vec<(String, String)> = Vec::new();
+        let mut set: Vec<FieldChange> = Vec::new();
         let frames = self.on_event.is_some() && self.config.step_frames;
         let act: ActResult;
         let changed: bool;
@@ -1037,11 +1090,13 @@ impl Agent {
                 },
                 _ => None,
             };
-            // A drawn control pressed as one element changes pixels, not elements: a canvas switch turned on read as
-            // "nothing visible changed", was withheld as idle, and the run went looking elsewhere. Its frame before the
-            // click lets the one after judge it.
+            // A drawn control pressed as one element changes pixels, not elements: a canvas switch or gesture that read
+            // as "nothing visible changed" was withheld as idle, and the run went looking elsewhere. Its frame before
+            // the action lets the one after judge it.
             let drawn_before = match (&located, decision.target.as_ref()) {
-                (None, Some(target)) if action.operation == Operation::Click && target.drawn == Some(true) => {
+                (None, Some(target))
+                    if matches!(action.operation, Operation::Click | Operation::Drag) && target.drawn == Some(true) =>
+                {
                     self.viewport().await?
                 }
                 _ => None,
@@ -1055,7 +1110,7 @@ impl Agent {
                         } else if action.operation == Operation::Wait {
                             // A WAIT lasts until the page changes, which may be later than a few seconds: a status line
                             // rewritten every ten seconds was never seen to move. The run's own deadline bounds it, and
-                            // with no deadline the browser ends it after one armed watch.
+                            // with no deadline the page ends it after one armed watch, a browser's or a desktop window's.
                             let seconds = browsing_deadline(&state.ledger, state.compose)
                                 .map_or(f64::INFINITY, |until| {
                                     until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64()
@@ -1225,8 +1280,8 @@ impl Agent {
                 set = done
                     .set
                     .iter()
-                    .filter_map(|(id, held)| Some((describe(landed.controls.iter().find(|c| c.id == *id)?), held)))
-                    .map(|(field, held)| {
+                    .filter_map(|(id, held)| {
+                        let field = landed.controls.iter().find(|c| c.id == *id)?;
                         let left = match held {
                             Setting::Value(Some(value)) => text::repr(value),
                             Setting::Value(None) => "empty".to_string(),
@@ -1235,14 +1290,26 @@ impl Agent {
                                 (if *selected { "selected" } else { "not selected" }).to_string()
                             }
                         };
-                        (field, left)
+                        Some(FieldChange {
+                            label: describe(field),
+                            value: left,
+                            form: Form::of(&landed, field),
+                            was_target: observation.document_key == landed.document_key
+                                && field.frame_id == target.frame_id
+                                && field.id == target.id,
+                        })
                     })
                     .collect();
                 // A page that shows a choice only in a label or in text holds it in no field it reports, so the run
                 // cannot say which field it set: it says what it clicked.
                 let stayed = observation.url == landed.url && observation.document_key == landed.document_key;
                 if set.is_empty() && done.set_something && stayed {
-                    set.push((describe(target), UNREPORTED.to_string()));
+                    set.push(FieldChange {
+                        label: describe(target),
+                        value: UNREPORTED.to_string(),
+                        form: None,
+                        was_target: false,
+                    });
                 }
                 effect_now = Some(done.summary);
             }
@@ -1254,6 +1321,15 @@ impl Agent {
             }
             act = result;
         }
+        let sent = state.committing && act.outcome == StepOutcome::Executed;
+        let form = if decision.operation == Operation::Dialog && act.outcome == StepOutcome::Executed {
+            state.dialog_form.take().filter(|_| sent)
+        } else {
+            decision.target.as_ref().and_then(|target| Form::of(observation, target))
+        };
+        if act.outcome == StepOutcome::Executed && observation.dialog.is_none() {
+            state.dialog_form.clone_from(&form);
+        }
         state.history.push(HistoryEntry {
             text: typed,
             effect: effect_now,
@@ -1261,6 +1337,14 @@ impl Agent {
             setting: setting.then_some(true),
             set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
+            // A step that dispatched nothing submitted nothing.
+            submitted: decision
+                .target
+                .as_ref()
+                .filter(|_| act.outcome == StepOutcome::Executed)
+                .and_then(|target| Submitted::of(decision.operation, target, observation)),
+            commit: sent.then_some(Commit::Sent),
+            form,
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {
@@ -1269,6 +1353,7 @@ impl Agent {
             });
         }
         let note = self.redact(act.detail.as_deref().unwrap_or_default());
+        let refused = (act.outcome == StepOutcome::Failed && !note.is_empty()).then(|| note.clone());
         let facts: Vec<_> = state.notes.facts()[facts_before.min(state.notes.facts().len())..]
             .iter()
             .map(|fact| self.public_fact(fact, &state.notes))
@@ -1291,7 +1376,7 @@ impl Agent {
         self.record_step(state, step, false, frame).await?;
         match progressed {
             Some(progressed) => {
-                let stalled = Idle { action: withheld(decision), outcome: act.outcome };
+                let stalled = Idle { action: withheld(decision), outcome: act.outcome, refused };
                 self.count_progress(state, progressed, observation, stalled, Status::Stuck).await
             }
             None => {
@@ -1512,6 +1597,15 @@ impl Agent {
             && state.history.last().is_some_and(|last| last.operation != Some(Operation::SwitchTab))
         {
             state.navigation_from = Some((landed.clone(), before.clone()));
+            // A step that dispatched nothing did not lead the run here: the page changed by itself.
+            state.navigated_by =
+                state.history.last().filter(|last| last.outcome == StepOutcome::Executed).and_then(|last| {
+                    let operation = last.operation?;
+                    Some(match &last.target {
+                        Some(target) => format!("{operation} {}", text::repr(target)),
+                        None => operation.to_string(),
+                    })
+                });
         }
         if let Some(href) = state.followed.take()
             && landed != read_key(&before)
@@ -1932,6 +2026,11 @@ fn judge_site(state: &mut RunState, observation: &Observation, decision: &Decisi
     } else if reported {
         state.site_failure = None;
     }
+}
+
+/// Whether Jev's latest reading of this page judged it a sign-in wall.
+fn signing_in(state: &RunState, observation: &Observation, above: f64) -> bool {
+    state.login_readings.get(&read_key(observation)).is_some_and(|probability| *probability > above)
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ use lifecycle_support::{FakeChrome, Reply};
 use serde_json::json;
 use tokio::sync::watch;
 
-#[cfg(any(feature = "cursor", feature = "recording"))]
+#[cfg(feature = "recording")]
 fn temp_dir(name: &str) -> std::path::PathBuf {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -279,6 +279,8 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
         emit_frame(&session, 2, b"next jpeg", "session");
         settle(&session).await;
         session.switch_tab("owned").await.unwrap();
+        // The retry and the stop run in the background; close() would race them.
+        settle(&session).await;
         session.close().await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2, "{failure}");
         let calls = fake.calls();
@@ -290,8 +292,8 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
             "Page.stopScreencast" => BrowserWarningOperation::ScreencastStop,
             _ => BrowserWarningOperation::ScreencastFrameAck,
         };
-        let expected =
-            usize::from(failure == "Page.screencastFrameAck") * 2 + usize::from(failure != "Page.screencastFrameAck");
+        // A refused start is tried again on the switch; a refused stop or ack is not repeated.
+        let expected = if failure == "Page.stopScreencast" { 1 } else { 2 };
         assert_eq!(warnings.iter().filter(|warning| warning.operation == operation).count(), expected, "{failure}");
         assert!(warnings.iter().all(|warning| warning.failure == BrowserWarningFailure::BrowserError));
         let serialized = serde_json::to_string(&*warnings).unwrap();
@@ -327,6 +329,33 @@ async fn test_a_stalled_frame_ack_does_not_block_delivery_or_tab_input() {
     assert_eq!(client.pending(), 0);
 }
 
+/// Chrome can refuse the first start, as while a tab is still attaching. The cast was marked running anyway, so no
+/// later switch to the tab started it again and no frame ever came.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_refused_screencast_start_is_tried_again_on_the_next_switch() {
+    let fake = FakeChrome::start().await;
+    fake.script().results.entry("Page.startScreencast".into()).or_default().push_back(Reply::Error(-32000));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let on_frame: FrameHandler = Arc::new({
+        let calls = calls.clone();
+        move |_frame| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    settle(&session).await;
+    assert_eq!(fake.script().count("Page.startScreencast"), 1);
+    session.switch_tab("owned").await.unwrap();
+    settle(&session).await;
+    assert_eq!(fake.script().count("Page.startScreencast"), 2);
+    emit_frame(&session, 1, b"jpeg", "session");
+    settle(&session).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    session.close().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_stalled_screencast_does_not_delay_switching_tabs() {
     let fake = FakeChrome::start().await;
@@ -341,6 +370,42 @@ async fn test_a_stalled_screencast_does_not_delay_switching_tabs() {
     assert!(client.pending() >= 1);
     session.close().await.unwrap();
     assert_eq!(client.pending(), 0);
+}
+
+/// A start Chrome runs but never answers in time, or that a close cancels mid-await, was recorded only after the
+/// answer, so close never stopped a cast Chrome might still be sending.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_screencast_start_cancelled_by_close_is_still_stopped() {
+    let fake = FakeChrome::start().await;
+    fake.block("Page.startScreencast");
+    let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async {}));
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    fake.sent("Page.startScreencast").await;
+    session.close().await.unwrap();
+    assert!(fake.calls().iter().any(|m| m == "Page.stopScreencast"), "{:?}", fake.calls());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_screencast_start_that_times_out_is_stopped_on_close() {
+    let fake = FakeChrome::start().await;
+    fake.block("Page.startScreencast");
+    let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async {}));
+    let (timed_out, mut timeouts) = tokio::sync::mpsc::unbounded_channel();
+    let on_warning = Arc::new(move |warning: BrowserWarningEvent| {
+        if warning.operation == BrowserWarningOperation::ScreencastStart
+            && warning.failure == BrowserWarningFailure::Timeout
+        {
+            let _ = timed_out.send(());
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), on_warning: Some(on_warning), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    fake.sent("Page.startScreencast").await;
+    // The start must end unanswered, not cancelled by close.
+    tokio::time::timeout(Duration::from_secs(10), timeouts.recv()).await.unwrap().expect("start timeout warning");
+    session.close().await.unwrap();
+    assert!(fake.calls().iter().any(|m| m == "Page.stopScreencast"), "{:?}", fake.calls());
 }
 
 /// Python also checks the warning that nothing was recorded; see the note on the live view failures test.
@@ -465,6 +530,71 @@ async fn test_a_fed_recording_writes_both_videos_with_the_cursor_and_the_drawn_c
         .unwrap();
     assert!(last.status.success());
     assert!(last.stdout.first().is_some_and(|&luma| luma < 64), "{:?}", last.stdout);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(feature = "recording")]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_fed_recording_fits_a_window_of_another_size_inside_its_first_frame() {
+    // A desktop run's windows differ in size: a tall dialog after a wide editor is shrunk and centred, not stretched.
+    use fastbrowse_browser::recording::Recording;
+
+    if fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_none() {
+        eprintln!("recording needs ffmpeg; skipping");
+        return;
+    }
+    let dir = temp_dir("fed-sizes");
+    let shot = |name: &str, colour: &str, size: &str| {
+        let path = dir.join(name);
+        let source = format!("color=c={colour}:s={size}");
+        async move {
+            let made = tokio::process::Command::new("ffmpeg")
+                .args(["-loglevel", "error", "-f", "lavfi", "-i", &source, "-frames:v", "1"])
+                .arg(&path)
+                .status()
+                .await
+                .unwrap();
+            assert!(made.success());
+            std::fs::read(&path).unwrap()
+        }
+    };
+    let (wide, tall) = (shot("wide.png", "white", "320x240").await, shot("tall.png", "lime", "160x480").await);
+    let path = dir.join("clip.mp4");
+    let (recording, feed) = Recording::start_fed(&path).unwrap();
+    feed.show(wide);
+    tokio::time::sleep(Duration::from_secs_f64(0.5)).await;
+    feed.show(tall);
+    tokio::time::sleep(Duration::from_secs_f64(0.5)).await;
+    let outputs = recording.finish().await;
+    let plain = dir.join("clip.plain.mp4");
+    assert_eq!(outputs, [path.clone(), plain.clone()]);
+    let luma = |x: u32, y: u32| {
+        let plain = plain.clone();
+        async move {
+            let last = tokio::process::Command::new("ffmpeg")
+                .args(["-loglevel", "error", "-sseof", "-0.2", "-i"])
+                .arg(&plain)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    &format!("crop=2:2:{x}:{y}"),
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "gray",
+                    "-",
+                ])
+                .output()
+                .await
+                .unwrap();
+            assert!(last.status.success(), "{}", String::from_utf8_lossy(&last.stderr));
+            last.stdout[0]
+        }
+    };
+    // The video keeps the first window's size, with the tall window centred on black.
+    assert!(luma(4, 4).await < 32);
+    assert!(luma(160, 120).await > 100);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -701,129 +831,6 @@ async fn test_a_closed_tab_reaches_the_loop_as_unavailable() {
 //
 // test_recording_preserves_attached_page_geometry_and_reattachment is not ported: it runs `run_task` and `Agent`,
 // the run layer, which is not ported here.
-
-// -- test_cursor.py: cursor geometry must belong to the page that supplied the action point --------------------------
-
-#[cfg(feature = "cursor")]
-mod cursor {
-    use super::*;
-    use crate::common::{control, harness};
-    use fastbrowse_browser::cursor::Geometry;
-    use fastbrowse_browser::page::CdpPage;
-    use fastbrowse_browser::testing::lifecycle::{cursor_geometry, open_cursor};
-    use fastbrowse_core::config::Config;
-    use fastbrowse_core::models::{Operation, StepOutcome};
-    use fastbrowse_core::page::Action;
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_geometry_rejects_a_point_from_another_tab() {
-        let Some(h) = harness().await else { return };
-        h.goto("/").await;
-        let observation = h.observe().await;
-        let active = h.session.active_session_id().unwrap();
-        let same_page = |reading: Option<Geometry>| reading.expect("the page reports its frame").same_page;
-        assert!(same_page(cursor_geometry(&h.page, &active, &observation.document_key).await));
-        assert!(!same_page(cursor_geometry(&h.page, "another-session", &observation.document_key).await));
-        h.close().await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_geometry_rejects_a_point_from_the_previous_document() {
-        let Some(h) = harness().await else { return };
-        h.goto("/").await;
-        let before = h.observe().await;
-        let session_id = h.session.active_session_id().unwrap();
-        h.goto("/dispatch.html").await;
-        let after = h.observe().await;
-        assert_ne!(before.document_key, after.document_key);
-        // The old point means nothing on the new document, but the new one still says whether the browser shows.
-        let same_page = |reading: Option<Geometry>| reading.expect("the new page reports its frame").same_page;
-        assert!(!same_page(cursor_geometry(&h.page, &session_id, &before.document_key).await));
-        assert!(same_page(cursor_geometry(&h.page, &session_id, &after.document_key).await));
-        h.close().await;
-    }
-
-    /// A `cua-driver` that completes the handshake and then fails every tool call, as Python's mock driver does.
-    const FAILING_DRIVER: &str = r#"#!/usr/bin/env python3
-import json, sys
-if len(sys.argv) > 1 and sys.argv[1] == "cursor-theme":
-    print(json.dumps(["fastbrowse.focus.v1"]))
-    sys.exit(0)
-tools = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"]
-started = False
-for line in sys.stdin:
-    message = json.loads(line)
-    if "id" not in message:
-        continue
-    method = message.get("method")
-    if method == "initialize":
-        reply = {"result": {"capabilities": {}}}
-    elif method == "tools/list":
-        schema = {"properties": {"scope": {"enum": ["window", "desktop"]}, "cursor_theme": {"type": "object"}}}
-        reply = {"result": {"tools": [{"name": name, "inputSchema": schema} for name in tools]}}
-    elif message["params"]["name"] == "start_session" and not started:
-        started = True
-        reply = {"result": {"content": [], "structuredContent": {}}}
-    else:
-        reply = {"error": {"code": -32000, "message": "driver unavailable"}}
-    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], **reply}), flush=True)
-"#;
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_driver_failure_does_not_repeat_or_change_a_browser_action() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let Some(h) = harness().await else { return };
-        let dir = temp_dir("cursor");
-        let binary = dir.join("cua-driver");
-        std::fs::write(&binary, FAILING_DRIVER).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let feedback = Arc::new(open_cursor(&binary).await.expect("the driver's handshake passes"));
-        let page = CdpPage::new(h.session.clone(), Config::default()).with_cursor(Some(feedback.clone()));
-        page.navigate(
-            "data:text/html,<button onclick=\"this.textContent='Clicked '+(++window.clicks)\">Click</button>\
-             <script>window.clicks=0</script>",
-            None,
-        )
-        .await
-        .unwrap();
-        let observation = page.observe().await.unwrap();
-        let mut action = Action::new(Operation::Click);
-        action.target_id = Some(control(&observation, "Click").id.clone());
-        let result = page.act(&action, &observation).await.unwrap();
-        feedback.settled().await;
-        assert_eq!(result.outcome, StepOutcome::Executed);
-        let session_id = h.session.active_session_id().unwrap();
-        assert_eq!(page.evaluate(&session_id, "window.clicks").await.unwrap(), json!(1));
-        assert!(page.capture().await.unwrap().text.contains("Clicked 1"));
-        // `driver.close.assert_awaited_once()`: the failure closed the driver.
-        assert!(!feedback.running());
-        feedback.close().await;
-        h.close().await;
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Python makes the first `_evaluate` on a real page raise; the fake answers the geometry read with CDP's -32000
-    /// once, as a navigation that destroyed the context does.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_navigation_context_loss_skips_only_the_cursor_read() {
-        let fake = FakeChrome::start().await;
-        let session = fake.session(fake.connection()).await;
-        let page = CdpPage::new(session.clone(), Config::default());
-        let metrics = json!({"cssLayoutViewport": {"clientWidth": 800}, "layoutViewport": {"clientWidth": 800}});
-        let reading = json!({"result": {"value": [0, 0, 800, 600, 800, 600, 1, true, "document"]}});
-        fake.queue("SystemInfo.getProcessInfo", [json!({"processInfo": [{"type": "browser", "id": 5}]})]);
-        fake.queue("Page.getLayoutMetrics", [metrics.clone(), metrics]);
-        fake.script()
-            .results
-            .entry("Runtime.evaluate".into())
-            .or_default()
-            .extend([Reply::Error(-32000), Reply::Result(reading)]);
-        assert!(cursor_geometry(&page, "session", "document").await.is_none());
-        assert!(cursor_geometry(&page, "session", "document").await.is_some());
-        session.close().await.unwrap();
-    }
-}
 
 /// A server that never answers leaves Chrome loading with no further event, so a load is waited on for as long as a
 /// navigation is given one, from its own start, and no longer.

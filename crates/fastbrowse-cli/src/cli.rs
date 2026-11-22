@@ -88,6 +88,9 @@ pub struct Build {
     pub git_dirty: Option<bool>,
     /// The environment the Python package was installed into, which `self-update` names; None for the binary.
     pub wheel: Option<crate::update::Wheel>,
+    /// The real path of the script this install runs as, which the extension registry keys on, where the process's own
+    /// executable is the interpreter. None for the binary, and when no script is known.
+    pub identity: Option<std::path::PathBuf>,
 }
 
 impl Build {
@@ -196,15 +199,15 @@ pub struct Args {
     /// Which browser the extension is connected in, by its label; implies `extension`.
     pub extension_browser: Option<String>,
     /// The desktop apps to start and drive through deskpilot instead of a browser, each a command line, one per
-    /// `--desktop`.
+    /// `--desktop`. Each is driven through its accessibility tree, so an app that exposes none cannot be.
     pub desktop: Vec<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
-    /// `--cursor` or `--no-cursor`; neither draws the cursor wherever it can be placed.
+    /// `--cursor` or `--no-cursor`; neither draws the cursor wherever the page can be seen.
     pub cursor: Option<bool>,
 }
 
-/// The cursor a run was asked for: `--cursor` also brings the window forward, `--no-cursor` turns it off.
+/// The cursor a run was asked for: `--cursor` draws it in every run, `--no-cursor` turns it off.
 pub(crate) fn cursor_choice(cursor: bool, no_cursor: bool) -> Option<bool> {
     match (cursor, no_cursor) {
         (true, _) => Some(true),

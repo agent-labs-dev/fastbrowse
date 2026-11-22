@@ -67,7 +67,8 @@ Configuration refusals also exit 1.
 
 **What it means.** The run stopped before an action Jev judged irreversible, such as submit, pay, delete or
 send, because the run was not authorized to take it, or was authorized but Jev judged the task did not ask
-for it. That action was not taken.
+for it. That action was not taken. A run that has already carried out a commit the task asked for does not stop
+here: it refuses the extra action as a failed step and goes on.
 
 **Common causes.** The task leads to an irreversible action, and the run had no authorization. The error is
 `<operation> '<control>' needs confirmation`, and the refusal appears as a failed step.
@@ -263,8 +264,9 @@ everyday Chrome use `--extension` instead, which needs no approval; see [Your ow
 `--extension` reaches Chrome through the fastbrowse extension, which Chrome connects to fastbrowse when the
 browser starts. When the run ends `unavailable` with `no browser has the fastbrowse extension connected`:
 
-- Check that `fastbrowse extension install` ran for this user, and run it again after moving or reinstalling
-  fastbrowse, since it records where fastbrowse is.
+- Run `fastbrowse extension status` to see which fastbrowse installs are registered, in the order the extension
+  tries them. Run `fastbrowse extension install` again after moving or reinstalling fastbrowse, since it records
+  where fastbrowse is.
 - Check that the [store extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop)
   is installed and on at `chrome://extensions`, and that Chrome is open.
 - After installing, restart Chrome or turn the extension off and on, so it connects.

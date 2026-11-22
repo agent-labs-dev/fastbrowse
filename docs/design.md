@@ -28,10 +28,13 @@ declare the task complete. `plan_ahead=false` disables list reads and planned fi
 
 ## Authorization
 
-Jev judges every model-selected click, drag or key chord, including links, navigation to a caller-supplied address, every Enter press and acceptance of
+Jev judges every model-selected click, drag, key chord or file attached to an input (a page can upload a file the
+moment it is chosen), including links, navigation to a caller-supplied address, every Enter press and acceptance of
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
-for it; otherwise the run stops at `needs_confirmation`. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
+for it; otherwise the run stops at `needs_confirmation`, unless it has already carried out a commit the task asked
+for: then the action is refused as a failed step and the run picks again, so a run that posted what it was asked to
+is not reported as waiting for confirmation. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
 
 A submission of a form that holds more than one password field changes an account's credentials whatever
 the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at
@@ -55,13 +58,19 @@ recent actions, and can only refuse: the action proceeds only on a yes, and any 
 so the run can read the page or finish.
 Repeated refusals spend recoveries and end the run `stuck`, never by committing.
 
-Two rules come from the task itself, judged once per run by Jev from the task text and kept for the run.
+Rules also come from the task itself, judged once per run by Jev from the task text and kept for the run.
 When the task rules out downloading, a control the page says downloads a file is refused. When the task
 rules out changing anything, a fill, a select or a click on a setting control (a checkbox, radio, switch,
 option, or any control that reports a checked state) is refused, and from then on those operations are no
 longer offered. Typing into a search box is exempt, since searching is how a read-only task finds things.
-Authorization does not lift either rule: it lets a run commit what the task asks for, never what the task
-forbids.
+When the task tells the agent not to take some action ("do not click Upload"), every action the gate asks about
+is also asked about in the same request, against the task and the action alone: one the task says not to take,
+whatever the page shows, is refused once, and so is one the question goes unanswered for. When the task forbids it
+only in some state of the page ("do not click Upload while the preview shows confidential data"), a request of its
+own with the masked page asks whether the page shows that state, and the action goes ahead only on Jev's answer that
+it does not. Whether the task forbids anything is judged first, so a task that forbids nothing adds no question to
+its gates. Authorization does not lift any of these rules: it lets a run commit what
+the task asks for, never what the task forbids.
 
 Unmarked password fields leave the current-or-replacement role to Jev using the task and page context.
 Field count and order do not establish that role. An explicit `current-password` marker identifies an
@@ -162,6 +171,19 @@ another control or submitting its form. The field must still be the same node an
 action runs. A replacement field is not retried. Page change and blur handlers run as they do when the
 field is left; their observed effects reach the next decision. A focus change counts as a changed page
 state, but does not by itself prove a value was set or accepted.
+
+## Dragging
+
+Drag has two forms. A draggable control can be dragged onto a destination chosen by Jev. A drawn surface, such
+as a canvas, offers Drag as a same-control gesture.
+Jev chooses the operation and target first. A non-drawn target then gets the destination choice. For a drawn target,
+the screenshot-seeing model receives the task, current screenshot and target box and returns a `DragPath`: press,
+every supplied movement point, release and optional Shift, all normalized to the target box.
+
+The browser resolves those points against the live visible target, rejects non-finite or out-of-bounds coordinates,
+rechecks freshness before press and during movement, and sends real `mousePressed`, every supplied `mouseMoved` with
+the button held, and `mouseReleased` events. It does not interpolate, simplify, cap or repair the path. Stale geometry
+cancels before release. Direct CDP and extension routes use the same dispatch.
 
 ## Reading and citations
 
@@ -272,7 +294,10 @@ the page fingerprint, so a scroll that exposes content counts as progress even w
 without a target retains viewport scrolling.
 
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
-answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
+answer, or the answer must be composed from more than one fact. On a page the step judged to show what the task needs,
+the first is replaced by a third: the page holds a fact the steps need, such as a link to follow or a code to enter, and
+nothing that answers. Its blocks are kept as notes the steps see, none of them an answer, and DONE on notes that answer
+nothing is a step short of the answer. On a page with more spans than one choice can offer, a
 relevance pass narrows them first. If no value choice fits, a page that fits Jev's input limit can still supply
 facts for synthesis. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
 writes page text. A span Jev picks becomes a fact, and identical values from the same page and frame share one choice
@@ -303,10 +328,10 @@ The composer selects source wording by note id in private text parts, either the
 one field of a record, that code finds in the note's text exactly as written. Code copies the selection and adds
 quotation delimiters when requested; prose parts, objects like the others so the composer does not write connecting
 wording as a source part, keep explanatory wording separate. A tally has a computed numeric part or
-requested winner-field parts, which code fills without replacing matching text inside a source part. A numeric slot retains its exact position in its prose or table cell, so unit and sign checks see the surrounding text without confusing an identical source number with the slot. Packed compositions expose their original
+requested winner-field parts, which code fills without replacing matching text inside a source part. If the task asks for the calculated value, the composer places a numeric slot in the claim text or cells. The tally's format hint alone does not render the value. A numeric slot retains its exact position in its prose or table cell, so unit and sign checks see the surrounding text without confusing an identical source number with the slot. Packed compositions expose their original
 sources separately, and kept claims retain these parts through a rewrite. A rewrite's feedback names a rejected
-draft's notes by the labels each request shows, and leaves out the notes another request holds. Split notes cannot be
-selected as whole sources. The delivered claims keep the same text, cells, tally and evidence id fields.
+draft's notes by the labels each request shows, and leaves out the notes another request holds. When the check that the answer copies only what the task asks fails, the
+feedback lists the copied texts it judged. Split notes cannot be selected as whole sources. The delivered claims keep the same text, cells, tally and evidence id fields.
 For a comparison restricted to each group's minimum or maximum, the composer also names a private selection:
 the grouping field, the inner field and its extreme. Group names must copy an exact span from the record's quote
 or, for captured page text, its own captured heading path. Code selects each group's tied extremes before applying
@@ -314,7 +339,8 @@ the outer comparison. The claim cites every qualifying record used in the select
 only the outer winners. This selection survives packing and rewrites without adding fields to delivered claims.
 An extreme can supply both its numeric result and requested fields from its winning records. If a draft uses a slot named for the compared field as its numeric result, that slot gives the shared value once, including when records tie. A prose claim or table cell uses one slot for the comparison. Separate cells can show the computed result and the value as each winner writes it. Other typed computed slots name the fields to copy from each winner. Code selects the rank and every tied winner first, then copies each requested field only from those records and their associated source notes. Literal-copy checks accept wording from a record's quote or captured heading, never its address or generated metadata. Field-support checks use those same sources and reject a missing, ambiguous or unrelated value. A name and price can therefore share a prose claim or occupy separate table cells without the composer choosing the winning record.
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The response schema requires a field for sums, minima and maxima; only counts may omit it. The composer marks it as a tally with
-the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
+the kind of record, the scope the task gives those records in a field of its own (such as "by Albert Einstein" or
+"httpx or requests"), and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. For a total or extreme, membership uses the task's scope as well as the draft's record kind, with the page's labels identifying the requested state. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
 or compares, writes the value into the claim and cites every record it rests on. For a count per group, such as quotes
@@ -377,7 +403,7 @@ answer worked out which was newer. When a string value occupies part of a source
 choice and the word-boundary questions retain the record's other field names and the selected source's
 context. A whole table row carries its header rather than an unknown column label. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
-The composer only writes the answer; it never judges whether the answer is complete. Jev's coverage question judges whether the answer gives every requested fact, and code ends a run over a whole list, or the pages a task names, `unverified` while a page of it is unread. A draft with no claims fails coverage and goes to recovery, so Jev can choose what evidence to gather next. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
+The composer only writes the answer; it never judges whether the answer is complete. Jev's coverage question judges whether the answer gives every requested fact, and code ends a run over a whole list, or the pages a task names, `unverified` while a page of it is unread, unless Jev's read found one passage that alone answers the task, such as a total the list states. A draft with no claims fails coverage and goes to recovery, so Jev can choose what evidence to gather next. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while
 their source evidence remains unchanged and the run has taken no further step. A later nonempty checked repair replaces the retained draft; an empty
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
@@ -550,62 +576,31 @@ To regenerate the schema, run `FASTBROWSE_UPDATE_GOLDEN=1 cargo test -p fastbrow
 
 ## Cursor feedback
 
-The run shows where the agent is about to act, through the Cua Driver's synthetic cursor on X11 or deskpilot's
-agent cursor on Hyprland, whenever its tab is on screen: by default it is drawn wherever it can be placed, `--cursor` (`run_task(cursor=True)`) also brings the
-window to the front so it always can be, and `--no-cursor` (`cursor=False`) turns it off. A plain `--headed` run
-works in a background tab behind `about:blank`, so the default draws nothing there; nothing of the run is on
-screen to mark. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
-retried. The page hook is in `CdpPage.act`, where the hit-tested point is known; a secret's field is never
-marked. MP4 recordings draw a timed cursor at those points, with a glide between actions and a pulse on clicks.
-The recording uses ffprobe to read its frame dimensions. If that fails, it omits the cursor with a warning.
-`browser/cursor.py` owns one `cua-driver mcp` child per run, speaking JSON-RPC over stdio, and stops it
-when the run ends, including on cancellation. The driver's `move_cursor` is sent in `window` scope only, so the
-real pointer and focus never move.
+The run shows where the agent acts with a cursor the page draws itself (`js/cursor.js`): ember focus brackets
+around a dot, with a fastbrowse tag. It glides along a shallow arc to each action point, the brackets close in as it
+lands, a ring goes out on each press, and a drag carries it along the drag's own path while the button is held. It
+never moves the user's pointer or changes focus, and the input is still sent over CDP, so the drawing cannot change
+what an action did.
 
-The page point becomes a screen point from what the page reports: `screenX/Y`, `outerWidth/Height`,
-`innerWidth/Height` and the zoom from `Page.getLayoutMetrics`. The top inset is `outerHeight - innerHeight * zoom`.
-The cursor is drawn only when exactly one driver window matches the page's reported frame (which also shows the
-two share a scale, so a scaled display is skipped), that window is in front of every other, the tab is visible and
-the point is inside the viewport. Otherwise it is hidden. Once drawn it stays for the whole run, with the driver's
-idle fade off: a navigation, a scroll or a point outside the viewport leaves it at its last position, and a watcher
-hides it as soon as the tab stops showing, the frame can no longer be placed, or another window comes in front. Any
-driver failure turns the feature off for the run.
+It is drawn wherever someone can see the page: the user's own Chrome through the extension, a headed or attached
+local browser, a cloud browser's live view, a host's live frames, or a `--record` video, which films it with the
+page. A headless run nobody watches draws nothing. `--cursor` (`cursor=True`) draws it in every run and
+`--no-cursor` (`cursor=False`) never.
 
-On a Wayland session the cursor is drawn only under Hyprland, through `deskpilot mcp` (`FASTBROWSE_DESKPILOT` or
-`deskpilot` on `PATH`), since `cua-driver` lists no windows there. Chrome on native Wayland cannot know where its
-window is, so the window is the one listed by deskpilot's `windows` with the browser's pid and the page's
-`outerWidth x outerHeight`, and the point is sent to `move` in that window's pixels. Nothing is drawn when no window
-or more than one matches, the window is on a workspace no monitor shows, or any other window on screen overlaps it:
-Hyprland gives no stacking order, so an overlap cannot be shown to be behind. `move` reports the global point it
-drew at, and a point other than the window's position plus the one sent turns the feature off, since deskpilot
-scales a point by its latest shot of that window when it holds one. deskpilot has no session or hide: its arrow
-fades after eight idle seconds, so an arrow drawn just before another window covers the browser can stay that long.
-`take_pointer`, `show` and `focus` are never sent, so the user's pointer and focus stay where they are.
+`cursor.rs` evaluates the script in an isolated world of the tab's top document (`Page.createIsolatedWorld`), so page
+scripts can neither see nor call it, and the extension relays the same three commands, so both browser routes share
+it. The first call in a document installs it; a navigation destroys the world, and the next action draws it again
+from the last point the run sent. Every call is bounded and quiet on failure: a document that refuses the script only
+misses its drawing. The glide is paced to a travel speed, not a duration: as long as its distance needs at
+`GLIDE_PX_PER_S`, between `GLIDE_MS` and `GLIDE_MAX_MS`, so a sweep across the page and a hop between neighbours
+cross at the same pace. The action waits for the glide to land before its input is sent.
 
-The driver answers `move_cursor` only once its glide has landed, and at its own pace a glide across the screen takes
-one to three seconds, longer than the half second between quick clicks: each glide was cut off by the next, so the
-arrow landed on nothing, and a glide past the two-second call bound turned the feature off. The run asks
-`set_agent_cursor_motion` for fixed timing with a glide paced between 550 and 2,200 ms, and waits up to six
-seconds for the move itself. The outer deadline also allows two seconds each for refreshing the session,
-finding its window, restoring visibility and updating the pace. Shorter glides land sooner but cross the
-screen in a few frames.
-
-The glide a move is drawn with is paced to a travel speed, not to a duration: it takes as long as its distance
-needs at `GLIDE_PX_PER_S`, between `GLIDE_MS` and `GLIDE_MAX_MS`. One fixed duration made a sweep across the page
-the same length as a hop between neighbours, so the long move crossed four or five times faster and could not be
-followed. The floor is the value tuned to land the arrow on every click, and the cap keeps one sweep from holding
-up the step behind it. On the measured replay a sweep peaked at 1,350-2,400px/s and now peaks near 750px/s.
-`glide_duration_ms` is only the glide length under `timing: fixed`; every other timing keeps the style's own curve
-and ignores the number, so the run asks for `fixed` when it sets a glide and again when it re-paces one. The paced
-value is sent with `set_agent_cursor_motion` only when it changes, and a driver without that tool keeps the glide
-it was started with.
-
-Limits: Linux only, on X11 or Hyprland; other Wayland compositors, macOS and Windows are not verified. X11
-needs `cua-driver` 0.28.3 or newer with the session cursor tools, and Hyprland needs deskpilot with its plugin
-loaded. Cloud and headless browsers are skipped. The desktop cursor has no
-click pulse through `move_cursor`; recordings add one in the video. A docked DevTools panel or a pinch zoom hides
-the desktop cursor, and a window partly covered by another counts as covered. CDP screenshots do not show the
-desktop cursor.
+The cursor draws into a closed shadow root on one host element marked `data-fastbrowse-cursor`, `aria-hidden` and
+`pointer-events: none`, in the top layer as a manual popover, so it shows above dialogs and fullscreen elements and
+is never hit by the run's own hit tests. It never reaches what the agent reads: the host holds no text, the snapshot
+skips it, and a screenshot for the model takes it out of the page first. While it is out, the session withholds
+frames as it does for a secret, so the live view and the recording hold their last frame rather than show the page
+without it.
 
 ## Browser capabilities over plain CDP
 

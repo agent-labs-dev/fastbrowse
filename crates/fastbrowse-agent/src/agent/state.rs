@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes, address, fact_id};
-use crate::policy::{Decision, HistoryEntry, Look};
+use crate::policy::{Decision, Form, HistoryEntry, Look};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
 use crate::start::KnownPages;
@@ -351,6 +351,8 @@ pub(crate) struct RunState {
     pub surface_judged: Option<((String, String), f64)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
+    /// The action that made the latest navigation, as "click 'Learn more'".
+    pub navigated_by: Option<String>,
     /// Jev's sign-in readings stay with the document they described, not with every later route.
     pub login_readings: HashMap<(String, String), f64>,
     /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
@@ -397,6 +399,8 @@ pub(crate) struct RunState {
     pub replied: bool,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
+    /// Jev's word that the task tells the agent not to take some action, asked once the gate first asks about one.
+    pub prohibits: Option<bool>,
     /// Jev's word on which changes to the page's fields and settings the task allows, asked once an edit is in play.
     pub edits: Option<Edits>,
     /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
@@ -406,6 +410,9 @@ pub(crate) struct RunState {
     pub read_tries: HashMap<(String, String), u8>,
     /// Screenshots that a successful image read found held no answer for this run's task.
     pub unanswered_images: HashSet<String>,
+    /// The captures, by digest, a read kept for the steps: they hold a fact a step needs, such as a code to enter, and
+    /// nothing that answers the task.
+    pub step_pages: HashSet<String>,
     /// The page the last action changed, until the next observation shows it is still the page in view.
     pub changed_page: Option<(String, String)>,
     /// Jev's latest word is that this page reports the site failed, so nothing on it is read as evidence.
@@ -458,6 +465,8 @@ pub(crate) struct RunState {
     pub fetched: HashSet<String>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
     pub committing: bool,
+    /// A dialog has no target control, so its acceptance needs the form of the action that opened it.
+    pub dialog_form: Option<Form>,
     /// Commits this run has carried out, each counted once the page after it did not fail. A later commit is checked
     /// against the page and the run's own steps, so one the task asks for once is not sent again (#882).
     pub commits: usize,
@@ -544,13 +553,11 @@ impl RunState {
 
     /// What one read leaves in the notes: its facts, the page kept whole when one fact was picked from it, and the
     /// earlier reads of that address it supersedes.
-    pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) {
+    /// Record a read in the notes, returning the steps that could change the site taken before it.
+    pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) -> usize {
         let added = facts.len();
         let steps_taken = self.history.iter().filter(|entry| entry.changed_site()).count();
-        self.notes.remember_capture(capture, steps_taken);
-        for fact in facts {
-            self.notes.add(fact);
-        }
+        self.notes.record(capture, steps_taken, facts);
         // A fragment names a view of the same page: an earlier view kept whole would come back as current notes when
         // composing, beside the read that superseded it.
         let page = address(&capture.url);
@@ -558,10 +565,7 @@ impl RunState {
         if !compose && added > 0 {
             self.read_whole.push(capture.clone());
         }
-        // An absent read must not mistake a stored quote from a revisited capture for fresh evidence.
-        if added > 0 {
-            self.notes.supersede(&capture.url, &capture.sha256, &capture.text);
-        }
+        steps_taken
     }
 
     /// The notes with the pages read for one fact whole. A task over some pages of a list leaves out what was read on
@@ -721,12 +725,20 @@ impl RunState {
     /// The next pages of the list this run reads that it has not read. A list none of whose pages gave the task a note
     /// is not the one it reads: a shop's front page lists every book, and a one-page category opened from it has no
     /// pager of its own, so the front page's 49 next pages were opened one by one for a question about the category.
+    ///
+    /// Nor does a list whose read gave the answer in one passage leave pages to read: Jev's read chooses between a
+    /// passage that alone answers the task and an answer composed across pages, and a count of a filtered GitHub issue
+    /// list it answered from "59 results" opened pages 2 and 3 after Jev chose done, citing each page's chrome (#1331).
+    /// Only that pick counts: an answer to compose, a screenshot reading among them, judged nothing about the rest of
+    /// the list, and taking it as the whole ended a cheapest-across-both-pages task on page 1.
     pub fn unread_list_pages(&self) -> impl Iterator<Item = &String> {
         let list: Vec<String> =
             self.pager_start.iter().chain(&self.pager_pages).map(|page| crate::memory::address(page)).collect();
-        let noted = self.notes.facts().iter().any(|fact| {
-            fact.evidence.as_ref().is_some_and(|evidence| list.contains(&crate::memory::address(&evidence.url)))
-        });
+        let picked = self.notes.answered() && !self.compose;
+        let noted = !picked
+            && self.notes.facts().iter().any(|fact| {
+                fact.evidence.as_ref().is_some_and(|evidence| list.contains(&crate::memory::address(&evidence.url)))
+            });
         self.pager_pages
             .iter()
             .filter(move |page| noted && !self.read_urls.contains(page.as_str()) && self.on_the_way(page))
@@ -737,14 +749,24 @@ impl RunState {
         self.unread_list_pages().find(|page| !self.pager_followed.contains(page.as_str()))
     }
 
-    /// Mark each link that leads to a page already read. A mark on the link itself tells apart links that share a
-    /// label, as every quote's "(about)" does, where a list of labels could not.
-    pub fn mark_read_links(&self, observation: &mut Observation) {
+    /// Mark each link that leads to a page already read, and each that leads to another site than the one the browser
+    /// opened for the task. A mark on the link itself tells apart links that share a label, as every quote's "(about)"
+    /// does, where a list of labels could not. Shown only hrefs, a run checking a page followed its store button off
+    /// the site and ended at that store's security check (#1137).
+    pub fn mark_links(&self, observation: &mut Observation) {
         let here = url::Url::parse(&observation.url).ok();
+        let start = self.start_landing_url.as_deref().or(self.caller_start.as_deref());
+        let home = start.and_then(fastbrowse_core::origins::site_of);
         for control in &mut observation.controls {
-            let leads_to = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok());
-            if leads_to.is_some_and(|url| self.read_urls.contains(url.as_str())) {
+            let Some(leads_to) = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok()) else {
+                continue;
+            };
+            if self.read_urls.contains(leads_to.as_str()) {
                 control.already_read = Some(true);
+            }
+            let site = fastbrowse_core::origins::site_of(leads_to.as_str());
+            if home.is_some() && site.is_some() && site != home {
+                control.other_site = Some(true);
             }
         }
     }
@@ -803,11 +825,13 @@ impl RunState {
             changed_page: None,
             unchanged: 0,
             committing: false,
+            dialog_form: None,
             commits: 0,
             redecided: false,
             last_page: None,
             surface_judged: None,
             navigation_from: None,
+            navigated_by: None,
             ..self
         }
     }
@@ -857,6 +881,7 @@ impl RunState {
             last_page: None,
             surface_judged: None,
             navigation_from: None,
+            navigated_by: None,
             login_readings: HashMap::new(),
             reached: HashMap::new(),
             shown: HashMap::new(),
@@ -872,10 +897,12 @@ impl RunState {
             look: None,
             replied: false,
             downloads_forbidden: None,
+            prohibits: None,
             edits: None,
             read_documents: HashMap::new(),
             read_tries: HashMap::new(),
             unanswered_images: HashSet::new(),
+            step_pages: HashSet::new(),
             changed_page: None,
             page_failed: false,
             compose: false,
@@ -900,6 +927,7 @@ impl RunState {
             pager_followed: HashSet::new(),
             fetched: HashSet::new(),
             committing: false,
+            dialog_form: None,
             commits: 0,
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),

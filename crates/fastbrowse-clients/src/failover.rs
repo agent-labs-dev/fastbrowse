@@ -156,6 +156,10 @@ impl DecisionClient for FailoverDecisionClient {
     fn profile(&self) -> DecisionProfile {
         self.primary.profile()
     }
+
+    fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
+        self.primary.image_tokens(state, questions, images)
+    }
 }
 
 /// The LLM on its backup provider for the rest of a run once the primary refuses its key.

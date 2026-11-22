@@ -61,12 +61,25 @@ pub(crate) mod keys {
 }
 
 const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after that action is among the recent actions; what the page already showed before it is not the\nanswer, however close it looks.";
-const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task names one, choose\nby context; a link in one record's context opens it and shows no more of the list.";
+const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nEach option is the element in state.elements with its id, whose `context` is the card, row or section it belongs\nto. When the task names one, choose by context; a link in one record's context opens it and shows no more of the\nlist.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could carrying out any part of the task or current subgoal that is still needed, or reading what it needs, act on or rely on the element in each question?\nUse recent actions to judge which task steps are already complete.\nJudge by its label, role, context and href. An already_read link leads to a page this run has read;\nconsider whether visiting it again would help the task. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
 
 fn untrusted(rules: &str) -> String {
     format!("{UNTRUSTED}\n{rules}")
+}
+
+/// What `other_site` on an element means, told only on a page where a link carries it: a run checking one page on a
+/// Pages preview followed its store button to another site and ended at that site's security check, with nothing
+/// saying the button left the site the task was about (#1137).
+pub const OTHER_SITE: &str = "An element marked other_site is a link to a different site: following it leaves the site the browser opened for this task. Follow one only when the task asks for that link or for what that other site holds.";
+
+/// `rules` with `OTHER_SITE` added when one of `controls` carries the mark.
+fn told_sites(rules: &str, controls: &[Control]) -> String {
+    match controls.iter().any(|control| control.other_site == Some(true)) {
+        true => format!("{rules}\n{OTHER_SITE}"),
+        false => rules.to_string(),
+    }
 }
 
 pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTION_RULES));
@@ -90,8 +103,12 @@ pub fn operation_label(operation: Operation) -> &'static str {
             "Open another HTTP(S) address: one the caller supplied for this task, or a page a site the task names is known to serve for an item the task names."
         }
         Operation::Click => "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
+        Operation::RightClick => {
+            "Right-click an element to open its context menu of commands, such as rename or compress."
+        }
+        Operation::DoubleClick => "Double-click an element to open it, such as a file, folder or list item.",
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
-        Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
+        Operation::Drag => "Drag a control onto a destination, or draw a pointer gesture on a drawn surface.",
         Operation::Fill => "Put the value the task needs into an editable field, typing or replacing its text.",
         Operation::Press => "Press the key or key chord the task gives in an editable field.",
         Operation::Blur => {
@@ -168,7 +185,7 @@ pub struct HistoryEntry {
     /// Each field a click on an option, checkbox, radio or switch changed, described, with what the page reads it as
     /// holding after the click. Kept out of what models are shown: it is the run's own record of what it changed.
     #[serde(skip)]
-    pub set: Vec<(String, String)>,
+    pub set: Vec<FieldChange>,
     /// The task step a click placed inside a drawn surface was made for. Kept apart from `target`, which actions are
     /// withheld and counted by.
     #[serde(skip)]
@@ -178,6 +195,109 @@ pub struct HistoryEntry {
     /// judged not to have made the text bold, and pressed Bold again.
     #[serde(skip)]
     pub look: Option<Look>,
+    /// The form the step submitted, kept out of what models are shown but for a question about another submission.
+    #[serde(skip)]
+    pub submitted: Option<Submitted>,
+    /// The commit the step sent, if it sent one: a run that posted two replies and then stopped reported both as typed
+    /// but unsent. Kept out of what models are shown: it is the run's own record.
+    #[serde(skip)]
+    pub commit: Option<Commit>,
+    /// The form or field group the step's target belongs to, as the page reports it: a commit sends the fields of its
+    /// own form, and no others.
+    #[serde(skip)]
+    pub form: Option<Form>,
+}
+
+/// The scope of a form or field group. A local form id can be reused in other frames or documents.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Form {
+    pub(crate) document: String,
+    pub(crate) frame: Option<String>,
+    pub(crate) id: String,
+}
+
+impl Form {
+    pub(crate) fn of(observation: &Observation, control: &Control) -> Option<Self> {
+        Some(Self {
+            document: observation.document_key.clone(),
+            frame: control.frame_id.clone(),
+            id: control.form_id.clone()?,
+        })
+    }
+}
+
+/// A field changed by a click, with the value and form the page reports for that field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldChange {
+    pub(crate) label: String,
+    pub(crate) value: String,
+    pub(crate) form: Option<Form>,
+    pub(crate) was_target: bool,
+}
+
+/// A commit a step sent, and whether the run saw the page take it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Commit {
+    /// Sent, and the run ended before the next page showed whether it was taken.
+    Sent,
+    /// The page took it, as the run counts its commits.
+    Taken,
+}
+
+/// The form a step submitted, and what its other fields held as it went.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Submitted {
+    /// The document the form was in: form ids are numbered per document, so the same id on another page is another form.
+    document: (String, String),
+    frame_id: Option<String>,
+    form_id: String,
+    held: Vec<String>,
+}
+
+impl Submitted {
+    /// The form `operation` on `target` submits in `observation`; None for a step that submits no form. A field
+    /// Enter submits from is among what the form held.
+    pub fn of(operation: Operation, target: &Control, observation: &Observation) -> Option<Submitted> {
+        let form_id = target.form_id.clone().filter(|_| fastbrowse_core::safety::submits(operation, target))?;
+        let own = target
+            .value
+            .as_deref()
+            .filter(|value| !value.is_empty() && !target.sensitive && target.role != "button")
+            .map(|value| format!("{} holds {}", text::repr(&target.label), text::repr(value)));
+        // A masked field is said to hold a value without the value, so a form whose only entry was a password is not
+        // told as empty.
+        let masked = observation.controls.iter().filter(|c| {
+            c.sensitive
+                && c.value.as_deref().is_some_and(|value| !value.is_empty())
+                && (&c.frame_id, &c.form_id) == (&target.frame_id, &target.form_id)
+        });
+        let held = own
+            .into_iter()
+            .chain(fastbrowse_core::safety::form_held(target, &observation.controls))
+            .chain(masked.map(|c| format!("{} holds a masked value", text::repr(&c.label))))
+            .collect();
+        Some(Submitted {
+            document: (observation.url.clone(), observation.document_key.clone()),
+            frame_id: target.frame_id.clone(),
+            form_id,
+            held,
+        })
+    }
+
+    /// Which form this was beside the one `target` submits, and what it held.
+    fn told(&self, target: Option<&Control>, observation: &Observation) -> String {
+        let same = (&observation.url, &observation.document_key) == (&self.document.0, &self.document.1)
+            && target.is_some_and(|t| (&t.frame_id, t.form_id.as_ref()) == (&self.frame_id, Some(&self.form_id)));
+        let which = match same {
+            true => "the same form the action now asked about submits",
+            false => "a different form from the one the action now asked about submits",
+        };
+        // The observation can omit fields in the submitted form, so no recorded values is not proof of emptiness.
+        match self.held.is_empty() {
+            true => format!("{which}; the observation recorded no field values"),
+            false => format!("{which}; in it, {}", self.held.join("; ")),
+        }
+    }
 }
 
 /// What the place a step acted on looked like: the card the decision saw and, for a click placed in pixels, the same
@@ -214,6 +334,9 @@ impl HistoryEntry {
             set: Vec::new(),
             for_step: None,
             look: None,
+            submitted: None,
+            commit: None,
+            form: None,
         }
     }
 
@@ -224,6 +347,18 @@ impl HistoryEntry {
         let mut shown = self.dump_exclude_none();
         if let (Some(step), Some(target)) = (&self.for_step, &self.target) {
             shown["target"] = format!("{target}, for the task step {step:?}").into();
+        }
+        shown
+    }
+
+    /// The entry as shown to a question about submitting `target`'s form: a submission says which form it sent and
+    /// what that held. Shown only "click Post" with the page unchanged after the run had pressed the empty top-level
+    /// Post, Jev judged a thread's reply already posted, 0.6 to 0.4, and refused it; told the Post sent another,
+    /// empty form, it judged the reply asked for (#881).
+    pub fn shown_beside(&self, target: Option<&Control>, observation: &Observation) -> Value {
+        let mut shown = self.shown();
+        if let Some(submitted) = &self.submitted {
+            shown["form"] = submitted.told(target, observation).into();
         }
         shown
     }
@@ -464,21 +599,27 @@ pub struct Planned {
 
 const PLAN_PREFIX: &str = "plan:";
 
-fn plan_question(control: &Control) -> Question {
+/// A field as a sentence names it: its role, label, the context it sits in, and the input name and autocomplete that
+/// tell two fields labelled alike apart. A label alone can be the role again: an unlabelled search box reads as
+/// 'textbox', and a value writer told only that typed the task's whole answer into it (#1339).
+pub fn described(control: &Control) -> String {
     let context = control.context.as_deref().map(|c| format!(" in {}", text::repr(c))).unwrap_or_default();
-    // A target candidate's state element leaves out its input name and autocomplete, and two fields labelled alike
-    // are told apart by them.
     let named = [("named", &control.input_name), ("autocomplete", &control.autocomplete)]
         .into_iter()
         .filter_map(|(key, value)| value.as_deref().map(|value| format!(", {key} {}", text::repr(value))))
         .collect::<String>();
+    format!("a {} labelled {}{context}{named}", control.role, text::repr(&control.label))
+}
+
+fn plan_question(control: &Control) -> Question {
+    // A target candidate's state element leaves out its input name and autocomplete, and two fields labelled alike
+    // are told apart by them.
     let instructions = format!(
-        "{UNTRUSTED}\nElement {} is a {} labelled {}{context}{named}. Besides the one next action, does what the task still \
-         needs on this page include that this run fill it, before anything moves on from this page? Yes only when the \
-         task itself gives or calls for a value for it now.",
+        "{UNTRUSTED}\nElement {} is {}. Besides the one next action, does what the task still needs on this page \
+         include that this run fill it, before anything moves on from this page? Yes only when the task itself gives \
+         or calls for a value for it now.",
         control.id,
-        control.role,
-        text::repr(&control.label),
+        described(control),
     );
     noul(
         &instructions,
@@ -612,7 +753,7 @@ pub async fn decide(
     trace: &Trace,
 ) -> Result<Decision> {
     let options = jev.profile().max_choice_options;
-    let fitting = Fitting { config, options };
+    let fitting = Fitting { config, options, jev };
     let (mut observation, mut context) = (Cow::Borrowed(observation), Cow::Borrowed(context));
     let mut controls: Vec<Control> = observation.controls.clone();
     let mut reduction = Reduction::None;
@@ -641,7 +782,15 @@ pub async fn decide(
             drop_a_picture(context.to_mut());
             continue;
         }
-        if fits(&request, config) {
+        // A viewport can take the entire token budget on its own (#1303). Drop pictures before reducing text.
+        let fits = fitting.request_fits(&request);
+        if !fits && shows_pictures(&context) {
+            if context.to_mut().screenshot.take().is_none() {
+                drop_a_picture(context.to_mut());
+            }
+            continue;
+        }
+        if fits {
             match evaluate(jev, &request, &controls, reduction, ledger).await {
                 Ok(mut decision) => {
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
@@ -707,6 +856,8 @@ pub async fn decide(
 struct Fitting<'a> {
     config: &'a Config,
     options: usize,
+    /// The client the request goes to, which says what its pictures cost it.
+    jev: &'a dyn DecisionClient,
 }
 
 impl Fitting<'_> {
@@ -717,8 +868,24 @@ impl Fitting<'_> {
     /// How many characters the request's state runs over Jev's limit; zero or less when it fits.
     fn excess(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> i64 {
         let request = build_request(observation, controls, context, self.config, self.options);
-        let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-        text::len(&dumps(&request.state)) as i64 - self.config.tokens.input_chars(&written)
+        -self.room(&request)
+    }
+
+    fn room(&self, request: &Request) -> i64 {
+        let state_chars = text::len(&dumps(&request.state)) as i64;
+        let room_for = |questions: &IndexMap<String, Question>| {
+            let pictured = self.jev.image_tokens(&request.state, questions, &request.images);
+            input_room(state_chars, questions, self.config, pictured)
+        };
+        request.groups.iter().fold(room_for(&request.questions), |room, (&operation, groups)| {
+            groups
+                .iter()
+                .fold(room, |room, group| room.min(room_for(&group_target_question(request, operation, group))))
+        })
+    }
+
+    fn request_fits(&self, request: &Request) -> bool {
+        self.room(request) >= 0
     }
 
     fn fits(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> bool {
@@ -885,7 +1052,7 @@ async fn shortlist(
     let protected_set: HashSet<usize> = (0..controls.len()).filter(|i| protected(&controls[*i])).collect();
     let candidates: Vec<usize> = (0..controls.len()).filter(|i| !protected_set.contains(i)).collect();
     let state = json!({
-        "rules": *RELEVANCE,
+        "rules": told_sites(&RELEVANCE, controls),
         "task": context.task,
         "subgoal": context.subgoal,
         // Scrolling changes visibility, not completed task steps. Other actions can make an unchanged control
@@ -960,7 +1127,7 @@ async fn shortlist(
     let (mut low, mut high) = (0, ranked.len().min(max_offered.saturating_sub(protected_set.len())));
     while low < high {
         let middle = (low + high).div_ceil(2);
-        if fits(&build_request(observation, &kept(middle), context, config, fitting.options), config) {
+        if fitting.request_fits(&build_request(observation, &kept(middle), context, config, fitting.options)) {
             low = middle;
         } else {
             high = middle - 1;
@@ -1032,6 +1199,8 @@ fn offered_operations(
             Operation::Search => context.web_search,
             Operation::Navigate => !urls.is_empty(),
             Operation::Click
+            | Operation::RightClick
+            | Operation::DoubleClick
             | Operation::Hover
             | Operation::Fill
             | Operation::Blur
@@ -1097,11 +1266,12 @@ pub fn build_request(
         offered_operations(observation, &indexed, context, &urls)
     };
     let mut questions: IndexMap<String, Question> = IndexMap::new();
-    let target_rules = TARGET.as_str();
+    let target_rules = told_sites(&TARGET, controls);
+    let target_rules = target_rules.as_str();
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            HistoryEntry::told(&NEXT_ACTION, &context.history),
+            told_sites(&HistoryEntry::told(&NEXT_ACTION, &context.history), controls),
             offered.iter().map(|op| {
                 // The operation is chosen apart from its target, and a choice of one address is answered without Jev
                 // at all, so the operation names where navigate goes: told only "another address", Jev searched the
@@ -1190,16 +1360,8 @@ pub fn build_request(
     }
     let drops: Vec<Control> = controls.iter().filter(|control| !control.label.is_empty()).cloned().collect();
     let mut drop_groups: Vec<Vec<Control>> = Vec::new();
-    if offered.contains(&Operation::Drag) {
-        if drops.len() <= limit {
-            questions.insert(keys::DRAG_DESTINATION.into(), destination_question(&drops).into());
-        } else {
-            drop_groups = chunks(&drops, size);
-            questions.insert(
-                keys::DRAG_DESTINATION_GROUP.into(),
-                group_question(Operation::Drag, &drop_groups, &DESTINATION).into(),
-            );
-        }
+    if offered.contains(&Operation::Drag) && drops.len() > limit {
+        drop_groups = chunks(&drops, size);
     }
     if offered.contains(&Operation::SwitchTab) {
         let instructions = dumps(&json!({"rules": *TARGET, "operation": Operation::SwitchTab.as_str()}));
@@ -1346,9 +1508,20 @@ pub fn build_request(
 /// slower and less accurate. An image puts a request there too. Questions asked ahead save a round trip only below it.
 const LONG_CONTEXT_BYTES: usize = 32_000;
 
-pub fn fits(request: &Request, config: &Config) -> bool {
-    let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-    text::len(&dumps(&request.state)) as i64 <= config.tokens.input_chars(&written)
+/// Whether the initial request fits beside the image tokens its client sends with it.
+pub fn fits(request: &Request, config: &Config, pictured: i64) -> bool {
+    input_room(text::len(&dumps(&request.state)) as i64, &request.questions, config, pictured) >= 0
+}
+
+fn input_room(state_chars: i64, questions: &IndexMap<String, Question>, config: &Config, pictured: i64) -> i64 {
+    let written: Vec<String> = questions.values().map(Dump::dump_json).collect();
+    config.tokens.beside_images(pictured).input_chars(&written) - state_chars
+}
+
+/// The question that picks a target from `group` once Jev has chosen it for `operation`.
+fn group_target_question(request: &Request, operation: Operation, group: &[Control]) -> IndexMap<String, Question> {
+    let question = target_question(operation, group, &request.target_rules, &request.looks);
+    IndexMap::from([(keys::target(operation), question.into())])
 }
 
 /// The bytes the request's body takes as the Jev client sends it: its state and questions as JSON, and each picture
@@ -1436,11 +1609,7 @@ async fn evaluate(
         let group_answer = choice_answer(&evaluation, &keys::group(operation))?;
         let group = &groups[group_index(&group_answer.choice, groups.len())?];
         let key = keys::target(operation);
-        let questions = IndexMap::from([(
-            key.clone(),
-            target_question(operation, group, &request.target_rules, &request.looks).into(),
-        )]);
-        let inner = ask(&questions).await?;
+        let inner = ask(&group_target_question(request, operation, group)).await?;
         let target_answer = choice_answer(&inner, &key)?;
         target = Some(find_control(group, &target_answer.choice)?);
         // The element was only ever chosen from inside the group, so a doubtful group is a doubtful target.
@@ -1480,13 +1649,19 @@ async fn evaluate(
         target_confidence = Some(group_confidence * target_answer.confidence);
     }
     let mut destination: Option<Control> = None;
-    if operation == Operation::Drag {
+    if operation == Operation::Drag && target.as_ref().is_none_or(|target| target.drawn != Some(true)) {
         let destination_confidence = if request.destination_groups.is_empty() {
-            let destination_answer = choice_answer(&evaluation, keys::DRAG_DESTINATION)?;
+            let key = keys::DRAG_DESTINATION.to_string();
+            let question = destination_question(&request.destinations);
+            let destination_evaluation = ask(&IndexMap::from([(key.clone(), question.into())])).await?;
+            let destination_answer = choice_answer(&destination_evaluation, &key)?;
             destination = Some(find_control(&request.destinations, &destination_answer.choice)?);
             destination_answer.confidence
         } else {
-            let group_answer = choice_answer(&evaluation, keys::DRAG_DESTINATION_GROUP)?;
+            let group_key = keys::DRAG_DESTINATION_GROUP.to_string();
+            let group_question = group_question(Operation::Drag, &request.destination_groups, &DESTINATION);
+            let group_evaluation = ask(&IndexMap::from([(group_key.clone(), group_question.into())])).await?;
+            let group_answer = choice_answer(&group_evaluation, &group_key)?;
             let group =
                 &request.destination_groups[group_index(&group_answer.choice, request.destination_groups.len())?];
             let questions = IndexMap::from([(keys::DRAG_DESTINATION.to_string(), destination_question(group).into())]);
@@ -1659,6 +1834,9 @@ fn relevance_element(control: &Control) -> Map<String, Value> {
     if control.already_read == Some(true) {
         element.insert("already_read".into(), true.into());
     }
+    if control.other_site == Some(true) {
+        element.insert("other_site".into(), true.into());
+    }
     if control.offscreen {
         element.insert("offscreen".into(), true.into());
     }
@@ -1678,19 +1856,28 @@ fn context_of(control: &Control) -> Option<String> {
 
 /// A control as the step's state lists it.
 pub fn element(control: &Control) -> Map<String, Value> {
+    control_description(control, true)
+}
+
+/// A control's description; `shared` adds the context and operations every question reads from the step's state, which
+/// a target option refers to by id rather than repeating.
+fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
     let mut element = Map::new();
     element.insert("id".into(), control.id.clone().into());
     element.insert("label".into(), control.label.clone().into());
     element.insert("role".into(), control.role.clone().into());
-    element.insert("operations".into(), sorted_operations(control));
+    if shared {
+        element.insert("operations".into(), sorted_operations(control));
+    }
     let optional = [
-        ("context", context_of(control).map(Value::from)),
+        ("context", context_of(control).filter(|_| shared).map(Value::from)),
         ("value", control.value.clone().map(Value::from)),
         // An unfocused control offers nothing an unknown one does not, and every control but one is unfocused.
         ("focused", control.focused.filter(|focused| *focused).map(Value::from)),
         ("href", control.href.clone().map(Value::from)),
         ("next_page", pager_link(control).then_some(true.into())),
         ("already_read", control.already_read.filter(|read| *read).map(Value::from)),
+        ("other_site", control.other_site.filter(|other| *other).map(Value::from)),
         ("drawn", control.drawn.filter(|drawn| *drawn).map(Value::from)),
         ("checked", control.checked.map(Value::from)),
         ("selected", control.selected.map(Value::from)),
@@ -1773,10 +1960,9 @@ fn target_question(
     rules: &str,
     looks: &IndexMap<String, Vec<u8>>,
 ) -> ChoiceQuestion {
-    // Sending only the label and pointing Jev at the shared state for the rest is two thirds smaller on a dense page,
-    // and it was tried. It bought no measured latency, because the request was never the slow part, and a criterion
-    // the model has to go and look up is a worse criterion: the choice is what this whole design rests on, so it gets
-    // the attributes in front of it.
+    // An option keeps what tells it apart as a target (label, role, href, value, state), and refers by id to the
+    // context and operations the shared state carries for the operation question. Repeated in every option, they
+    // added 45% to a step request's bytes and 18% to its cost (#1286).
     let shown = candidates.iter().any(|c| looks.contains_key(&c.id));
     let rules = if shown { json!([rules, LOOKS_LIKE]) } else { json!(rules) };
     choice(
@@ -1794,7 +1980,7 @@ fn target_question(
 /// Ported from browser-use/jev-ultrafast (MIT), snapshot.js: name opening a field separately from typing in it so a
 /// picker is a useful click target even when its value is already filled.
 fn target_element(control: &Control, operation: Operation) -> Map<String, Value> {
-    let mut element = element(control);
+    let mut element = control_description(control, false);
     if operation == Operation::Press && !role_keys(&control.role).is_empty() {
         let label = element["label"].as_str().unwrap_or_default().to_string();
         let given = if control.operations.contains(&Operation::Fill) { ", or a task-supplied key," } else { "" };
@@ -2034,7 +2220,7 @@ mod tests {
     }
 
     #[test]
-    fn test_operation_and_target_choices_both_receive_control_context_and_actions() {
+    fn test_control_context_and_actions_are_sent_once_in_shared_state() {
         let carded = |i| Control {
             context: Some(format!("Card {i}")),
             shown_by: Some("clicking Booking date".into()),
@@ -2045,9 +2231,13 @@ mod tests {
         let context = StepContext::new("t");
         let targeted = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let criteria: Value = serde_json::from_str(&targeted.questions["click_target"].dump_json()).unwrap();
-        assert_eq!(criteria["criteria"]["b1"]["context"], "shown by clicking Booking date; Card 1");
+        // A target option names its element by id; its context and operations are read from the shared state, which
+        // the operation question needs them in too (#1286).
+        assert_eq!(criteria["criteria"]["b1"], json!({"id": "b1", "label": "Button 1", "role": "button"}));
+        assert_eq!(criteria["criteria"]["away"]["href"], "/away");
+        assert!(criteria["instructions"].as_str().unwrap().contains("state.elements"));
         let shown = &targeted.state["elements"][0];
-        assert_eq!(shown["context"], criteria["criteria"]["b1"]["context"]);
+        assert_eq!(shown["context"], "shown by clicking Booking date; Card 1");
         assert_eq!(shown["operations"], json!(["click"]));
         assert_eq!(targeted.state["elements"][3]["href"], "/away");
         // Grouped targets retain the same facts in shared state.
@@ -2335,6 +2525,26 @@ mod tests {
     }
 
     #[test]
+    fn test_rules_tell_jev_what_other_site_means_only_when_a_link_carries_it() {
+        let mut page = observation((0..3).map(button).collect());
+        page.controls[1].role = "link".into();
+        page.controls[1].href = Some("https://store.test/item".into());
+        let context = StepContext::new("check that the page's sections open");
+        let plain = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        page.controls[1].other_site = Some(true);
+        let marked = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let instructions = |request: &Request, key: &str| match &request.questions[key] {
+            Question::Choice(question) => question.instructions.clone(),
+            _ => unreachable!("{key} is a choice"),
+        };
+        assert!(!instructions(&plain, keys::OPERATION).contains(OTHER_SITE));
+        assert!(instructions(&marked, keys::OPERATION).contains(OTHER_SITE));
+        assert!(instructions(&marked, &keys::target(Operation::Click)).contains(OTHER_SITE));
+        assert_eq!(marked.state["elements"][1]["other_site"], json!(true));
+        assert!(OTHER_SITE.contains("leaves the site the browser opened for this task"));
+    }
+
+    #[test]
     fn test_a_step_on_a_pictured_control_shows_its_card_in_the_recent_actions() {
         let page = observation((0..3).map(button).collect());
         let mut context = StepContext::new("make the text bold, then save");
@@ -2606,6 +2816,150 @@ mod tests {
         assert_eq!(decision.reduction, Reduction::None, "no text or control was cut for the pictures");
     }
 
+    /// Refuses as too large a request past Jev's 32,000 tokens for its state and largest question as Jev counts them:
+    /// its text at 1.5 characters a token and each picture at its measured count for every place it is used.
+    struct Counting {
+        inner: Fake,
+        refused: Mutex<usize>,
+    }
+
+    impl DecisionClient for Counting {
+        fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
+            let written = format!("{state}{}", serde_json::to_string(questions).unwrap());
+            images
+                .iter()
+                .map(|(key, png)| {
+                    written.matches(key.as_str()).count() as i64 * fastbrowse_core::decision::jev_image_tokens(png)
+                })
+                .sum()
+        }
+
+        fn profile(&self) -> DecisionProfile {
+            self.inner.profile()
+        }
+
+        fn evaluate_images<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+            images: &'a Images,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            let pictures = self.image_tokens(state, questions, images);
+            let largest = questions.values().map(|question| text::len(&question.dump_json())).max().unwrap_or(0);
+            let text = (text::len(&dumps(state)) + largest) as f64 / fastbrowse_core::config::JSON_CHARS_PER_TOKEN;
+            if text as i64 + pictures > 32_000 {
+                *self.refused.lock().unwrap() += 1;
+                return Box::pin(async { Err(DecisionError::input_too_large("max_tokens_exceeded")) });
+            }
+            self.inner.evaluate(state, questions)
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            self.inner.evaluate(state, questions)
+        }
+    }
+
+    /// Eight viewport-sized cards are about 29,000 tokens as Jev counts them, under the body limit in bytes but past
+    /// its input limit beside a page's text: the oldest are left out before the first request is sent, so Jev is never
+    /// sent one it refuses (#1303).
+    #[test]
+    fn test_a_step_whose_cards_overrun_jevs_input_limit_leaves_out_the_oldest_before_asking() {
+        let jev = Counting { inner: fake(&[("operation", "click")], ""), refused: Mutex::new(0) };
+        let mut context = StepContext::new("press button 1");
+        context.history = (0..8u8)
+            .map(|i| {
+                let mut card = Vec::new();
+                image::RgbaImage::from_pixel(1568, 882, image::Rgba([i, 0, 0, 255]))
+                    .write_to(&mut std::io::Cursor::new(&mut card), image::ImageFormat::Png)
+                    .unwrap();
+                let mut entry = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, false);
+                entry.look = Some(Look { before: card, after: None });
+                entry
+            })
+            .collect();
+        let mut page = observation((0..3).map(button).collect());
+        page.viewport_text = "Plain page text. ".repeat(1200);
+        block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
+        assert_eq!(*jev.refused.lock().unwrap(), 0, "a request Jev counts past its limit was sent");
+        let states = jev.inner.states.lock().unwrap();
+        let carded: Vec<bool> = states[0]["recent_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.get("looks_like").is_some())
+            .collect();
+        let kept = carded.iter().filter(|carded| **carded).count();
+        assert!((1..8).contains(&kept), "{carded:?}");
+        assert!(carded[8 - kept..].iter().all(|carded| *carded), "the newest cards are kept: {carded:?}");
+    }
+
+    #[test]
+    fn test_a_screenshot_larger_than_the_step_budget_is_dropped_before_asking() {
+        let jev = Counting { inner: fake(&[("operation", "read_list")], ""), refused: Mutex::new(0) };
+        let mut png = Vec::new();
+        image::RgbaImage::new(1568, 882)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        assert_eq!(fastbrowse_core::decision::jev_image_tokens(&png), 3597);
+        let mut card = Vec::new();
+        image::RgbaImage::new(28, 28).write_to(&mut std::io::Cursor::new(&mut card), image::ImageFormat::Png).unwrap();
+        let mut entry = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, false);
+        entry.look = Some(Look { before: card, after: None });
+        let context = StepContext {
+            screenshot: Some(png),
+            history: vec![entry],
+            list_read: ListRead::Continue,
+            ..StepContext::new("Read all the results")
+        };
+        let page = observation(vec![button(1)]);
+        let mut config = Config::default();
+        config.tokens.state_plus_largest_question = 3000;
+
+        let decision = block_on(decide(&jev, &page, &context, &config, None, &Trace::disabled())).unwrap();
+
+        assert_eq!(decision.reduction, Reduction::None);
+        let states = jev.inner.states.lock().unwrap();
+        assert_eq!(states.len(), 1);
+        assert!(states[0].get("viewport_screenshot").is_none());
+        assert!(states[0]["recent_actions"][0].get("looks_like").is_some());
+        assert_eq!(states[0]["elements"].as_array().unwrap().len(), 1);
+    }
+
+    /// A group's follow-up shows its members' cards, which the request that chose the group did not: with the run's
+    /// cards filling most of Jev's input limit, the follow-up is fitted before the first request is sent, rather than
+    /// sent and refused.
+    #[test]
+    fn test_a_group_follow_up_whose_cards_overrun_jevs_input_limit_is_fitted_before_asking() {
+        let card = |shade: u8| {
+            let mut png = Vec::new();
+            image::RgbaImage::from_pixel(1568, 882, image::Rgba([shade, 0, 0, 255]))
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            png
+        };
+        let inner =
+            Fake { options: 10, ..fake(&[("operation", "click"), ("click_group", "2"), ("click_target", "b9")], "") };
+        let jev = Counting { inner, refused: Mutex::new(0) };
+        let mut context = StepContext::new("add the red kettle");
+        context.history = (0..7u8)
+            .map(|i| {
+                let mut entry = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, false);
+                entry.look = Some(Look { before: card(i), after: None });
+                entry
+            })
+            .collect();
+        context.looks = (8..11).map(|i| (format!("b{i}"), card(200 + i as u8))).collect();
+        let mut page = observation((0..12).map(button).collect());
+        page.viewport_text = "Plain page text. ".repeat(300);
+        let decision = block_on(decide(&jev, &page, &context, &grouped(), None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.target.as_ref().unwrap().id, "b9");
+        assert_eq!(*jev.refused.lock().unwrap(), 0, "a follow-up Jev counts past its limit was sent");
+    }
+
     /// A request no larger than Jev's documented limit in tokens, at 1.5 characters a token.
     fn tight() -> Config {
         let mut config = Config::default();
@@ -2847,6 +3201,19 @@ mod tests {
             build_request(&page, &[button(1)], &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
         assert!(!request.questions.contains_key("drag_target"));
         assert!(!request.questions.contains_key("drag_destination"));
+    }
+
+    #[test]
+    fn test_drawn_drag_has_a_target_but_no_destination_question() {
+        let mut surface = button(1);
+        surface.drawn = Some(true);
+        surface.operations = [Operation::Drag].into_iter().collect();
+        let page = observation(vec![surface.clone()]);
+        let request =
+            build_request(&page, &[surface], &StepContext::new("draw on it"), &Config::default(), MAX_CHOICE_OPTIONS);
+        assert!(request.questions.contains_key(&keys::target(Operation::Drag)));
+        assert!(!request.questions.contains_key(keys::DRAG_DESTINATION));
+        assert!(!request.questions.contains_key(keys::DRAG_DESTINATION_GROUP));
     }
 
     fn assert_send<T: Send>(_: &T) {}

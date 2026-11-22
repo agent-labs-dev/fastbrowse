@@ -304,7 +304,7 @@ fn nth(script: &Value, n: usize) -> Option<&Value> {
 /// Jev's answer from a case's `jev` script: `pick` names a choice per question key (a list is taken in turn), `pick`
 /// under `pick` any other choice, `nouls` a probability per noul (a list is taken in turn) and `noul` the rest, `confidence` the pick's.
 /// `recover` gives the picks of a call asked again while recovering.
-/// The wall questions default to no.
+/// The wall questions, and whether the task forbids an action, default to no.
 fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value]) -> Value {
     let asked_again = state.get("problem").is_some();
     let confidence = if asked_again { 0.0 } else { script["confidence"].as_f64().unwrap_or(0.9) };
@@ -322,7 +322,13 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
             // A case's answer is the one it expects to stand, so the checks of that answer pass unless it scripts them.
             let default = if matches!(
                 key.as_str(),
-                "login_required" | "bot_check" | "site_failure" | "unobtainable" | "inside_drawn" | "dates"
+                "login_required"
+                    | "bot_check"
+                    | "site_failure"
+                    | "unobtainable"
+                    | "inside_drawn"
+                    | "dates"
+                    | "prohibits"
             ) {
                 0.0
             } else if matches!(key.as_str(), "coverage" | "exact" | "carried") || key.starts_with("claim") {
@@ -1110,7 +1116,8 @@ fn list_case() -> Value {
     case["config"] = serde_json::json!({"plan_ahead":true});
     case["jev"]["pick"] = serde_json::json!({
         "operation": ["read_list", "read_list", "read_list", "done"],
-        "extent": "every_page", "pick": "text", "steps": "reads"
+        // Each page's status is one part of the answer, so Jev's read says it is composed across the pages.
+        "extent": "every_page", "task": "synthesis", "pick": "text", "steps": "reads"
     });
     case["jev"]["nouls"] = serde_json::json!({
         "claim0": 0.9, "claim1": 0.9, "claim2": 0.9, "coverage": 0.9, "actions": 0.9

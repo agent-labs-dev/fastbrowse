@@ -385,8 +385,6 @@ pub(crate) struct PageState {
     /// same address: a dialog a page opened as it loaded after a navigation is not the action's, and accepting it
     /// moved nothing.
     pub(crate) marked: Option<(u32, String)>,
-    /// Where the running action's pointer mark sits in the recording's marks, until a press is sent at it.
-    pub(crate) mark_index: Option<usize>,
     pub(crate) back_to: HashMap<String, String>,
     /// Child frame session -> when its last read missed the full deadline.
     pub(crate) unanswered: HashMap<String, Instant>,
@@ -412,11 +410,8 @@ pub struct CdpPage {
     capture_js: String,
     pub(crate) fingerprint_js: String,
     pub(crate) state: Mutex<PageState>,
-    pub(crate) pointer_marks: Option<Arc<Mutex<Vec<crate::pointer::PointerMark>>>>,
-    #[cfg(feature = "cursor")]
-    cursor: Option<Arc<crate::cursor::CursorFeedback>>,
-    #[cfg(feature = "cursor")]
-    cursor_pid: Arc<Mutex<Option<i64>>>,
+    /// The agent cursor drawn in the page, when someone can see the page's pixels.
+    pub(crate) cursor: Option<crate::cursor::PageCursor>,
 }
 
 /// Python's truthiness of a JSON value.
@@ -486,12 +481,13 @@ fn add_control(
         None => frame.frame_id.clone(),
     };
     control_state.insert(control_id.clone(), (frame.session_id.clone(), frame_key.to_owned(), c.id, guard));
-    control_from_raw(control_id, fid, c, retarget)
+    control_from_raw(control_id, fid, &frame.raw.document_key, c, retarget)
 }
 
 fn control_from_raw(
     control_id: String,
     frame_id: Option<String>,
+    document_key: &str,
     c: &SnapshotControl,
     retarget: Option<String>,
 ) -> Control {
@@ -499,7 +495,8 @@ fn control_from_raw(
         id: control_id,
         frame_id,
         frame_origin: c.frame_origin.clone(),
-        form_id: c.form_id.clone(),
+        // An iframe can navigate and reuse its local form ids while the top-level document stays put.
+        form_id: c.form_id.as_ref().map(|id| format!("{document_key}:{id}")),
         retarget_key: retarget,
         role: c.role.clone(),
         label: c.label.clone(),
@@ -531,6 +528,7 @@ fn control_from_raw(
         drawn: c.drawn,
         pictured: c.pictured,
         already_read: None,
+        other_site: None,
         shown_by: None,
     }
 }
@@ -581,36 +579,12 @@ impl CdpPage {
         let page_js = session.snapshot().function.clone();
         let capture_js = format!("({CAPTURE_JS})({origins})");
         let fingerprint_js = format!("{page_js}('fingerprint').fingerprint");
-        Self {
-            session,
-            config,
-            page_js,
-            capture_js,
-            fingerprint_js,
-            state: Mutex::default(),
-            pointer_marks: None,
-            #[cfg(feature = "cursor")]
-            cursor: None,
-            #[cfg(feature = "cursor")]
-            cursor_pid: Arc::new(Mutex::new(None)),
-        }
+        Self { session, config, page_js, capture_js, fingerprint_js, state: Mutex::default(), cursor: None }
     }
 
-    pub fn with_pointer_marks(mut self, marks: Arc<Mutex<Vec<crate::pointer::PointerMark>>>) -> Self {
-        self.pointer_marks = Some(marks);
-        self
-    }
-
-    #[cfg(feature = "cursor")]
-    pub fn with_cursor(mut self, cursor: Option<Arc<crate::cursor::CursorFeedback>>) -> Self {
-        self.cursor = cursor;
-        self
-    }
-
-    /// Native messaging cannot call browser-level SystemInfo, so the host supplies Chrome's process id.
-    #[cfg(feature = "cursor")]
-    pub fn with_cursor_browser_pid(self, pid: Option<u32>) -> Self {
-        *self.cursor_pid.lock().unwrap() = pid.map(i64::from);
+    /// Draw the agent cursor in the page: for a browser someone watches or a run that records it.
+    pub fn with_cursor(mut self) -> Self {
+        self.cursor = Some(crate::cursor::PageCursor::new(self.session.clone()));
         self
     }
 
@@ -1383,6 +1357,18 @@ impl CdpPage {
                 "screenshots are unavailable for scoped documents".into(),
             ));
         }
+        // The model reads the page, not the agent's own cursor drawn over it.
+        match &self.cursor {
+            Some(cursor) => cursor.hidden(self.capture_screenshot()).await.unwrap_or_else(|| {
+                Err(BrowserError::ScreenshotsUnavailable(
+                    "the agent's cursor could not be taken out of the page".into(),
+                ))
+            }),
+            None => self.capture_screenshot().await,
+        }
+    }
+
+    async fn capture_screenshot(&self) -> Result<Vec<u8>, BrowserError> {
         let client = self.session.client()?;
         let session_id = self.session.active_session_id()?;
         let metrics = client.send("Page.getLayoutMetrics", json!({}), Some(&session_id)).await?;
@@ -2043,6 +2029,10 @@ impl Page for CdpPage {
 
     fn edges<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
         Box::pin(async move { seam(CdpPage::edges(self, id).await) })
+    }
+
+    fn reveal<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async move { seam(CdpPage::reveal(self, id).await) })
     }
 
     fn withhold_frames(&self, withheld: bool) {

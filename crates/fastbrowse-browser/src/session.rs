@@ -328,6 +328,11 @@ pub(crate) struct State {
     /// Set once a secret has been typed, and never cleared: a page can echo it as pixels no reading of its text
     /// shows, and between one reading and the next frames arrive that nothing has checked.
     pub(crate) frames_sealed: bool,
+    /// Set while the agent cursor is out of the page for a model screenshot: the video and live view hold their last
+    /// frame rather than show the page without it.
+    pub(crate) cursor_hidden: bool,
+    /// The cursor world in each tab the run drew in, for tabs that outlive the session.
+    pub(crate) cursor_contexts: HashMap<String, i64>,
     pub(crate) screencast_session_id: Option<String>,
     pub(crate) pending_frame: Option<Frame>,
     pub(crate) frame_scheduled: bool,
@@ -632,6 +637,15 @@ impl BrowserSession {
                 state.owned.intersection(&state.handed_over).cloned().collect(),
             )
         };
+        let cursor_contexts = std::mem::take(&mut self.0.state.lock().unwrap().cursor_contexts);
+        futures_util::future::join_all(cursor_contexts.iter().map(|(session_id, context)| async move {
+            let params = json!({
+                "contextId": context,
+                "expression": "globalThis.__fastbrowseCursor?.dispose()",
+            });
+            let _ = timeout(secs(FRAME_RELEASE_SECONDS), self.send("Runtime.evaluate", params, Some(session_id))).await;
+        }))
+        .await;
         // Removing a scope gate before closing an owned tab could let its pending navigation escape the grant.
         for target_id in owned {
             // Best-effort teardown; the browser may already be gone.
@@ -682,7 +696,15 @@ impl BrowserSession {
     /// Always true in a scoped run, which delivers and records no frames at all.
     pub fn frames_withheld(&self) -> bool {
         let state = self.0.state.lock().unwrap();
-        state.frames_withheld || state.frames_sealed || self.0.grant.is_some()
+        state.frames_withheld || state.frames_sealed || state.cursor_hidden || self.0.grant.is_some()
+    }
+
+    pub(crate) fn track_cursor(&self, session_id: &str, context: i64) {
+        self.0.state.lock().unwrap().cursor_contexts.insert(session_id.to_owned(), context);
+    }
+
+    pub(crate) fn set_cursor_hidden(&self, hidden: bool) {
+        self.0.state.lock().unwrap().cursor_hidden = hidden;
     }
 
     pub fn set_frames_withheld(&self, withheld: bool) {
@@ -2287,16 +2309,28 @@ impl Drop for AdoptionSettled<'_> {
     }
 }
 
-async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, session_id: Option<&str>) {
-    let Some(client) = shared.client.lock().unwrap().clone() else { return };
+/// How a screencast command ended. A timeout is not a refusal: Chrome may still have run it.
+#[derive(PartialEq)]
+enum CastReply {
+    Accepted,
+    /// Chrome (or a closed transport) definitely did not start the cast.
+    Refused,
+    /// No answer in time; the command may have taken effect.
+    Unanswered,
+}
+
+async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, session_id: Option<&str>) -> CastReply {
+    let Some(client) = shared.client.lock().unwrap().clone() else { return CastReply::Refused };
     match timeout(secs(SCREENCAST_COMMAND_SECONDS), client.send(method, params, session_id)).await {
-        Ok(Ok(_)) => {}
+        Ok(Ok(_)) => CastReply::Accepted,
         Ok(Err(error)) => {
             if let Some(operation) = screencast_operation(method) {
+                // The error text is built from the method and a typed reason, never Chrome's own message.
                 browser_warning(shared, operation, browser_warning_failure(error.kind()), || {
-                    warn(&format!("{method} failed ({})", error.kind()))
+                    warn(&format!("{method} failed ({error})"))
                 });
             }
+            CastReply::Refused
         }
         Err(_) => {
             if let Some(operation) = screencast_operation(method) {
@@ -2304,6 +2338,7 @@ async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, s
                     warn(&format!("{method} failed (TimeoutError)"))
                 });
             }
+            CastReply::Unanswered
         }
     }
 }
@@ -2360,14 +2395,22 @@ async fn update_screencast(shared: &Arc<Shared>) {
         shared.state.lock().unwrap().screencast_session_id = None;
     }
     let active = {
-        let mut state = shared.state.lock().unwrap();
-        let active = state.active_session_id().ok().filter(|_| !state.closing);
-        state.screencast_session_id.clone_from(&active);
-        active
+        let state = shared.state.lock().unwrap();
+        state.active_session_id().ok().filter(|_| !state.closing)
     };
     if let Some(active) = active {
         let params = json!({"format": "jpeg", "quality": 60, "maxWidth": 1280, "maxHeight": 800});
-        screencast_command(shared, "Page.startScreencast", params, Some(&active)).await;
+        // Recorded before the send, so a start Chrome runs but answers late, or that is cancelled mid-await, is still
+        // stopped by the next switch or close. Cleared only when Chrome definitely refused it: a refused start left
+        // marked as running would make every later switch to this tab think the cast was going, and no frame would
+        // ever arrive.
+        shared.state.lock().unwrap().screencast_session_id = Some(active.clone());
+        if screencast_command(shared, "Page.startScreencast", params, Some(&active)).await == CastReply::Refused {
+            let mut state = shared.state.lock().unwrap();
+            if state.screencast_session_id.as_deref() == Some(active.as_str()) {
+                state.screencast_session_id = None;
+            }
+        }
     }
 }
 
@@ -2380,7 +2423,8 @@ pub(crate) async fn deliver_frames(shared: &Arc<Shared>) {
             }
             let Some(frame) = state.pending_frame.take() else { break };
             let active = state.active_session_id().ok();
-            let withheld = state.frames_withheld || state.frames_sealed || shared.grant.is_some();
+            let withheld =
+                state.frames_withheld || state.frames_sealed || state.cursor_hidden || shared.grant.is_some();
             let deliver = shared.on_frame.is_some() && !withheld && active.is_some() && frame.session_id == active;
             (frame, deliver)
         };
