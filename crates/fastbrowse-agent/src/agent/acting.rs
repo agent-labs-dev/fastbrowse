@@ -1281,7 +1281,7 @@ impl Agent {
         let mut candidates = Vec::new();
         let mut split = false;
         while let Some(window) = windows.pop() {
-            let result = self.copy_read_window(state, observation, target, read, label, window, split).await;
+            let result = self.copy_read_window(state, observation, target, (read, label), window, split).await;
             match result {
                 Ok(candidate) if !split => return candidate.ok_or_else(|| self.missing(state, observation, target)),
                 Ok(Some(candidate)) if !candidates.contains(&candidate) => candidates.push(candidate),
@@ -1322,14 +1322,12 @@ impl Agent {
             .ok_or_else(|| self.missing(state, observation, target))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn copy_read_window(
         &self,
         state: &mut RunState,
         observation: &Observation,
         target: &Control,
-        read: &str,
-        label: &str,
+        (read, label): (&str, &str),
         window: &[Word],
         split: bool,
     ) -> Step<Option<String>> {
