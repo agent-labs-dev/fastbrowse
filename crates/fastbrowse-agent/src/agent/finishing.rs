@@ -822,15 +822,9 @@ pub(super) fn outcome_notes(state: &RunState) -> Notes {
     outcome
 }
 
-/// The answer's notes and each schema field cite independently; the same words on the same page are one citation, as
-/// of their latest read. Evidence comes in read order, and keeping the first read cited a capture taken before the
-/// run's own edit though the page had been read again since (#1436).
-fn one_citation_per_quote(evidence: Vec<Evidence>) -> Vec<Evidence> {
-    let mut cited: IndexMap<(String, String), Evidence> = IndexMap::new();
-    for item in evidence {
-        cited.insert((item.url.clone(), item.quote.clone()), item);
-    }
-    cited.into_values().collect()
+/// The answer's notes and each schema field cite independently; the same read is one citation, its latest.
+pub(super) fn one_citation_per_quote(evidence: Vec<Evidence>) -> Vec<Evidence> {
+    crate::retrieval::latest_reads(evidence, |e| Some(e.clone()))
 }
 
 #[cfg(test)]
@@ -854,6 +848,41 @@ mod tests {
         ]);
         assert_eq!(cited.len(), 1);
         assert_eq!((cited[0].capture_sha256.as_str(), cited[0].start), ("after-reload", 17234));
+    }
+
+    #[test]
+    fn an_older_capture_appended_after_a_newer_read_does_not_replace_it() {
+        let read = |sha: &str, start: u32, at: &str| {
+            serde_json::from_value(json!({
+                "source_id": "main/:76", "url": "https://example.test/#/edit", "frame_id": null, "captured_at": at,
+                "capture_sha256": sha, "start": start, "end": start + 14, "quote": "Save: disabled",
+            }))
+            .unwrap()
+        };
+        let cited = one_citation_per_quote(vec![
+            read("after-reload", 17234, "2026-11-21T20:30:12Z"),
+            read("before-edit", 17198, "2026-11-21T20:29:37Z"),
+        ]);
+        assert_eq!(cited.len(), 1);
+        assert_eq!((cited[0].capture_sha256.as_str(), cited[0].start), ("after-reload", 17234));
+    }
+
+    #[test]
+    fn identical_quotes_in_one_capture_keep_distinct_source_spans() {
+        let read = |source_id: &str, start: u32| {
+            serde_json::from_value(json!({
+                "source_id": source_id, "url": "https://example.test/records", "frame_id": null,
+                "captured_at": "2026-11-21T20:30:12Z", "capture_sha256": "same-capture",
+                "start": start, "end": start + 3, "quote": "GBP 5",
+            }))
+            .unwrap()
+        };
+        let cited = one_citation_per_quote(vec![read("record-a", 10), read("record-b", 30)]);
+        assert_eq!(cited.len(), 2);
+        assert_eq!(
+            cited.iter().map(|item| (item.source_id.as_str(), item.start)).collect::<Vec<_>>(),
+            [("record-a", 10), ("record-b", 30)]
+        );
     }
 
     #[test]

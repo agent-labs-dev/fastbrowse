@@ -581,6 +581,7 @@ impl Agent {
         {
             result.data = extraction.data.unwrap_or(Value::Null);
             result.evidence.extend(extraction.evidence);
+            result.evidence = finishing::one_citation_per_quote(result.evidence);
         }
         result
     }
@@ -618,6 +619,7 @@ impl Agent {
                     let mut result = self.answered(partial, &notes, Some(state), ledger, stop.status, error, budget);
                     result.wall = self.wall(stop);
                     result.evidence.extend(stop.evidence.clone());
+                    result.evidence = finishing::one_citation_per_quote(result.evidence);
                     return result;
                 }
             }
@@ -695,11 +697,8 @@ impl Agent {
                             self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
                         if let Some(extraction) = extraction {
                             result.data = extraction.data.unwrap_or(Value::Null);
-                            for item in extraction.evidence {
-                                if !result.evidence.iter().any(|e| e.url == item.url && e.quote == item.quote) {
-                                    result.evidence.push(item);
-                                }
-                            }
+                            result.evidence.extend(extraction.evidence);
+                            result.evidence = finishing::one_citation_per_quote(result.evidence);
                         }
                         return self.ending_frame(result, state.output_intent.attaches_screenshot()).await;
                     }
@@ -889,7 +888,7 @@ impl Agent {
             budget: outcome.budget,
             answer: outcome.answer,
             data: outcome.data,
-            evidence: outcome.evidence,
+            evidence: finishing::one_citation_per_quote(outcome.evidence),
             steps: state.map(|state| state.steps.clone()).unwrap_or_default(),
             cost: ledger.breakdown(),
             artifacts,
