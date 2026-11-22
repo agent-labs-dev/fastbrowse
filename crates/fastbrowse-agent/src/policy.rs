@@ -465,21 +465,27 @@ pub struct Planned {
 
 const PLAN_PREFIX: &str = "plan:";
 
-fn plan_question(control: &Control) -> Question {
+/// A field as a sentence names it: its role, label, the context it sits in, and the input name and autocomplete that
+/// tell two fields labelled alike apart. A label alone can be the role again: an unlabelled search box reads as
+/// 'textbox', and a value writer told only that typed the task's whole answer into it (#1339).
+pub fn described(control: &Control) -> String {
     let context = control.context.as_deref().map(|c| format!(" in {}", text::repr(c))).unwrap_or_default();
-    // A target candidate's state element leaves out its input name and autocomplete, and two fields labelled alike
-    // are told apart by them.
     let named = [("named", &control.input_name), ("autocomplete", &control.autocomplete)]
         .into_iter()
         .filter_map(|(key, value)| value.as_deref().map(|value| format!(", {key} {}", text::repr(value))))
         .collect::<String>();
+    format!("a {} labelled {}{context}{named}", control.role, text::repr(&control.label))
+}
+
+fn plan_question(control: &Control) -> Question {
+    // A target candidate's state element leaves out its input name and autocomplete, and two fields labelled alike
+    // are told apart by them.
     let instructions = format!(
-        "{UNTRUSTED}\nElement {} is a {} labelled {}{context}{named}. Besides the one next action, does what the task still \
-         needs on this page include that this run fill it, before anything moves on from this page? Yes only when the \
-         task itself gives or calls for a value for it now.",
+        "{UNTRUSTED}\nElement {} is {}. Besides the one next action, does what the task still needs on this page \
+         include that this run fill it, before anything moves on from this page? Yes only when the task itself gives \
+         or calls for a value for it now.",
         control.id,
-        control.role,
-        text::repr(&control.label),
+        described(control),
     );
     noul(
         &instructions,
