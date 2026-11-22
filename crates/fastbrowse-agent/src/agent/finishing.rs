@@ -500,7 +500,7 @@ impl Agent {
             error,
             answer: answer_text,
             data,
-            evidence: one_citation_per_quote(evidence),
+            evidence: one_citation_per_quote(evidence, &state.notes),
             citations,
             ..Outcome::default()
         };
@@ -823,8 +823,10 @@ pub(super) fn outcome_notes(state: &RunState) -> Notes {
 }
 
 /// The answer's notes and each schema field cite independently; the same read is one citation, its latest.
-pub(super) fn one_citation_per_quote(evidence: Vec<Evidence>) -> Vec<Evidence> {
-    let known = evidence.clone();
+/// `notes` are the reads the run holds beyond those cited: a read the answer did not select can still be the later
+/// capture of one it did.
+pub(super) fn one_citation_per_quote(evidence: Vec<Evidence>, notes: &Notes) -> Vec<Evidence> {
+    let known: Vec<Evidence> = evidence.iter().cloned().chain(crate::retrieval::noted_evidence(notes)).collect();
     crate::retrieval::latest_reads(evidence, |e| Some(e.clone()), &known)
 }
 
@@ -833,6 +835,7 @@ mod tests {
     use serde_json::json;
 
     use super::{one_citation_per_quote, rejection_reason};
+    use crate::memory::Notes;
 
     #[test]
     fn the_same_words_read_again_are_cited_as_of_their_latest_read() {
@@ -843,10 +846,13 @@ mod tests {
             }))
             .unwrap()
         };
-        let cited = one_citation_per_quote(vec![
-            read("before-edit", 17198, "2026-11-21T20:29:37Z"),
-            read("after-reload", 17234, "2026-11-21T20:30:12Z"),
-        ]);
+        let cited = one_citation_per_quote(
+            vec![
+                read("before-edit", 17198, "2026-11-21T20:29:37Z"),
+                read("after-reload", 17234, "2026-11-21T20:30:12Z"),
+            ],
+            &Notes::default(),
+        );
         assert_eq!(cited.len(), 1);
         assert_eq!((cited[0].capture_sha256.as_str(), cited[0].start), ("after-reload", 17234));
     }
@@ -860,10 +866,13 @@ mod tests {
             }))
             .unwrap()
         };
-        let cited = one_citation_per_quote(vec![
-            read("after-reload", 17234, "2026-11-21T20:30:12Z"),
-            read("before-edit", 17198, "2026-11-21T20:29:37Z"),
-        ]);
+        let cited = one_citation_per_quote(
+            vec![
+                read("after-reload", 17234, "2026-11-21T20:30:12Z"),
+                read("before-edit", 17198, "2026-11-21T20:29:37Z"),
+            ],
+            &Notes::default(),
+        );
         assert_eq!(cited.len(), 1);
         assert_eq!((cited[0].capture_sha256.as_str(), cited[0].start), ("after-reload", 17234));
     }
@@ -878,7 +887,7 @@ mod tests {
             }))
             .unwrap()
         };
-        let cited = one_citation_per_quote(vec![read("record-a", 10), read("record-b", 30)]);
+        let cited = one_citation_per_quote(vec![read("record-a", 10), read("record-b", 30)], &Notes::default());
         assert_eq!(cited.len(), 2);
         assert_eq!(
             cited.iter().map(|item| (item.source_id.as_str(), item.start)).collect::<Vec<_>>(),

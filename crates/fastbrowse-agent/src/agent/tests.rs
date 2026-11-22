@@ -11589,3 +11589,5 @@ async fn a_text_task_concluded_with_no_answer_is_not_complete() {
     assert_eq!(result.failure_kind.as_deref(), Some("Done/unanswered"));
     assert_eq!(result.error.as_deref(), Some(super::finishing::UNANSWERED));
 }
+#[path = "tests/citation_record_selected_results.rs"]
+mod citation_record_selected_results;

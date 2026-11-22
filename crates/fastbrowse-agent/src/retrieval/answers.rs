@@ -2324,7 +2324,7 @@ pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evi
 }
 
 /// The evidence of every note the run holds.
-fn noted_evidence(notes: &Notes) -> Vec<Evidence> {
+pub(crate) fn noted_evidence(notes: &Notes) -> Vec<Evidence> {
     notes.facts().into_iter().filter_map(|fact| fact.evidence.clone()).collect()
 }
 

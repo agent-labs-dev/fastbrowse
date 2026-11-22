@@ -570,7 +570,7 @@ impl Agent {
             Flow::Agent(error) => Some(error.failure_kind()),
             Flow::Browser(_) | Flow::Unsure(_) => None,
         };
-        let mut result = self.stopped_result(flow, state, ledger, output_schema).await;
+        let mut result = self.stopped_result(flow, state.as_deref_mut(), ledger, output_schema).await;
         // A stop whose evidence answers the task after all ends complete, and a complete run names no failure.
         if result.status != Status::Complete && result.failure_kind.is_none() {
             result.failure_kind = kind;
@@ -581,7 +581,8 @@ impl Agent {
         {
             result.data = extraction.data.unwrap_or(Value::Null);
             result.evidence.extend(extraction.evidence);
-            result.evidence = finishing::one_citation_per_quote(result.evidence);
+            let notes = state.as_deref().map(|state| state.notes.clone()).unwrap_or_default();
+            result.evidence = finishing::one_citation_per_quote(result.evidence, &notes);
         }
         result
     }
@@ -619,7 +620,7 @@ impl Agent {
                     let mut result = self.answered(partial, &notes, Some(state), ledger, stop.status, error, budget);
                     result.wall = self.wall(stop);
                     result.evidence.extend(stop.evidence.clone());
-                    result.evidence = finishing::one_citation_per_quote(result.evidence);
+                    result.evidence = finishing::one_citation_per_quote(result.evidence, &state.notes);
                     return result;
                 }
             }
@@ -698,7 +699,7 @@ impl Agent {
                         if let Some(extraction) = extraction {
                             result.data = extraction.data.unwrap_or(Value::Null);
                             result.evidence.extend(extraction.evidence);
-                            result.evidence = finishing::one_citation_per_quote(result.evidence);
+                            result.evidence = finishing::one_citation_per_quote(result.evidence, &state.notes);
                         }
                         return self.ending_frame(result, state.output_intent.attaches_screenshot()).await;
                     }
@@ -888,7 +889,10 @@ impl Agent {
             budget: outcome.budget,
             answer: outcome.answer,
             data: outcome.data,
-            evidence: finishing::one_citation_per_quote(outcome.evidence),
+            evidence: finishing::one_citation_per_quote(
+                outcome.evidence,
+                &state.map(|state| state.notes.clone()).unwrap_or_default(),
+            ),
             steps: state.map(|state| state.steps.clone()).unwrap_or_default(),
             cost: ledger.breakdown(),
             artifacts,
