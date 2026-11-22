@@ -64,8 +64,7 @@ pub(crate) mod keys {
 }
 
 const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after that action is among the recent actions; what the page already showed before it is not the\nanswer, however close it looks.";
-const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nEach option is the element in state.elements with its id, whose `context` is the card, row or section it belongs\nto. When the task names one, choose by context; a link in one record's context opens it and shows no more of the\nlist.";
-const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
+const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose an offered element, or choose `not_here` when no offered element matches the task's item.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nEach option is the element in state.elements with its id, whose `context` is the card, row or section it belongs\nto. When the task names one, choose by context; a link in one record's context opens it and shows no more of the\nlist.";
 const RELEVANCE_RULES: &str = "Could carrying out any part of the task or current subgoal that is still needed, or reading what it needs, act on or rely on the element in each question?\nUse recent actions to judge which task steps are already complete.\nJudge by its label, role, context and href. An already_read link leads to a page this run has read;\nconsider whether visiting it again would help the task. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
 
 fn untrusted(rules: &str) -> String {
@@ -640,6 +639,9 @@ pub struct Decision {
     pub operation: Operation,
     #[serde(default)]
     pub url: Option<String>,
+    /// The current page address offered by policy as a reload after Jev found no matching target.
+    #[serde(skip)]
+    pub reload: Option<String>,
     pub target: Option<Control>,
     pub tab_id: Option<String>,
     pub operation_confidence: f64,
@@ -808,7 +810,7 @@ pub async fn decide(
                     let named: Vec<String> = operations.iter().map(ToString::to_string).collect();
                     context.withheld.extend(operations);
                     context.page_facts.push(format!(
-                        "The task names an item that none of the elements this page offers to {} is: it is not on this page as it was read.",
+                        "The task names an item, but no element this page offers to {} matches that item.",
                         named.join(" or ")
                     ));
                     if context.reload.is_none() {
@@ -818,12 +820,14 @@ pub async fn decide(
                     continue;
                 }
                 Ok(Evaluated::Decided(mut decision)) => {
+                    // Carry the reload authorization across the temporary context so the navigation gate can verify it.
+                    decision.reload = context.reload.clone();
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
                     decision.input_tokens += tokens;
                     if config.step_choices {
                         decision.offered = controls;
                     }
-                    return Ok(decision);
+                    return Ok(*decision);
                 }
                 // Jev counts a picture again for each place it is used, and as it decodes it rather than as it was
                 // sent, so a body that fits can still be refused. Its pictures are the part a text cut cannot shrink:
@@ -1583,7 +1587,7 @@ fn drop_pictures(context: &mut StepContext) {
 /// What one request settled: the next action, or that the item the task names is not among the elements offered for
 /// the operation Jev chose, with what the request cost.
 enum Evaluated {
-    Decided(Decision),
+    Decided(Box<Decision>),
     NotHere { operations: Vec<Operation>, cost: Vec<CostLine>, tokens: i64 },
 }
 
@@ -1748,11 +1752,12 @@ async fn evaluate(
             })
         })
         .collect();
-    Ok(Evaluated::Decided(Decision {
+    Ok(Evaluated::Decided(Box::new(Decision {
         read_scope,
         plan,
         operation,
         url,
+        reload: None,
         target,
         tab_id,
         operation_confidence,
@@ -1773,7 +1778,7 @@ async fn evaluate(
         offered: Vec::new(),
         ahead,
         step: chosen_step(&evaluation, &request.steps),
-    }))
+    })))
 }
 
 /// `int(choice)` used as an index into `count` groups.
@@ -2368,13 +2373,14 @@ mod tests {
         let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let Question::Choice(target) = &request.questions["click_target"] else { panic!("a choice") };
         assert_eq!(target.criteria.keys().last().map(String::as_str), Some("not_here"));
+        assert!(target.instructions.contains("choose `not_here` when no offered element matches the task's item"));
         assert_eq!(
             target.criteria["not_here"],
             "The task names the item this operation would act on, and none of the other options is that item: it is not among the elements offered on this page as it was read."
         );
         assert!(request.targets[&Operation::Click].iter().all(|control| control.id != "not_here"));
 
-        let jev = fake(&[("click_target", "not_here")], "");
+        let jev = fake(&[("click_target", "not_here"), ("navigate_target", "0")], "");
         let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         let (requests, states) = (jev.requests.lock().unwrap(), jev.states.lock().unwrap());
         assert_eq!(requests.len(), 2, "one more request settles the operation");
@@ -2382,14 +2388,12 @@ mod tests {
         assert!(!operation.criteria.contains_key("click") && !requests[1].contains_key("click_target"));
         assert_eq!(
             states[1]["page_facts"],
-            json!([
-                "The task names an item that none of the elements this page offers to click is: it is not on this page as it was read.",
-                RELOAD_FACT
-            ])
+            json!(["The task names an item, but no element this page offers to click matches that item.", RELOAD_FACT])
         );
         assert!(operation.criteria["navigate"].as_str().unwrap().contains("https://example.test/"));
         assert_ne!(decision.operation, Operation::Click);
         assert!(decision.target.is_none());
+        assert_eq!(decision.reload.as_deref(), Some(page.url.as_str()));
     }
 
     #[test]

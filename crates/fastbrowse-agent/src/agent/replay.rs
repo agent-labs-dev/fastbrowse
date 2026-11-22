@@ -66,6 +66,7 @@ impl Replay {
         Some(Decision {
             operation: step.operation,
             url: None,
+            reload: None,
             target_confidence: target.as_ref().map(|_| 1.0),
             target,
             tab_id: None,

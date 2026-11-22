@@ -259,6 +259,7 @@ pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> De
         step: None,
         operation,
         url: None,
+        reload: None,
         target_confidence: target.as_ref().map(|_| 1.0),
         target,
         tab_id: None,
@@ -10903,6 +10904,19 @@ fn a_known_page_is_offered_to_navigate_to_until_the_run_is_on_it() {
         ),
         "{navigate}"
     );
+}
+
+#[tokio::test]
+async fn a_reload_authorized_by_not_here_can_pass_the_navigation_gate() {
+    let agent = Agent::new(Arc::new(NoPage), authorized_jev(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.authorization = Authorization { irreversible_actions: true };
+    let page = at("https://shop.test/list", &[]);
+    let reload = page.url.clone();
+    let decision =
+        Decision { url: Some(reload.clone()), reload: Some(reload), ..code_decision(Operation::Navigate, None) };
+    let action = agent.action(&mut state, &page, &decision).await;
+    assert!(action.is_ok(), "a reload explicitly authorized by policy was rejected: {action:?}");
 }
 
 #[test]
