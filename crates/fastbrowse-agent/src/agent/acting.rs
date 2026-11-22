@@ -29,6 +29,7 @@ use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Ste
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry, screenshot_reference};
 use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
+use crate::retrieval::{SCREENSHOT_PICTURED, Screenshot};
 use crate::verification::{page_state, page_verdict_state};
 use crate::writing::write_value;
 
@@ -303,10 +304,10 @@ fn choice_picks(
     for (key, question) in questions {
         let Question::Choice(question) = question else { continue };
         let Some(Answer::Choice(answer)) = answers.get(key) else {
-            return Err(DecisionError::Failed("expected a choice answer".into()));
+            return Err(DecisionError::failed("expected a choice answer"));
         };
         if !question.criteria.contains_key(&answer.choice) {
-            return Err(DecisionError::Failed(format!("Jev picked {}, which was not offered", answer.choice)));
+            return Err(DecisionError::failed(format!("Jev picked {}, which was not offered", answer.choice)));
         }
         picks.insert(key.clone(), answer.choice.clone());
     }
@@ -378,10 +379,20 @@ impl Agent {
                         || state.routes.contains(url)
                         || state.known_pages.contains(url)
                 }) else {
-                    return Err(Stop::new(Status::Stuck, "navigation address was not supplied by the caller").into());
+                    return Err(Stop::new(
+                        Status::Stuck,
+                        "Navigate/unsupplied-address",
+                        "navigation address was not supplied by the caller",
+                    )
+                    .into());
                 };
                 if self.reveals_text(&url) {
-                    return Err(Stop::new(Status::NeedsInput, "navigation address contains a resolved secret").into());
+                    return Err(Stop::new(
+                        Status::NeedsInput,
+                        "Navigate/secret-in-address",
+                        "navigation address contains a resolved secret",
+                    )
+                    .into());
                 }
                 self.gate_download(state, observation, decision, &caller_link(&url)).await?;
                 let irreversible = navigation_question(&url);
@@ -409,7 +420,12 @@ impl Agent {
             }
             Operation::Drag => {
                 let Some(destination) = &decision.destination else {
-                    return Err(Stop::new(Status::NeedsInput, "the page offers no drop target for the drag").into());
+                    return Err(Stop::new(
+                        Status::NeedsInput,
+                        "Drag/no-target",
+                        "the page offers no drop target for the drag",
+                    )
+                    .into());
                 };
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action {
@@ -482,13 +498,23 @@ impl Agent {
             }
             Operation::Upload => {
                 if state.attachments.is_empty() {
-                    return Err(Stop::new(Status::NeedsInput, "the page asks for a file and none was provided").into());
+                    return Err(Stop::new(
+                        Status::NeedsInput,
+                        "Upload/no-file",
+                        "the page asks for a file and none was provided",
+                    )
+                    .into());
                 }
                 let names: Vec<String> = state.attachments.iter().map(|a| a.name.clone()).collect();
                 let name = self.choose(state, observation, "Which file belongs in this input?", &names).await?;
                 let files: Vec<_> = state.attachments.iter().filter(|a| a.name == name).cloned().collect();
                 if files.iter().map(|f| f.content.0.len() as i64).sum::<i64>() > self.config.max_upload_bytes {
-                    return Err(Stop::new(Status::NeedsInput, format!("{name} exceeds the upload size limit")).into());
+                    return Err(Stop::new(
+                        Status::NeedsInput,
+                        "Upload/too-large",
+                        format!("{name} exceeds the upload size limit"),
+                    )
+                    .into());
                 }
                 Ok(Action { target_id: Some(require(target)?.id.clone()), files, ..Action::new(Operation::Upload) })
             }
@@ -948,7 +974,7 @@ impl Agent {
             if decision.replayed { Decider::Recipe } else { Decider::Jev },
         )
         .await?;
-        Err(Stop::new(Status::NeedsConfirmation, reason).into())
+        Err(Stop::new(Status::NeedsConfirmation, "Confirm/irreversible", reason).into())
     }
 
     /// Why the page does not show a conditional commit allowed, or `None` when it does: Jev's yes that it shows the
@@ -1141,11 +1167,9 @@ impl Agent {
                     return Ok(text);
                 }
                 RecipeText::Input(name) => {
-                    let value = state
-                        .inputs
-                        .get(&name)
-                        .cloned()
-                        .ok_or_else(|| Stop::new(Status::NeedsInput, format!("the recipe needs input {name}")))?;
+                    let value = state.inputs.get(&name).cloned().ok_or_else(|| {
+                        Stop::new(Status::NeedsInput, "Recipe/input-missing", format!("the recipe needs input {name}"))
+                    })?;
                     state.text_source = Some(RecipeText::Input(name));
                     return Ok(value);
                 }
@@ -1413,7 +1437,7 @@ impl Agent {
             .iter()
             .find(|word| Some(word.index) == picked)
             .cloned()
-            .ok_or_else(|| DecisionError::Failed("expected a word of the source".into()).into())
+            .ok_or_else(|| DecisionError::failed("expected a word of the source").into())
     }
 
     /// How many punctuation characters the beginning and the end of a value keep, as Jev picks among `edges`.
@@ -1470,8 +1494,8 @@ impl Agent {
     ) -> Step<(Vec<Word>, Vec<Word>)> {
         let max = self.jev.profile().max_choice_options;
         if max < 3 {
-            return Err(fastbrowse_core::decision::DecisionError::Failed(
-                "value selection needs a provider supporting at least three choices".into(),
+            return Err(fastbrowse_core::decision::DecisionError::failed(
+                "value selection needs a provider supporting at least three choices",
             )
             .into());
         }
@@ -1513,12 +1537,13 @@ impl Agent {
                 if picked == NO_VALUE {
                     return Ok((Vec::new(), Vec::new()));
                 }
-                let chosen = picked.parse::<usize>().map_err(|_| {
-                    fastbrowse_core::decision::DecisionError::Failed("expected a source part index".into())
-                })?;
-                let part = parts.into_iter().nth(chosen).ok_or_else(|| {
-                    fastbrowse_core::decision::DecisionError::Failed("expected a source part index".into())
-                })?;
+                let chosen = picked
+                    .parse::<usize>()
+                    .map_err(|_| fastbrowse_core::decision::DecisionError::failed("expected a source part index"))?;
+                let part = parts
+                    .into_iter()
+                    .nth(chosen)
+                    .ok_or_else(|| fastbrowse_core::decision::DecisionError::failed("expected a source part index"))?;
                 if key == "begins" { begins = part } else { ends = part }
             }
         }
@@ -1613,6 +1638,7 @@ impl Agent {
                     _ => {
                         return Err(Stop::new(
                             Status::NeedsInput,
+                            "Password/unclear-role",
                             format!(
                                 "{} does not establish whether it takes the current password or a replacement",
                                 text::repr(&target.label),
@@ -1627,6 +1653,7 @@ impl Agent {
             if !secrets.iter().any(|name| name == "new_password") {
                 return Err(Stop::new(
                     Status::NeedsInput,
+                    "Password/replacement-unset",
                     "A replacement password requires --secret new_password=ENV_VAR@https://host; set ENV_VAR to the new value instead of putting it in the task.",
                 )
                 .into());
@@ -1638,6 +1665,7 @@ impl Agent {
         match secrets.as_slice() {
             [] => Err(Stop::new(
                 Status::NeedsLogin,
+                "Secret/none-stored",
                 format!("{} wants a secret and none is stored", text::repr(&target.label)),
             )
             .into()),
@@ -1679,9 +1707,14 @@ impl Agent {
         let Some(value) = value else {
             if credential {
                 let error = format!("sign-in required at {origin}: secret {name} is not available there");
-                return Err(Stop::new(Status::NeedsLogin, error).into());
+                return Err(Stop::new(Status::NeedsLogin, "Secret/sign-in", error).into());
             }
-            return Err(Stop::new(Status::NeedsInput, format!("secret {name} is not available for {origin}")).into());
+            return Err(Stop::new(
+                Status::NeedsInput,
+                "Secret/unavailable",
+                format!("secret {name} is not available for {origin}"),
+            )
+            .into());
         };
         self.redactor().register(name, &value, Some(origin));
         Ok(value)
@@ -1709,7 +1742,7 @@ impl Agent {
     fn unsupplied(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
         if target.required == Some(true) {
             let error = format!("{} needs a value the task does not give", text::repr(&target.label));
-            return Stop::new(Status::NeedsInput, error).into();
+            return Stop::new(Status::NeedsInput, "Field/required-unsupplied", error).into();
         }
         self.missing(state, observation, target)
     }
@@ -1756,7 +1789,11 @@ impl Agent {
     ) -> Step<Chosen> {
         match options {
             [only] if instead.is_empty() => return Ok(Chosen::Option(only.clone())),
-            [] => return Err(Stop::new(Status::Stuck, format!("no options to answer: {question}")).into()),
+            [] => {
+                return Err(
+                    Stop::new(Status::Stuck, "Choice/no-options", format!("no options to answer: {question}")).into()
+                );
+            }
             _ => {}
         }
         let offered = |criteria: &mut IndexMap<String, JsonValue>| {
@@ -1974,14 +2011,16 @@ impl Agent {
         // out, the start address held a signed-in run that had read its orders page below 0.5 on every ask, where the
         // task alone scored 0.98.
         let task = self.caller_task(state);
+        // Code, not an action, takes the screenshot a task asks for, of the page the run ends on: not told so, this
+        // question held a screenshot of the release page undone on the release page itself, and a run that had read
+        // every value ended stuck. It is part of the question because it is code's own fact about the run, not page
+        // content.
+        let mut question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?".to_string();
+        if self.screenshot(state.output_intent) == Screenshot::Attached {
+            question.push_str(&format!(" {SCREENSHOT_PICTURED}"));
+        }
         let carried = NoulQuestion::new(
-            format!(
-                "{UNTRUSTED}\n\n# Task\n{task}\n\n{}",
-                HistoryEntry::told(
-                    "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?",
-                    &state.history
-                )
-            ),
+            format!("{UNTRUSTED}\n\n# Task\n{task}\n\n{}", HistoryEntry::told(&question, &state.history)),
             Some("Every such step has been carried out, or the task asks only to find, read or report something."),
             Some("A step the task asks for, other than finding, reading or reporting, has not been carried out yet."),
         );
@@ -1998,8 +2037,10 @@ impl Agent {
             ),
             Some("Nothing shown says the site refuses a step the task asks for."),
         );
-        let history = state.history.iter().map(HistoryEntry::seen).collect();
-        let mut context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
+        // Masked here, as the task is: a secret typed after the run opened its first page can sit in that address.
+        let mut history = JsonValue::Array(state.actions_taken().map(HistoryEntry::seen).collect());
+        self.mask_strings(&mut history);
+        let mut context = Map::from_iter([("recent_actions".to_string(), history)]);
         // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
         // fields left empty once the run stalled on a task to carry out (#812).
         // A run that has only read can find a page already showing what the task asks to be made, such as an editor
@@ -2055,7 +2096,7 @@ impl Agent {
         state.ledger.record([evaluation.cost.clone()])?;
         let holds = |key: &str| match evaluation.answers.get(key) {
             Some(Answer::Noul(answer)) => Ok(answer.probability > 0.5),
-            _ => Err(DecisionError::Failed(format!("expected a yes-or-no answer to {key}"))),
+            _ => Err(DecisionError::failed(format!("expected a yes-or-no answer to {key}"))),
         };
         Ok(if holds("carried")? {
             Carried::Done
@@ -2079,10 +2120,9 @@ impl Agent {
                     criteria,
                 )
                 .await?;
-            let index =
-                picked.parse::<usize>().map_err(|_| DecisionError::Failed("expected an undone task step".into()))?;
+            let index = picked.parse::<usize>().map_err(|_| DecisionError::failed("expected an undone task step"))?;
             let Some((_, _, step)) = steps.get(index) else {
-                return Err(DecisionError::Failed("expected an undone task step".into()).into());
+                return Err(DecisionError::failed("expected an undone task step").into());
             };
             Carried::Undone(step.clone())
         })
@@ -2130,7 +2170,7 @@ impl Agent {
 
     async fn accept_dialog(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
         let Some(dialog) = &observation.dialog else {
-            return Err(Stop::new(Status::Stuck, "DIALOG chosen with no dialog open").into());
+            return Err(Stop::new(Status::Stuck, "Dialog/none-open", "DIALOG chosen with no dialog open").into());
         };
         let question = format!(
             "The page shows a {} dialog saying {}, opened by the agent's last action. Accept it if it asks to go ahead with what the task wants done; dismiss it if it would do something the task did not ask for.",
@@ -2182,7 +2222,8 @@ impl Agent {
         };
         // The error reaches the caller as it is, so it is built from what models see and redacted as well: a page can
         // echo a typed secret into its title or a field's label.
-        Stop::new(Status::NeedsLogin, self.redact(&format!("sign-in required at {origin}: {evidence}"))).into()
+        Stop::new(Status::NeedsLogin, "Wall/sign-in", self.redact(&format!("sign-in required at {origin}: {evidence}")))
+            .into()
     }
 }
 

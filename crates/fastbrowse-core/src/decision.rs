@@ -7,7 +7,8 @@ use serde_json::Value;
 
 use crate::BoxFuture;
 use crate::config::{Config, JSON_CHARS_PER_TOKEN, Thresholds};
-use crate::models::{CostComponent, CostLine, JevPurpose, MaybeUnavailable};
+use crate::llm::FaultClass;
+use crate::models::{CostComponent, CostLine, FailureKind, JevPurpose, MaybeUnavailable};
 use crate::py::lax;
 use crate::schema::{Field, ModelTy, Schema, Ty};
 use crate::telemetry::{BudgetExceeded, Ledger};
@@ -454,30 +455,146 @@ pub struct RetriesExhausted {
     pub answered: Vec<Evaluation>,
     /// The last failed response, so a caller that sent more requests can restate the count around it.
     pub last: String,
+    pub cause: JevCause,
+}
+
+/// How a Jev call failed, named without anything it carried: the class where the error was made, the provider and
+/// purpose where the call was. A Jev failure named only `Jev.Failed` said neither which provider failed nor how (#1372).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JevCause {
+    /// None for a failure no call made, such as a question with no options.
+    pub class: Option<FaultClass>,
+    /// The decision source, as `FASTBROWSE_DECISION_SOURCE` spells it.
+    pub provider: Option<String>,
+    pub purpose: Option<JevPurpose>,
+}
+
+impl JevCause {
+    /// `provider/purpose/class`, with `unknown` for a part no one set, or None for a failure no call made.
+    fn named(&self) -> Option<String> {
+        let class = self.class?;
+        let provider = self.provider.as_deref().unwrap_or("unknown");
+        let purpose = self.purpose.map_or("unknown", |purpose| purpose.as_str());
+        Some(format!("{provider}/{purpose}/{class}"))
+    }
+}
+
+/// A failed Jev call's message, which can quote the provider's answer, and its content-free cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JevFault {
+    pub message: String,
+    pub cause: JevCause,
+}
+
+impl std::fmt::Display for JevFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl JevFault {
+    fn new(message: impl Into<String>) -> JevFault {
+        JevFault { message: message.into(), cause: JevCause::default() }
+    }
 }
 
 /// Transport or validation failure; the request may be retried only if it caused no browser action.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum DecisionError {
     #[error("{0}")]
-    Failed(String),
+    Failed(JevFault),
     /// The provider rejected the request for exceeding its input token limits.
     #[error("{0}")]
-    InputTooLarge(String),
+    InputTooLarge(JevFault),
     /// Every attempt failed in transport. Not a provider verdict, so it does not move a run to the backup.
     #[error("{0}")]
-    TransportFailed(String),
+    TransportFailed(JevFault),
     #[error("{}", .0.message)]
     RetriesExhausted(Box<RetriesExhausted>),
     /// The provider refused the key (HTTP 401 or 403), which no retry on that provider can change.
     #[error("{0}")]
-    Rejected(String),
+    Rejected(JevFault),
     /// A request would break a limit, so it was not sent. Python raises `BudgetExceeded` through `evaluate` itself.
     #[error(transparent)]
     Budget(#[from] BudgetExceeded),
     /// The page redrew under the decision that would have sent this request, so it was not sent.
     #[error("the page redrew, so the decision it was for is discarded")]
     Superseded,
+}
+
+impl DecisionError {
+    pub fn failed(message: impl Into<String>) -> DecisionError {
+        DecisionError::Failed(JevFault::new(message))
+    }
+    pub fn input_too_large(message: impl Into<String>) -> DecisionError {
+        DecisionError::InputTooLarge(JevFault::new(message))
+    }
+    pub fn transport_failed(message: impl Into<String>) -> DecisionError {
+        DecisionError::TransportFailed(JevFault::new(message))
+    }
+    pub fn rejected(message: impl Into<String>) -> DecisionError {
+        DecisionError::Rejected(JevFault::new(message))
+    }
+
+    fn cause_mut(&mut self) -> Option<&mut JevCause> {
+        match self {
+            DecisionError::Failed(fault)
+            | DecisionError::InputTooLarge(fault)
+            | DecisionError::TransportFailed(fault)
+            | DecisionError::Rejected(fault) => Some(&mut fault.cause),
+            DecisionError::RetriesExhausted(exhausted) => Some(&mut exhausted.cause),
+            DecisionError::Budget(_) | DecisionError::Superseded => None,
+        }
+    }
+
+    fn cause(&self) -> Option<&JevCause> {
+        match self {
+            DecisionError::Failed(fault)
+            | DecisionError::InputTooLarge(fault)
+            | DecisionError::TransportFailed(fault)
+            | DecisionError::Rejected(fault) => Some(&fault.cause),
+            DecisionError::RetriesExhausted(exhausted) => Some(&exhausted.cause),
+            DecisionError::Budget(_) | DecisionError::Superseded => None,
+        }
+    }
+
+    /// This error, classed where it was made.
+    pub fn classed(mut self, class: FaultClass) -> DecisionError {
+        if let Some(cause) = self.cause_mut() {
+            cause.class = Some(class);
+        }
+        self
+    }
+
+    /// This error with the provider and purpose of the call that met it, where no one closer to the call set them.
+    pub fn from_call(mut self, provider: &str, purpose: Option<JevPurpose>) -> DecisionError {
+        if let Some(cause) = self.cause_mut() {
+            cause.provider.get_or_insert_with(|| provider.to_owned());
+            if cause.purpose.is_none() {
+                cause.purpose = purpose;
+            }
+        }
+        self
+    }
+}
+
+/// The variant, then the cause of a failed call: a Jev failure's message is the provider's, so it is never part of it.
+impl FailureKind for DecisionError {
+    fn failure_kind(&self) -> String {
+        let variant = match self {
+            DecisionError::Failed(_) => "Failed",
+            DecisionError::InputTooLarge(_) => "InputTooLarge",
+            DecisionError::TransportFailed(_) => "TransportFailed",
+            DecisionError::RetriesExhausted(_) => "RetriesExhausted",
+            DecisionError::Rejected(_) => "Rejected",
+            DecisionError::Budget(exceeded) => return exceeded.failure_kind(),
+            DecisionError::Superseded => "Superseded",
+        };
+        match self.cause().and_then(JevCause::named) {
+            Some(cause) => format!("{variant}/{cause}"),
+            None => variant.into(),
+        }
+    }
 }
 
 impl MaybeUnavailable for DecisionError {
@@ -706,6 +823,22 @@ mod tests {
     use super::*;
     use crate::config::TokenBudget;
     use serde_json::json;
+
+    #[test]
+    fn a_jev_failure_is_named_by_its_cause_and_never_its_message() {
+        let failed = DecisionError::failed("HTTP 500: sk-secret")
+            .classed(FaultClass::Http(500))
+            .from_call("openrouter", Some(JevPurpose::Verify))
+            .from_call("gateway", Some(JevPurpose::Read));
+        assert_eq!(failed.failure_kind(), "Failed/openrouter/verify/http-500");
+        // A failure no call made, such as a question with no options, keeps the bare variant.
+        assert_eq!(
+            DecisionError::rejected("q offers no options").from_call("openrouter", None).failure_kind(),
+            "Rejected"
+        );
+        let unstamped = DecisionError::transport_failed("timed out").classed(FaultClass::Transport);
+        assert_eq!(unstamped.failure_kind(), "TransportFailed/unknown/unknown/transport");
+    }
 
     #[test]
     fn jev_leaves_the_default_config_as_it_is() {

@@ -8,6 +8,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{
     ActResult, Action, BrowserError, CaptchaSolve, Capture, Control, Observation, Page, PageResult, SearchOutcome,
+    Unread,
 };
 
 use super::{BlockKind, FetchedPage, Found, capture, eligible};
@@ -92,6 +93,7 @@ impl Page for SearchPage {
                     loaded.capture = Some(capture);
                     loaded.requested = None;
                     loaded.controls = controls;
+                    loaded.scripts = false;
                     loaded.generation += 1;
                     drop(loaded);
                     // Search observations describe the results, not any secret still visible in the retained browser.
@@ -105,6 +107,9 @@ impl Page for SearchPage {
 
     fn over_http(&self) -> bool {
         !self.active.load(Ordering::Relaxed) && self.inner.over_http()
+    }
+    fn unread(&self) -> Option<Unread> {
+        self.view().unread()
     }
     fn needs_browser(&self, message: String) -> BrowserError {
         self.inner.needs_browser(message)
@@ -335,6 +340,29 @@ mod tests {
         page.withhold_frames(false);
         assert!(!inner.0.load(Ordering::Relaxed));
     }
+    /// Search results are code's own page, with no script: the unrun scripts of the document read before the search
+    /// are that document's alone, and come back with it (#1380).
+    #[tokio::test]
+    async fn search_results_report_none_of_the_previous_documents_unrun_scripts() {
+        let http = Http::new(Arc::new(|request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+            let response = if request.url.contains("exa.ai") {
+                Response::json(200, &serde_json::json!({"results":[],"costDollars":{"total":0.007}}))
+            } else {
+                Response::new(200, "<p>Text</p><script src=/s.js></script>").with_header("content-type", "text/html")
+            };
+            Box::pin(async move { Ok(response) })
+        }));
+        let inner = Arc::new(FetchedPage::new(http.clone(), None, None));
+        let page =
+            SearchPage::new(inner, FetchedPage::new(http.clone(), None, None), Exa::new(http, Secret::new("key")));
+        page.navigate("https://docs.example.test/", None).await.unwrap();
+        assert!(page.unread().is_some_and(|unread| unread.scripts));
+        assert!(page.search("question", 30.0).await.error.is_none());
+        assert_eq!(page.unread(), None);
+        page.navigate("https://docs.example.test/", None).await.unwrap();
+        assert!(page.unread().is_some_and(|unread| unread.scripts));
+    }
+
     #[tokio::test]
     async fn search_navigation_preserves_the_retained_pages_failed_step_checks() {
         let http = Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {

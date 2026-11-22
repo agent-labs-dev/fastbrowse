@@ -30,6 +30,7 @@ async fn an_http_origin_without_a_port_is_reached_on_port_80() {
             body: Vec::new(),
             timeout: Duration::from_secs(5),
             max_bytes: None,
+            handoff: Default::default(),
         })
         .await;
     let head = tokio::time::timeout(Duration::from_secs(5), proxy).await.unwrap().unwrap();
@@ -72,6 +73,7 @@ async fn an_http_origin_works_with_a_forward_proxy_that_does_not_allow_connect()
             body: Vec::new(),
             timeout: Duration::from_secs(5),
             max_bytes: None,
+            handoff: Default::default(),
         })
         .await;
     let head = tokio::time::timeout(Duration::from_secs(5), proxy).await.unwrap().unwrap();

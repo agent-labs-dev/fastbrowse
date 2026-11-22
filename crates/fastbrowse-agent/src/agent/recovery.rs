@@ -70,6 +70,13 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
     if let Some((operation, label)) = withheld.action.clone() {
         let mut left_out = false;
         match &label {
+            // An address is no control, so removing controls by label left a reload that moved nothing on offer: a
+            // blank start page judged a site failure was reloaded until the run ended `unavailable` with the task's
+            // own /login beside it (#1365).
+            Some(url) if operation == Operation::Navigate => {
+                context.withheld_targets.push((operation, url.clone()));
+                left_out = true;
+            }
             Some(label) => {
                 for control in offered.controls.iter_mut().filter(|control| describe(control) == *label) {
                     if operation == Operation::Blur && leavable(control) {
@@ -185,45 +192,17 @@ impl Agent {
         gives_up_as: Status,
         withheld: impl Into<Idle>,
     ) -> fastbrowse_core::BoxFuture<'a, Step> {
-        state.recoveries += 1;
-        let spent = state.recoveries > self.config.stall.max_recoveries;
-        self.recover_unless(spent, state, observation, reason, gives_up_as, withheld.into())
-    }
-
-    /// Spend one rewrite of a rejected answer draft on `reason`, from a budget of its own the size of
-    /// `stall.max_recoveries`: the check named what to correct in the notes the run holds, which is not a stall, and
-    /// sharing the stall budget left a run that had recovered from one on its way no rewrite at all (#1176). Past it
-    /// the run ends unverified as a spent recovery does.
-    pub(super) fn rewrite<'a>(
-        &'a self,
-        state: &'a mut RunState,
-        observation: &'a Observation,
-        reason: &str,
-    ) -> fastbrowse_core::BoxFuture<'a, Step> {
-        state.rewrites += 1;
-        let spent = state.rewrites > self.config.stall.max_recoveries;
-        self.recover_unless(spent, state, observation, reason, Status::Unverified, Idle::from(None))
-    }
-
-    /// Jev asked again after `reason`, or, once the budget that paid for it is `spent`, the run's end.
-    fn recover_unless<'a>(
-        &'a self,
-        spent: bool,
-        state: &'a mut RunState,
-        observation: &'a Observation,
-        reason: &str,
-        gives_up_as: Status,
-        withheld: Idle,
-    ) -> fastbrowse_core::BoxFuture<'a, Step> {
+        let withheld = withheld.into();
         let reason = self.redact(reason);
         // Route proposals add model futures to recovery, which otherwise overflow the native worker stack.
         Box::pin(async move {
+            state.recoveries += 1;
             // Recovery spends the stall's evidence so the same threshold crossing cannot trigger it again.
             state.unchanged = 0;
             if observation.controls.iter().any(starts_download) {
                 self.downloads_forbidden(state).await?;
             }
-            if spent {
+            if state.recoveries > self.config.stall.max_recoveries {
                 // A page that reports the site failed ends as that failure, whatever the run was last unsure about: a
                 // field the task gives no value for, on a page whose own data requests failed, is not the caller's to
                 // supply. BU Bench bu2-196 was asked for a 2024 USITC report on a DataWeb page reading "Http failure
@@ -312,6 +291,7 @@ impl Agent {
                 } else {
                     reason
                 };
+                let rule = if unfilled.is_empty() { "Recovery/exhausted" } else { "Recovery/unfilled" };
                 let reason = match unfilled.as_slice() {
                     [] => reason,
                     [only] => format!("{} needs a value the task does not give: {reason}", text::repr(only)),
@@ -320,7 +300,7 @@ impl Agent {
                         many.iter().map(|label| text::repr(label)).collect::<Vec<_>>().join(", ")
                     ),
                 };
-                return Err(Stop::new(status, reason).into());
+                return Err(Stop::new(status, rule, reason).into());
             }
             self.ask_jev_again(state, observation, &reason, withheld).await
         })

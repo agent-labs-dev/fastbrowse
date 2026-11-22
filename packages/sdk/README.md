@@ -43,7 +43,10 @@ try {
 `run` resolves with the result whatever status the run ended in, and only `complete` is success. Read
 `result.status` before you use the answer. A `needs_login` result, and a `blocked` one at a bot check, says what
 stopped it in `result.wall`: `kind` is `password`, `one_time_code`, `sign_in` or `bot_check`, with the page's
-`origin`, the labels of the `fields` it asked for and `seen_at_ms`.
+`origin`, the labels of the `fields` it asked for and `seen_at_ms`. Every result short of `complete` names its
+cause in `result.failure_kind`, which holds no page text or secret: `Budget/seconds` for a time limit,
+`Callback/run/event/error/-32603` when your `onEvent` callback threw, or a model failure's provider, purpose and status
+such as `Llm.Rejected/openrouter/action/http-401`.
 
 ## Processes and errors
 
@@ -94,7 +97,9 @@ active tab; none are sent without it), and the browser choices `chrome`, `cloudP
 without that default.
 
 A run reads pages over HTTP until the task needs a browser. `fetch: true` never starts one, and `browser: true`
-starts one from the first step; the server refuses the two together. `allowedOrigins` limits the documents a run
+starts one from the first step; the server refuses the two together. A fetched page can only follow links, so the
+server also refuses `fetch: true` with the browser choices, `inputs`, `attachments`, any `secrets` or
+`authorization.irreversibleActions`. `allowedOrigins` limits the documents a run
 may open, read and control to those exact origins: navigations, redirects, frames and popups elsewhere are refused
 before they are sent, so a sign-in that redirects through another origin needs it listed too. It scopes documents,
 not the network, and a scoped run sends no frames and cannot `record`.

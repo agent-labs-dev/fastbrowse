@@ -71,6 +71,7 @@ async fn events_reach_the_host_as_json_in_order_and_one_it_fails_ends_the_run() 
     let ended = embedded.run(&params(json!({})), host, Cancel::default()).await.unwrap();
     assert_eq!(ended.status, Status::Error);
     assert_eq!(ended.error.as_deref(), Some("run/event: boom"));
+    assert_eq!(ended.failure_kind.as_deref(), Some("Callback/run/event/error/-32603"));
 }
 
 #[tokio::test]
@@ -104,6 +105,7 @@ async fn a_secret_is_asked_only_where_its_ref_reaches_and_a_failure_hides_what_t
     let ended = Embedded::with_runner(typist, settings()).run(&params(refs), host, Cancel::default()).await.unwrap();
     assert_eq!(ended.status, Status::Error);
     assert_eq!(ended.error.as_deref(), Some("secrets/resolve: the client could not resolve the secret 'password'"));
+    assert_eq!(ended.failure_kind.as_deref(), Some("Callback/secrets/resolve/error/-32603"));
 }
 
 #[tokio::test]

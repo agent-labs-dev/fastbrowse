@@ -385,7 +385,8 @@ pub struct StepContext {
     /// Page operations not offered this time, because the problem is that they changed nothing.
     #[serde(default)]
     pub withheld: Vec<Operation>,
-    /// Derived actions have no entry in a control's operation list to remove during recovery.
+    /// Derived actions have no entry in a control's operation list to remove during recovery; a navigation's target is
+    /// its address.
     #[serde(skip)]
     pub withheld_targets: Vec<(Operation, String)>,
     /// Fields the task gives no value for: filling one ends the run needing input.
@@ -1121,6 +1122,11 @@ pub fn build_request(
     if let Some(reload) = context.reload.as_ref().filter(|url| !urls.contains(url)) {
         urls.push(reload.clone());
     }
+    urls.retain(|url| {
+        !context.withheld_targets.iter().any(|(operation, withheld)| {
+            *operation == Operation::Navigate && fastbrowse_core::navigation::same_address(url, withheld)
+        })
+    });
     let offered = if context.list_read == ListRead::Continue {
         Vec::new()
     } else {
@@ -2033,6 +2039,7 @@ mod tests {
                             requests: 1,
                             answered: Vec::new(),
                             last: "503".into(),
+                            cause: Default::default(),
                         },
                     )));
                 }
@@ -2652,7 +2659,7 @@ mod tests {
             let sent = referenced(images, state, questions).len();
             self.pictures.lock().unwrap().push(sent);
             if sent > 1 {
-                return Box::pin(async { Err(DecisionError::InputTooLarge("over the body limit".into())) });
+                return Box::pin(async { Err(DecisionError::input_too_large("over the body limit")) });
             }
             self.inner.evaluate(state, questions)
         }
@@ -2707,7 +2714,7 @@ mod tests {
             let text = (text::len(&dumps(state)) + largest) as f64 / fastbrowse_core::config::JSON_CHARS_PER_TOKEN;
             if text as i64 + pictures > 32_000 {
                 *self.refused.lock().unwrap() += 1;
-                return Box::pin(async { Err(DecisionError::InputTooLarge("max_tokens_exceeded".into())) });
+                return Box::pin(async { Err(DecisionError::input_too_large("max_tokens_exceeded")) });
             }
             self.inner.evaluate(state, questions)
         }
