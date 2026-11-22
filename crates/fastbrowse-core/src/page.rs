@@ -139,6 +139,10 @@ pub struct Control {
     /// never does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub already_read: Option<bool>,
+    /// A link to a different site from the one the browser opened for the task: the agent marks it from the link's
+    /// address, the page never does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_site: Option<bool>,
     /// The step this run took that showed this control without leaving the page, such as "clicking Depart" for a
     /// date popup the page attaches at the end of its body, far from the field that opened it: the agent marks it,
     /// the page never does.
@@ -181,6 +185,7 @@ impl Control {
             drawn: None,
             pictured: None,
             already_read: None,
+            other_site: None,
             shown_by: None,
         }
     }

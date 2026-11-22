@@ -88,9 +88,11 @@ options:
                         (implies --extension)
   --desktop APP         start the native desktop app APP (a command line) and
                         drive it instead of a browser, through deskpilot on
-                        Hyprland, without moving your pointer or focus;
-                        repeat it to start several apps, each window a tab;
-                        they close when the run ends
+                        Hyprland, without moving your pointer or focus; the
+                        app must expose an accessibility tree, so a terminal
+                        or an app that draws its own interface cannot be
+                        driven; repeat it to start several apps, each window
+                        a tab; they close when the run ends
   --trace FILE          append the run's trace to FILE as JSON lines, or - for
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every

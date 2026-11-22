@@ -28,10 +28,13 @@ declare the task complete. `plan_ahead=false` disables list reads and planned fi
 
 ## Authorization
 
-Jev judges every model-selected click, drag or key chord, including links, navigation to a caller-supplied address, every Enter press and acceptance of
+Jev judges every model-selected click, drag, key chord or file attached to an input (a page can upload a file the
+moment it is chosen), including links, navigation to a caller-supplied address, every Enter press and acceptance of
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
-for it; otherwise the run stops at `needs_confirmation`. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
+for it; otherwise the run stops at `needs_confirmation`, unless it has already carried out a commit the task asked
+for: then the action is refused as a failed step and the run picks again, so a run that posted what it was asked to
+is not reported as waiting for confirmation. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
 
 A submission of a form that holds more than one password field changes an account's credentials whatever
 the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at
@@ -55,13 +58,19 @@ recent actions, and can only refuse: the action proceeds only on a yes, and any 
 so the run can read the page or finish.
 Repeated refusals spend recoveries and end the run `stuck`, never by committing.
 
-Two rules come from the task itself, judged once per run by Jev from the task text and kept for the run.
+Rules also come from the task itself, judged once per run by Jev from the task text and kept for the run.
 When the task rules out downloading, a control the page says downloads a file is refused. When the task
 rules out changing anything, a fill, a select or a click on a setting control (a checkbox, radio, switch,
 option, or any control that reports a checked state) is refused, and from then on those operations are no
 longer offered. Typing into a search box is exempt, since searching is how a read-only task finds things.
-Authorization does not lift either rule: it lets a run commit what the task asks for, never what the task
-forbids.
+When the task tells the agent not to take some action ("do not click Upload"), every action the gate asks about
+is also asked about in the same request, against the task and the action alone: one the task says not to take,
+whatever the page shows, is refused once, and so is one the question goes unanswered for. When the task forbids it
+only in some state of the page ("do not click Upload while the preview shows confidential data"), a request of its
+own with the masked page asks whether the page shows that state, and the action goes ahead only on Jev's answer that
+it does not. Whether the task forbids anything is judged first, so a task that forbids nothing adds no question to
+its gates. Authorization does not lift any of these rules: it lets a run commit what
+the task asks for, never what the task forbids.
 
 Unmarked password fields leave the current-or-replacement role to Jev using the task and page context.
 Field count and order do not establish that role. An explicit `current-password` marker identifies an
@@ -316,10 +325,10 @@ The composer selects source wording by note id in private text parts, either the
 one field of a record, that code finds in the note's text exactly as written. Code copies the selection and adds
 quotation delimiters when requested; prose parts, objects like the others so the composer does not write connecting
 wording as a source part, keep explanatory wording separate. A tally has a computed numeric part or
-requested winner-field parts, which code fills without replacing matching text inside a source part. A numeric slot retains its exact position in its prose or table cell, so unit and sign checks see the surrounding text without confusing an identical source number with the slot. Packed compositions expose their original
+requested winner-field parts, which code fills without replacing matching text inside a source part. If the task asks for the calculated value, the composer places a numeric slot in the claim text or cells. The tally's format hint alone does not render the value. A numeric slot retains its exact position in its prose or table cell, so unit and sign checks see the surrounding text without confusing an identical source number with the slot. Packed compositions expose their original
 sources separately, and kept claims retain these parts through a rewrite. A rewrite's feedback names a rejected
-draft's notes by the labels each request shows, and leaves out the notes another request holds. Split notes cannot be
-selected as whole sources. The delivered claims keep the same text, cells, tally and evidence id fields.
+draft's notes by the labels each request shows, and leaves out the notes another request holds. When the check that the answer copies only what the task asks fails, the
+feedback lists the copied texts it judged. Split notes cannot be selected as whole sources. The delivered claims keep the same text, cells, tally and evidence id fields.
 For a comparison restricted to each group's minimum or maximum, the composer also names a private selection:
 the grouping field, the inner field and its extreme. Group names must copy an exact span from the record's quote
 or, for captured page text, its own captured heading path. Code selects each group's tied extremes before applying
@@ -327,7 +336,8 @@ the outer comparison. The claim cites every qualifying record used in the select
 only the outer winners. This selection survives packing and rewrites without adding fields to delivered claims.
 An extreme can supply both its numeric result and requested fields from its winning records. If a draft uses a slot named for the compared field as its numeric result, that slot gives the shared value once, including when records tie. A prose claim or table cell uses one slot for the comparison. Separate cells can show the computed result and the value as each winner writes it. Other typed computed slots name the fields to copy from each winner. Code selects the rank and every tied winner first, then copies each requested field only from those records and their associated source notes. Literal-copy checks accept wording from a record's quote or captured heading, never its address or generated metadata. Field-support checks use those same sources and reject a missing, ambiguous or unrelated value. A name and price can therefore share a prose claim or occupy separate table cells without the composer choosing the winning record.
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The response schema requires a field for sums, minima and maxima; only counts may omit it. The composer marks it as a tally with
-the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
+the kind of record, the scope the task gives those records in a field of its own (such as "by Albert Einstein" or
+"httpx or requests"), and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. For a total or extreme, membership uses the task's scope as well as the draft's record kind, with the page's labels identifying the requested state. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
 or compares, writes the value into the claim and cites every record it rests on. For a count per group, such as quotes

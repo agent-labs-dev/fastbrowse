@@ -1484,7 +1484,7 @@ async fn desktop(
         let opened = match desktop::connect(&program, view).await {
             Ok(client) => {
                 *server.lock().await = Some(client.clone());
-                desktop::DeskpilotPage::open(client, &commands, view).await
+                desktop::DeskpilotPage::open(client, &commands, view).await.map(|page| page.traced(http.trace.clone()))
             }
             Err(error) => Err(error),
         };

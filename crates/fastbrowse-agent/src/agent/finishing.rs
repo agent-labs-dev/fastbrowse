@@ -16,7 +16,7 @@ use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use std::collections::HashSet;
 
-use crate::memory::Notes;
+use crate::memory::{Fact, Notes};
 use crate::retrieval::{
     ComposedAnswer, Draft, Screenshot, compose_reviewed, draft_answer, draft_reviewed, noticed, page_quotes,
 };
@@ -278,7 +278,17 @@ impl Agent {
             !text.trim().is_empty() && (state.appearance || !state.notes.repeats_page_text(text, &observation.url))
         });
         if let Some(text) = reading_text {
-            state.notes.add_image_read(&self.mask(&text), &observation.url, observation.captured_at, &png);
+            let fact = Fact::read_from_image(&self.mask(&text), &observation.url, observation.captured_at, &png);
+            // An image read has no capture, so its trace event keeps the fact with its evidence: `Notes::add` rebuilds
+            // it, as `Notes::record` rebuilds a page read. Without it a trace lost every answer read off a screenshot.
+            self.event("image_read", || {
+                Map::from_iter([
+                    ("step".into(), state.steps.len().into()),
+                    ("url".into(), observation.url.clone().into()),
+                    ("facts".into(), serde_json::to_value([&fact]).unwrap_or_default()),
+                ])
+            });
+            state.notes.add(fact);
             state.compose = true;
         } else {
             state.unanswered_images.insert(image);
@@ -578,29 +588,74 @@ const UNOBTAINABLE_INSTRUCTIONS: &str = "# Unavailable item\nA browser agent's t
 pub(super) const CHANGED: &str =
     "This run ended without finishing after changing fields on the page, which may still hold what it entered:";
 
+/// Said before the commits a run that ended without finishing sent, each with the fields of its own form it entered. A
+/// run that posted two replies and then stopped on a later click said both replies may still be in their fields (#1317).
+pub(super) const COMMITTED: &str =
+    "This run sent these commits before it ended, each with what it entered in that commit's form:";
+
+/// Said of a commit the run sent and then ended before the next page showed whether it was taken.
+pub(super) const UNSEEN: &str = "the run ended before the page showed whether it was taken";
+
 /// What a clicked option, box or switch is said to have left when the page changed without any field reporting a
 /// new value, checked or selected state, as a select that shows its choice only in its label does.
 pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports what it now holds";
 
-/// What a run's executed steps left in each field they changed, the latest change to each, as [`CHANGED`] says it:
-/// text typed or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field
-/// it changed, as the page read it after the click. None when no step changed a field.
+/// What a run's executed steps did to the page: each commit it sent, as [`COMMITTED`] says it, with what it entered in
+/// the commit's own form, then the fields left changed, the latest change to each, as [`CHANGED`] says it: text typed
+/// or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field it changed, as
+/// the page read it after the click. A commit sends only its own form, as the page reports it, so a field of another
+/// form stays among the changed fields. Without a form, only the committing control's own change is sent.
 pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
-    let mut changed: IndexMap<&str, String> = IndexMap::new();
-    let mut put = |field, left| {
-        changed.shift_remove(field);
-        changed.insert(field, left);
-    };
-    for entry in history.iter().filter(|entry| entry.outcome == StepOutcome::Executed) {
+    // Each field's latest value, with its form and the step that directly targeted it.
+    let mut changed = IndexMap::new();
+    let mut committed = Vec::new();
+    for (index, entry) in history.iter().enumerate().filter(|(_, entry)| entry.outcome == StepOutcome::Executed) {
+        let form = entry.form.as_ref();
+        let mut put = |form, field, left, was_target: bool| {
+            let key = (form, field);
+            changed.shift_remove(&key);
+            changed.insert(key, (was_target.then_some(index), left));
+        };
         match (entry.operation, &entry.text, entry.target.as_deref()) {
-            (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => put(target, text::repr(text)),
-            _ => entry.set.iter().for_each(|(field, left)| put(field, left.clone())),
+            (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => {
+                put(form, target, text::repr(text), true)
+            }
+            _ => entry.set.iter().for_each(|field| {
+                put(field.form.as_ref(), field.label.as_str(), field.value.clone(), field.was_target);
+            }),
         }
+        let Some(commit) = entry.commit else { continue };
+        let step = match (entry.operation, entry.target.as_deref()) {
+            (Some(operation), Some(target)) => format!("{operation} {}", text::repr(target)),
+            (Some(operation), None) => operation.to_string(),
+            (None, _) => "a step".to_string(),
+        };
+        let mut entered = Vec::new();
+        changed.retain(|(from, field), (by, left)| {
+            let sent = *from == form && (form.is_some() || *by == Some(index));
+            if sent {
+                entered.push(format!("{field}: {left}"));
+            }
+            !sent
+        });
+        let mut line = format!("- {step}");
+        if commit == crate::policy::Commit::Sent {
+            line += &format!(" ({UNSEEN})");
+        }
+        if !entered.is_empty() {
+            line += &format!(", with {}", entered.join("; "));
+        }
+        committed.push(line);
     }
-    (!changed.is_empty()).then(|| {
-        let lines: Vec<String> = changed.iter().map(|(field, left)| format!("- {field}: {left}")).collect();
+    let committed = (!committed.is_empty()).then(|| format!("{COMMITTED}\n{}", committed.join("\n")));
+    let changed = (!changed.is_empty()).then(|| {
+        let lines: Vec<String> = changed.iter().map(|((_, field), (_, left))| format!("- {field}: {left}")).collect();
         format!("{CHANGED}\n{}", lines.join("\n"))
-    })
+    });
+    match (committed, changed) {
+        (Some(committed), Some(changed)) => Some(format!("{committed}\n\n{changed}")),
+        (committed, changed) => committed.or(changed),
+    }
 }
 
 /// What the answer of a run that stopped with a step of its task undone says first: what it read can show what was
