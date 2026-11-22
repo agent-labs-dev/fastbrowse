@@ -550,9 +550,7 @@ impl Agent {
                 effect: Some(format!("went to {landed}")),
                 ..HistoryEntry::new(Some(Operation::Navigate), Some(&opening), StepOutcome::Executed, true)
             });
-            if start.is_some() {
-                state.start_landing_url = Some(landed);
-            }
+            state.start_landing_url = Some(landed);
         }
         Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }

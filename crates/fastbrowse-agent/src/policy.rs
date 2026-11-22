@@ -13,7 +13,7 @@ use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
     Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images,
-    JEV_REQUEST_BYTES, NoulQuestion, Question, asset_bytes, referenced,
+    JEV_REQUEST_BYTES, NoulQuestion, Question, asset_bytes, jev_image_tokens, referenced,
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::keys::role_keys;
@@ -61,12 +61,25 @@ pub(crate) mod keys {
 }
 
 const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after that action is among the recent actions; what the page already showed before it is not the\nanswer, however close it looks.";
-const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task names one, choose\nby context; a link in one record's context opens it and shows no more of the list.";
+const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nEach option is the element in state.elements with its id, whose `context` is the card, row or section it belongs\nto. When the task names one, choose by context; a link in one record's context opens it and shows no more of the\nlist.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could carrying out any part of the task or current subgoal that is still needed, or reading what it needs, act on or rely on the element in each question?\nUse recent actions to judge which task steps are already complete.\nJudge by its label, role, context and href. An already_read link leads to a page this run has read;\nconsider whether visiting it again would help the task. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
 
 fn untrusted(rules: &str) -> String {
     format!("{UNTRUSTED}\n{rules}")
+}
+
+/// What `other_site` on an element means, told only on a page where a link carries it: a run checking one page on a
+/// Pages preview followed its store button to another site and ended at that site's security check, with nothing
+/// saying the button left the site the task was about (#1137).
+pub const OTHER_SITE: &str = "An element marked other_site is a link to a different site: following it leaves the site the browser opened for this task. Follow one only when the task asks for that link or for what that other site holds.";
+
+/// `rules` with `OTHER_SITE` added when one of `controls` carries the mark.
+fn told_sites(rules: &str, controls: &[Control]) -> String {
+    match controls.iter().any(|control| control.other_site == Some(true)) {
+        true => format!("{rules}\n{OTHER_SITE}"),
+        false => rules.to_string(),
+    }
 }
 
 pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTION_RULES));
@@ -169,7 +182,7 @@ pub struct HistoryEntry {
     /// Each field a click on an option, checkbox, radio or switch changed, described, with what the page reads it as
     /// holding after the click. Kept out of what models are shown: it is the run's own record of what it changed.
     #[serde(skip)]
-    pub set: Vec<(String, String)>,
+    pub set: Vec<FieldChange>,
     /// The task step a click placed inside a drawn surface was made for. Kept apart from `target`, which actions are
     /// withheld and counted by.
     #[serde(skip)]
@@ -182,6 +195,50 @@ pub struct HistoryEntry {
     /// The form the step submitted, kept out of what models are shown but for a question about another submission.
     #[serde(skip)]
     pub submitted: Option<Submitted>,
+    /// The commit the step sent, if it sent one: a run that posted two replies and then stopped reported both as typed
+    /// but unsent. Kept out of what models are shown: it is the run's own record.
+    #[serde(skip)]
+    pub commit: Option<Commit>,
+    /// The form or field group the step's target belongs to, as the page reports it: a commit sends the fields of its
+    /// own form, and no others.
+    #[serde(skip)]
+    pub form: Option<Form>,
+}
+
+/// The scope of a form or field group. A local form id can be reused in other frames or documents.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Form {
+    pub(crate) document: String,
+    pub(crate) frame: Option<String>,
+    pub(crate) id: String,
+}
+
+impl Form {
+    pub(crate) fn of(observation: &Observation, control: &Control) -> Option<Self> {
+        Some(Self {
+            document: observation.document_key.clone(),
+            frame: control.frame_id.clone(),
+            id: control.form_id.clone()?,
+        })
+    }
+}
+
+/// A field changed by a click, with the value and form the page reports for that field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldChange {
+    pub(crate) label: String,
+    pub(crate) value: String,
+    pub(crate) form: Option<Form>,
+    pub(crate) was_target: bool,
+}
+
+/// A commit a step sent, and whether the run saw the page take it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Commit {
+    /// Sent, and the run ended before the next page showed whether it was taken.
+    Sent,
+    /// The page took it, as the run counts its commits.
+    Taken,
 }
 
 /// The form a step submitted, and what its other fields held as it went.
@@ -275,6 +332,8 @@ impl HistoryEntry {
             for_step: None,
             look: None,
             submitted: None,
+            commit: None,
+            form: None,
         }
     }
 
@@ -720,7 +779,14 @@ pub async fn decide(
             drop_a_picture(context.to_mut());
             continue;
         }
-        if fits(&request, config) {
+        if step_room(&request, config) >= 0 {
+            // Jev counts every picture's tokens, for each place it is used, on top of the text: a step whose text fits
+            // but whose pictures do not was sent anyway and refused with `max_tokens_exceeded` (#1303). The oldest
+            // card goes first, as for the body limit, until the first request sent fits.
+            if shows_pictures(&context) && !pictures_fit(&request, config) {
+                drop_a_picture(context.to_mut());
+                continue;
+            }
             match evaluate(jev, &request, &controls, reduction, ledger).await {
                 Ok(mut decision) => {
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
@@ -796,8 +862,7 @@ impl Fitting<'_> {
     /// How many characters the request's state runs over Jev's limit; zero or less when it fits.
     fn excess(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> i64 {
         let request = build_request(observation, controls, context, self.config, self.options);
-        let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-        text::len(&dumps(&request.state)) as i64 - self.config.tokens.input_chars(&written)
+        -step_room(&request, self.config)
     }
 
     fn fits(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> bool {
@@ -964,7 +1029,7 @@ async fn shortlist(
     let protected_set: HashSet<usize> = (0..controls.len()).filter(|i| protected(&controls[*i])).collect();
     let candidates: Vec<usize> = (0..controls.len()).filter(|i| !protected_set.contains(i)).collect();
     let state = json!({
-        "rules": *RELEVANCE,
+        "rules": told_sites(&RELEVANCE, controls),
         "task": context.task,
         "subgoal": context.subgoal,
         // Scrolling changes visibility, not completed task steps. Other actions can make an unchanged control
@@ -1178,11 +1243,12 @@ pub fn build_request(
         offered_operations(observation, &indexed, context, &urls)
     };
     let mut questions: IndexMap<String, Question> = IndexMap::new();
-    let target_rules = TARGET.as_str();
+    let target_rules = told_sites(&TARGET, controls);
+    let target_rules = target_rules.as_str();
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            HistoryEntry::told(&NEXT_ACTION, &context.history),
+            told_sites(&HistoryEntry::told(&NEXT_ACTION, &context.history), controls),
             offered.iter().map(|op| {
                 // The operation is chosen apart from its target, and a choice of one address is answered without Jev
                 // at all, so the operation names where navigate goes: told only "another address", Jev searched the
@@ -1420,9 +1486,53 @@ pub fn build_request(
 /// slower and less accurate. An image puts a request there too. Questions asked ahead save a round trip only below it.
 const LONG_CONTEXT_BYTES: usize = 32_000;
 
+/// Whether the request's text fits Jev's input limit; its pictures are counted by `pictures_fit`.
 pub fn fits(request: &Request, config: &Config) -> bool {
-    let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-    text::len(&dumps(&request.state)) as i64 <= config.tokens.input_chars(&written)
+    room(text::len(&dumps(&request.state)) as i64, &request.questions, config) >= 0
+}
+
+/// Room in the tightest text request, including the target choices Jev may ask after choosing a group.
+fn step_room(request: &Request, config: &Config) -> i64 {
+    let state_chars = text::len(&dumps(&request.state)) as i64;
+    let initial = room(state_chars, &request.questions, config);
+    request.groups.iter().fold(initial, |room_left, (&operation, groups)| {
+        groups.iter().fold(room_left, |room_left, group| {
+            room_left.min(room(state_chars, &group_target_question(request, operation, group), config))
+        })
+    })
+}
+
+/// Whether the request, and each target question asked after a group is chosen, fits Jev's input limit with the tokens
+/// of every picture it refers to, once for each use. A group's question shows its members' cards, which the first
+/// request does not.
+fn pictures_fit(request: &Request, config: &Config) -> bool {
+    let state = request.state.to_string();
+    let state_chars = text::len(&dumps(&request.state)) as i64;
+    let asked = |questions: &IndexMap<String, Question>| {
+        let written = format!("{state}{}", serde_json::to_string(questions).unwrap_or_default());
+        let tokens: i64 = request
+            .images
+            .iter()
+            .map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png))
+            .sum();
+        room(state_chars, questions, config) >= config.tokens.decision_chars_of(tokens)
+    };
+    asked(&request.questions)
+        && request.groups.iter().all(|(&operation, groups)| {
+            groups.iter().all(|group| asked(&group_target_question(request, operation, group)))
+        })
+}
+
+/// The characters of Jev's input limit `state` leaves unused beside `questions`.
+fn room(state_chars: i64, questions: &IndexMap<String, Question>, config: &Config) -> i64 {
+    let written: Vec<String> = questions.values().map(Dump::dump_json).collect();
+    config.tokens.input_chars(&written) - state_chars
+}
+
+/// The question that picks a target from `group` once Jev has chosen it for `operation`.
+fn group_target_question(request: &Request, operation: Operation, group: &[Control]) -> IndexMap<String, Question> {
+    let question = target_question(operation, group, &request.target_rules, &request.looks);
+    IndexMap::from([(keys::target(operation), question.into())])
 }
 
 /// The bytes the request's body takes as the Jev client sends it: its state and questions as JSON, and each picture
@@ -1510,11 +1620,7 @@ async fn evaluate(
         let group_answer = choice_answer(&evaluation, &keys::group(operation))?;
         let group = &groups[group_index(&group_answer.choice, groups.len())?];
         let key = keys::target(operation);
-        let questions = IndexMap::from([(
-            key.clone(),
-            target_question(operation, group, &request.target_rules, &request.looks).into(),
-        )]);
-        let inner = ask(&questions).await?;
+        let inner = ask(&group_target_question(request, operation, group)).await?;
         let target_answer = choice_answer(&inner, &key)?;
         target = Some(find_control(group, &target_answer.choice)?);
         // The element was only ever chosen from inside the group, so a doubtful group is a doubtful target.
@@ -1733,6 +1839,9 @@ fn relevance_element(control: &Control) -> Map<String, Value> {
     if control.already_read == Some(true) {
         element.insert("already_read".into(), true.into());
     }
+    if control.other_site == Some(true) {
+        element.insert("other_site".into(), true.into());
+    }
     if control.offscreen {
         element.insert("offscreen".into(), true.into());
     }
@@ -1752,19 +1861,28 @@ fn context_of(control: &Control) -> Option<String> {
 
 /// A control as the step's state lists it.
 pub fn element(control: &Control) -> Map<String, Value> {
+    control_description(control, true)
+}
+
+/// A control's description; `shared` adds the context and operations every question reads from the step's state, which
+/// a target option refers to by id rather than repeating.
+fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
     let mut element = Map::new();
     element.insert("id".into(), control.id.clone().into());
     element.insert("label".into(), control.label.clone().into());
     element.insert("role".into(), control.role.clone().into());
-    element.insert("operations".into(), sorted_operations(control));
+    if shared {
+        element.insert("operations".into(), sorted_operations(control));
+    }
     let optional = [
-        ("context", context_of(control).map(Value::from)),
+        ("context", context_of(control).filter(|_| shared).map(Value::from)),
         ("value", control.value.clone().map(Value::from)),
         // An unfocused control offers nothing an unknown one does not, and every control but one is unfocused.
         ("focused", control.focused.filter(|focused| *focused).map(Value::from)),
         ("href", control.href.clone().map(Value::from)),
         ("next_page", pager_link(control).then_some(true.into())),
         ("already_read", control.already_read.filter(|read| *read).map(Value::from)),
+        ("other_site", control.other_site.filter(|other| *other).map(Value::from)),
         ("drawn", control.drawn.filter(|drawn| *drawn).map(Value::from)),
         ("checked", control.checked.map(Value::from)),
         ("selected", control.selected.map(Value::from)),
@@ -1843,10 +1961,9 @@ fn target_question(
     rules: &str,
     looks: &IndexMap<String, Vec<u8>>,
 ) -> ChoiceQuestion {
-    // Sending only the label and pointing Jev at the shared state for the rest is two thirds smaller on a dense page,
-    // and it was tried. It bought no measured latency, because the request was never the slow part, and a criterion
-    // the model has to go and look up is a worse criterion: the choice is what this whole design rests on, so it gets
-    // the attributes in front of it.
+    // An option keeps what tells it apart as a target (label, role, href, value, state), and refers by id to the
+    // context and operations the shared state carries for the operation question. Repeated in every option, they
+    // added 45% to a step request's bytes and 18% to its cost (#1286).
     let shown = candidates.iter().any(|c| looks.contains_key(&c.id));
     let rules = if shown { json!([rules, LOOKS_LIKE]) } else { json!(rules) };
     choice(
@@ -1864,7 +1981,7 @@ fn target_question(
 /// Ported from browser-use/jev-ultrafast (MIT), snapshot.js: name opening a field separately from typing in it so a
 /// picker is a useful click target even when its value is already filled.
 fn target_element(control: &Control, operation: Operation) -> Map<String, Value> {
-    let mut element = element(control);
+    let mut element = control_description(control, false);
     if operation == Operation::Press && !role_keys(&control.role).is_empty() {
         let label = element["label"].as_str().unwrap_or_default().to_string();
         let given = if control.operations.contains(&Operation::Fill) { ", or a task-supplied key," } else { "" };
@@ -2104,7 +2221,7 @@ mod tests {
     }
 
     #[test]
-    fn test_operation_and_target_choices_both_receive_control_context_and_actions() {
+    fn test_control_context_and_actions_are_sent_once_in_shared_state() {
         let carded = |i| Control {
             context: Some(format!("Card {i}")),
             shown_by: Some("clicking Booking date".into()),
@@ -2115,9 +2232,13 @@ mod tests {
         let context = StepContext::new("t");
         let targeted = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let criteria: Value = serde_json::from_str(&targeted.questions["click_target"].dump_json()).unwrap();
-        assert_eq!(criteria["criteria"]["b1"]["context"], "shown by clicking Booking date; Card 1");
+        // A target option names its element by id; its context and operations are read from the shared state, which
+        // the operation question needs them in too (#1286).
+        assert_eq!(criteria["criteria"]["b1"], json!({"id": "b1", "label": "Button 1", "role": "button"}));
+        assert_eq!(criteria["criteria"]["away"]["href"], "/away");
+        assert!(criteria["instructions"].as_str().unwrap().contains("state.elements"));
         let shown = &targeted.state["elements"][0];
-        assert_eq!(shown["context"], criteria["criteria"]["b1"]["context"]);
+        assert_eq!(shown["context"], "shown by clicking Booking date; Card 1");
         assert_eq!(shown["operations"], json!(["click"]));
         assert_eq!(targeted.state["elements"][3]["href"], "/away");
         // Grouped targets retain the same facts in shared state.
@@ -2398,6 +2519,26 @@ mod tests {
     }
 
     #[test]
+    fn test_rules_tell_jev_what_other_site_means_only_when_a_link_carries_it() {
+        let mut page = observation((0..3).map(button).collect());
+        page.controls[1].role = "link".into();
+        page.controls[1].href = Some("https://store.test/item".into());
+        let context = StepContext::new("check that the page's sections open");
+        let plain = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        page.controls[1].other_site = Some(true);
+        let marked = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let instructions = |request: &Request, key: &str| match &request.questions[key] {
+            Question::Choice(question) => question.instructions.clone(),
+            _ => unreachable!("{key} is a choice"),
+        };
+        assert!(!instructions(&plain, keys::OPERATION).contains(OTHER_SITE));
+        assert!(instructions(&marked, keys::OPERATION).contains(OTHER_SITE));
+        assert!(instructions(&marked, &keys::target(Operation::Click)).contains(OTHER_SITE));
+        assert_eq!(marked.state["elements"][1]["other_site"], json!(true));
+        assert!(OTHER_SITE.contains("leaves the site the browser opened for this task"));
+    }
+
+    #[test]
     fn test_a_step_on_a_pictured_control_shows_its_card_in_the_recent_actions() {
         let page = observation((0..3).map(button).collect());
         let mut context = StepContext::new("make the text bold, then save");
@@ -2667,6 +2808,112 @@ mod tests {
         let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!(*jev.pictures.lock().unwrap(), vec![4, 1]);
         assert_eq!(decision.reduction, Reduction::None, "no text or control was cut for the pictures");
+    }
+
+    /// Refuses as too large a request past Jev's 32,000 tokens for its state and largest question as Jev counts them:
+    /// its text at 1.5 characters a token and each picture at its measured count for every place it is used.
+    struct Counting {
+        inner: Fake,
+        refused: Mutex<usize>,
+    }
+
+    impl DecisionClient for Counting {
+        fn profile(&self) -> DecisionProfile {
+            self.inner.profile()
+        }
+
+        fn evaluate_images<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+            images: &'a Images,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            let written = format!("{state}{}", serde_json::to_string(questions).unwrap());
+            let pictures: i64 = images
+                .iter()
+                .map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png))
+                .sum();
+            let largest = questions.values().map(|question| text::len(&question.dump_json())).max().unwrap_or(0);
+            let text = (text::len(&dumps(state)) + largest) as f64 / fastbrowse_core::config::JSON_CHARS_PER_TOKEN;
+            if text as i64 + pictures > 32_000 {
+                *self.refused.lock().unwrap() += 1;
+                return Box::pin(async { Err(DecisionError::input_too_large("max_tokens_exceeded")) });
+            }
+            self.inner.evaluate(state, questions)
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            self.inner.evaluate(state, questions)
+        }
+    }
+
+    /// Eight viewport-sized cards are about 29,000 tokens as Jev counts them, under the body limit in bytes but past
+    /// its input limit beside a page's text: the oldest are left out before the first request is sent, so Jev is never
+    /// sent one it refuses (#1303).
+    #[test]
+    fn test_a_step_whose_cards_overrun_jevs_input_limit_leaves_out_the_oldest_before_asking() {
+        let jev = Counting { inner: fake(&[("operation", "click")], ""), refused: Mutex::new(0) };
+        let mut context = StepContext::new("press button 1");
+        context.history = (0..8u8)
+            .map(|i| {
+                let mut card = Vec::new();
+                image::RgbaImage::from_pixel(1568, 882, image::Rgba([i, 0, 0, 255]))
+                    .write_to(&mut std::io::Cursor::new(&mut card), image::ImageFormat::Png)
+                    .unwrap();
+                let mut entry = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, false);
+                entry.look = Some(Look { before: card, after: None });
+                entry
+            })
+            .collect();
+        let mut page = observation((0..3).map(button).collect());
+        page.viewport_text = "Plain page text. ".repeat(1200);
+        block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
+        assert_eq!(*jev.refused.lock().unwrap(), 0, "a request Jev counts past its limit was sent");
+        let states = jev.inner.states.lock().unwrap();
+        let carded: Vec<bool> = states[0]["recent_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.get("looks_like").is_some())
+            .collect();
+        let kept = carded.iter().filter(|carded| **carded).count();
+        assert!((1..8).contains(&kept), "{carded:?}");
+        assert!(carded[8 - kept..].iter().all(|carded| *carded), "the newest cards are kept: {carded:?}");
+    }
+
+    /// A group's follow-up shows its members' cards, which the request that chose the group did not: with the run's
+    /// cards filling most of Jev's input limit, the follow-up is fitted before the first request is sent, rather than
+    /// sent and refused.
+    #[test]
+    fn test_a_group_follow_up_whose_cards_overrun_jevs_input_limit_is_fitted_before_asking() {
+        let card = |shade: u8| {
+            let mut png = Vec::new();
+            image::RgbaImage::from_pixel(1568, 882, image::Rgba([shade, 0, 0, 255]))
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            png
+        };
+        let inner =
+            Fake { options: 10, ..fake(&[("operation", "click"), ("click_group", "2"), ("click_target", "b9")], "") };
+        let jev = Counting { inner, refused: Mutex::new(0) };
+        let mut context = StepContext::new("add the red kettle");
+        context.history = (0..7u8)
+            .map(|i| {
+                let mut entry = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, false);
+                entry.look = Some(Look { before: card(i), after: None });
+                entry
+            })
+            .collect();
+        context.looks = (8..11).map(|i| (format!("b{i}"), card(200 + i as u8))).collect();
+        let mut page = observation((0..12).map(button).collect());
+        page.viewport_text = "Plain page text. ".repeat(300);
+        let decision = block_on(decide(&jev, &page, &context, &grouped(), None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.target.as_ref().unwrap().id, "b9");
+        assert_eq!(*jev.refused.lock().unwrap(), 0, "a follow-up Jev counts past its limit was sent");
     }
 
     /// A request no larger than Jev's documented limit in tokens, at 1.5 characters a token.
