@@ -489,6 +489,25 @@ async fn a_film_frame_leaves_no_png_in_deskpilots_cache() {
     assert!(!dir.join("launched.png").exists() && !dir.join("waited.png").exists());
 }
 
+#[tokio::test]
+async fn a_timed_out_film_frame_removes_its_png_when_the_reply_arrives() {
+    let fake = filmed("late-frame");
+    let (film, kept) = frames();
+    std::fs::write(fake.dir().join("shot.delay"), "1").unwrap();
+    let page = open(&fake).await.filmed(film).await;
+    page.withhold_frames(true);
+    page.observe().await.unwrap();
+    let path = fake.dir().join("launched.png");
+    tokio::time::timeout(std::time::Duration::from_millis(250), async {
+        while path.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the late shot's PNG was left on disk");
+    assert!(kept.frames.lock().unwrap().is_empty());
+}
+
 fn stop_tool() -> Value {
     json!({"name": "stop", "inputSchema": {"type": "object", "properties": {}}})
 }
@@ -819,6 +838,38 @@ async fn a_wait_ends_at_its_deadline_though_the_window_list_is_slow() {
 }
 
 #[tokio::test]
+async fn a_second_wait_bounds_pending_window_discovery() {
+    let fake = waiting_window("wait-pending-discovery", 600, false);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    std::fs::write(fake.dir().join("windows.delay"), "2").unwrap();
+    let wait = Action::new(Operation::Wait);
+    page.wait(&wait, &before, 0.03).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_millis(250), page.wait(&wait, &before, 0.03))
+        .await
+        .expect("pending window discovery exceeded the WAIT budget")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_wait_bounds_its_check_for_a_reopened_window() {
+    let fake = closing_dialog("wait-reopened-deadline");
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    let mut click = Action::new(Operation::Click);
+    click.target_id = Some("e2".into());
+    page.act(&click, &before).await.unwrap();
+    let closed = page.observe().await.unwrap();
+    assert!(closed.controls.is_empty());
+    std::fs::write(fake.dir().join("wait_for.delay"), "2").unwrap();
+    let wait = Action::new(Operation::Wait);
+    tokio::time::timeout(std::time::Duration::from_millis(250), page.wait(&wait, &closed, 0.03))
+        .await
+        .expect("reopened window check exceeded the WAIT budget")
+        .unwrap();
+}
+
+#[tokio::test]
 async fn a_drag_between_same_named_files_whose_ids_swapped_is_stale() {
     // Two search results named report.pdf from different folders trade ids when the list reorders: role and name alone
     // pass, and the wrong file would be dragged.
@@ -843,6 +894,8 @@ async fn a_drag_between_same_named_files_whose_ids_swapped_is_stale() {
     let result = page.act(&drag, &before).await.unwrap();
     assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
     assert!(calls(&fake, "drag").is_empty());
+    fake.replies("wait_for", [refused("not_found", "no window 0xabc")]).replies("windows", [list(&[])]);
+    assert!(matches!(page.observe().await, Err(BrowserError::Unavailable(_))));
 }
 
 #[tokio::test]

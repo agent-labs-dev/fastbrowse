@@ -235,7 +235,7 @@ impl DeskpilotPage {
     /// Takes a frame of the window as it is now, for the next observation to film or drop.
     async fn hold_frame(&self) {
         // A shot that hangs costs the video a frame, never the step its time.
-        let png = tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), self.frame()).await.unwrap_or(None);
+        let png = self.frame().await;
         *self.pending.lock().unwrap() = png;
     }
 
@@ -245,10 +245,16 @@ impl DeskpilotPage {
         if self.film.is_none() || self.withheld.load(Ordering::SeqCst) {
             return None;
         }
-        let (shot, png, path) = self.shoot().await.ok()?;
+        let client = Arc::clone(&self.client);
+        let window = self.address();
+        // A late reply still names a file we must remove, even after the recording has dropped this frame.
+        let capture = tokio::spawn(async move {
+            let (shot, png, _cleanup) = Self::take_shot(&client, window).await?;
+            Ok::<_, BrowserError>((shot, png))
+        });
+        let (shot, png) =
+            tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), capture).await.ok()?.ok()?.ok()?;
         *self.framed.lock().unwrap() = Some((shot.width, shot.height));
-        // The frame is only film: its PNG must not outlive the bytes, whether the next observation films or drops it.
-        let _ = tokio::fs::remove_file(&path).await;
         // Withheld while the shot was taken: a secret fill may have just begun.
         (!self.withheld.load(Ordering::SeqCst)).then_some(png)
     }
@@ -276,10 +282,13 @@ impl DeskpilotPage {
 
     /// A shot of the window, as deskpilot binds later points to it, its PNG and the file deskpilot wrote it to.
     async fn shoot(&self) -> PageResult<(Shot, Vec<u8>, String)> {
-        let window = self.address();
-        let content = self
-            .client
-            .call("shot", self.client.placed("shot", json!({"window": window})))
+        let (shot, png, mut cleanup) = Self::take_shot(&self.client, self.address()).await?;
+        Ok((shot, png, cleanup.0.take().expect("shot file is still owned")))
+    }
+
+    async fn take_shot(client: &Deskpilot, window: String) -> PageResult<(Shot, Vec<u8>, RemoveOnDrop)> {
+        let content = client
+            .call("shot", client.placed("shot", json!({"window": window})))
             .await
             .map_err(|error| BrowserError::ScreenshotsUnavailable(error.message().to_string()))?;
         let taken = mcp::json_block(&content)
@@ -294,12 +303,11 @@ impl DeskpilotPage {
             return Err(BrowserError::ScreenshotsUnavailable("deskpilot described its shot without a file".into()));
         };
         // From here the file is ours to remove however this ends: a read that fails, or a run cancelled mid-read.
-        let mut cleanup = RemoveOnDrop(Some(path.clone()));
+        let cleanup = RemoveOnDrop(Some(path.clone()));
         let png = tokio::fs::read(&path)
             .await
             .map_err(|error| BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")))?;
-        cleanup.0 = None;
-        Ok((Shot { id, width, height }, png, path))
+        Ok((Shot { id, width, height }, png, cleanup))
     }
 
     fn address(&self) -> String {
@@ -525,7 +533,8 @@ impl DeskpilotPage {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Ok(false);
             }
-            tokio::time::sleep(POLL).await;
+            let next = Instant::now() + POLL;
+            tokio::time::sleep_until(deadline.map_or(next, |deadline| deadline.min(next)).into()).await;
         }
     }
 
@@ -867,14 +876,30 @@ impl DeskpilotPage {
     }
 
     async fn act_within(&self, action: &Action, observation: &Observation, seconds: f64) -> PageResult<ActResult> {
-        let started = Instant::now();
-        if self.still_closed().await? {
-            return Err(self.ended());
+        let deadline =
+            (action.operation == Operation::Wait).then(|| Instant::now() + Duration::from_secs_f64(seconds.max(0.0)));
+        match Self::until(deadline, self.still_closed()).await {
+            Some(closed) => {
+                if closed? {
+                    return Err(self.ended());
+                }
+            }
+            None => {
+                return Ok(ActResult {
+                    outcome: StepOutcome::Executed,
+                    failure: None,
+                    page_changed: false,
+                    detail: Some("the window did not change".to_string()),
+                    moved: false,
+                });
+            }
         }
         // A window the last step opened, which its lookup was too slow to find, is followed before anything is sent: the
         // action was chosen in the window before it, and a modal it opened would refuse or misdirect the action.
         if self.lookup_missed.load(Ordering::SeqCst) {
-            let opened = tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), self.follow_opened()).await;
+            let settle = Instant::now() + Duration::from_secs_f64(SETTLE_SECONDS);
+            let limit = deadline.map_or(settle, |deadline| deadline.min(settle));
+            let opened = tokio::time::timeout_at(limit.into(), self.follow_opened()).await;
             if let Ok(Ok(Some(_))) = opened {
                 self.generation.fetch_add(1, Ordering::Relaxed);
                 return Ok(ActResult {
@@ -913,8 +938,11 @@ impl DeskpilotPage {
         // Only an action that sends input to the app can be what closes it: a wait sends nothing, and a tab switch
         // only chooses which window is read, so a window lost during either is not the run's own close.
         let sends_input = !matches!(action.operation, Operation::Wait | Operation::SwitchTab);
-        *self.sent.lock().unwrap() = sends_input.then(|| step_name(action, observation));
+        *self.sent.lock().unwrap() = None;
         let sent = self.dispatch(action, observation).await;
+        if sends_input && matches!(sent, Ok(None)) {
+            *self.sent.lock().unwrap() = Some(step_name(action, observation));
+        }
         let measured = if action.operation == Operation::SwitchTab && matches!(sent, Ok(None)) {
             // Another window is read next, so the step changed what the run sees whatever that window shows.
             self.generation.fetch_add(1, Ordering::Relaxed);
@@ -926,13 +954,11 @@ impl DeskpilotPage {
                 moved: false,
             })
         } else {
-            let measured = self.measured(sent, observation, seconds).await;
+            let remaining = |deadline: Instant| deadline.saturating_duration_since(Instant::now());
+            let watch = deadline.map_or(seconds, |deadline| remaining(deadline).as_secs_f64());
+            let measured = self.measured(sent, observation, watch).await;
             // A WAIT's window discovery is bound by what is left of its own deadline, a step's by a settle.
-            let discovery = if action.operation == Operation::Wait {
-                Duration::from_secs_f64(seconds).saturating_sub(started.elapsed())
-            } else {
-                Duration::from_secs_f64(SETTLE_SECONDS)
-            };
+            let discovery = deadline.map_or(Duration::from_secs_f64(SETTLE_SECONDS), remaining);
             self.followed(measured, discovery).await
         };
         self.hold_frame().await;
@@ -1082,12 +1108,15 @@ impl Page for DeskpilotPage {
                 return Err(BrowserError::ScreenshotsUnavailable("no screenshot of the window was taken".into()));
             };
             let before = self.glance().await?;
-            *self.sent.lock().unwrap() = Some("click on the screenshot".into());
+            *self.sent.lock().unwrap() = None;
             let point = json!({
                 "window": self.address(), "x": x * shot.width, "y": y * shot.height, "shot": shot.id,
             });
             self.point(Operation::Click, (x * shot.width, y * shot.height, shot.width, shot.height));
-            let sent = self.tool("click", point).await.map(|()| None);
+            let sent = self.tool("click", point).await.map(|()| {
+                *self.sent.lock().unwrap() = Some("click on the screenshot".into());
+                None
+            });
             let measured = self
                 .followed(self.measured(sent, &before, SETTLE_SECONDS).await, Duration::from_secs_f64(SETTLE_SECONDS))
                 .await;
