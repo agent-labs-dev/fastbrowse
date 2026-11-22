@@ -1982,7 +1982,7 @@ impl CdpPage {
             }
             let (landed, no_hits) = self.drop_point(&drop, false).await?;
             let Point::At(x, y) = landed else { break };
-            if no_hits || (x, y) == at {
+            if (x, y) == at || (no_hits && self.receives_drop(&drop, at).await?) {
                 self.release(session_id, at.0, at.1).await?;
                 return Ok((StepOutcome::Executed, None, None));
             }
@@ -2021,6 +2021,24 @@ impl CdpPage {
             _ => Point::Gone,
         };
         Ok((centre, true))
+    }
+
+    /// Whether a release at `at` reaches the drop target or a container holding it. A target that takes no pointer hits
+    /// still receives a drop through its list, but once it has moved away, or a nested control takes hits inside it,
+    /// the pointer rests over a different control and releasing there drops onto that one.
+    async fn receives_drop(&self, drop: &Target, at: (f64, f64)) -> Result<bool, BrowserError> {
+        let script = format!(
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected) return false; \
+             const chain = []; let view = e.ownerDocument.defaultView; \
+             while (view.frameElement) {{ chain.unshift(view.frameElement); view = view.frameElement.ownerDocument.defaultView; }} \
+             let x = {}, y = {}; \
+             for (const f of chain) {{ const r = f.getBoundingClientRect(); \
+               x = (x - r.x) * f.offsetWidth / r.width - f.clientLeft; \
+               y = (y - r.y) * f.offsetHeight / r.height - f.clientTop; }} \
+             const hit = e.ownerDocument.elementFromPoint(x, y); return !!hit && hit.contains(e); }})()",
+            drop.2, at.0, at.1
+        );
+        Ok(self.evaluate(&drop.0, &script).await? == Value::Bool(true))
     }
 
     /// Abandon a drag in progress without dropping it anywhere.

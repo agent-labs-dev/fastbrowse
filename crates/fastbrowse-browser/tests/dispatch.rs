@@ -619,6 +619,39 @@ async fn test_a_drop_the_page_posts_does_not_hold_the_action() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_drop_that_takes_no_hits_is_not_released_on_a_different_control() {
+    // The destination moves away mid-drag, or holds a nested button that takes hits: either way the pointer would rest
+    // on another control, which must not receive the drop.
+    for setup in [
+        "destination.style.pointerEvents = 'none'; destination.style.left = '600px';",
+        "destination.style.pointerEvents = 'none'; destination.innerHTML = \"<button id=delete style='position:absolute;inset:0;pointer-events:auto'>Delete</button>\";",
+    ] {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        eval_active(
+            &h.page,
+            &format!(
+                "document.body.innerHTML = `
+                  <div id=source draggable=true aria-label=Card style=\"position:fixed;left:20px;top:20px;width:100px;height:80px\">Card</div>
+                  <div id=trash aria-label=Trash style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\">Trash</div>
+                  <div id=destination role=button tabindex=0 aria-label=Destination style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\">Destination</div>`;
+                window.drops = [];
+                document.addEventListener('dragover', e => e.preventDefault());
+                document.addEventListener('drop', e => {{ e.preventDefault(); window.drops.push(e.target.id); }});
+                source.ondragstart = e => {{ e.dataTransfer.setData('text/plain', 'Card'); {setup} }};
+                true"
+            ),
+        )
+        .await;
+        let obs = h.observe().await;
+        let result = h.page.act(&drag(find(&obs, "Card"), find(&obs, "Destination")), &obs).await.expect("act");
+        assert_eq!(eval_active(&h.page, "window.drops").await, json!([]), "{setup}: {result:?}");
+        assert_eq!(result.outcome, StepOutcome::Stale, "{setup}: {result:?}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_drag_hit_tests_the_destination_before_pressing() {
     for destination_change in ["none", "covered", "renamed"] {
         let Some(h) = harness().await else { return };
