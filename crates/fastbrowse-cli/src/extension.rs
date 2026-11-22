@@ -938,7 +938,7 @@ mod tests {
         assert_eq!(not_registered, Uninstalled::NotRegistered(vec![at(&bundled, "0.13.0"), at(&user, "0.13.0")]));
         assert!(dir.join("native-host").exists());
         // A retry repairs a launcher left stale: the registry already lists only these, so the launcher must too.
-        write_launcher(&dir, &[stranger.clone()]).unwrap();
+        write_launcher(&dir, std::slice::from_ref(&stranger)).unwrap();
         unregister(&dir, &stranger, &query, Vec::new).unwrap();
         let repaired = std::fs::read_to_string(dir.join("native-host")).unwrap();
         assert!(
