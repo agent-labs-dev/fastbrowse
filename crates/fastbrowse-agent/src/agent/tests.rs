@@ -2209,6 +2209,34 @@ async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opene
     assert!(opened["target"].as_str().is_some_and(|target| target.starts_with("https://example.test/reset?token=")));
 }
 
+/// A reply posted on a signed-in page was missing after a reload, because the site served the copy from before the
+/// post for a minute, and the carried-out check scored the step 0.18 and 0.11. It is told which commits the run sent,
+/// and only those.
+#[tokio::test]
+async fn test_the_done_check_is_told_each_commit_the_run_sent_and_nothing_when_none() {
+    for (commits, expected) in [
+        (
+            vec!["click 'Post (cjber / Author)'".to_string()],
+            vec!["The run's click 'Post (cjber / Author)' was sent, and the site keeps what it sent."],
+        ),
+        (Vec::new(), Vec::new()),
+    ] {
+        let mut state = run_state();
+        state.task = "Reply to the comment with: Glad it helps!".into();
+        state.commits = commits;
+        state.history.push(HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Executed, true));
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+        agent.actions_done(&mut state, &observation(&[])).await.expect("the done check answers");
+        let sent = jev.3.lock().unwrap();
+        let told: Vec<&str> = sent[0]["page_facts"]
+            .as_array()
+            .map(|facts| facts.iter().filter_map(|fact| fact.as_str()).filter(|f| f.contains("was sent")).collect())
+            .unwrap_or_default();
+        assert_eq!(told, expected, "{}", sent[0]);
+    }
+}
+
 /// Answers the opening at `landed` whatever address it was sent to, as a server that redirects does, and shows a page
 /// with nothing on it to act on, so a run's first decision is DONE.
 struct Redirecting {

@@ -165,6 +165,19 @@ pub(crate) fn unsent_fact(history: &[HistoryEntry], observation: &Observation) -
     })
 }
 
+/// One fact per commit the run has sent, each worded as the step's result names it ("click 'Post'").
+///
+/// A site can serve the copy from before a send for a while: a reply posted on a signed-in page was missing after a
+/// reload, the carried-out question scored its step 0.18 and 0.11, and the run ended stuck on a reply that was live.
+/// Replayed on the real request, the question scored 0.41 to 0.60 as sent and 0.62 to 0.75 told that the click was
+/// sent and the site keeps what it sent.
+pub(crate) fn sent_facts(commits: &[String]) -> Vec<String> {
+    unique(commits.iter().cloned())
+        .into_iter()
+        .map(|step| format!("The run's {step} was sent, and the site keeps what it sent."))
+        .collect()
+}
+
 /// The fields still empty here on a task to carry out, leaving out those the task gives no value for: Jev confirmed
 /// a form with its one field empty when nothing said so.
 pub(crate) fn empty_fields_fact(

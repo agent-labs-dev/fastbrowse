@@ -23,7 +23,9 @@ use serde_json::{Map, Value as JsonValue, json};
 
 use super::Agent;
 use super::driving::require;
-use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
+use super::helpers::{
+    caller_link, describe, dialog_question, empty_fields_fact, navigation_question, sent_facts, unsent_fact,
+};
 use super::seeing::cards;
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
@@ -2114,6 +2116,7 @@ impl Agent {
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
             .chain(state.to_carry_out.then(|| empty_fields_fact(&state.missing, observation)).flatten())
+            .chain(sent_facts(&state.commits))
             .chain(untouched)
             .collect();
         if !facts.is_empty() {
