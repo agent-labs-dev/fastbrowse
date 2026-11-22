@@ -399,11 +399,14 @@ fn test_a_model_is_charged_for_the_pictures_its_route_sends_it() {
     };
     // Jev reads the option's picture in place; another model is given only the screenshot.
     assert_eq!(tokens("jev-1.14"), 213 + 813);
+    assert_eq!(tokens("~typesafe/jev-latest"), 213 + 813);
     assert_eq!(tokens("google/gemini-decision-1"), 1120);
     assert_eq!(tokens("liquid/d1.2"), 122);
     assert_eq!(tokens("perplexity/pplx-decider-v1.2"), 79);
     assert_eq!(tokens("microsoft/microsoft-decision-1.1"), 0, "no documented image token rule");
     assert_eq!(tokens("parallel/decisions-fast"), 0, "a route OpenRouter lists without image input");
+    let custom = SystemOneClient::new("key", http, "https://custom.test", "vendor/jev-1.14").images();
+    assert_eq!(custom.image_tokens(&state, &asked, &images), 0);
 }
 
 #[test]

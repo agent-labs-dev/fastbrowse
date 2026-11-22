@@ -291,7 +291,7 @@ impl ImageAccounting {
     fn for_model(model: &str) -> Self {
         let (vendor, model) = model.trim_start_matches('~').split_once('/').unwrap_or(("", model));
         match (vendor, model) {
-            ("" | "typesafe" | "typesafe-ai", _) if model.starts_with("jev-") => Self::Jev,
+            ("" | "typesafe" | "typesafe-ai", _) if model == "jev" || model.starts_with("jev-") => Self::Jev,
             ("google", "gemini-decision-1") => Self::GeminiDecision,
             ("liquid", "d1" | "d1-ultra") => Self::LiquidPerQuestion,
             ("liquid", "d1.2" | "d1.2-ultra") => Self::LiquidPerRequest,
