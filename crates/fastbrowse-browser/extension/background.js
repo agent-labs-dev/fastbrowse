@@ -89,8 +89,9 @@ async function adoptTab(conn, run, tabId) {
     // a tab of the user's stayed grouped. Undo it now, so the failure leaves nothing behind.
     if (!run.released) {
       run.tabs.delete(tabId);
+      // The adopted marker stays: a stop that lands meanwhile releases this tab again, and without it the user's tab
+      // would be closed as one the run opened.
       await releaseTab(run, tabId);
-      run.adopted.delete(tabId);
     }
     throw error;
   } finally {
