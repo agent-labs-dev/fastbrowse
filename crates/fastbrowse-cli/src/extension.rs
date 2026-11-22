@@ -92,11 +92,22 @@ fn this_fastbrowse(program: &str) -> PathBuf {
         Some(named.to_path_buf())
     } else {
         std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path).map(|dir| dir.join(program)).find(|candidate| candidate.is_file())
+            std::env::split_paths(&path).map(|dir| dir.join(program)).find(|candidate| is_runnable(candidate))
         })
     };
     let found = found.or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| named.to_path_buf());
     canonical(&found)
+}
+
+/// A regular file the launcher would run: it skips anything else, so the lookup must too.
+fn is_runnable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata().is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    path.is_file()
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -163,10 +174,19 @@ fn reported_version_within(program: &Path, limit: std::time::Duration) -> Option
         let _ = stdout.read_to_end(&mut bytes);
         let _ = sender.send(bytes);
     });
+    let started = std::time::Instant::now();
     let bytes = receiver.recv_timeout(limit).ok();
+    // Only a probe that exits 0 counts: a wrapper that prints a version and fails is not a working install.
+    let exited_ok = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if started.elapsed() < limit => std::thread::sleep(std::time::Duration::from_millis(5)),
+            _ => break false,
+        }
+    };
     let _ = child.kill();
     let _ = child.wait();
-    let text = String::from_utf8(bytes?).ok()?;
+    let text = String::from_utf8(bytes.filter(|_| exited_ok)?).ok()?;
     let version = text.split_whitespace().nth(1)?;
     version.starts_with(|c: char| c.is_ascii_digit()).then(|| version.to_string())
 }
@@ -388,6 +408,13 @@ fn plan(
     let installs = read_installs(dir)?;
     // A host another one handed over to serves only if it is registered itself, and hands over no further: it probes nothing.
     let candidates = if delegated { Vec::new() } else { newer_installs(&installs, own, own_version, query) };
+    // Probing took time: an uninstall may have landed meanwhile, so what serves or is handed over to is decided from the
+    // registry as it is now.
+    let installs = read_installs(dir)?;
+    let candidates: Vec<Install> = candidates
+        .into_iter()
+        .filter(|candidate| installs.iter().any(|install| canonical(&install.path) == canonical(&candidate.path)))
+        .collect();
     Ok(Some((is_registered(&installs, own), candidates)))
 }
 
@@ -584,8 +611,14 @@ fn unregister(
             write_host(dir, &rest)?;
             return Ok(if registered { Uninstalled::Kept(rest) } else { Uninstalled::NotRegistered(rest) });
         }
+        // The registry goes first and its failure is the uninstall's: nothing else is removed, so a retry finishes it.
+        match std::fs::remove_file(dir.join(INSTALLS)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("cannot remove {}: {e}", dir.join(INSTALLS).display())),
+        }
         let removed = remove_browsers();
-        for file in ["native-host", "native-host.bat", INSTALLS, &format!("{HOST_NAME}.json")] {
+        for file in ["native-host", "native-host.bat", &format!("{HOST_NAME}.json")] {
             let _ = std::fs::remove_file(dir.join(file));
         }
         Ok(Uninstalled::Removed(removed))
@@ -865,14 +898,13 @@ mod tests {
             for program in &programs {
                 let dir = &dir;
                 scope.spawn(move || {
-                    locked(dir, || {
-                        let mut installs = read_installs(dir)?;
-                        // Without the lock, every thread reads the same list before any writes.
+                    // A register step that dawdles gives an unlocked read-modify-write time to lose entries.
+                    let register = |_: &Path, _: &str| {
                         std::thread::sleep(std::time::Duration::from_millis(20));
-                        installs.push(at(program, "1.0.0"));
-                        write_host(dir, &installs).map(|_| ())
-                    })
-                    .unwrap();
+                        Ok(vec!["Chrome"])
+                    };
+                    let mut out = String::new();
+                    record_install(dir, at(program, "1.0.0"), &|_: &Path| None, &mut out, register).unwrap();
                 });
             }
         });
@@ -981,6 +1013,67 @@ mod tests {
         let via_path = this_fastbrowse(program.to_str().unwrap());
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(via_link, via_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_counts_only_when_the_child_exits_zero() {
+        let dir = scratch("exit-status");
+        let (bad, good) = (dir.join("bad/fastbrowse"), dir.join("good/fastbrowse"));
+        script(&bad, "echo fastbrowse 0.16.0\nexit 1");
+        script(&good, "echo fastbrowse 0.16.0");
+        let limit = std::time::Duration::from_secs(5);
+        let (bad, good) = (reported_version_within(&bad, limit), reported_version_within(&good, limit));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!((bad, good), (None, Some("0.16.0".to_string())));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_host_uninstalled_while_it_probed_does_not_serve() {
+        let dir = scratch("uninstalled-meanwhile");
+        let (own, other) = (dir.join("own/fastbrowse"), dir.join("other/fastbrowse"));
+        script(&own, "echo fastbrowse 0.13.0");
+        script(&other, "echo fastbrowse 0.16.0");
+        write_host(&dir, &[at(&own, "0.13.0"), at(&other, "0.16.0")]).unwrap();
+        let uninstall_meanwhile = |_: &Path| {
+            std::fs::remove_file(dir.join(INSTALLS)).unwrap();
+            Some("0.16.0".to_string())
+        };
+        let planned = plan(&dir, &own, "0.13.0", false, &uninstall_meanwhile);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(planned, Ok(Some((false, vec![]))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_last_uninstall_fails_when_the_registry_cannot_be_deleted() {
+        let dir = scratch("undeletable");
+        let program = dir.join("bin/fastbrowse");
+        script(&program, "echo fastbrowse 1.0.0");
+        write_host(&dir, &[at(&program, "1.0.0")]).unwrap();
+        // A directory in its place cannot be removed as a file.
+        std::fs::remove_file(dir.join(INSTALLS)).unwrap();
+        std::fs::create_dir(dir.join(INSTALLS)).unwrap();
+        std::fs::write(dir.join(INSTALLS).join("x"), "").unwrap();
+        let result = unregister(&dir, &canonical(&program), &|_: &Path| None, || vec![]);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_path_lookup_skips_a_non_executable_fastbrowse() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("path-lookup");
+        let (plain, runnable) = (dir.join("a/fastbrowse"), dir.join("b/fastbrowse"));
+        script(&plain, "echo a");
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+        script(&runnable, "echo b");
+        let path = std::env::join_paths([plain.parent().unwrap(), runnable.parent().unwrap()]).unwrap();
+        let found = std::env::split_paths(&path).map(|d| d.join("fastbrowse")).find(|c| is_runnable(c));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(found, Some(runnable));
     }
 
     #[cfg(unix)]
