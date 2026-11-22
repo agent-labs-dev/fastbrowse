@@ -374,7 +374,7 @@ fn media_as_items(state: &Value, images: &Images) -> Value {
 }
 
 /// The exact top-level references the non-Jev wire resolves to pictures. A repeated item counts at each occurrence.
-fn state_images<'a, 'b>(state: &'a Value, images: &'b Images) -> impl Iterator<Item = (&'b String, &'b Vec<u8>)> {
+fn state_images<'a>(state: &Value, images: &'a Images) -> impl Iterator<Item = (&'a String, &'a Vec<u8>)> {
     let items = state.as_array().map_or_else(|| std::slice::from_ref(state), Vec::as_slice);
     items.iter().filter_map(|item| images.get_key_value(item.as_str()?))
 }

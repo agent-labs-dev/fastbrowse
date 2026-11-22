@@ -936,9 +936,8 @@ pub trait DecisionClient: Send + Sync {
     /// The model this client asks, whose limits fit every request sent to it.
     fn profile(&self) -> DecisionProfile;
 
-    /// The image tokens the model is sent for this request: none on a route that takes no image, otherwise every
-    /// reference the request makes. A client that sends a model fewer pictures than the request names says so here,
-    /// so the text is not cut for pictures that never go out.
+    /// The local image token estimate for what this client sends with the request. The default client omits images.
+    /// A client that sends images supplies its model's estimate when the tokenization rule is known.
     fn image_tokens(&self, _state: &Value, _questions: &IndexMap<String, Question>, _images: &Images) -> i64 {
         0
     }

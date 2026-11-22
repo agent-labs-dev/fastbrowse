@@ -92,8 +92,8 @@ with `max_tokens_exceeded` because nothing counted them ([#1303](https://github.
 When pictures overflow the token budget, fastbrowse drops the screenshot first, then cards, before reducing
 text or controls. For non-Jev System One routes, the client counts the image items it sends using the published
 rules for Gemini Decisions, Liquid D1 and D1.2, Perplexity Decider and Cloudflare Clef where available. A model
-without a published image token rule still reports its image usage after the call. fastbrowse has no local
-image token estimate for that model.
+without a published image token rule has no local image token estimate. Billing uses the provider's reported
+usage when available.
 
 A control that fills the viewport has no card beside the screenshot, which would show it again; a question sent no
 screenshot, as the irreversible-action check is, still gets that card. The gateway and every backup
