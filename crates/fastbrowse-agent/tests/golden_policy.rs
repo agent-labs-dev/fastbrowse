@@ -86,7 +86,7 @@ fn requests_are_built_as_python_builds_them() {
         let built = json!({
             "state": write(&request.state, Style::HTTPX),
             "questions": write(&Value::Object(questions), Style::HTTPX),
-            "fits": fits(&request, &config),
+            "fits": fits(&request, &config, true),
         });
         for key in ["state", "questions", "fits"] {
             if updating {

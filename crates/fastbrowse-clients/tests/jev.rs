@@ -371,6 +371,42 @@ async fn test_direct_encodes_all_question_types_and_estimates_usage() {
 }
 
 #[tokio::test]
+async fn test_question_keys_go_out_legal_and_answers_come_back_under_the_keys_asked() {
+    let long = "x".repeat(70);
+    let asked: IndexMap<String, Question> = [
+        ("w0.0".to_string(), noul("Bears on it?")),
+        ("w0_0".to_string(), noul("Bears on it?")),
+        ("field2/check".to_string(), noul("Bears on it?")),
+        (long.clone(), noul("Bears on it?")),
+    ]
+    .into_iter()
+    .collect();
+    let http = answering(|request| {
+        let payload: Value = serde_json::from_slice(&request.body).unwrap();
+        let sent: Vec<String> = payload["questions"].as_object().unwrap().keys().cloned().collect();
+        let short = "x".repeat(56);
+        assert_eq!(sent, ["w0_0_1", "w0_0", "field2_check", short.as_str()]);
+        let answers: serde_json::Map<String, Value> = sent
+            .iter()
+            .zip([0.1, 0.2, 0.3, 0.4])
+            .map(|(key, p)| (key.clone(), json!({"type": "noul", "noul": p})))
+            .collect();
+        let response = Response::json(200, &json!({"answers": answers, "usage": {"input_tokens": 9}}));
+        Box::pin(async move { Ok(response) })
+    });
+    let client = SystemOneClient::new("key", http, "https://direct.test/", "google/gemini-decision-1");
+    let result = client.evaluate(&json!({}), &asked).await.unwrap();
+    let probability = |key: &str| match &result.answers[key] {
+        Answer::Noul(answer) => answer.probability,
+        other => panic!("a noul, not {other:?}"),
+    };
+    assert_eq!(
+        [probability("w0.0"), probability("w0_0"), probability("field2/check"), probability(&long)],
+        [0.1, 0.2, 0.3, 0.4]
+    );
+}
+
+#[tokio::test]
 async fn test_an_unmetered_answer_from_a_model_with_no_price_is_an_unknown_cost() {
     let http = answering(|_| {
         let response = Response::json(
