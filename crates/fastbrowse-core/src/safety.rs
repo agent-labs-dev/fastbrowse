@@ -73,6 +73,36 @@ pub fn page_description(control: &Control) -> Option<String> {
     }
 }
 
+/// Which item of its list a control is and how many the list holds, as the page or the capture counted them.
+pub fn item_place(control: &Control) -> Option<(u32, u32)> {
+    Some((control.item_position?, control.item_count?))
+}
+
+/// Where a drag starts and ends in its list. "First" is a position the labels never state: with the two ends'
+/// places unsaid, Jev put a drag to the first card at 0.22 requested, and 0.81 to 0.93 once they were stated.
+fn drag_places(source: &Control, destination: &Control) -> Option<String> {
+    let (from, to) = (item_place(source), item_place(destination));
+    match (from, to) {
+        (Some((from, count)), Some((to, other))) if count == other && source.context == destination.context => {
+            let list = source
+                .context
+                .as_deref()
+                .filter(|c| !c.is_empty())
+                .map_or_else(|| "in its list".to_string(), |c| format!("listed under {}", text::repr(c)));
+            Some(format!(
+                "The dragged element is item {from} of the {count} items {list}; the drop target is item {to} of them.\n"
+            ))
+        }
+        _ => {
+            let said = |what: &str, place: Option<(u32, u32)>| {
+                place.map(|(at, count)| format!("{what} is item {at} of the {count} items in its list.\n"))
+            };
+            let both = [said("The dragged element", from), said("The drop target", to)];
+            Some(both.into_iter().flatten().collect::<String>()).filter(|s| !s.is_empty())
+        }
+    }
+}
+
 fn describe_control(
     instructions: &mut String,
     operation: Operation,
@@ -84,8 +114,14 @@ fn describe_control(
         instructions.push_str(&format!("It sits under {} on the page.\n", text::repr(context)));
     }
     instructions.extend(page_description(control));
+    if destination.is_none()
+        && let Some((position, count)) = item_place(control)
+    {
+        instructions.push_str(&format!("It is item {position} of the {count} items in its list.\n"));
+    }
     if let Some(destination) = destination {
         instructions.push_str(&format!("Drop it onto the element labelled {}.\n", text::repr(&destination.label)));
+        instructions.extend(drag_places(control, destination));
         if let Some(context) = destination.context.as_deref().filter(|c| !c.is_empty()) {
             instructions.push_str(&format!("The drop target sits under {} on the page.\n", text::repr(context)));
         }
@@ -1263,6 +1299,31 @@ mod tests {
         assert!(archive_question.instructions.contains("Drop it onto the element labelled 'Archive'."));
         assert!(delete_question.instructions.contains("Drop it onto the element labelled 'Delete'."));
         assert_ne!(archive_question.instructions, delete_question.instructions);
+    }
+
+    #[test]
+    fn a_drag_question_states_where_both_ends_sit_in_their_list() {
+        let place = |id: &str, at: u32| {
+            let mut card = Control::new(id, "button", id, [Operation::Drag]);
+            card.context = Some("Reorder Media".into());
+            card.item_position = Some(at);
+            card.item_count = Some(6);
+            card
+        };
+        let (last, first) = (place("Test image", 6), place("First", 1));
+        let question = requested_question(&control_action(Operation::Drag, &last, Some(&first), &[]));
+        assert!(question.instructions.contains(
+            "Drop it onto the element labelled 'First'.\nThe dragged element is item 6 of the 6 items listed under \
+             'Reorder Media'; the drop target is item 1 of them.\nThe drop target sits under 'Reorder Media' on the page.\n"
+        ));
+        assert!(
+            irreversible_question(Operation::Drag, &last, Some(&first), &[])
+                .instructions
+                .contains("item 6 of the 6 items listed under 'Reorder Media'; the drop target is item 1 of them.")
+        );
+        let press = control_action(Operation::Press, &last, None, &[]);
+        assert!(press.contains("It is item 6 of the 6 items in its list.\n"));
+        assert!(!control_action(Operation::Press, &button("Plain"), None, &[]).contains("items in its list"));
     }
 
     fn password(id: &str, form: Option<&str>, autocomplete: Option<&str>) -> Control {

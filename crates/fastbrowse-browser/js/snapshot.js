@@ -1968,6 +1968,28 @@
       c.context = [c.context, `orientation: ${orientation}`].filter(Boolean).join('; ');
   }
 
+  // "First" and "last" are places in a list, which a label does not state. The page's own `aria-posinset` and
+  // `aria-setsize` say it where present; otherwise the place among the visible items of the nearest list container.
+  const SET_ITEM = 'li,[role="listitem"],[role="option"],[role="row"],[role="treeitem"]';
+  const SET_LIST = 'ul,ol,[role="list"],[role="listbox"],[role="grid"],[role="tree"]';
+  for (const c of controls) {
+    const e = registry.nodes.get(c.id);
+    const item = e?.closest(`[aria-posinset],${SET_ITEM}`);
+    if (!item) continue;
+    const list = item.parentElement?.closest(SET_LIST);
+    const siblings = list
+      ? [...list.querySelectorAll(SET_ITEM)].filter(i => i.parentElement.closest(SET_LIST) === list && visible(i))
+      : [];
+    const declared = Number.parseInt(item.getAttribute('aria-posinset'), 10);
+    const size = Number.parseInt(item.getAttribute('aria-setsize'), 10);
+    const position = declared > 0 ? declared : siblings.indexOf(item) + 1;
+    const count = size > 0 ? size : siblings.length;
+    if (position > 0 && count > 1 && position <= count) {
+      c.item_position = position;
+      c.item_count = count;
+    }
+  }
+
   // A wheel at the viewport centre misses panels and horizontal lists. Index the browser's actual scroll owners,
   // separately for each overflowing axis, so the chosen target determines which content moves.
   registry.scrollIds ||= new WeakMap();

@@ -163,6 +163,8 @@ struct SnapshotControl {
     validation_message: Option<String>,
     role_description: Option<String>,
     description: Option<String>,
+    item_position: Option<u32>,
+    item_count: Option<u32>,
     next_page: Option<bool>,
     download: Option<bool>,
     #[serde(default)]
@@ -521,6 +523,8 @@ fn control_from_raw(
         validation_message: c.validation_message.clone(),
         role_description: c.role_description.clone(),
         description: c.description.clone(),
+        item_position: c.item_position,
+        item_count: c.item_count,
         focused: c.focused,
         next_page: c.next_page,
         download: c.download,

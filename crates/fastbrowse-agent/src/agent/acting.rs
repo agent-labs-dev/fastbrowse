@@ -14,9 +14,9 @@ use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
     CredentialField, DONE, EDITS_ALLOWED, EDITS_NONE, EDITS_REQUESTED_ONLY, HAPPENED, LATER_VALUES, MET,
     asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action, credential_field,
-    downloads_question, edits_question, happened_question, irreversible_question, is_password, lasting_question,
-    may_be_irreversible, met_question, offers_passkey, origin_of, page_description, requested_question, resolve_secret,
-    sets_new_password, starts_download, values_question,
+    downloads_question, edits_question, happened_question, irreversible_question, is_password, item_place,
+    lasting_question, may_be_irreversible, met_question, offers_passkey, origin_of, page_description,
+    requested_question, resolve_secret, sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -1121,6 +1121,10 @@ impl Agent {
         }
         if let Some(description) = &target.description {
             question.push_str(&format!(" The page describes it: {}", text::repr(description)));
+        }
+        // An arrow moves the item one place in its list, so which place it holds is part of what the key does.
+        if let Some((position, count)) = item_place(target) {
+            question.push_str(&format!(" It is item {position} of the {count} items in its list."));
         }
         match self.choose_among(state, observation, &question, &options, &[(TASK_KEY, TASK_KEY_SAID)]).await? {
             Chosen::Option(key) => {

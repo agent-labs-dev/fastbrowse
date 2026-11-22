@@ -2140,6 +2140,11 @@ async fn test_a_card_that_declares_itself_sortable_is_moved_by_keys() {
         "{one:?}"
     );
     assert_eq!(find(&before, "Save").description, None);
+    // The page's markup says nothing of order, so the place is the card's index among its list's items.
+    let places: Vec<_> =
+        ["One", "Two", "Three"].iter().map(|n| (find(&before, n).item_position, find(&before, n).item_count)).collect();
+    assert_eq!(places, [(Some(1), Some(3)), (Some(2), Some(3)), (Some(3), Some(3))]);
+    assert_eq!((find(&before, "Save").item_position, find(&before, "Save").item_count), (None, None));
     for key in ["Space", "ArrowDown", "Space"] {
         let now = h.observe().await;
         let card = find(&now, "One");

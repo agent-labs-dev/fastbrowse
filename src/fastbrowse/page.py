@@ -54,6 +54,10 @@ class Control(Frozen):
     """What the page calls this control's role (`aria-roledescription`), such as "draggable"."""
     description: str | None = Field(default=None, exclude_if=lambda text: text is None)
     """The text the page attaches to this control to describe it (`aria-describedby`), as the page states it."""
+    item_position: int | None = Field(default=None, exclude_if=lambda number: number is None)
+    """Which item of its list this control is, counted from 1 (`aria-posinset`, or its place among its list's items)."""
+    item_count: int | None = Field(default=None, exclude_if=lambda number: number is None)
+    """How many items that list holds (`aria-setsize`, or the items counted in the list)."""
     next_page: bool | None = None
     """A link the page marks `rel="next"`: the next page of the list it belongs to."""
     download: bool | None = None

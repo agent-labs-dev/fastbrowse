@@ -1701,6 +1701,8 @@ pub fn element(control: &Control) -> Map<String, Value> {
         ("validation_message", control.validation_message.clone().map(Value::from)),
         ("role_description", control.role_description.clone().map(Value::from)),
         ("description", control.description.clone().map(Value::from)),
+        ("item_position", control.item_position.map(Value::from)),
+        ("item_count", control.item_count.map(Value::from)),
     ];
     for (key, value) in optional {
         if let Some(value) = value {
@@ -2739,6 +2741,11 @@ mod tests {
         assert_eq!(element(&card)["role_description"], "draggable");
         assert_eq!(element(&card)["description"], "Press the space bar to pick up.");
         assert!(!element(&button(1)).contains_key("description"));
+        card.item_position = Some(6);
+        card.item_count = Some(6);
+        assert_eq!(element(&card)["item_position"], 6);
+        assert_eq!(element(&card)["item_count"], 6);
+        assert!(!element(&button(1)).contains_key("item_position"));
         assert!(!element(&button(2)).contains_key("required"));
         assert!(!element(&button(2)).contains_key("invalid"));
     }
