@@ -2269,22 +2269,30 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
         .collect()
 }
 
-/// Keep the newest capture of each quote on a page, and every distinct span within that capture. Reads arrive out of
-/// capture order (a schema field's evidence is appended after the notes'), and keeping the first cited a capture taken
-/// before the run's own edit (#1436); collapsing spans of one capture gave two records with the same words one
-/// record's provenance. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
+/// Keep the newest capture of each record's quote on a page, and every distinct span within that capture. Reads arrive
+/// out of capture order (a schema field's evidence is appended after the notes'), and keeping the first cited a
+/// capture taken before the run's own edit (#1436); collapsing spans of one capture gave two records with the same
+/// words one record's provenance. The same quote under another heading or control is another record, so it is kept
+/// whatever its capture time. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
 pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evidence>) -> Vec<T> {
+    let same_record = |a: &Evidence, b: &Evidence| {
+        a.url == b.url
+            && a.quote == b.quote
+            && a.heading_path == b.heading_path
+            && a.control_context == b.control_context
+    };
     let reads: Vec<Option<Evidence>> = items.iter().map(&evidence).collect();
-    let mut newest: HashMap<(&str, &str), Option<f64>> = HashMap::new();
-    for e in reads.iter().flatten() {
-        let at = e.captured_at.timestamp();
-        newest.entry((&e.url, &e.quote)).and_modify(|t| *t = t.zip(at).map(|(t, at)| t.max(at))).or_insert(at);
-    }
+    let newest = |e: &Evidence| {
+        let mut newest = e.captured_at.timestamp();
+        for other in reads.iter().flatten().filter(|other| same_record(e, other)) {
+            newest = newest.zip(other.captured_at.timestamp()).map(|(t, at)| t.max(at));
+        }
+        newest
+    };
     let mut kept: Vec<(T, Option<&Evidence>)> = Vec::new();
     for (item, read) in items.into_iter().zip(&reads) {
         if let Some(e) = read {
-            let stale =
-                newest[&(e.url.as_str(), e.quote.as_str())].is_some_and(|t| e.captured_at.timestamp() != Some(t));
+            let stale = newest(e).is_some_and(|t| e.captured_at.timestamp() != Some(t));
             if stale || kept.iter().any(|(_, k)| *k == Some(e)) {
                 continue;
             }
@@ -3671,6 +3679,19 @@ mod tests {
         let answer =
             assemble_answer(&[Claim::new("GBP 5", vec![first_id, second_id])], &Notes::new([first, second]), &[]);
         assert_eq!(answer.citations.len(), 2, "distinct source spans need distinct answer citations");
+    }
+
+    #[test]
+    fn identical_quotes_of_different_records_in_different_captures_keep_both_citations() {
+        let mut first = fact(0, "GBP 5".into());
+        let mut second = fact(1, "GBP 5".into());
+        first.evidence.as_mut().unwrap().heading_path = vec!["Plan A".into()];
+        second.evidence.as_mut().unwrap().heading_path = vec!["Plan B".into()];
+        first.evidence.as_mut().unwrap().captured_at = DateTime::new(2026, 1, 1, 0, 0, 0).utc();
+        second.evidence.as_mut().unwrap().captured_at = DateTime::new(2026, 1, 1, 0, 0, 1).utc();
+        let ids = vec![crate::memory::fact_id(&first), crate::memory::fact_id(&second)];
+        let answer = assemble_answer(&[Claim::new("GBP 5", ids)], &Notes::new([first, second]), &[]);
+        assert_eq!(answer.citations.len(), 2, "records under different headings are not repeated reads");
     }
 
     #[tokio::test]
