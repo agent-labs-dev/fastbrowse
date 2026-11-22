@@ -245,11 +245,13 @@ impl DeskpilotPage {
         (!self.withheld.load(Ordering::SeqCst)).then_some(png)
     }
 
-    /// Tells the film where `operation` lands: window pixels in a window `width` by `height`. Only a click is drawn
-    /// as a press: deskpilot fills, hovers and selects through the element, not a press at this point.
+    /// Tells the film where `operation` lands: window pixels in a window `width` by `height`. Only a click or the
+    /// start of a drag is drawn as a press: deskpilot fills, hovers and selects through the element, not a press at
+    /// this point.
     fn point(&self, operation: Operation, (x, y, width, height): (f64, f64, f64, f64)) {
         if let Some(film) = &self.film {
-            let pressed = matches!(operation, Operation::Click);
+            let pressed =
+                matches!(operation, Operation::Click | Operation::RightClick | Operation::DoubleClick | Operation::Drag);
             film.point(PointerMark { at: Instant::now(), x, y, operation, pressed, width, height });
         }
     }
@@ -529,7 +531,16 @@ impl DeskpilotPage {
     async fn dispatch(&self, action: &Action, observation: &Observation) -> Result<Option<String>, ToolError> {
         let window = self.address();
         // The pointer actions a browser recording marks; a secret field stays unmarked, as it does there.
-        if matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover | Operation::Select)
+        if matches!(
+            action.operation,
+            Operation::Click
+                | Operation::RightClick
+                | Operation::DoubleClick
+                | Operation::Drag
+                | Operation::Fill
+                | Operation::Hover
+                | Operation::Select
+        )
             && !action.secret
             && let Some(id) = action.target_id.as_deref()
             && let Some(aim) = self.observed.lock().unwrap().as_ref().and_then(|root| tree::aim(root, id))
@@ -542,6 +553,13 @@ impl DeskpilotPage {
         let target = bound.as_deref();
         match action.operation {
             Operation::Click => self.tool("click", json!({"window": window, "element": target})).await?,
+            Operation::RightClick => {
+                self.tool("click", json!({"window": window, "element": target, "button": "right"})).await?
+            }
+            Operation::DoubleClick => {
+                self.tool("click", json!({"window": window, "element": target, "double": true})).await?
+            }
+            Operation::Drag => return self.drag(&window, action).await,
             Operation::Hover => {
                 self.tool("hover", json!({"window": window, "element": target, "wait": SETTLE_SECONDS})).await?
             }
@@ -630,6 +648,41 @@ impl DeskpilotPage {
             }
             other => return Ok(Some(format!("{} is not something a desktop window can do", other.as_str()))),
         }
+        Ok(None)
+    }
+
+    /// Presses on the action's target, moves to its destination and lets go there. deskpilot's drag takes points, not
+    /// elements, in the pixels of a shot, so both centres are placed in a shot taken now: the model's last shot may be
+    /// scaled differently or be of the window before it changed.
+    async fn drag(&self, window: &str, action: &Action) -> Result<Option<String>, ToolError> {
+        let (Some(source), Some(destination)) = (action.target_id.as_deref(), action.destination_id.as_deref()) else {
+            return Ok(Some("drag needs an element to drag and one to drop it onto".into()));
+        };
+        let ends = {
+            let observed = self.observed.lock().unwrap();
+            let root = observed.as_ref();
+            (root.and_then(|root| tree::aim(root, source)), root.and_then(|root| tree::aim(root, destination)))
+        };
+        let (Some((x1, y1, width, height)), Some((x2, y2, _, _))) = ends else {
+            return Ok(Some("the window does not say where both ends of the drag are".into()));
+        };
+        let shot = match self.shoot().await {
+            Ok((shot, _, path)) => {
+                // Only its id is wanted, to place the points: the PNG is not film and must not pile up.
+                let _ = tokio::fs::remove_file(&path).await;
+                shot
+            }
+            Err(error) => return Ok(Some(format!("no shot to place the drag in: {error}"))),
+        };
+        let (sx, sy) = (shot.width / width, shot.height / height);
+        self.tool(
+            "drag",
+            json!({
+                "window": window, "shot": shot.id,
+                "x1": x1 * sx, "y1": y1 * sy, "x2": x2 * sx, "y2": y2 * sy,
+            }),
+        )
+        .await?;
         Ok(None)
     }
 

@@ -83,6 +83,8 @@ class RunCancelled(asyncio.CancelledError):
 
 class Operation(StrEnum):
     CLICK = "click"
+    RIGHT_CLICK = "right_click"
+    DOUBLE_CLICK = "double_click"
     HOVER = "hover"
     DRAG = "drag"
     FILL = "fill"

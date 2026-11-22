@@ -379,6 +379,63 @@ async fn a_click_is_traced_with_the_snapshot_and_element_it_names() {
     assert_eq!(inputs, [expected]);
 }
 
+/// GNOME Files' scans folder, as deskpilot reads it: a file and a folder, each a grid cell, in an 800 by 600 window.
+fn folder(name: &str) -> Fake {
+    let cell = |id: &str, name: &str, x: i64, y: i64| {
+        json!({"id": id, "role": "grid cell", "name": name, "states": ["showing", "enabled", "selectable"],
+            "x": x, "y": y, "width": 80, "height": 20})
+    };
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "width": 800, "height": 600,
+        "children": [cell("e2", "photo-1.txt", 100, 40), cell("e3", "keep", 300, 200)]});
+    let fake = editor(name, &[launch_tool(), shot_tool()]);
+    fake.replies("wait_for", [ok(&window(false))]).replies("elements", [ok(&root)]);
+    fake
+}
+
+#[tokio::test]
+async fn a_right_or_double_click_is_deskpilots_click_with_that_button_or_count() {
+    // A file's Rename and Compress live in its context menu, and a folder opens on a double click: offered only a
+    // left click, runs on GNOME Files had no route to either (#1407).
+    let fake = folder("secondary-clicks");
+    fake.replies("click", [ok(&json!({"x": 1, "y": 1}))]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    for operation in [Operation::RightClick, Operation::DoubleClick] {
+        let mut action = Action::new(operation);
+        action.target_id = Some("e2".into());
+        page.act(&action, &before).await.unwrap();
+    }
+    let sent: Vec<Value> = calls(&fake, "click").iter().map(|call| call["params"]["arguments"].clone()).collect();
+    assert_eq!(
+        sent,
+        [
+            json!({"window": "0xabc", "element": "s1:e2", "button": "right"}),
+            json!({"window": "0xabc", "element": "s1:e2", "double": true}),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_drag_presses_on_one_element_and_lets_go_on_the_other_in_a_fresh_shots_pixels() {
+    // deskpilot's drag takes points in a shot's pixels, and the shot here is 640 by 480 of an 800 by 600 window.
+    let fake = folder("dragged");
+    fake.replies("shot", [shot(&fake, "placed", b"placed")]).replies("drag", [ok(&json!({"x": 272, "y": 168}))]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    let mut drag = Action::new(Operation::Drag);
+    drag.target_id = Some("e2".into());
+    drag.destination_id = Some("e3".into());
+    let result = page.act(&drag, &before).await.unwrap();
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    let sent: Vec<Value> = calls(&fake, "drag").iter().map(|call| call["params"]["arguments"].clone()).collect();
+    assert_eq!(
+        sent,
+        [json!({"window": "0xabc", "shot": "placed", "x1": 112.0, "y1": 40.0, "x2": 272.0, "y2": 168.0})]
+    );
+    // The shot only placed the points: its PNG does not pile up in deskpilot's cache.
+    assert!(!fake.dir().join("placed.png").exists());
+}
+
 #[tokio::test]
 async fn a_scroll_that_brings_lines_into_the_window_changed_it() {
     // A scroll moves where the app places its lines, not their text or states: the window's bounds are what tell

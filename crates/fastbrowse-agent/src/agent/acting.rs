@@ -400,7 +400,7 @@ impl Agent {
                 self.gate_question(state, observation, decision, &url, Some(irreversible), &action, None).await?;
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
-            Operation::Click | Operation::Enter => {
+            Operation::Click | Operation::RightClick | Operation::DoubleClick | Operation::Enter => {
                 if let Some(target) = target {
                     self.gate_edit(state, observation, decision, target).await?;
                 }

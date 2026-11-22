@@ -209,15 +209,31 @@ fn sibling_label(siblings: &[Element], at: usize) -> Option<&str> {
         .or(before.text.as_deref().filter(|text| !text.trim().is_empty()))
 }
 
+/// Roles of the items of a collection: a file in a file manager, a row of a list or tree, a cell of a table or grid.
+/// A desktop app opens such an item on a double click, keeps its commands (rename, compress, move to trash) in the
+/// context menu a secondary click opens, and moves it by drag and drop. Offered only a left click, a run could not
+/// rename or compress a file, open a folder or drag a file into one (#1407).
+const ITEMS: &[&str] = &["list item", "tree item", "table cell", "grid cell", "icon"];
+
 fn operations(element: &Element) -> Vec<Operation> {
-    // Editable is a state the app sets, on entries, spin buttons, password fields and editable combo boxes alike.
+    // Editable is a state the app sets, on entries, spin buttons, password fields and editable combo boxes alike. A
+    // text field's context menu holds the edits it offers, such as a text editor's Change Case.
     if element.has("editable") {
-        return vec![Operation::Click, Operation::Fill, Operation::Enter];
+        return vec![Operation::Click, Operation::RightClick, Operation::Fill, Operation::Enter];
     }
     // A combo box's list opens as a popup whose items cannot be clicked in the background, so it is chosen in as a
     // web page's dropdown is, by naming an option, and the page picks it with the keyboard.
     if !options(element).is_empty() {
         return vec![Operation::Select];
+    }
+    if ITEMS.contains(&element.role.as_str()) {
+        return vec![
+            Operation::Click,
+            Operation::DoubleClick,
+            Operation::RightClick,
+            Operation::Drag,
+            Operation::Hover,
+        ];
     }
     if CLICKABLE.contains(&element.role.as_str()) {
         return vec![Operation::Click, Operation::Hover];
@@ -681,11 +697,11 @@ mod tests {
             summary,
             [
                 ("e4", "Country", vec!["select"]),
-                ("e7", "Name", vec!["click", "enter", "fill"]),
+                ("e7", "Name", vec!["click", "enter", "fill", "right_click"]),
                 ("e8", "Gift wrap", vec!["click", "hover"]),
                 ("e9", "Small", vec!["click", "hover"]),
                 ("e10", "Place order", vec!["click", "hover"]),
-                ("e12", "Password", vec!["click", "enter", "fill"]),
+                ("e12", "Password", vec!["click", "enter", "fill", "right_click"]),
             ]
         );
         let roles: Vec<&str> = observation.controls.iter().map(|c| c.role.as_str()).collect();
@@ -749,6 +765,34 @@ mod tests {
         assert!(controls.iter().all(|c| c.operations.contains(&Operation::Click)));
         // What the window says names them too, so a quote of a file name is found in it.
         assert!(capture(&window, &root).text.contains("IMG_4471.txt. File"));
+    }
+
+    #[test]
+    fn an_item_of_a_collection_is_offered_a_double_click_a_secondary_click_and_a_drag() {
+        // GNOME Files keeps a file's Rename and Compress in its context menu and opens a folder on a double click
+        // (#1407); a button does neither, so it is offered what it was.
+        let item = |id: &str, role: &str| node(id, role, id, &shown(&["selectable"]), None, vec![]);
+        let root = node(
+            "e1",
+            "window",
+            "scans",
+            &SHOWN,
+            None,
+            vec![
+                item("e2", "grid cell"),
+                item("e3", "list item"),
+                item("e4", "tree item"),
+                item("e5", "table cell"),
+                item("e6", "icon"),
+                node("e7", "push button", "New Folder", &SHOWN, None, vec![]),
+            ],
+        );
+        let window = Window { address: "0xabc".into(), class: "org.gnome.Nautilus".into(), title: "scans".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let offered: Vec<Vec<&str>> =
+            controls.iter().map(|c| c.operations.iter().map(|o| o.as_str()).collect()).collect();
+        let item = vec!["click", "double_click", "drag", "hover", "right_click"];
+        assert_eq!(offered, [&item[..], &item, &item, &item, &item, &["click", "hover"]]);
     }
 
     #[test]

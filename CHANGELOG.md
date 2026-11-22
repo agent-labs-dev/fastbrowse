@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A desktop run can right-click, double-click and drag ([#1407](https://github.com/agent-labs-dev/fastbrowse/issues/1407)). It was offered only a left click, so a file's Rename or Compress in its context menu, a folder that opens on a double click and a file dragged into a folder were out of reach. The items of a list, tree, table, grid or icon view are now offered `double_click`, `right_click` and `drag`, and a text field `right_click`, by the role the app reports. They are new operations in the protocol, which a browser page does not offer. deskpilot refuses a drag and drop in a hidden window, so that one needs `FASTBROWSE_DESKTOP_SHOWN=1`.
+
 - A step the browser or desktop app refused is named in the next decision with the refusal it gave, such as deskpilot's "scroll it into view", instead of as a step that did not move the task on. A desktop run no longer presses OK after its click on a list row out of view failed without knowing why (#1403).
 
 - A desktop run with no time limit no longer waits forever on a window that does not change ([#1406](https://github.com/agent-labs-dev/fastbrowse/issues/1406)). A WAIT polled the window until it changed, spending nothing, so `--max-dollars` never ended the run and it was killed with no result, cost or clip. A WAIT with no deadline now watches the window for 60 seconds, as a browser's watches for one reply, and hands the step back unchanged, so the stall rule counts it and the run ends `stuck`. A scroll that brings lines into the window now counts as changing it, since text past the window's bottom edge reads as out of view.
