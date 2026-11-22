@@ -3,9 +3,9 @@ title: MCP browser server with spending limits
 description: fastbrowse-mcp serves one browse tool over MCP with its limits set on the server. What each flag fixes, and what a calling model can and cannot change.
 topic: Coding agents and MCP
 published: 2026-11-01
-updated: 2026-11-21
+updated: 2026-11-22
 verifiedAgainst: v0.10.0
-verifiedOn: 2026-11-21
+verifiedOn: 2026-11-22
 ---
 
 `fastbrowse-mcp` serves one `browse` tool over MCP. Its limits are set when the server starts. A call can ask for less, never more.
