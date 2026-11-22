@@ -1524,6 +1524,15 @@ impl CdpPage {
         {
             return Err(BrowserError::OriginNotAllowed);
         }
+        // Opening the address the tab is already on, fragment included, is a same-document navigation: Chrome
+        // keeps the document, so a reload meant to show what the site serves now never reached the site. The
+        // address without its fragment is a new document, and the fragment is then reached below as ordinary
+        // same-document navigation.
+        if let Some((document, _)) = url.split_once('#')
+            && self.address().await.is_ok_and(|current| current == url)
+        {
+            Box::pin(self.navigate_within(document, load_timeout_seconds, back_to)).await?;
+        }
         let mut session_id = self.session.active_session_id()?;
         if self.session.client()?.wedged(&session_id).await {
             // Page.navigate to a hung renderer waits behind its script, so the page is opened in a fresh tab whose
