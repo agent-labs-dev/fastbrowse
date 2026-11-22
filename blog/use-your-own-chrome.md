@@ -77,7 +77,7 @@ fastbrowse "What is the title of the top story?" \
 
 ## Remove it
 
-`fastbrowse extension uninstall` removes what `install` wrote. Remove the extension itself at `chrome://extensions`.
+`fastbrowse extension uninstall` unregisters the fastbrowse that runs it; the last one registered also removes the launcher and manifests that `install` wrote. Remove the extension itself at `chrome://extensions`.
 
 For other ways to reach a browser, see [attaching to a running Chrome](/blog/attach-to-running-chrome/).
 
