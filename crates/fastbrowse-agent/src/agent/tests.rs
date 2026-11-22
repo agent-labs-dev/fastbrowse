@@ -8979,7 +8979,7 @@ async fn test_done_on_a_list_page_read_from_its_screenshot_opens_the_next_page()
     let mut state = run_state();
     let first = paged("https://list.test/", "/page/2/");
     read_one(&mut state, &first, Extent::EveryPage);
-    state.notes.add_image_read("Cheapest: GBP 4.60", &first.url, first.captured_at, b"page-one-png");
+    state.notes.add(Fact::read_from_image("Cheapest: GBP 4.60", &first.url, first.captured_at, b"page-one-png"));
     state.compose = true;
     state.note_pager_pages(&first);
 
