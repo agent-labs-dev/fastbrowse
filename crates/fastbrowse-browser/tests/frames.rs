@@ -393,7 +393,8 @@ async fn test_a_screencast_start_that_times_out_is_stopped_on_close() {
     let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async {}));
     let (timed_out, mut timeouts) = tokio::sync::mpsc::unbounded_channel();
     let on_warning = Arc::new(move |warning: BrowserWarningEvent| {
-        if warning.operation == BrowserWarningOperation::ScreencastStart && warning.failure == BrowserWarningFailure::Timeout
+        if warning.operation == BrowserWarningOperation::ScreencastStart
+            && warning.failure == BrowserWarningFailure::Timeout
         {
             let _ = timed_out.send(());
         }
