@@ -2275,6 +2275,57 @@ async fn test_a_real_dnd_kit_card_is_lifted_moved_and_dropped_by_keys() {
     h.close().await;
 }
 
+/// A picked-up card moves by transform while the DOM keeps its order: each arrow must still read as a new page state,
+/// or a reorder longer than the stall budget is cut off.
+#[tokio::test]
+async fn test_moving_a_picked_up_card_reaches_a_new_page_state() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dndkit-sortable.html").await;
+    let mut seen = Vec::new();
+    for key in ["Space", "ArrowDown", "ArrowDown"] {
+        let now = h.observe().await;
+        let card = find(&now, "Test image");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&press, &now).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+        seen.push(fastbrowse_core::effects::state_key(&h.observe().await));
+    }
+    assert_ne!(seen[0], seen[1], "the first ArrowDown moves the card");
+    assert_ne!(seen[1], seen[2], "the second ArrowDown moves it again");
+    h.close().await;
+}
+
+/// A tree's child group is a separate set from its parent's siblings.
+#[tokio::test]
+async fn test_tree_positions_are_relative_to_their_sibling_group() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = `
+          <div role="tree" aria-label="Files" tabindex="0">
+            <div role="treeitem" aria-label="Folder" aria-expanded="true" tabindex="-1">
+              Folder
+              <div role="group">
+                <div role="treeitem" aria-label="Child one" tabindex="-1">Child one</div>
+                <div role="treeitem" aria-label="Child two" tabindex="-1">Child two</div>
+              </div>
+            </div>
+            <div role="treeitem" aria-label="Last root" tabindex="-1">Last root</div>
+          </div>`;
+        true
+    "#,
+    )
+    .await;
+    let observed = h.observe().await;
+    for (label, position) in [("Folder", 1), ("Last root", 2), ("Child one", 1), ("Child two", 2)] {
+        let control = find(&observed, label);
+        assert_eq!((control.item_position, control.item_count), (Some(position), Some(2)), "{label}");
+    }
+    h.close().await;
+}
+
 /// The same list moved with the pointer, as its PointerSensor takes it: the last card dragged onto the first. The card
 /// declares itself a draggable, so it is offered as a drag source though it carries no `draggable` attribute.
 #[tokio::test]

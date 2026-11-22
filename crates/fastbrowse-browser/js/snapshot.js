@@ -2085,16 +2085,33 @@
 
   // "First" and "last" are places in a list, which a label does not state. The page's own `aria-posinset` and
   // `aria-setsize` say it where present; otherwise the place among the visible items of the nearest list container.
-  const SET_ITEM = 'li,[role="listitem"],[role="option"],[role="row"],[role="treeitem"]';
-  const SET_LIST = 'ul,ol,[role="list"],[role="listbox"],[role="grid"],[role="tree"]';
+  // A sortable's items sit in a plain container, and a tree's child group is its own set.
+  const SORTABLE = '[aria-roledescription="sortable"]';
+  const SET_ITEM = `li,[role="listitem"],[role="option"],[role="row"],[role="treeitem"],${SORTABLE}`;
+  const SET_LIST = 'ul,ol,[role="list"],[role="listbox"],[role="grid"],[role="tree"],[role="tree"] [role="group"]';
+  const setOwner = i => (i.matches(SORTABLE) ? i.parentElement : i.parentElement?.closest(SET_LIST));
   for (const c of controls) {
     const e = registry.nodes.get(c.id);
     const item = e?.closest(`[aria-posinset],${SET_ITEM}`);
     if (!item) continue;
-    const list = item.parentElement?.closest(SET_LIST);
-    const siblings = list
-      ? [...list.querySelectorAll(SET_ITEM)].filter(i => i.parentElement.closest(SET_LIST) === list && visible(i))
+    const list = setOwner(item);
+    const members = list
+      ? [...list.querySelectorAll(SET_ITEM)].filter(i => setOwner(i) === list && visible(i))
       : [];
+    // A picked-up sortable card moves by transform while the DOM keeps its order, so the order a person sees is the
+    // one stated: otherwise every arrow press leaves the page looking unchanged.
+    const lifted = members.some(i => i.matches(`${SORTABLE}[aria-pressed="true"]`));
+    const place = i => {
+      const box = renderFact('box', i);
+      return [box.top, box.left];
+    };
+    const siblings = lifted
+      ? [...members].sort((a, b) => {
+          const [at, al] = place(a);
+          const [bt, bl] = place(b);
+          return at - bt || al - bl;
+        })
+      : members;
     const declared = Number.parseInt(item.getAttribute('aria-posinset'), 10);
     // `aria-setsize="-1"` says the list's size is unknown (a virtualised feed); counting the rendered items instead
     // would state a size the page says it does not know.
