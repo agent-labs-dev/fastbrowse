@@ -703,7 +703,7 @@ pub fn command(program: &str, args: &[String]) -> (String, i32) {
             }
             out.push_str(&format!("Registered the fastbrowse host with {}.\n", registered.join(", ")));
             out.push_str(
-                "Requires extension 0.1.2 or newer with the required commands. If the Store update is not available, \
+                "Use extension 0.1.2 or newer for the full command set. If the Store update is not available, \
                  run `fastbrowse extension path`, then enable Developer mode at chrome://extensions and choose \
                  Load unpacked with the printed folder.\n",
             );
