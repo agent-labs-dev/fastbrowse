@@ -378,6 +378,7 @@ async fn test_a_wait_is_told_how_far_a_playing_clock_moved() {
         state.idle.push(super::recovery::Idle {
             action: Some((Operation::Click, Some("Next".into()))),
             outcome: StepOutcome::Covered,
+            refused: None,
         });
         state.history.push(executed(Some(operation), Some("Theme"), false));
         agent().note_effect(&mut state, &playing(17.0));
@@ -1807,9 +1808,10 @@ async fn test_a_task_that_rules_out_only_other_changes_makes_the_requested_one()
     }
 }
 
-/// Records the instructions of every `requested` question, and answers the edits question `requested_only`.
+/// Records the key and instructions of every `requested` and `changes_value` question, and answers the edits question
+/// `requested_only`.
 #[derive(Default)]
-struct RequestedRecorder(std::sync::Mutex<Vec<String>>);
+struct RequestedRecorder(std::sync::Mutex<Vec<(String, String)>>);
 
 impl fastbrowse_core::decision::DecisionClient for RequestedRecorder {
     fn evaluate<'a>(
@@ -1821,8 +1823,8 @@ impl fastbrowse_core::decision::DecisionClient for RequestedRecorder {
         let answers = questions
             .iter()
             .map(|(key, question)| {
-                if let ("requested", Question::Noul(q)) = (key.as_str(), question) {
-                    self.0.lock().unwrap().push(q.instructions.clone());
+                if let ("requested" | "changes_value", Question::Noul(q)) = (key.as_str(), question) {
+                    self.0.lock().unwrap().push((key.clone(), q.instructions.clone()));
                 }
                 let answer = if key == "edits" {
                     Answer::Choice(ChoiceAnswer {
@@ -1866,9 +1868,28 @@ async fn test_a_requested_press_is_asked_about_its_chord() {
     let decision = code_decision(Operation::Press, Some(tab.clone()));
     let gated = agent.gate_key_edit(&mut state, &page, &decision, &tab, "ArrowRight").await;
     assert!(gated.is_ok(), "{gated:?}");
-    let asked = jev.0.lock().unwrap();
+    let asked: Vec<_> = jev.0.lock().unwrap().iter().filter(|(key, _)| key == "requested").cloned().collect();
     assert_eq!(asked.len(), 1);
-    assert!(asked[0].contains("The exact key chord to press is 'ArrowRight'."), "{}", asked[0]);
+    assert!(asked[0].1.contains("The exact key chord to press is 'ArrowRight'."), "{}", asked[0].1);
+}
+
+/// A save chord in a text editor was asked whether it changed "something the site keeps", and refused as an edit the
+/// task did not ask for under a task that asked to save (#1393). Whether a press changes a value is asked of the
+/// field's value alone, and a commit is left to the irreversible gate.
+#[tokio::test]
+async fn test_a_press_is_asked_whether_it_changes_a_value_not_whether_it_commits() {
+    let editor = Control::new("t", "textbox", "textbox", [Operation::Press]);
+    let page = observation(std::slice::from_ref(&editor));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Add the result under \"Settle up:\" and save it with Ctrl+S.".into();
+    let decision = code_decision(Operation::Press, Some(editor.clone()));
+    let _ = agent.gate_key_edit(&mut state, &page, &decision, &editor, "Control+s").await;
+    let asked = jev.0.lock().unwrap();
+    let (_, question) = asked.iter().find(|(key, _)| key == "changes_value").expect("changes_value is asked");
+    assert!(question.contains("change what a field holds or a selected setting?"), "{question}");
+    assert!(question.contains("neither does committing what the fields already hold"), "{question}");
 }
 
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
@@ -1920,6 +1941,27 @@ fn test_an_idle_wait_stays_on_offer_and_an_idle_click_does_not() {
     let mut context = crate::policy::StepContext::new(&state.task);
     super::recovery::leave_out_idle(&state, &mut offered, &mut context);
     assert!(offered.controls.is_empty(), "{:?}", offered.controls);
+}
+
+/// A desktop run pressed OK right after its click on a list row failed (#1403): deskpilot said to scroll the row into
+/// view, and the next ask said only that the click did not move the task on. A refused action is named with the
+/// refusal, so the next decision is made knowing what it takes.
+#[test]
+fn test_an_action_refused_is_left_out_with_the_refusal_its_page_gave() {
+    let page = observation(&[button("entry 173"), button("OK")]);
+    let mut state = run_state();
+    let refusal = "Element e180 reports no size; scroll it into view or take a new snapshot.";
+    state.idle.push(super::recovery::Idle {
+        action: Some((Operation::Click, Some(super::helpers::describe(&page.controls[0])))),
+        outcome: StepOutcome::Failed,
+        refused: Some(refusal.into()),
+    });
+    let mut offered = page.clone();
+    let mut context = crate::policy::StepContext::new(&state.task);
+    super::recovery::leave_out_idle(&state, &mut offered, &mut context);
+    let problem = context.problem.unwrap_or_default();
+    assert!(problem.contains(refusal), "{problem}");
+    assert!(!problem.contains("did not move the task on"), "{problem}");
 }
 
 #[tokio::test]
@@ -10501,7 +10543,7 @@ async fn test_a_read_only_task_can_press_a_navigation_key_but_not_change_a_value
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|q| q.contains("exact key chord") && q.contains("change a field's value"))
+                .any(|q| q.contains("exact key chord") && q.contains("change what a field holds"))
         );
     }
 }
