@@ -2252,7 +2252,6 @@ impl Drop for AdoptionSettled<'_> {
     }
 }
 
-/// Whether Chrome accepted the command: a cast that was refused is not running.
 /// How a screencast command ended. A timeout is not a refusal: Chrome may still have run it.
 #[derive(PartialEq)]
 enum CastReply {
@@ -2263,12 +2262,7 @@ enum CastReply {
     Unanswered,
 }
 
-async fn screencast_command(
-    shared: &Arc<Shared>,
-    method: &str,
-    params: Value,
-    session_id: Option<&str>,
-) -> CastReply {
+async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, session_id: Option<&str>) -> CastReply {
     let Some(client) = shared.client.lock().unwrap().clone() else { return CastReply::Refused };
     match timeout(secs(SCREENCAST_COMMAND_SECONDS), client.send(method, params, session_id)).await {
         Ok(Ok(_)) => CastReply::Accepted,
