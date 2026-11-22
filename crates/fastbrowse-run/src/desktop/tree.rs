@@ -189,26 +189,6 @@ fn offered_role(element: &Element) -> &str {
     aria_role(&element.role)
 }
 
-/// What names a control with no name of its own, from the element before it among `siblings`, at `at` in reading
-/// order. A label read just before an unnamed field names it, as a sighted reader pairs them: Qt's Add Entry dialog
-/// lays out "Name:" beside an unnamed text field, and each field was offered as `textbox`, so the run typed the value
-/// into the name field (#1408). A table cell is named by the first named cell of its row, the cells beside it at its
-/// height, since the tree holds no row element: a checkbox cell offered as `cell` did not say which option it sets.
-fn sibling_label(siblings: &[Element], at: usize) -> Option<&str> {
-    let element = &siblings[at];
-    const CELLS: [&str; 2] = ["table cell", "grid cell"];
-    if CELLS.contains(&element.role.as_str()) {
-        return siblings[..at]
-            .iter()
-            .filter(|sibling| CELLS.contains(&sibling.role.as_str()) && sibling.y == element.y)
-            .find_map(|sibling| Some(sibling.name.as_str()).filter(|name| !name.trim().is_empty()));
-    }
-    let before = siblings[..at].last().filter(|before| before.role == "label")?;
-    Some(before.name.as_str())
-        .filter(|name| !name.trim().is_empty())
-        .or(before.text.as_deref().filter(|text| !text.trim().is_empty()))
-}
-
 /// Roles of the items of a collection: a file in a file manager, a row of a list or tree, a cell of a table or grid.
 /// A desktop app opens such an item on a double click, keeps its commands (rename, compress, move to trash) in the
 /// context menu a secondary click opens, and moves it by drag and drop. Offered only a left click, a run could not
@@ -317,7 +297,7 @@ pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
     element.children.iter().find_map(|child| find(child, id))
 }
 
-fn control(element: &Element, window: Size, context: Option<&str>, beside: Option<&str>) -> Option<Control> {
+fn control(element: &Element, window: Size, context: Option<&str>) -> Option<Control> {
     if !element.showing(window) || !element.reachable(window) || !element.operable() {
         return None;
     }
@@ -326,14 +306,15 @@ fn control(element: &Element, window: Size, context: Option<&str>, beside: Optio
         return None;
     }
     let role = offered_role(element);
-    // A control with no name is offered under its words, the label beside it, or its role, as a page offers one. An
+    // A control with no name is offered under its words or its role, as a page offers one: deskpilot names a control its
+    // app says is labelled by another element, so no label is guessed from what lies beside it. An
     // editable's text is its value, not its label: GNOME Text Editor's unnamed text view, labelled by what it held, was
     // offered as a field named "charger" holding "charger", and labelled '' when empty, Jev copied the task's answer
     // into it.
     let label = match element.text.as_deref() {
         _ if !element.name.is_empty() => element.name.clone(),
         Some(text) if !text.trim().is_empty() && !element.has("editable") => text.to_string(),
-        _ => beside.unwrap_or(role).to_string(),
+        _ => role.to_string(),
     };
     let mut control = Control::new(&element.id, role, &label, operations);
     let sensitive = element.role == "password text";
@@ -399,18 +380,22 @@ fn question(element: &Element, window: Size) -> Option<String> {
 /// element holding it below the window itself, as a group box or a page tab names what it holds, or what the dialog
 /// holding it asks.
 pub fn controls(root: &Element) -> Vec<Control> {
-    fn walk(element: &Element, window: Size, context: Option<&str>, beside: Option<&str>, out: &mut Vec<Control>) {
-        let made = control(element, window, context, beside);
+    // `asking` is what the nearest dialog above asks. A named container inside the dialog, a group box or a page tab,
+    // adds its name to that question and never replaces it: the buttons it holds still answer the dialog.
+    fn walk(element: &Element, window: Size, context: Option<&str>, asking: Option<&str>, out: &mut Vec<Control>) {
+        let made = control(element, window, context);
         // A control's own name is its label, not the context of what it holds.
         let asked = question(element, window);
-        let inner = match asked.as_deref() {
-            Some(asked) => Some(asked),
-            None if element.name.is_empty() || made.is_some() => context,
-            None => Some(element.name.as_str()),
+        let inner = match (asked.as_deref(), asking) {
+            (Some(asked), _) => Some(asked.to_string()),
+            _ if element.name.is_empty() || made.is_some() => context.map(str::to_string),
+            (None, Some(asking)) => Some(format!("{asking}: {}", element.name)),
+            (None, None) => Some(element.name.clone()),
         };
+        let asking = asked.as_deref().or(asking);
         out.extend(made);
-        for (at, child) in element.children.iter().enumerate() {
-            walk(child, window, inner, sibling_label(&element.children, at), out);
+        for child in &element.children {
+            walk(child, window, inner.as_deref(), asking, out);
         }
     }
     // A control nothing below the window holds is the window's own, as its title bar's Close is: its context is the
@@ -419,10 +404,11 @@ pub fn controls(root: &Element) -> Vec<Control> {
     // dialog's context is what it asks, its title included.
     let window = Size::of(root);
     let mut out = Vec::new();
-    out.extend(control(root, window, None, None));
+    out.extend(control(root, window, None));
     let asked = question(root, window).or_else(|| Some(root.name.clone()).filter(|name| !name.trim().is_empty()));
-    for (at, child) in root.children.iter().enumerate() {
-        walk(child, window, asked.as_deref(), sibling_label(&root.children, at), &mut out);
+    let asking = question(root, window);
+    for child in &root.children {
+        walk(child, window, asked.as_deref(), asking.as_deref(), &mut out);
     }
     out
 }
@@ -827,8 +813,9 @@ mod tests {
     }
 
     #[test]
-    fn a_qt_form_names_fields_by_their_labels_and_ticks_cells_and_drops_closed_combo_items() {
-        // As deskpilot read CMake GUI's Add Entry dialog and cache table (#1408).
+    fn a_qt_form_ticks_cells_and_drops_closed_combo_items_and_guesses_no_label() {
+        // As deskpilot read CMake GUI's Add Entry dialog and cache table (#1408). A field with no name stays named by its
+        // role: deskpilot names one its app says is labelled by another element, and a label before it proves nothing.
         let at = |element: Element, x, y| Element { x, y, width: 100, height: 20, ..element };
         let editable = shown(&["editable", "focusable"]);
         let closed = node(
@@ -886,13 +873,13 @@ mod tests {
         assert_eq!(
             summary,
             [
-                ("e4", "textbox", "Name:", None),
-                ("e6", "combobox", "Type:", None),
-                ("e8", "textbox", "Value:", None),
+                ("e4", "textbox", "textbox", None),
+                ("e6", "combobox", "combobox", None),
+                ("e8", "textbox", "textbox", None),
                 ("e10", "cell", "ENABLE_LOGS", None),
-                ("e11", "checkbox", "ENABLE_LOGS", Some(false)),
+                ("e11", "checkbox", "checkbox", Some(false)),
                 ("e12", "cell", "GREETING", None),
-                ("e13", "checkbox", "GREETING", Some(true)),
+                ("e13", "checkbox", "checkbox", Some(true)),
             ]
         );
         // The closed combo box's list is off the window, so it is not open, though Qt says its items are showing.
@@ -934,6 +921,15 @@ mod tests {
         // A main window's text is no control's context: only a dialog asks something its buttons answer.
         let (_, form) = form();
         assert!(super::controls(&form).iter().all(|c| c.context.as_deref() == Some("Delivery")));
+    }
+
+    #[test]
+    fn a_named_group_in_a_dialog_keeps_the_dialogs_question() {
+        let group =
+            node("e2", "panel", "Actions", &SHOWN, None, vec![node("e3", "push button", "Yes", &SHOWN, None, vec![])]);
+        let root = node("e1", "alert message", "Delete Cache", &SHOWN, None, vec![group]);
+        let controls = super::controls(&root);
+        assert_eq!(controls[0].context.as_deref(), Some("Delete Cache: Actions"));
     }
 
     #[test]
