@@ -261,10 +261,13 @@ fn precedence(version: &str) -> Precedence {
 /// the other's launcher, so whichever ran last served every run and a version mismatch failed runs from the other
 /// (#1456). Both stay registered now, and the newest serves: the Store updates the extension to match the newest
 /// fastbrowse, and an older one still serves once the newer is removed. A tie keeps the earlier registration first.
-fn with_install(installs: Vec<Install>, this: Install) -> Vec<Install> {
-    let mut installs: Vec<Install> =
-        installs.into_iter().filter(|install| install.path != this.path && install.path.is_file()).collect();
-    installs.push(this);
+fn with_install(mut installs: Vec<Install>, this: Install) -> Vec<Install> {
+    installs.retain(|install| install.path == this.path || install.path.is_file());
+    if let Some(existing) = installs.iter_mut().find(|install| install.path == this.path) {
+        *existing = this;
+    } else {
+        installs.push(this);
+    }
     newest_first(&mut installs);
     installs
 }
@@ -1293,6 +1296,9 @@ mod tests {
         // Installing a version again replaces its own entry instead of adding a second.
         let installs = with_install(installs, install(&programs[0], "0.14.0"));
         assert_eq!(installs, [install(&programs[0], "0.14.0"), install(&programs[1], "0.13.0")]);
+        let tied = with_install(installs.clone(), install(&programs[1], "0.14.0"));
+        let reinstalled = with_install(tied.clone(), install(&programs[0], "0.14.0"));
+        assert_eq!(reinstalled, tied);
 
         let launcher = write_host(&root, &installs).unwrap();
         assert_eq!(read_installs(&root).unwrap(), installs);
