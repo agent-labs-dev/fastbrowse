@@ -323,25 +323,55 @@ fn control(element: &Element, context: Option<&str>, beside: Option<&str>) -> Op
     Some(control)
 }
 
+/// Roles of an element that asks the person something, by the names AT-SPI, Qt and GTK 4 report: a Qt message box is an
+/// `alert message`, GTK 4's an `alert dialog`.
+const DIALOGS: [&str; 4] = ["alert", "alert message", "alert dialog", "dialog"];
+
+/// What a dialog asks, as the context of the buttons that answer it: its title and the text it shows. A Yes button
+/// judged by its name alone could not be told to answer "Are you sure you want to delete the cache?", so a run asked
+/// to delete the cache ended `needs_confirmation` with the task judged not to ask for that click (#1404). None for an
+/// element that is no dialog, or one that says nothing.
+fn question(element: &Element) -> Option<String> {
+    if !DIALOGS.contains(&element.role.as_str()) {
+        return None;
+    }
+    let (shown, _) = texts(element);
+    let shown = shown.replace('\n', " ");
+    match (element.name.trim(), shown.as_str()) {
+        ("", "") => None,
+        (title, "") => Some(title.to_string()),
+        ("", said) => Some(said.to_string()),
+        (title, said) => Some(format!("{title}: {said}")),
+    }
+}
+
 /// Every control the window shows, in reading order. Its id is deskpilot's element number, which stays the same while
 /// the tree before it keeps its shape, as a DOM node's id does while the node lives; `act` binds it to the snapshot of
 /// the observation it was chosen from. A control's context is the name of the nearest named
-/// element holding it below the window itself, as a group box or a page tab names what it holds.
+/// element holding it below the window itself, as a group box or a page tab names what it holds, or what the dialog
+/// holding it asks.
 pub fn controls(root: &Element) -> Vec<Control> {
     fn walk(element: &Element, context: Option<&str>, beside: Option<&str>, out: &mut Vec<Control>) {
         let made = control(element, context, beside);
         // A control's own name is its label, not the context of what it holds.
-        let inner = if element.name.is_empty() || made.is_some() { context } else { Some(element.name.as_str()) };
+        let asked = question(element);
+        let inner = match asked.as_deref() {
+            Some(asked) => Some(asked),
+            None if element.name.is_empty() || made.is_some() => context,
+            None => Some(element.name.as_str()),
+        };
         out.extend(made);
         for (at, child) in element.children.iter().enumerate() {
             walk(child, inner, sibling_label(&element.children, at), out);
         }
     }
-    // The window's own name is its title, which every control shares, so it tells none apart.
+    // The window's own name is its title, which every control shares, so it tells none apart; a dialog's is part of
+    // what it asks.
     let mut out = Vec::new();
     out.extend(control(root, None, None));
+    let asked = question(root);
     for (at, child) in root.children.iter().enumerate() {
-        walk(child, None, sibling_label(&root.children, at), &mut out);
+        walk(child, asked.as_deref(), sibling_label(&root.children, at), &mut out);
     }
     out
 }
@@ -782,6 +812,41 @@ mod tests {
         let combo = find(&root, "e6").unwrap();
         assert!(!list_open(combo));
         assert_eq!(chosen(combo), Some("BOOL"));
+    }
+
+    #[test]
+    fn a_dialogs_buttons_carry_its_question() {
+        // As deskpilot read CMake GUI's Delete Cache message box (#1404): the gate judged 'Yes' by its name alone.
+        let root = node(
+            "e1",
+            "alert message",
+            "Delete Cache",
+            &SHOWN,
+            None,
+            vec![
+                node(
+                    "e2",
+                    "label",
+                    "Are you sure you want to delete the cache?",
+                    &SHOWN,
+                    Some("Are you sure you want to delete the cache?"),
+                    vec![],
+                ),
+                node("e3", "push button", "Yes", &SHOWN, None, vec![]),
+                node("e4", "push button", "No", &SHOWN, None, vec![]),
+            ],
+        );
+        let window = Window { address: "0xabc".into(), class: "cmake-gui".into(), title: "Delete Cache".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let asked = "Delete Cache: Are you sure you want to delete the cache?";
+        let contexts: Vec<_> = controls.iter().map(|c| (c.label.as_str(), c.context.as_deref())).collect();
+        assert_eq!(contexts, [("Yes", Some(asked)), ("No", Some(asked))]);
+        // The authorization gate's questions say what the button answers.
+        let action = fastbrowse_core::safety::control_action(Operation::Click, &controls[0], None, &controls);
+        assert!(action.contains(asked), "{action}");
+        // A main window's text is no control's context: only a dialog asks something its buttons answer.
+        let (_, form) = form();
+        assert!(super::controls(&form).iter().all(|c| c.context.as_deref().is_none_or(|c| c == "Delivery")));
     }
 
     #[test]
