@@ -279,9 +279,10 @@ fn control(element: &Element, context: Option<&str>, beside: Option<&str>) -> Op
         return None;
     }
     let role = offered_role(element);
-    // A control with no name is offered under its words, the label beside it, or its role, as a page offers one. An editable's text is
-    // its value, not its label: GNOME Text Editor's unnamed text view, labelled by what it held, was offered as a
-    // field named "charger" holding "charger", and labelled '' when empty, Jev copied the task's answer into it.
+    // A control with no name is offered under its words, the label beside it, or its role, as a page offers one. An
+    // editable's text is its value, not its label: GNOME Text Editor's unnamed text view, labelled by what it held, was
+    // offered as a field named "charger" holding "charger", and labelled '' when empty, Jev copied the task's answer
+    // into it.
     let label = match element.text.as_deref() {
         _ if !element.name.is_empty() => element.name.clone(),
         Some(text) if !text.trim().is_empty() && !element.has("editable") => text.to_string(),
