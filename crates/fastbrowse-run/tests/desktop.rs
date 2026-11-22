@@ -557,3 +557,50 @@ async fn a_window_deskpilot_cannot_tell_apart_by_title_fails_the_read_without_ca
     assert_eq!(failure.reason, "deskpilot/ambiguous");
     assert!(failure.message.contains("same title") && failure.message.contains(message), "{}", failure.message);
 }
+
+/// Answers `slow` with a reply split in two, a second apart, `noisy` with a line that is not JSON, and any other tool
+/// at once.
+const SPLITTING: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  [ -z "$id" ] && continue
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"tools/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id" ;;
+    *'"name":"slow"'*) printf '{"jsonrpc":"2.0","id":%s,' "$id"; sleep 1; printf '"result":{"content":[]}}\n' ;;
+    *'"name":"noisy"'*) printf 'Gtk-WARNING: not a reply\n' ;;
+    *) printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"fast"}]}}\n' "$id" ;;
+  esac
+done
+"#;
+
+fn splitting(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("desktop").join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let program = dir.join("deskpilot");
+    std::fs::write(&program, SPLITTING).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    program
+}
+
+/// #1401: a call abandoned partway through a reply line dropped the bytes it had read, and the next call began
+/// mid-line and ended the run as "not JSON".
+#[tokio::test]
+async fn a_call_abandoned_mid_line_leaves_the_next_call_a_whole_line() {
+    let program = splitting("split-line");
+    let client = connect(program.to_str().unwrap(), View::Hidden).await.unwrap();
+    let abandoned = tokio::time::timeout(std::time::Duration::from_millis(300), client.call("slow", json!({}))).await;
+    assert!(abandoned.is_err(), "the slow call must still be waiting for the rest of its line");
+    let content = client.call("fast", json!({})).await.unwrap();
+    assert_eq!(content, [json!({"type": "text", "text": "fast"})]);
+}
+
+#[tokio::test]
+async fn a_line_that_is_not_json_is_quoted_in_the_error() {
+    let program = splitting("not-json");
+    let client = connect(program.to_str().unwrap(), View::Hidden).await.unwrap();
+    let error = client.call("noisy", json!({})).await.unwrap_err();
+    assert!(error.message().contains("Gtk-WARNING: not a reply"), "{error:?}");
+}
