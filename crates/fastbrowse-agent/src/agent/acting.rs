@@ -120,6 +120,28 @@ fn value_ends(value: &str) -> String {
     format!("{head} [... {} words ...] {tail}", all.len() - 2 * VALUE_ENDS_SHOWN)
 }
 
+const READ_SOURCE: &str = "The task does not state it, and what was read does: ";
+
+/// A source question that crowds out the page state can show the read by its ends.
+fn shorten_read(question: &mut String, options: &mut IndexMap<String, JsonValue>) -> bool {
+    if question.contains(ELIDED) {
+        return false;
+    }
+    let Some(value) = options.get_mut(IN_READ) else {
+        return false;
+    };
+    let Some(read) = value.as_str().and_then(|shown| shown.strip_prefix(READ_SOURCE)) else {
+        return false;
+    };
+    let ends = value_ends(read);
+    if ends == read {
+        return false;
+    }
+    *value = JsonValue::from(format!("{READ_SOURCE}{ends}"));
+    question.push_str(ELIDED);
+    true
+}
+
 /// The words Jev may pick from, each with where it stands in the task.
 fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, JsonValue> {
     let chars: Vec<char> = task.chars().collect();
@@ -1356,10 +1378,22 @@ impl Agent {
             sources.retain(|source, _| source == IN_TASK);
         }
         let (begins, ends) = self.located(state, observation, &task, &label, group).await?;
-        let asked =
+        let mut asked =
             value_questions(state, target, (&task, "the task"), &label, (&begins, &ends), source_question, sources);
         let picks = match ahead_picks(decision, &asked) {
             Some(picks) => picks,
+            None if asked[0].2.contains_key(IN_READ) => {
+                match self.ask_choices(state, Some(observation), asked.clone()).await {
+                    Err(Flow::Agent(error @ (AgentError::ObservationTooLarge(_) | AgentError::NotesTooLarge(_)))) => {
+                        let (_, question, options) = &mut asked[0];
+                        if !shorten_read(question, options) {
+                            return Err(error.into());
+                        }
+                        self.ask_choices(state, Some(observation), asked).await?
+                    }
+                    result => result?,
+                }
+            }
             None => self.ask_choices(state, Some(observation), asked).await?,
         };
         let source = picks.get("source").cloned().unwrap_or_else(|| NO_VALUE.into());
@@ -1948,9 +1982,8 @@ impl Agent {
             WRITTEN.into(),
             "The task asks for text it does not state word for word, such as a search query for what it looks for, or text it asks to be written or composed, including items it names set out as the lines, sentences or list it asks for, so it is written from the task.".into(),
         );
-        let said = |read: &str| JsonValue::from(format!("The task does not state it, and what was read does: {read}"));
         if !read.is_empty() {
-            sources.insert(IN_READ.into(), said(&shown));
+            sources.insert(IN_READ.into(), JsonValue::from(format!("{READ_SOURCE}{shown}")));
         }
         sources.insert(NO_VALUE.into(), NO_VALUE_SAID.into());
         sources.insert(LEAVE.into(), LEAVE_SAID.into());
@@ -1968,8 +2001,7 @@ impl Agent {
         let model_task = self.model_task(state);
         let whole = page_question(&model_task, &source_question, sources.clone()).dump_json();
         if !read.is_empty() && self.config.tokens.input_chars(&[whole]) == 0 {
-            sources.insert(IN_READ.into(), said(&value_ends(&shown)));
-            source_question.push_str(ELIDED);
+            shorten_read(&mut source_question, &mut sources);
         }
         Value { task, read, label, group, source_question, sources }
     }
