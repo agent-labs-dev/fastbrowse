@@ -39,12 +39,15 @@ pub struct Element {
 }
 
 impl Element {
-    /// Whether `other`, the element an id names in a later read, is this one: ids are numbered by the tree's order, so
-    /// two files of one name in different folders swap them when the list reorders, and role and name cannot tell
-    /// them apart. Where the element lies, and how big, can: an element that moved is not the one the run chose.
-    pub fn same_place(&self, other: &Element) -> bool {
+    /// Whether the element `id` names in `fresh`, a later read of the window, is this one. Ids are the tree's order
+    /// and deskpilot gives an element no identity of its own, so a read cannot prove which of two elements of one role
+    /// and name an id names: two fixed-size rows named alike swap, and every field but the file behind them matches.
+    /// Only an element no other shares its role and name with is told by them, and by where it lies.
+    pub fn still_in(&self, fresh: &Element, id: &str) -> bool {
+        let Some(now) = find(fresh, id) else { return false };
         (&self.role, &self.name, self.x, self.y, self.width, self.height)
-            == (&other.role, &other.name, other.x, other.y, other.width, other.height)
+            == (&now.role, &now.name, now.x, now.y, now.width, now.height)
+            && count_named(fresh, &now.role, &now.name) == 1
     }
 
     fn has(&self, state: &str) -> bool {
@@ -296,6 +299,11 @@ pub fn aim(root: &Element, id: &str) -> Option<(f64, f64, f64, f64)> {
     }
     let centre = |at: i64, size: i64| at as f64 + size as f64 / 2.0;
     Some((centre(element.x, element.width), centre(element.y, element.height), root.width as f64, root.height as f64))
+}
+
+fn count_named(element: &Element, role: &str, name: &str) -> usize {
+    usize::from(element.role == role && element.name == name)
+        + element.children.iter().map(|child| count_named(child, role, name)).sum::<usize>()
 }
 
 pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {

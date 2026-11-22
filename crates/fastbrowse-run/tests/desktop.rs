@@ -823,6 +823,57 @@ async fn a_drag_between_same_named_files_whose_ids_swapped_is_stale() {
 }
 
 #[tokio::test]
+async fn a_drag_between_same_named_files_is_stale_though_the_read_is_unchanged() {
+    // Deskpilot's ids follow tree order and name no file: two fixed-height rows named alike that swapped leave every
+    // id, role, name and box as it was, so only the shared name tells that the ends cannot be told apart.
+    let fake = editor("drag-twins", &[launch_tool(), shot_tool()]);
+    fake.replies("wait_for", [ok(&window(false))]);
+    let cell = |id: &str, y: i64| {
+        json!({"id": id, "role": "grid cell", "name": "report.pdf", "states": ["showing", "enabled", "selectable"],
+            "x": 100, "y": y, "width": 80, "height": 20})
+    };
+    let tree = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "width": 800, "height": 600,
+        "children": [cell("e2", 40), cell("e3", 200)]});
+    fake.replies("elements", [ok(&tree)]);
+    fake.replies("shot", [shot(&fake, "placed", b"placed")]).replies("drag", [ok(&json!({"x": 1, "y": 1}))]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    let mut drag = Action::new(Operation::Drag);
+    drag.target_id = Some("e2".into());
+    drag.destination_id = Some("e3".into());
+    let result = page.act(&drag, &before).await.unwrap();
+    assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
+    assert!(calls(&fake, "drag").is_empty());
+}
+
+#[tokio::test]
+async fn a_window_the_action_opened_during_a_slow_lookup_is_followed_by_the_next_step() {
+    let fake = two_apps("followed-late");
+    let dialog = named("0x123", "org.gnome.TextEditor", "Save As");
+    let button = json!({"id":"e2", "role":"push button", "name":"Save", "states":["showing", "enabled"]});
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "children": [button]});
+    fake.replies("elements@0xabc", [ok(&root)]);
+    fake.replies("wait_for@0x123", [ok(&dialog)]).replies("elements@0x123", [ok(&frame("s3"))]);
+    fake.replies("click", [ok(&json!({"x": 1, "y": 1}))]);
+    fake.replies("windows", [list(&[window(false), calculator()])]);
+    let page = open_both(&fake).await;
+    let before = page.observe().await.unwrap();
+    // The dialog opens, and the window list is too slow to say so within the step.
+    fake.replies("windows", [list(&[window(false), calculator(), dialog])]);
+    std::fs::write(fake.dir().join("windows.delay"), "1").unwrap();
+    let mut click = Action::new(Operation::Click);
+    click.target_id = Some("e2".into());
+    page.act(&click, &before).await.unwrap();
+    std::fs::remove_file(fake.dir().join("windows.delay")).unwrap();
+    // The observation lists the dialog and the editor stays active: the dialog is not one that was always there.
+    let between = page.observe().await.unwrap();
+    assert_eq!(between.document_key, "0xabc", "{between:?}");
+    let result = page.act(&click, &between).await.unwrap();
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(page.observe().await.unwrap().title, "Save As");
+}
+
+#[tokio::test]
 async fn a_drag_whose_window_was_reordered_since_the_observation_is_stale() {
     // GNOME Files sorted a new file in between the decision and the act: e2 is now another file, so dragging by the
     // old ids would pick up and drop the wrong ones.

@@ -93,6 +93,9 @@ pub struct DeskpilotPage {
     visited: Mutex<Vec<String>>,
     /// Every window seen on the workspace, so a window an action opened is told from one already there.
     seen: Mutex<HashSet<String>>,
+    /// Set when a step's window lookup timed out, so a window it opened is not yet known: the next observation leaves
+    /// the windows unseen for the next step's `follow_opened`, instead of taking the dialog for one that was there.
+    lookup_missed: AtomicBool,
     /// The snapshot the latest observation took, the only one whose ids may be acted on.
     latest: Mutex<Option<String>>,
     shot: Mutex<Option<Shot>>,
@@ -205,6 +208,7 @@ impl DeskpilotPage {
             visited: Mutex::new(vec![window.address.clone()]),
             seen: Mutex::new(launched.into_iter().map(|window| window.address).collect()),
             window: Mutex::new(window),
+            lookup_missed: AtomicBool::new(false),
             latest: Mutex::new(None),
             shot: Mutex::new(None),
             generation: AtomicU64::new(0),
@@ -322,6 +326,7 @@ impl DeskpilotPage {
     /// opens: a dialog the app opened is where the run goes on. None when no window opened.
     async fn follow_opened(&self) -> PageResult<Option<Window>> {
         let windows = self.windows().await?;
+        self.lookup_missed.store(false, Ordering::SeqCst);
         let opened = {
             let mut seen = self.seen.lock().unwrap();
             windows.into_iter().filter(|window| seen.insert(window.address.clone())).last()
@@ -710,14 +715,14 @@ impl DeskpilotPage {
         };
         // Ids are numbered by the tree's order, so the window may have reordered since the observation: a file manager
         // that sorted a new file in renumbers its items, and a stale id then names another file. Both ends are read in
-        // the window now, and each must still be the element the run chose, or the step is stale.
+        // the window now, and each must still be the element the run chose, or the step is stale. An end whose role and
+        // name another element shares cannot be told from it, so it is stale too: the agent observes again.
         let fresh = self.peeked(window).await?;
         let ends = {
             let observed = self.observed.lock().unwrap();
             let chosen = |id: &str| {
                 let was = tree::find(observed.as_ref()?, id)?;
-                let now = tree::find(&fresh, id)?;
-                was.same_place(now).then(|| tree::aim(&fresh, id)).flatten()
+                was.still_in(&fresh, id).then(|| tree::aim(&fresh, id)).flatten()
             };
             (chosen(source), chosen(destination))
         };
@@ -904,8 +909,10 @@ impl DeskpilotPage {
         // measured, and a window it opened is followed by the next read of the list.
         let opened = tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), self.follow_opened()).await;
         if !matches!(opened, Ok(Ok(Some(_)))) {
-            if let Ok(Err(error)) = opened {
-                return Err(error);
+            match opened {
+                Ok(Err(error)) => return Err(error),
+                Err(_) => self.lookup_missed.store(true, Ordering::SeqCst),
+                Ok(Ok(_)) => {}
             }
             return Ok(measured);
         }
@@ -922,8 +929,10 @@ impl DeskpilotPage {
         };
         let windows = self.windows().await?;
         // A window that appeared without an action, such as a second window an app opens as it starts, is listed
-        // and is not an action's later.
-        self.seen.lock().unwrap().extend(windows.iter().map(|window| window.address.clone()));
+        // and is not an action's later. After a lookup that timed out, a new window may be the action's: it stays unseen.
+        if !self.lookup_missed.load(Ordering::SeqCst) {
+            self.seen.lock().unwrap().extend(windows.iter().map(|window| window.address.clone()));
+        }
         let observation = tree::observation(&window, &root, &windows);
         Ok((root, observation))
     }
