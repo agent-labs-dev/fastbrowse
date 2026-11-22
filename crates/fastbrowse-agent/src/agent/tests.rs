@@ -10081,6 +10081,7 @@ fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
                 label: "Notify followers".into(),
                 value: "checked".into(),
                 form: None,
+                was_target: true,
             }],
             ..HistoryEntry::new(Some(Operation::Click), Some("Notify followers"), StepOutcome::Executed, true)
         },

@@ -226,6 +226,7 @@ pub struct FieldChange {
     pub(crate) label: String,
     pub(crate) value: String,
     pub(crate) form: Option<Form>,
+    pub(crate) was_target: bool,
 }
 
 /// A commit a step sent, and whether the run saw the page take it.

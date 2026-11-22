@@ -52,6 +52,10 @@ impl Page for FormPage {
                 page.dialog = None;
                 page.viewport_text = "Comment posted".into();
             }
+            (_, Some("publish")) => {
+                page.controls[0].checked = Some(true);
+                page.controls[1].value = Some("Our new article".into());
+            }
             (_, Some("draft")) => page.controls[0].checked = Some(true),
             (_, Some("post")) if self.confirms_post => {
                 page.dialog =

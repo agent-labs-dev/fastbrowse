@@ -604,23 +604,25 @@ pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports w
 /// the commit's own form, then the fields left changed, the latest change to each, as [`CHANGED`] says it: text typed
 /// or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field it changed, as
 /// the page read it after the click. A commit sends only its own form, as the page reports it, so a field of another
-/// form, or one no form is reported for, stays among the changed fields. None when no step changed a field or committed.
+/// form stays among the changed fields. Without a form, only the committing control's own change is sent.
 pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
-    // Each field's latest value, with the form it is in and the step that left it.
+    // Each field's latest value, with its form and the step that directly targeted it.
     let mut changed = IndexMap::new();
     let mut committed = Vec::new();
     for (index, entry) in history.iter().enumerate().filter(|(_, entry)| entry.outcome == StepOutcome::Executed) {
         let form = entry.form.as_ref();
-        let mut put = |form, field, left| {
+        let mut put = |form, field, left, was_target: bool| {
             let key = (form, field);
             changed.shift_remove(&key);
-            changed.insert(key, (index, left));
+            changed.insert(key, (was_target.then_some(index), left));
         };
         match (entry.operation, &entry.text, entry.target.as_deref()) {
             (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => {
-                put(form, target, text::repr(text))
+                put(form, target, text::repr(text), true)
             }
-            _ => entry.set.iter().for_each(|field| put(field.form.as_ref(), field.label.as_str(), field.value.clone())),
+            _ => entry.set.iter().for_each(|field| {
+                put(field.form.as_ref(), field.label.as_str(), field.value.clone(), field.was_target);
+            }),
         }
         let Some(commit) = entry.commit else { continue };
         let step = match (entry.operation, entry.target.as_deref()) {
@@ -630,7 +632,7 @@ pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<
         };
         let mut entered = Vec::new();
         changed.retain(|(from, field), (by, left)| {
-            let sent = *by == index || form.is_some() && *from == form;
+            let sent = *from == form && (form.is_some() || *by == Some(index));
             if sent {
                 entered.push(format!("{field}: {left}"));
             }

@@ -30,7 +30,8 @@ impl DecisionClient for RequestedPost {
         Box::pin(async move {
             let mut answer = self.0.evaluate(state, questions).await?;
             if let Some(Question::Noul(question)) = questions.get("irreversible") {
-                let posting = question.instructions.contains("Post");
+                let posting =
+                    question.instructions.contains("Post") || question.instructions.contains("Publish article");
                 if let Some(Answer::Noul(irreversible)) = answer.answers.get_mut("irreversible") {
                     irreversible.probability = if posting { 0.9 } else { 0.0 };
                 }
@@ -213,4 +214,51 @@ async fn a_portalled_option_reports_the_field_it_sets_as_part_of_the_submitted_f
         "the field submitted by Post belongs to that commit: {answer}"
     );
     assert!(!answer.contains("may still hold what it entered"), "the submitted choice is not an unsent edit: {answer}");
+}
+
+#[tokio::test]
+async fn a_commit_keeps_fields_prefilled_in_another_form_among_unsent_changes() {
+    for (article_form, share_form) in [(Some("article"), Some("social")), (None, None)] {
+        let publish = Control {
+            form_id: article_form.map(str::to_owned),
+            checked: Some(false),
+            ..Control::new("publish", "switch", "Publish article", [Operation::Click])
+        };
+        let share = Control {
+            form_id: share_form.map(str::to_owned),
+            value: Some(String::new()),
+            ..Control::new("share", "textbox", "Share message", [Operation::Fill])
+        };
+        let page = serde_json::from_value(json!({
+            "url": "https://example.test/", "title": "Article and sharing", "page_key": "k", "document_key": "doc",
+            "captured_at": "2026-09-26T20:00:00Z", "controls": [publish, share], "viewport_text": "", "tabs": [],
+        }))
+        .unwrap();
+        let jev = RequestedPost(ScriptedJev::new(steps("click Publish article").unwrap()));
+        let agent = Agent::new(
+            Arc::new(FormPage { page: Mutex::new(page), confirms_post: false }),
+            Arc::new(jev),
+            Arc::new(ScriptedLLM),
+        );
+        let result = agent
+            .run(
+                "Publish the article, then prepare a message to share it",
+                RunOptions {
+                    start: Some("https://example.test/".into()),
+                    authorization: Some(Authorization { irreversible_actions: true }),
+                    limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+        let answer = result.answer.expect("the unfinished run reports what it changed");
+        let (committed, changed) = answer
+            .split_once("This run ended without finishing after changing fields")
+            .unwrap_or_else(|| panic!("the separately owned sharing field is still unsent: {answer}"));
+        assert!(committed.contains("Publish article: checked"), "{answer}");
+        assert!(!committed.contains("Share message:"), "the share message was never sent: {answer}");
+        assert!(changed.contains("Share message: 'Our new article'"), "{answer}");
+    }
 }

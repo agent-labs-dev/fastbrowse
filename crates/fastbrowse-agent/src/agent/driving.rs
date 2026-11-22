@@ -1286,14 +1286,26 @@ impl Agent {
                                 (if *selected { "selected" } else { "not selected" }).to_string()
                             }
                         };
-                        Some(FieldChange { label: describe(field), value: left, form: Form::of(&landed, field) })
+                        Some(FieldChange {
+                            label: describe(field),
+                            value: left,
+                            form: Form::of(&landed, field),
+                            was_target: observation.document_key == landed.document_key
+                                && field.frame_id == target.frame_id
+                                && field.id == target.id,
+                        })
                     })
                     .collect();
                 // A page that shows a choice only in a label or in text holds it in no field it reports, so the run
                 // cannot say which field it set: it says what it clicked.
                 let stayed = observation.url == landed.url && observation.document_key == landed.document_key;
                 if set.is_empty() && done.set_something && stayed {
-                    set.push(FieldChange { label: describe(target), value: UNREPORTED.to_string(), form: None });
+                    set.push(FieldChange {
+                        label: describe(target),
+                        value: UNREPORTED.to_string(),
+                        form: None,
+                        was_target: false,
+                    });
                 }
                 effect_now = Some(done.summary);
             }
