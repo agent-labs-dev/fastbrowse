@@ -501,21 +501,27 @@ pub struct Planned {
 
 const PLAN_PREFIX: &str = "plan:";
 
-fn plan_question(control: &Control) -> Question {
+/// A field as a sentence names it: its role, label, the context it sits in, and the input name and autocomplete that
+/// tell two fields labelled alike apart. A label alone can be the role again: an unlabelled search box reads as
+/// 'textbox', and a value writer told only that typed the task's whole answer into it (#1339).
+pub fn described(control: &Control) -> String {
     let context = control.context.as_deref().map(|c| format!(" in {}", text::repr(c))).unwrap_or_default();
-    // A target candidate's state element leaves out its input name and autocomplete, and two fields labelled alike
-    // are told apart by them.
     let named = [("named", &control.input_name), ("autocomplete", &control.autocomplete)]
         .into_iter()
         .filter_map(|(key, value)| value.as_deref().map(|value| format!(", {key} {}", text::repr(value))))
         .collect::<String>();
+    format!("a {} labelled {}{context}{named}", control.role, text::repr(&control.label))
+}
+
+fn plan_question(control: &Control) -> Question {
+    // A target candidate's state element leaves out its input name and autocomplete, and two fields labelled alike
+    // are told apart by them.
     let instructions = format!(
-        "{UNTRUSTED}\nElement {} is a {} labelled {}{context}{named}. Besides the one next action, does what the task still \
-         needs on this page include that this run fill it, before anything moves on from this page? Yes only when the \
-         task itself gives or calls for a value for it now.",
+        "{UNTRUSTED}\nElement {} is {}. Besides the one next action, does what the task still needs on this page \
+         include that this run fill it, before anything moves on from this page? Yes only when the task itself gives \
+         or calls for a value for it now.",
         control.id,
-        control.role,
-        text::repr(&control.label),
+        described(control),
     );
     noul(
         &instructions,
@@ -1758,12 +1764,12 @@ fn context_of(control: &Control) -> Option<String> {
 
 /// A control as the step's state lists it.
 pub fn element(control: &Control) -> Map<String, Value> {
-    described(control, true)
+    control_description(control, true)
 }
 
 /// A control's description; `shared` adds the context and operations every question reads from the step's state, which
 /// a target option refers to by id rather than repeating.
-fn described(control: &Control, shared: bool) -> Map<String, Value> {
+fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
     let mut element = Map::new();
     element.insert("id".into(), control.id.clone().into());
     element.insert("label".into(), control.label.clone().into());
@@ -1878,7 +1884,7 @@ fn target_question(
 /// Ported from browser-use/jev-ultrafast (MIT), snapshot.js: name opening a field separately from typing in it so a
 /// picker is a useful click target even when its value is already filled.
 fn target_element(control: &Control, operation: Operation) -> Map<String, Value> {
-    let mut element = described(control, false);
+    let mut element = control_description(control, false);
     if operation == Operation::Press && !role_keys(&control.role).is_empty() {
         let label = element["label"].as_str().unwrap_or_default().to_string();
         let given = if control.operations.contains(&Operation::Fill) { ", or a task-supplied key," } else { "" };

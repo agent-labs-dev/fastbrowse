@@ -1224,10 +1224,14 @@ impl Agent {
             return Err(self.untouched(state, observation, target));
         }
         if source == WRITTEN {
+            let mut field = crate::policy::described(target);
+            if let Some(limit) = target.max_length {
+                field += &format!(", which holds at most {limit} characters");
+            }
             let written = write_value(
                 &*self.llm,
                 &self.model_task(state),
-                &label,
+                &field,
                 target.input_type.as_deref(),
                 &typed_into(state, target),
                 holding(target).as_deref(),

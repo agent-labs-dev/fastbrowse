@@ -299,7 +299,8 @@ impl Agent {
             }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
-            if bot_check || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above {
+            let walled = decision.login_required.unwrap_or(0.0) > thresholds.login_required_above;
+            if bot_check || walled {
                 // A wall offering nothing to act on cannot be signed into, so it is waited on as a bot check is: for as
                 // long as the browser's CAPTCHA solver works on it or its document is still loading, and no longer.
                 if (bot_check || raw.controls.is_empty())
@@ -404,9 +405,7 @@ impl Agent {
             }
             // A wall can be the answer to the task, but cannot authorize walking the list behind it.
             self.trace_read_context("list_continuation", state, &observation, &decision);
-            if decision.read_scope == ReadScope::List
-                && (state.page_failed || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above)
-            {
+            if decision.read_scope == ReadScope::List && (state.page_failed || walled) {
                 list_walk = None;
                 decision.read_scope = ReadScope::Page;
             }
@@ -420,6 +419,12 @@ impl Agent {
                 continue;
             }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision)
+                // A sign-in wall the run goes on to pass is read only when Jev says it shows the answer: a list's next
+                // page that asked for a sign-in was read as one more record of the answer being composed, and its text
+                // cited, before the run signed in. A run holding a secret is not asked again on the same page, so Jev's
+                // last reading of it stands.
+                && (!signing_in(state, &observation, thresholds.login_required_above)
+                    || decision.shows_answer.is_some_and(|probability| probability > EVEN_ODDS))
                 // The page the run began on is read for an answer only for a task that asks to be told something: a
                 // task that only carries something out would otherwise answer with whatever its start page showed.
                 && (shows || self.output_intent(state).await? != OutputIntent::CarriedOut)
@@ -1954,6 +1959,11 @@ fn judge_site(state: &mut RunState, observation: &Observation, decision: &Decisi
     } else if reported {
         state.site_failure = None;
     }
+}
+
+/// Whether Jev's latest reading of this page judged it a sign-in wall.
+fn signing_in(state: &RunState, observation: &Observation, above: f64) -> bool {
+    state.login_readings.get(&read_key(observation)).is_some_and(|probability| *probability > above)
 }
 
 #[cfg(test)]

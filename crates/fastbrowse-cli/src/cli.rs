@@ -88,6 +88,9 @@ pub struct Build {
     pub git_dirty: Option<bool>,
     /// The environment the Python package was installed into, which `self-update` names; None for the binary.
     pub wheel: Option<crate::update::Wheel>,
+    /// The real path of the script this install runs as, which the extension registry keys on, where the process's own
+    /// executable is the interpreter. None for the binary, and when no script is known.
+    pub identity: Option<std::path::PathBuf>,
 }
 
 impl Build {
