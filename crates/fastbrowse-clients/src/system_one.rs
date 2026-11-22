@@ -70,6 +70,12 @@ impl SystemOneClient {
         self
     }
 
+    /// OpenRouter, which serves each decision model at the context and price it lists for that model.
+    pub fn openrouter(mut self) -> SystemOneClient {
+        self.profile = DecisionProfile::on_openrouter(&self.model);
+        self
+    }
+
     /// A route that passes Jev image input through, sent with TypeSafe's images header.
     pub fn images(mut self) -> SystemOneClient {
         self.profile.images = true;

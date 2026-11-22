@@ -568,8 +568,7 @@ impl Settings {
                     &base_url(OPENROUTER_URL),
                     &model(OPENROUTER_MODEL),
                 )
-                .long_context()
-                .images(),
+                .openrouter(),
             ),
             DecisionSource::TypeSafe => Box::new(
                 SystemOneClient::new(

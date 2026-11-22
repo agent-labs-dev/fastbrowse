@@ -66,6 +66,31 @@ pub fn jev_takes_png(png: &[u8]) -> bool {
         && (78_400..=2_458_624).contains(&(width * height))
 }
 
+/// The input tokens Jev counts for one PNG: two for each 28-pixel tile it covers, rounded up on each side, and 13 for
+/// the image itself. TypeSafe publishes no image rate and says each image counts toward the context, so this was
+/// measured against Jev 1.14 through OpenRouter on 2026-11-22, reading `usage.input_tokens` against the same request
+/// without the image: 280x280 added 213, 560x560 813, 1568x882 3,597 and four at 800x600 5,156, each exactly this rule.
+/// A step that pictured eight cards was refused with `max_tokens_exceeded` while its text fitted, because nothing
+/// counted the pictures ([#1303](https://github.com/agent-labs-dev/fastbrowse/issues/1303)).
+pub fn jev_image_tokens(png: &[u8]) -> i64 {
+    if png.len() < 24 {
+        return 0;
+    }
+    let side = |at: usize| u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]) as i64;
+    let tiles = |pixels: i64| (pixels + 27) / 28;
+    2 * tiles(side(16)) * tiles(side(20)) + 13
+}
+
+/// The image tokens a request carries: each image Jev is sent, once for every place the state or a question refers to
+/// it, since Jev counts a picture again for each place it is used.
+pub fn image_tokens(images: &Images, state: &Value, questions: &IndexMap<String, Question>) -> i64 {
+    if images.is_empty() {
+        return 0;
+    }
+    let written = format!("{state}{}", serde_json::to_string(questions).unwrap_or_default());
+    images.iter().map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png)).sum()
+}
+
 /// `state` with every value that is an image reference left out, for a route that takes no image.
 pub fn without_images(state: &Value, images: &Images) -> Value {
     let reference = |value: &Value| value.as_str().is_some_and(|text| images.contains_key(text));
@@ -707,6 +732,32 @@ impl DecisionProfile {
         }
     }
 
+    /// The profile of `model` as OpenRouter serves it. Jev keeps its long context and image input. Every other model
+    /// takes the context, price and image input OpenRouter lists for it, so a 32k model is never sent a request
+    /// fitted to Jev's 262k: that is what microsoft-decision-1.1 refused with `question_context_limit`. A model the
+    /// list does not hold gets the tightest limits of [`DecisionProfile::unknown`].
+    pub fn on_openrouter(model: &str) -> DecisionProfile {
+        let bare = model.rsplit('/').next().unwrap_or(model);
+        if bare.starts_with("jev") {
+            return DecisionProfile { images: true, ..DecisionProfile::for_model(model).long_context() };
+        }
+        let Some((_, context, dollars_per_million, images)) =
+            OPENROUTER_DECISION_MODELS.iter().find(|(id, ..)| *id == model)
+        else {
+            return DecisionProfile::unknown();
+        };
+        let known = DecisionProfile::for_model(model);
+        DecisionProfile {
+            max_largest_tokens: *context,
+            max_total_tokens: *context,
+            // OpenRouter caps no decision body below TypeSafe's own limit, which it passes Jev requests through at.
+            max_request_bytes: Some(JEV_REQUEST_BYTES as i64),
+            dollars_per_input_token: Some(dollars_per_million / 1_000_000.0),
+            images: *images,
+            ..known
+        }
+    }
+
     /// This model at Jev's long context, for a route that serves it.
     pub fn long_context(self) -> DecisionProfile {
         DecisionProfile {
@@ -756,6 +807,47 @@ impl DecisionProfile {
         self.dollars_per_input_token.map(|price| input_tokens * price)
     }
 }
+
+/// Each decision model OpenRouter lists, as `GET /api/v1/models?output_modalities=decisions` returned it on
+/// 2026-11-22: its id, context length in tokens, dollars per million input tokens, and whether it takes image input.
+/// Jev is profiled as Jev. Respan's span models (no context listed, conversation spans only) and Clairic (extractions,
+/// not decisions) answer no fastbrowse request, so they are left out and fall to the unknown profile.
+pub const OPENROUTER_DECISION_MODELS: &[(&str, i64, f64, bool)] = &[
+    ("baseten/bison-1", 32768, 0.1, true),
+    ("baseten/elephant-1", 16384, 0.035, true),
+    ("baseten/groundhog-1", 16384, 0.035, true),
+    ("baseten/joey-1", 16384, 0.01, true),
+    ("baseten/mammoth-1", 16384, 0.1, true),
+    ("cloudflare/clef", 65537, 0.192, true),
+    ("cloudflare/clef-flash", 24576, 0.019, true),
+    ("cloudflare/clef-omni", 65536, 0.15, true),
+    ("google/gemini-decision-1", 262144, 0.1, true),
+    ("heygen/heygen-decision-1", 262144, 0.07, true),
+    ("heygen/heygen-decision-1-turbo", 262144, 0.042, true),
+    ("jaredpalmer/kev-4b", 8192, 0.042, false),
+    ("liquid/d1-ultra", 32768, 0.042, true),
+    ("liquid/d1.1", 65536, 0.02, true),
+    ("liquid/d1.2", 65536, 0.02, true),
+    ("liquid/d1.2-ultra", 65536, 0.042, true),
+    ("microsoft/microsoft-decision-1", 32768, 0.042, false),
+    ("microsoft/microsoft-decision-1.1", 32768, 0.042, true),
+    ("morph/reflex", 65536, 0.042, true),
+    ("nace-ai/drex-max", 262144, 0.06, true),
+    ("nace-ai/drex-max-finance", 262144, 0.06, true),
+    ("nace-ai/drex-v1.5", 131072, 0.04, false),
+    ("nace-ai/drex-v2.0", 131072, 0.06, false),
+    ("openai/gpt-6-luna-decisions", 1050000, 0.1, true),
+    ("parallel/decisions-fast", 32000, 0.0, false),
+    ("perplexity/pplx-decider-flash-v1.2", 262144, 0.01, true),
+    ("perplexity/pplx-decider-flash-v1.3:free", 262144, 0.0, true),
+    ("perplexity/pplx-decider-v1.2", 262144, 0.02, true),
+    ("perplexity/pplx-decider-v1.3:free", 262144, 0.0, true),
+    ("respan/span-02", 131072, 0.01, true),
+    ("scaledown/classify-1", 1000000, 0.04, true),
+    ("togethercomputer/tev1-4b-experimental", 32768, 0.042, false),
+    ("upstage/solar-decide", 524288, 0.05, false),
+    ("upstage/solar-decide-flash", 524288, 0.05, false),
+];
 
 pub trait DecisionClient: Send + Sync {
     /// Answer every question against one state. Fails with `InputTooLarge` or another `DecisionError`.
@@ -855,6 +947,36 @@ mod tests {
         assert!(!jev_takes_png(&png(2560, 1800)), "a HiDPI viewport");
         assert!(!jev_takes_png(&png(1280, 279)));
         assert!(!jev_takes_png(b"\xff\xd8\xff\xe0 a JPEG is not asked about here"));
+    }
+
+    #[test]
+    fn jev_counts_an_image_at_two_tokens_a_tile_as_measured() {
+        // Measured against Jev 1.14 through OpenRouter on 2026-11-22: the input tokens each image added.
+        for ((width, height), tokens) in [((280, 280), 213), ((560, 560), 813), ((1568, 882), 3597), ((800, 600), 1289)]
+        {
+            assert_eq!(jev_image_tokens(&png(width, height)), tokens, "{width}x{height}");
+        }
+        let images = Images::from([("ref-1".to_string(), png(280, 280))]);
+        let state = json!({"screenshot": "ref-1", "cards": ["ref-1"]});
+        assert_eq!(image_tokens(&images, &state, &IndexMap::new()), 2 * 213, "counted for each place it is used");
+    }
+
+    #[test]
+    fn pictures_take_their_tokens_from_the_room_left_for_text() {
+        let fitted = DecisionProfile::jev().long_context().fit(None).tokens;
+        let room = fitted.input_chars(&[""]);
+        assert!((room - fitted.beside_images(3597).input_chars(&[""]) - 3957).abs() <= 1);
+    }
+
+    #[test]
+    fn openrouter_fits_each_model_to_the_context_it_lists() {
+        let fitted = |model: &str| DecisionProfile::on_openrouter(model).fit(None).tokens;
+        let microsoft = fitted("microsoft/microsoft-decision-1.1");
+        assert_eq!((microsoft.state_plus_largest_question, microsoft.decision_chars), (32_000, Some((36_044, 36_044))));
+        assert_eq!(fitted("cloudflare/clef-flash").state_plus_largest_question, 24_576);
+        assert_eq!(DecisionProfile::on_openrouter("jev-1.14").max_largest_tokens, JEV_LONG_CONTEXT_TOKENS);
+        assert_eq!(DecisionProfile::on_openrouter("google/gemini-decision-1").max_largest_tokens, 262_144);
+        assert_eq!(DecisionProfile::on_openrouter("vendor/unlisted"), DecisionProfile::unknown());
     }
 
     #[test]

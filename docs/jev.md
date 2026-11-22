@@ -36,6 +36,13 @@ unknown cost, which a dollar limit treats as unaffordable. Its thresholds are Je
 it, and the run's trace says so with a `decision_unvalidated` event. A Jev release other than 1.13 or 1.14 keeps Jev's limits
 and price but is unvalidated too.
 
+On OpenRouter, a decision model other than Jev pinned with `FASTBROWSE_DECISION_MODEL` is fitted to the context,
+price and image input OpenRouter lists for it (`OPENROUTER_DECISION_MODELS`, read from
+`GET /api/v1/models?output_modalities=decisions` on 2026-11-22), not to Jev's 262k: a 32k model such as
+`microsoft/microsoft-decision-1.1` refused requests fitted to Jev's context with `question_context_limit`. A model
+that list does not hold gets the unknown model's limits above. Question keys go out as `[A-Za-z0-9_-]{1,64}`, the
+form Google's and Parallel's decision models require, and the answers come back under the keys fastbrowse asked by.
+
 ### Other decision hosts
 
 `FASTBROWSE_DECISION_SOURCE` picks one of these instead of a Jev source. Each is sent only its own key, never
@@ -77,7 +84,12 @@ screenshot: the state names it `viewport_screenshot`, and the request carries th
 sizes, or one taken while a secret shows as page text, is not sent. A step's request is fitted to TypeSafe's
 32 MiB body limit by its bytes as sent, base64 pictures included, before it goes: past it, recent actions'
 cards are left out from the oldest, then targets' cards, then the screenshot, before any text or control is cut. A
-request Jev still refuses as too large is asked again without a kind of picture, never with the same ones. A
+request Jev still refuses as too large is asked again without a kind of picture, never with the same ones. The
+pictures also take room from the step's text before it is sent: Jev counts each image at two tokens for every
+28-pixel tile it covers, rounded up on each side, plus 13, and again for each place the request refers to it
+(**ours**, measured on 2026-11-22 against Jev 1.14 through OpenRouter, where TypeSafe publishes no rate: 280x280
+added 213 tokens, 560x560 813, 1568x882 3,597). A request with eight cards once fitted its text and was refused
+with `max_tokens_exceeded` because nothing counted them ([#1303](https://github.com/agent-labs-dev/fastbrowse/issues/1303)). A
 control that fills the viewport has no card beside the screenshot, which would show it again; a question sent no
 screenshot, as the irreversible-action check is, still gets that card. The gateway and every backup
 are asked the rest of the state, without the image or its reference. The LLM's own screenshot path is separate; it is governed by the LLM route, not by
