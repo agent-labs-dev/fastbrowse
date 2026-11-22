@@ -4585,18 +4585,21 @@ async fn test_a_failed_image_read_can_be_retried_for_identical_pixels() {
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
-struct DateWriter;
+/// A value writer that writes 2026-11-04 and keeps the user message of each ask.
+#[derive(Default)]
+struct DateWriter(Mutex<Vec<String>>);
 
 impl LLMClient for DateWriter {
     fn generate_value<'a>(
         &'a self,
         purpose: LLMPurpose,
-        _: &'a [Message],
+        messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             assert_eq!(purpose, LLMPurpose::Fill);
+            self.0.lock().unwrap().extend(messages.last().map(|message| message.content.clone()));
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
@@ -4610,9 +4613,29 @@ impl LLMClient for DateWriter {
     }
 }
 
+// An unlabelled search box reads as 'textbox', and a writer told only that typed a research task's whole composed
+// answer into it, citations and all, in 3 of 3 replays; told the field sat in 'Advanced Search' and was named 'q', it
+// wrote a search query in 3 of 3 (#1339).
+#[tokio::test]
+async fn a_written_value_is_asked_for_the_field_as_the_page_describes_it() {
+    let writer = Arc::new(DateWriter::default());
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), writer.clone());
+    let mut state = run_state();
+    state.task = "Research with citations: who created Python?".into();
+    let mut target = Control::new("main:3", "textbox", "textbox", [Operation::Fill, Operation::Click]);
+    (target.context, target.input_name, target.max_length) =
+        (Some("Advanced Search".into()), Some("q".into()), Some(80));
+    let decision = code_decision(Operation::Fill, Some(target.clone()));
+    agent.text(&mut state, &observation(&[]), &decision, &target).await.unwrap();
+    let asked = writer.0.lock().unwrap();
+    let field =
+        "# Field\na textbox labelled 'textbox' in 'Advanced Search', named 'q', which holds at most 80 characters";
+    assert!(asked[0].contains(field), "{}", asked[0]);
+}
+
 #[tokio::test]
 async fn a_relative_date_written_by_the_llm_is_decided_live_when_a_recipe_is_reused() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter::default()));
     let mut state = run_state();
     state.task = "Book a table for tomorrow".into();
     let target = field("Date");
@@ -4628,7 +4651,7 @@ async fn a_relative_date_written_by_the_llm_is_decided_live_when_a_recipe_is_reu
 
 #[tokio::test]
 async fn a_value_written_as_the_task_gives_it_is_saved_for_a_recipe_to_type_again() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter::default()));
     let mut state = run_state();
     state.task = "Book a table for 2026-11-04".into();
     let target = field("Date");
@@ -4643,7 +4666,7 @@ async fn a_value_written_as_the_task_gives_it_is_saved_for_a_recipe_to_type_agai
 
 #[tokio::test]
 async fn a_value_typed_as_an_input_gave_it_is_saved_as_that_input() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter::default()));
     let inputs = IndexMap::from([("date".to_string(), "2026-11-04".to_string())]);
     let mut state = RunState::new(
         "Book a table for input date".into(),
@@ -8870,15 +8893,25 @@ fn paged(url: &str, next: &str) -> Observation {
     at(url, &[record, pager])
 }
 
-/// A run that read `page` and holds one note from it, with the task's output already judged as text.
+/// A run that read `page` as part of a list whose answer is still to be worked out, with the task's output already
+/// judged as text: its note is context, not a pick that alone answers the task, so it does not stand for the list's
+/// other pages.
 fn read_one(state: &mut RunState, page: &Observation, extent: Extent) {
+    read_note(state, page, extent, false);
+}
+
+/// A run that read `page` and holds Jev's pick of one passage from it that alone answers the task.
+fn read_answer(state: &mut RunState, page: &Observation, extent: Extent) {
+    read_note(state, page, extent, true);
+}
+
+fn read_note(state: &mut RunState, page: &Observation, extent: Extent, answers: bool) {
     state.task = "How many quotes on the whole site are by the author?".into();
     state.output_intent = super::state::OutputIntent::Text;
     state.extent = extent;
     let captured = Capture { url: page.url.clone(), ..capture(&[(BlockKind::Paragraph, "A quote by the author.")]) };
-    state
-        .notes
-        .add(Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
+    let note = Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice);
+    state.notes.add(if answers { note.answering() } else { note });
     state.mark_read(page);
 }
 
@@ -8973,6 +9006,49 @@ async fn test_schema_output_on_a_whole_list_opens_the_next_page_instead() {
     assert!(state.pager_followed.contains("https://list.test/page/2/"));
 }
 
+/// A filtered list that states its own total answers a count from one passage; Jev's read picked it and Jev chose
+/// done, and code still opened the list's next pages (#1331).
+#[tokio::test]
+async fn test_done_on_a_list_whose_read_gave_the_answer_in_one_passage_finishes_there() {
+    let first = paged("https://list.test/", "/page/2/");
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(first.clone())), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "How many open issues carry the bug label?".into();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.extent = Extent::EveryPage;
+    let captured = Capture { url: first.url.clone(), ..capture(&[(BlockKind::Paragraph, "59 results")]) };
+    state.notes.add(Fact::read("59 results", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
+    state.mark_read(&first);
+    state.note_pager_pages(&first);
+
+    assert_eq!(state.unread_pager_page(), None);
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("the run ends");
+    assert!(state.steps.iter().all(|step| step.operation != Operation::Navigate), "{:?}", state.steps);
+    let result = finished.expect("the run ends on page 1");
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+}
+
+/// A screenshot reading answers only what one viewport shows: it judged nothing about the list's other pages, so a
+/// whole-list task read from page 1's pixels still opens page 2.
+#[tokio::test]
+async fn test_done_on_a_list_page_read_from_its_screenshot_opens_the_next_page() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::EveryPage);
+    state.notes.add_image_read("Cheapest: GBP 4.60", &first.url, first.captured_at, b"page-one-png");
+    state.compose = true;
+    state.note_pager_pages(&first);
+
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("the run goes on");
+    assert!(finished.is_none(), "a whole-list task finished from page 1's screenshot with page 2 unread");
+    let step = state.steps.last().expect("a step opened the next page");
+    assert_eq!((step.operation, step.outcome), (Operation::Navigate, StepOutcome::Executed));
+    assert!(state.pager_followed.contains("https://list.test/page/2/"));
+}
+
 #[tokio::test]
 async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread_next_page() {
     let browser = Arc::new(HungPage::new(0));
@@ -9063,6 +9139,9 @@ async fn test_done_on_a_task_about_what_one_page_shows_concludes_with_a_next_pag
     let first = paged("https://list.test/", "/page/2/");
     read_one(&mut state, &first, Extent::Shown);
     state.note_pager_pages(&first);
+    assert_eq!(state.unread_pager_page(), None, "a task about one page has no next page to read");
+    // The run ends on an answer, which a task that wants to be told something needs.
+    read_answer(&mut state, &first, Extent::Shown);
 
     let finished = agent.finish(&mut state, &first, None, None).await.expect("finished");
     assert!(finished.is_some(), "a task about one page went on to the next");
@@ -9261,6 +9340,9 @@ async fn test_done_after_the_last_page_a_task_names_finishes() {
     state.note_pager_pages(&first);
     read_one(&mut state, &second, Extent::Pages(Some((1, 2))));
     state.note_pager_pages(&second);
+    assert_eq!(state.unread_pager_page(), None, "page 3 is past the pages the task names");
+    // The run ends on an answer, which a task that wants to be told something needs.
+    read_answer(&mut state, &second, Extent::Pages(Some((1, 2))));
 
     let finished = agent.finish(&mut state, &second, None, None).await.expect("finished");
     assert!(finished.is_some(), "a task over the first two pages went on to page 3");
@@ -9365,6 +9447,8 @@ async fn test_a_named_page_range_without_numbers_never_walks() {
     read_one(&mut state, &first, Extent::Pages(None));
     state.note_pager_pages(&first);
     assert_eq!(state.unread_pager_page(), None);
+    // The run ends on an answer, which a task that wants to be told something needs.
+    read_answer(&mut state, &first, Extent::Pages(None));
 
     let result = agent.conclude(&mut state, &first, None).await.expect("a conclusion");
     assert_ne!(result.status, Status::Unverified, "{:?}", result.error);
