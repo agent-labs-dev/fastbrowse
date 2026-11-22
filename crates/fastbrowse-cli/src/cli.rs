@@ -527,14 +527,25 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let extension = task.wants_extension();
     let recipe_sink =
         (args.recipe.is_some() || args.save_recipe.is_some()).then(fastbrowse_agent::agent::RecipeSink::default);
+    // Every local run writes its own trace, kept only when it ends short of complete, so a failure nobody traced can
+    // still be read afterwards (#1414).
+    let kept = crate::kept_trace::directory(args.trace.as_deref(), &context.environ)
+        .and_then(|directory| crate::kept_trace::KeptTrace::start(&directory));
+    if let Some(kept) = &kept {
+        kept.trace().event("build", || context.build.fields());
+    }
     let host = Host {
         recipe_sink: recipe_sink.clone(),
         browser_api_key: options::environment(&task, &settings)?,
         secrets: secrets.map(|secrets| Arc::new(secrets) as _),
         on_event: Some(progress(context.streams.clone())),
+        http: kept.as_ref().map(|kept| fastbrowse_clients::http::Http::hyper().with_trace(kept.trace())),
         ..Host::default()
     };
-    let mut result = match context.runner.run(task, host).await {
+    let outcome = context.runner.run(task, host).await;
+    let status = outcome.as_ref().ok().map(|result| result.status);
+    let trace = kept.and_then(|kept| kept.finish(status));
+    let mut result = match outcome {
         Ok(result) => result,
         // Stopped from the browser: the extension's Stop, Cancel on Chrome's debugging bar, or the user closing the
         // run's last tab. The reason says which.
@@ -545,7 +556,12 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         Err(RunError::AfterSpending { error, receipt }) => {
             options::cancelled_result(error.failure_kind(), error.to_string(), receipt)
         }
-        Err(error) => return Err(ConfigurationError(error.to_string())),
+        Err(error) => {
+            if let Some(path) = &trace {
+                context.streams.eprint(&format!("  trace: {}", path.display()));
+            }
+            return Err(ConfigurationError(error.to_string()));
+        }
     };
     // Replay accounting only for a run that replayed: a run that only saved one printed "0 actions reused" (#1342).
     if args.recipe.is_some()
@@ -572,7 +588,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     }
     let streams = &context.streams;
     if args.json {
-        streams.print(&json::write(&json_result(&result, &context.build), Style::PYDANTIC.indented(2)));
+        streams
+            .print(&json::write(&json_result(&result, trace.as_deref(), &context.build), Style::PYDANTIC.indented(2)));
     } else {
         // A local LLM endpoint reports no price, and printing only the priced calls would read as the whole bill.
         let mut spend = format!("${:.4}", result.cost.known_dollars());
@@ -593,6 +610,9 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
             Ok(path) => streams.eprint(&format!("  screenshot: {}", path.display())),
             Err(error) => streams.eprint(&format!("  screenshot not kept: {error}")),
         }
+    }
+    if let Some(path) = &trace {
+        streams.eprint(&format!("  trace: {}", path.display()));
     }
     if args.record.is_some() {
         if result.recordings.is_empty() {
@@ -634,7 +654,7 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
         Err(error) => {
             if args.json {
                 context.streams.print(&json::write(
-                    &json_result(&options::error_result("Configuration", &error.0), &context.build),
+                    &json_result(&options::error_result("Configuration", &error.0), None, &context.build),
                     Style::PYDANTIC.indented(2),
                 ));
             }
@@ -647,7 +667,11 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
 /// The result `--json` prints: its total cost beside its status, as the plain output and the MCP result give it, since
 /// a caller otherwise summed the cost lines itself (#1342), and the build that produced it, so a result file names
 /// its commit.
-fn json_result(result: &fastbrowse_core::models::RunResult, build: &Build) -> serde_json::Value {
+fn json_result(
+    result: &fastbrowse_core::models::RunResult,
+    trace: Option<&std::path::Path>,
+    build: &Build,
+) -> serde_json::Value {
     let mut fields = serde_json::Map::new();
     let serde_json::Value::Object(dumped) = result.dump() else { return result.dump() };
     for (name, value) in dumped {
@@ -657,6 +681,9 @@ fn json_result(result: &fastbrowse_core::models::RunResult, build: &Build) -> se
             fields.insert("dollars".into(), fastbrowse_core::py::round(result.cost.known_dollars(), 6).into());
             fields.insert("cost_complete".into(), (!result.cost.has_unknown()).into());
         }
+    }
+    if let Some(trace) = trace {
+        fields.insert("trace".into(), trace.display().to_string().into());
     }
     fields.insert("build".into(), build.fields().into());
     fields.into()

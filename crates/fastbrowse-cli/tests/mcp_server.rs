@@ -220,6 +220,28 @@ async fn test_a_captured_screenshot_reaches_the_caller_as_a_file() {
 }
 
 #[tokio::test]
+async fn test_a_call_that_ends_short_of_complete_names_its_kept_trace() {
+    // A failed signed-in call left nothing to read unless the server had been started traced (#1414).
+    let traces = std::env::temp_dir().join(format!("fastbrowse-mcp-traces-{}", std::process::id()));
+    std::fs::create_dir_all(&traces).unwrap();
+    let config = || ServerConfig { traces: Some(traces.clone()), ..ServerConfig::default() };
+    let recorder = Recorder::new(answered(Status::Stuck));
+    let (result, _) = call(config(), &recorder, json!({"task": "t", "start": START})).await;
+    let kept = PathBuf::from(result["structuredContent"]["trace"].as_str().expect("the trace is named"));
+    assert!(kept.starts_with(&traces));
+    // The run writes through the client it was handed, so what it traces lands in that file.
+    let http = recorder.calls.lock().unwrap()[0].host.http.clone().expect("the run is handed a traced client");
+    http.trace.event("probe", serde_json::Map::new);
+    assert!(std::fs::read_to_string(&kept).unwrap().contains(r#""event": "probe""#));
+
+    let (complete, _) =
+        call(config(), &Recorder::new(answered(Status::Complete)), json!({"task": "t", "start": START})).await;
+    assert!(complete["structuredContent"]["trace"].is_null());
+    assert_eq!(std::fs::read_dir(&traces).unwrap().count(), 1, "a complete call leaves nothing behind");
+    std::fs::remove_dir_all(&traces).unwrap();
+}
+
+#[tokio::test]
 async fn test_authorize_is_refused_unless_the_operator_allowed_it() {
     let recorder = Recorder::new(answered(Status::Complete));
     let (result, _) =

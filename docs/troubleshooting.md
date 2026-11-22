@@ -238,8 +238,9 @@ the task again.
 - For a deadline, set `Limits(max_seconds=...)` in the embedding API, or `--max-seconds` on the MCP server.
   Step and dollar limits do not bound elapsed time. Without `max_seconds` a Wait waits for the page to change, with
   no bound, so a run nobody watches, such as a benchmark or a scheduled job, should set one.
-- For a stalled run, write its trace with `--trace FILE` or `FASTBROWSE_TRACE=FILE` and keep the last event
-  with the result. Each `decide_choices` event lists the controls a step was chosen from, the chosen one marked.
+- For a stalled run, read the trace its result names in `trace` (kept for any CLI or MCP run that ends short of
+  `complete`), or write one with `--trace FILE` or `FASTBROWSE_TRACE=FILE`, and keep the last event with the
+  result. Each `decide_choices` event lists the controls a step was chosen from, the chosen one marked.
 
 ### An attached Chrome that waits for approval
 
