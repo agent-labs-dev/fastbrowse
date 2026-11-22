@@ -414,6 +414,8 @@ async def test_an_llm_client_that_raises_fails_as_that_client_and_the_run_report
             http=counted.http,
         )
     assert (result.status, result.error) == (Status.ERROR, "'not a model error'")
+    # The bridge knows the call's purpose though not the provider behind the caller's client.
+    assert result.failure_kind == "Llm.Failed/host/start/client"
 
 
 @pytest.mark.usefixtures("rust_core")

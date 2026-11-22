@@ -2885,7 +2885,7 @@ mod tests {
                 })
                 .collect();
             Box::pin(async move {
-                let data = schema.validate_json(&json!({"records": records}).to_string()).map_err(LLMError::Failed)?;
+                let data = schema.validate_json(&json!({"records": records}).to_string()).map_err(LLMError::schema)?;
                 let mut cost = CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.001));
                 cost.purpose = Some(purpose);
                 cost.physical_requests = Some(1);

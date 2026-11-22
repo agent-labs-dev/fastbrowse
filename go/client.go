@@ -40,6 +40,8 @@ type served struct {
 	cancel  func()
 	// failure is what ended the run from this side: the first OnEvent or OnFrame that returned an error.
 	failure string
+	// failureKind names the callback that failed, as the result's FailureKind, never with what it returned.
+	failureKind string
 }
 
 // Start starts a fastbrowse process and checks that it speaks this client's protocol version. Cancelling ctx stops
@@ -164,7 +166,7 @@ func (c *Client) Run(ctx context.Context, task string, options RunOptions) (*Run
 		r = <-waiting
 	}
 	c.mu.Lock()
-	failure := run.failure
+	failure, kind := run.failure, run.failureKind
 	c.mu.Unlock()
 	var refused *RPCError
 	cancelled := errors.As(r.err, &refused) && refused.Code == ErrorCodeCancelled
@@ -174,7 +176,7 @@ func (c *Client) Run(ctx context.Context, task string, options RunOptions) (*Run
 	}
 	switch {
 	case failure != "" && cancelled:
-		return endedBy(failure, receipt), nil
+		return endedBy(failure, kind, receipt), nil
 	case cancelled && ctx.Err() != nil:
 		return nil, &CancelledError{Receipt: receipt, cause: context.Cause(ctx)}
 	case r.err != nil:
@@ -187,7 +189,7 @@ func (c *Client) Run(ctx context.Context, task string, options RunOptions) (*Run
 	if failure != "" {
 		// A run can finish before the cancellation reaches it, and its callback failed all the same.
 		spent := CancellationReceipt{Steps: result.Steps, Cost: result.Cost, Recordings: result.Recordings}
-		return endedBy(failure, spent), nil
+		return endedBy(failure, kind, spent), nil
 	}
 	return &result, nil
 }
@@ -231,6 +233,8 @@ func (c *Client) fail(run *served, method ServerMethod, err error) {
 	first := run.failure == ""
 	if first {
 		run.failure = fmt.Sprintf("%s: %s", method, err)
+		// Named as the core names a request callback that failed, so a kind reads the same whichever callback failed.
+		run.failureKind = fmt.Sprintf("Callback/%s/error/%d", method, ErrorCodeInternalError)
 	}
 	c.mu.Unlock()
 	if first {
@@ -336,7 +340,7 @@ func newRunID() string {
 
 // endedBy is the result of a run that a failing callback ended, in the shape the server gives one, with the
 // steps, cost and videos of what it did.
-func endedBy(failure string, spent CancellationReceipt) *RunResult {
+func endedBy(failure, kind string, spent CancellationReceipt) *RunResult {
 	if spent.Steps == nil {
 		spent.Steps = []StepResult{}
 	}
@@ -355,7 +359,7 @@ func endedBy(failure string, spent CancellationReceipt) *RunResult {
 		Artifacts:   []Artifact{},
 		Citations:   []Citation{},
 		Error:       &failure,
-		FailureKind: nil,
+		FailureKind: &kind,
 		Recordings:  spent.Recordings,
 	}
 }

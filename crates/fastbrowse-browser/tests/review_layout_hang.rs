@@ -26,7 +26,7 @@ async fn layout_timeout_recovery_opens_a_fresh_tab() {
                 "guards": {"1": "guard"}, "retarget_keys": {}
             }}}),
             json!({"result": {"value": {
-                "url": "https://example.test/", "document_key": "document", "response_status": 200
+                "url": "https://example.test/", "entry": "https://example.test/", "status": 200, "document_key": "document"
             }}}),
         ],
     );

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -53,6 +54,55 @@ pub struct Request {
     /// body that keeps arriving is read to its end, however long a model takes to write it: a provider that is still
     /// working sends keep-alive bytes, so silence this long is a stall.
     pub timeout: Duration,
+    /// Whether a transport that queues requests before sending them sent this one; see [`Handoff`].
+    pub handoff: Handoff,
+}
+
+/// Settles once whether a request a transport queued before sending it went out: the transport takes it from its
+/// queue, or its caller withdraws it first, never both. A request dropped in the queue reached no provider, so it is
+/// neither a request sent nor a charge; one the transport took may have been billed. A transport that sends at once
+/// never queues, and its requests count as sent.
+#[derive(Debug, Clone, Default)]
+pub struct Handoff(Arc<AtomicU8>);
+
+const UNQUEUED: u8 = 0;
+const QUEUED: u8 = 1;
+const TAKEN: u8 = 2;
+const WITHDRAWN: u8 = 3;
+
+impl Handoff {
+    /// The transport holds the request until it may send it.
+    pub fn queue(&self) {
+        let _ = self.0.compare_exchange(UNQUEUED, QUEUED, Ordering::AcqRel, Ordering::Acquire);
+    }
+
+    /// The transport sends the queued request now; false when its caller withdrew it first, so it must not be sent.
+    pub fn take(&self) -> bool {
+        self.0.compare_exchange(QUEUED, TAKEN, Ordering::AcqRel, Ordering::Acquire).is_ok()
+    }
+
+    /// The transport could not send the request after all, as when its client had no connection to send it on: it
+    /// went out no more than a request still queued did. The caller has not settled it yet, since the transport says
+    /// so before it answers; one that was dropped meanwhile was already counted as possibly sent.
+    pub fn refused(&self) {
+        for from in [TAKEN, UNQUEUED] {
+            if self.0.compare_exchange(from, QUEUED, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                return;
+            }
+        }
+    }
+
+    /// Nobody waits for the request any longer: true when the transport still held it, so it never went out.
+    pub fn withdraw(&self) -> bool {
+        self.0.compare_exchange(QUEUED, WITHDRAWN, Ordering::AcqRel, Ordering::Acquire).is_ok()
+    }
+}
+
+/// A handoff is bookkeeping between a transport and its caller, not part of the request a provider sees.
+impl PartialEq for Handoff {
+    fn eq(&self, _: &Handoff) -> bool {
+        true
+    }
 }
 
 impl Request {
@@ -184,7 +234,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use super::{HyperTransport, Method, Request, Transport, TransportError, traced};
+    use super::{Handoff, HyperTransport, Method, Request, Transport, TransportError, traced};
 
     /// A proxy that answers the first connection with a refusal and returns the bytes it was sent.
     async fn refusing_proxy() -> (String, tokio::task::JoinHandle<Vec<u8>>) {
@@ -209,6 +259,7 @@ mod tests {
             body: Vec::new(),
             timeout: std::time::Duration::from_secs(5),
             max_bytes: None,
+            handoff: Handoff::default(),
         }
     }
 
@@ -354,6 +405,18 @@ impl Http {
         headers: &[(String, String)],
         seconds: f64,
     ) -> Result<Response, TransportError> {
+        self.post_json_handed(url, body, headers, seconds, Handoff::default()).await
+    }
+
+    /// [`Http::post_json`], settling through `handoff` whether a transport that queued the request sent it.
+    pub async fn post_json_handed(
+        &self,
+        url: &str,
+        body: &Value,
+        headers: &[(String, String)],
+        seconds: f64,
+        handoff: Handoff,
+    ) -> Result<Response, TransportError> {
         let mut all = headers.to_vec();
         all.push(("content-type".into(), "application/json".into()));
         // httpx writes `json=` compact and UTF-8, which `Style::HTTPX` is.
@@ -364,6 +427,7 @@ impl Http {
             body: write(body, Style::HTTPX).into(),
             max_bytes: None,
             timeout: if seconds == f64::INFINITY { Duration::MAX } else { Duration::from_secs_f64(seconds) },
+            handoff,
         };
         let mut event = HttpEvent { trace: &self.trace, url, body, began: monotonic(), written: false };
         let result = self.send(request).await;
@@ -400,6 +464,7 @@ impl Http {
             body: Vec::new(),
             max_bytes,
             timeout: Duration::from_secs_f64(seconds),
+            handoff: Handoff::default(),
         };
         self.send(request).await
     }

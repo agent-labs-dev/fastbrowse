@@ -27,7 +27,7 @@ use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCFunction, PyTuple};
 
-use crate::bridge::{Context, Failure, HostJev, HostLlm, HostSecrets, HostTransport, LlmCall, Sent};
+use crate::bridge::{Context, Failure, HostJev, HostLlm, HostSecrets, HostTransport, LlmCall, PyHandoff, Sent};
 use crate::host::{host_call, runtime};
 
 pyo3::create_exception!(
@@ -122,7 +122,16 @@ fn llm_argument(py: Python<'_>, call: LlmCall) -> PyResult<Bound<'_, PyTuple>> {
 
 fn request_argument(py: Python<'_>, request: Request) -> PyResult<Bound<'_, PyTuple>> {
     let body = PyBytes::new(py, &request.body);
-    (request.method.as_str(), request.url, request.headers, body, request.max_bytes, request.timeout.as_secs_f64())
+    let handoff = PyHandoff(request.handoff);
+    (
+        request.method.as_str(),
+        request.url,
+        request.headers,
+        body,
+        request.max_bytes,
+        request.timeout.as_secs_f64(),
+        handoff,
+    )
         .into_pyobject(py)
 }
 
@@ -537,6 +546,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("CloudFailed", m.py().get_type::<cloud::CloudFailed>())?;
     m.add_class::<Run>()?;
     m.add_class::<Context>()?;
+    m.add_class::<PyHandoff>()?;
     m.add("RunRefused", m.py().get_type::<RunRefused>())?;
     m.add("PROTOCOL_VERSION", fastbrowse_core::protocol::PROTOCOL_VERSION)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
