@@ -289,13 +289,17 @@ def validate_cassettes(directory: Path, tasks: Sequence[str]) -> list[Path]:
 # What the pull request is told
 
 
-def commit_message(tasks: Sequence[str], head_sha: str, verdict: FillVerdict) -> str:
+def commit_message(tasks: Sequence[str], head_sha: str, verdict: FillVerdict, *, last: bool = True) -> str:
+    """The refill commit's message. Only the last commit of a refill carries the trailer that stops the next refill:
+    if a later commit of a split refill fails, the head is an earlier one, and the next CI run refills what is still
+    missing instead of refusing a refill commit."""
     listed = ", ".join(tasks)
+    trailer = f"\n\n{TRAILER}: {head_sha}\n" if last else "\n"
     return (
         f"chore(bench): refill cassettes for {listed}\n\n"
         f"The replay check missed {len(tasks)} task(s) after the last change to what the agent asks. They were filled "
         f"with `bench fill` for ${verdict.spent:.4f} of a ${verdict.budget:.2f} cap, and each replays with no miss and "
-        f"passes its grade.\n\n{TRAILER}: {head_sha}\n"
+        f"passes its grade.{trailer}"
     )
 
 
@@ -338,7 +342,7 @@ WORK = Path("artifacts/refill-work")
 COMMIT_PAYLOAD_LIMIT = 40 * 1024 * 1024
 
 
-def commit_batches(files: Sequence[Path], limit: int = COMMIT_PAYLOAD_LIMIT) -> list[list[Path]]:
+def commit_batches(files: Sequence[Path], limit: int) -> list[list[Path]]:
     """`files` split, in order, into commits whose base64-encoded contents fit under `limit` bytes together."""
     batches: list[list[Path]] = []
     size = 0
@@ -511,6 +515,7 @@ def publish() -> int:
     result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else None
     verdict = fill_verdict(result["report"] if result else None, tasks, budget, result["exit_code"] if result else 1)
     committed = False
+    links: list[str] = []
     if not result:
         outcome = "Nothing was committed: the fill job produced no result (see the workflow run)."
     elif not verdict.accepted:
@@ -523,11 +528,14 @@ def publish() -> int:
                 raise ValueError(f"the branch moved to {facts.head_sha[:12]} while the fill ran")
             if not env.get("COMMIT_TOKEN"):
                 raise ValueError("the `AUR_SYNC_TOKEN` repository secret is not set, so no push could start CI again")
-            # Each commit builds on the one before it; every one carries the trailer, so none starts another refill.
-            head, links = sha, []
-            for batch in commit_batches(files):
+            # Each commit builds on the one before it. A commit that is not the branch head by the time its CI ends
+            # starts no refill, since the refill only runs for the current head.
+            head = sha
+            batches = commit_batches(files, COMMIT_PAYLOAD_LIMIT)
+            for position, batch in enumerate(batches, 1):
                 batch_tasks = [path.name.removesuffix(".jsonl") for path in batch]
-                headline, _, body = commit_message(batch_tasks, sha, verdict).partition("\n\n")
+                message = commit_message(batch_tasks, sha, verdict, last=position == len(batches))
+                headline, _, body = message.partition("\n\n")
                 made = gh(
                     "graphql",
                     token=env["COMMIT_TOKEN"],
@@ -559,7 +567,11 @@ def publish() -> int:
             outcome = f"Committed the refilled cassettes as {', '.join(links)}; CI runs again on it."
             committed = True
         except (ValueError, RuntimeError) as error:
-            outcome = f"Nothing was committed: {error}"
+            outcome = (
+                f"Committed {', '.join(links)}, then stopped: {error}. The next CI run refills what is still missing."
+                if links
+                else f"Nothing was committed: {error}"
+            )
     existing = find_comment(repo, number, token)
     attempted = attempted_shas(existing["body"]) if existing else [sha]
     body = render_comment(
