@@ -256,7 +256,9 @@ fn write_host(dir: &Path, installs: &[Install]) -> Result<PathBuf, String> {
     write_launcher(dir, &commands).map_err(|e| format!("cannot write the launcher: {e}"))
 }
 
-/// A launcher that runs the first of `commands` that is a regular, executable file as the host. There is no fallback
+/// A launcher that runs the first of `commands` that is a regular, executable file and starts, as the host. A command
+/// that cannot start (exit 126 or 127, as a script whose interpreter is gone) falls through to the next; any other
+/// exit is the host's own and ends the launcher, stdio inherited throughout. There is no fallback
 /// to a `fastbrowse` on the `PATH` Chrome starts it with: that is a binary nobody registered, and an explicit
 /// `uninstall` must stay uninstalled. With none left it says so and fails. A newer registered install than the one
 /// it runs takes over inside `fastbrowse native-host` (see [`delegate`]). The launcher tells it where the registry
@@ -282,15 +284,16 @@ fn write_launcher(dir: &Path, commands: &[PathBuf]) -> std::io::Result<PathBuf> 
     let quoted: Vec<String> =
         commands.iter().map(|command| format!("'{}'", command.display().to_string().replace('\'', r"'\''"))).collect();
     let text = format!(
-        "#!/bin/sh\n{HOST_DIR}=$(dirname \"$0\"); export {HOST_DIR}\nfor fastbrowse in {}; do\n    if [ -f \"$fastbrowse\" ] && [ -x \"$fastbrowse\" ]; then exec \"$fastbrowse\" native-host \"$@\"; fi\ndone\necho '{NONE}' >&2\nexit 127\n",
+        "#!/bin/sh\n{HOST_DIR}=$(dirname \"$0\"); export {HOST_DIR}\nfor fastbrowse in {}; do\n    if [ -f \"$fastbrowse\" ] && [ -x \"$fastbrowse\" ]; then\n        \"$fastbrowse\" native-host \"$@\"; code=$?\n        if [ \"$code\" -ne 126 ] && [ \"$code\" -ne 127 ]; then exit \"$code\"; fi\n    fi\ndone\necho '{NONE}' >&2\nexit 127\n",
         quoted.join(" ")
     );
     write_atomic(&launcher, text.as_bytes(), true)?;
     Ok(launcher)
 }
 
-/// The registered installs newer than this one, newest first, by what each reports now. An install that does not answer
-/// `--version` cannot be started, so it is not a candidate: a broken newer copy must not shadow a working one.
+/// The registered installs this host should hand over to, newest first, by what each reports now: the newer ones when
+/// this host is registered, every other one when it is not (a stray copy serving through the launcher). An install that
+/// does not answer `--version` cannot be started, so it is not a candidate: a broken copy must not shadow a working one.
 fn newer_installs(
     installs: &[Install],
     own: &Path,
@@ -298,11 +301,12 @@ fn newer_installs(
     query: &dyn Fn(&Path) -> Option<String>,
 ) -> Vec<Install> {
     let own = canonical(own);
+    let registered = installs.iter().any(|install| canonical(&install.path) == own);
     let mut newer: Vec<Install> = installs
         .iter()
         .filter(|install| canonical(&install.path) != own)
         .filter_map(|install| Some(Install { version: query(&install.path)?, path: install.path.clone() }))
-        .filter(|install| precedence(&install.version) > precedence(own_version))
+        .filter(|install| !registered || precedence(&install.version) > precedence(own_version))
         .collect();
     newer.sort_by_key(|install| std::cmp::Reverse(precedence(&install.version)));
     newer
@@ -461,7 +465,7 @@ fn register(manifest_path: &Path, _manifest: &str) -> Result<Vec<&'static str>, 
 enum Uninstalled {
     /// Other installs are still registered, so the host stays, running them.
     Kept(Vec<Install>),
-    /// This fastbrowse was never registered and others are: nothing changed.
+    /// This fastbrowse is not registered and others are: the registry stays as it was, and the launcher is rewritten from it.
     NotRegistered(Vec<Install>),
     /// This was the last registered install: the browsers the host was removed from.
     Removed(Vec<&'static str>),
@@ -487,11 +491,10 @@ fn unregister(
             query,
         );
         if !rest.is_empty() {
-            if !registered {
-                return Ok(Uninstalled::NotRegistered(rest));
-            }
+            // Rewritten even when this was never registered, so a retry after an interrupted uninstall repairs the
+            // launcher the registry has already moved past.
             write_host(dir, &rest)?;
-            return Ok(Uninstalled::Kept(rest));
+            return Ok(if registered { Uninstalled::Kept(rest) } else { Uninstalled::NotRegistered(rest) });
         }
         let removed = remove_browsers();
         for file in ["native-host", "native-host.bat", INSTALLS, &format!("{HOST_NAME}.json")] {
@@ -818,6 +821,41 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn the_launcher_falls_through_a_command_that_cannot_start_but_keeps_a_hosts_own_exit() {
+        let dir = scratch("fallthrough");
+        let broken = dir.join("broken/fastbrowse");
+        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        std::fs::write(&broken, "#!/nonexistent-interpreter\ntrue\n").unwrap();
+        std::fs::set_permissions(&broken, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let working = dir.join("working/fastbrowse");
+        script(&working, "echo working \"$@\"");
+        let failing = dir.join("failing/fastbrowse");
+        script(&failing, "exit 3");
+        let run = |commands: &[PathBuf]| {
+            std::process::Command::new(write_launcher(&dir, commands).unwrap()).output().unwrap()
+        };
+        let after_broken = run(&[broken.clone(), working.clone()]);
+        let host_failed = run(&[failing, working]);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(String::from_utf8_lossy(&after_broken.stdout), "working native-host\n");
+        assert_eq!(host_failed.status.code(), Some(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unregistered_host_hands_over_to_the_newest_install_even_when_older() {
+        let dir = scratch("stray");
+        let (stray, old) = (dir.join("stray/fastbrowse"), dir.join("old/fastbrowse"));
+        script(&stray, "echo fastbrowse 0.16.0");
+        script(&old, "echo fastbrowse 0.15.0");
+        let installs = vec![at(&old, "0.15.0")];
+        let candidates = newer_installs(&installs, &stray, "0.16.0", &reported_version);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(candidates, vec![at(&old, "0.15.0")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_symlink_and_its_target_are_one_identity() {
         let dir = scratch("identity");
         let program = dir.join("real/fastbrowse");
@@ -899,6 +937,14 @@ mod tests {
         let not_registered = unregister(&dir, &stranger, &query, Vec::new).unwrap();
         assert_eq!(not_registered, Uninstalled::NotRegistered(vec![at(&bundled, "0.13.0"), at(&user, "0.13.0")]));
         assert!(dir.join("native-host").exists());
+        // A retry repairs a launcher left stale: the registry already lists only these, so the launcher must too.
+        write_launcher(&dir, &[stranger.clone()]).unwrap();
+        unregister(&dir, &stranger, &query, Vec::new).unwrap();
+        let repaired = std::fs::read_to_string(dir.join("native-host")).unwrap();
+        assert!(
+            repaired.contains(bundled.to_str().unwrap()) && !repaired.contains(stranger.to_str().unwrap()),
+            "{repaired}"
+        );
 
         let kept = unregister(&dir, &bundled, &query, || panic!("the host must stay")).unwrap();
         assert_eq!(kept, Uninstalled::Kept(vec![at(&user, "0.13.0")]));

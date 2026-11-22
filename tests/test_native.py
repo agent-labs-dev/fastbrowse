@@ -899,13 +899,44 @@ def test_capture_document_title_kind_crosses_the_python_model_boundary() -> None
     assert Capture.model_validate_json(capture.model_dump_json()).blocks == capture.blocks
 
 
-def test_the_entry_passes_the_running_launchers_path_not_the_bare_name(
+def test_the_entry_passes_the_running_launchers_resolved_path_not_the_bare_name(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    launcher = tmp_path / "fastbrowse"
-    launcher.write_text("")
-    monkeypatch.setattr(sys, "argv", [str(launcher), "extension", "uninstall"])
-    assert native.program_path("fastbrowse") == str(launcher.resolve())
+    real = tmp_path / "install-b" / "fastbrowse"
+    real.parent.mkdir()
+    real.write_text("")
+    real.chmod(0o755)
+    renamed = tmp_path / "bin" / "fb"
+    renamed.parent.mkdir()
+    renamed.symlink_to(real)
+    other = tmp_path / "install-a" / "fastbrowse"
+    other.parent.mkdir()
+    other.write_text("")
+    passed: list[str] = []
+
+    class Core:
+        @staticmethod
+        def cli_main(program: str, *_: object, **__: object) -> int:
+            passed.append(program)
+            return 0
+
+    real_import = native.importlib.import_module
+    monkeypatch.setattr(
+        native.importlib, "import_module", lambda name: Core if name == "fastbrowse._native" else real_import(name)
+    )
+    monkeypatch.setattr(native.build, "identity", lambda: {"git_sha": "x", "git_dirty": False})
+    monkeypatch.setattr(native.build, "install_facts", lambda: {})
+    monkeypatch.setattr(native.signal, "signal", lambda *_: None)
+
+    def run(argv0: str, path: str) -> str:
+        monkeypatch.setattr(sys, "argv", [argv0, "extension", "uninstall"])
+        monkeypatch.setenv("PATH", path)
+        with pytest.raises(SystemExit):
+            native.command("fastbrowse")
+        return passed[-1]
+
+    # A symlink under another name, run bare with another install first on PATH, is the install it points to.
+    assert run("fb", f"{other.parent}:{renamed.parent}") == str(real.resolve())
+    assert run(str(real), "") == str(real.resolve())
     # Run as another entry point (`python -m`), no launcher is known: the name stands.
-    monkeypatch.setattr(sys, "argv", [str(tmp_path / "__main__.py")])
-    assert native.program_path("fastbrowse") == "fastbrowse"
+    assert run(str(tmp_path / "__main__.py"), "") == "fastbrowse"
