@@ -76,6 +76,32 @@ fn host_as(host_dir: &Path, started: Option<&Path>, delegated: bool) -> std::pro
 }
 
 #[test]
+fn an_unreadable_registry_is_an_error_not_a_missing_or_empty_one() {
+    let root = std::env::temp_dir().join(format!("fastbrowse-unreadable-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let host_dir = root.join("host");
+    std::fs::create_dir_all(&host_dir).unwrap();
+    std::fs::write(host_dir.join("installs.json"), "[]").unwrap();
+    // The folder denies traversal, so the registry's metadata cannot be read.
+    std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root or CAP_DAC_OVERRIDE reads it anyway, and then the read-failure path cannot be reached.
+    let readable = std::fs::metadata(host_dir.join("installs.json")).is_ok();
+    // Run as the legacy launcher (no path named): only the metadata check tells this from a missing registry.
+    let out = (!readable).then(|| host(&host_dir, None));
+    std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+    let Some(out) = out else {
+        eprintln!("skipped: the registry folder is still readable after chmod 000 (root or CAP_DAC_OVERRIDE)");
+        return;
+    };
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1));
+    // Only the read-failure path says this; a missing or unregistered host says something else.
+    assert!(said.contains("cannot read"), "{said}");
+    assert!(!said.contains("not registered") && !said.contains("before saying hello"), "{said}");
+}
+
+#[test]
 fn the_host_identity_is_the_path_the_launcher_started_not_this_executable() {
     let root = std::env::temp_dir().join(format!("fastbrowse-identity-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -91,13 +117,6 @@ fn the_host_identity_is_the_path_the_launcher_started_not_this_executable() {
     std::fs::remove_file(host_dir.join("installs.json")).unwrap();
     let before_registry = host(&host_dir, None);
     let after_uninstall = host(&host_dir, Some(&started));
-    // The registry's folder denies traversal, so its metadata cannot be read.
-    std::fs::write(host_dir.join("installs.json"), "[]").unwrap();
-    std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
-    // Run as the legacy launcher (no path named): only the metadata check tells this from a missing registry.
-    let unreadable = host(&host_dir, None);
-    std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::remove_file(host_dir.join("installs.json")).unwrap();
     // A registry that cannot be parsed is an error that names it.
     std::fs::write(host_dir.join("installs.json"), "{").unwrap();
     let corrupt = host(&host_dir, Some(&started));
@@ -117,10 +136,6 @@ fn the_host_identity_is_the_path_the_launcher_started_not_this_executable() {
     assert_eq!(after_uninstall.status.code(), Some(1));
     assert!(said(&after_uninstall).contains("installs.json"), "{}", said(&after_uninstall));
     assert!(!serving(&after_uninstall));
-    // A registry that cannot be inspected is not a missing one.
-    assert_eq!(unreadable.status.code(), Some(1));
-    assert!(said(&unreadable).contains("installs.json"), "{}", said(&unreadable));
-    assert!(!serving(&unreadable));
     assert_eq!(delegated_unregistered.status.code(), Some(1));
     assert!(said(&delegated_unregistered).contains("not registered"), "{}", said(&delegated_unregistered));
     assert!(serving(&delegated_registered), "{}", said(&delegated_registered));

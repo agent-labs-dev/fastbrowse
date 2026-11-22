@@ -138,12 +138,36 @@ fn read_installs(dir: &Path) -> Result<Vec<Install>, String> {
 
 /// What a fastbrowse reports for `--version`: its version, as "fastbrowse 0.13.0 (sha)" says it.
 fn reported_version(program: &Path) -> Option<String> {
-    let out = std::process::Command::new(program)
+    reported_version_within(program, VERSION_PROBE_LIMIT)
+}
+
+/// How long a `--version` probe may run before it is a hung process: it only prints a line.
+const VERSION_PROBE_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// [`reported_version`] that kills a probe still running after `limit`, so a hung binary cannot hold up the rest.
+fn reported_version_within(program: &Path, limit: std::time::Duration) -> Option<String> {
+    let mut child = std::process::Command::new(program)
         .arg("--version")
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let out = child.wait_with_output().ok()?;
     let text = String::from_utf8(out.stdout).ok()?;
     let version = text.split_whitespace().nth(1)?;
     version.starts_with(|c: char| c.is_ascii_digit()).then(|| version.to_string())
@@ -340,6 +364,7 @@ fn plan(
     dir: &Path,
     own: &Path,
     own_version: &str,
+    delegated: bool,
     query: &dyn Fn(&Path) -> Option<String>,
 ) -> Result<Option<(bool, Vec<Install>)>, String> {
     match std::fs::metadata(dir.join(INSTALLS)) {
@@ -348,7 +373,9 @@ fn plan(
         Err(e) => return Err(format!("cannot read {}: {e}", dir.join(INSTALLS).display())),
     }
     let installs = read_installs(dir)?;
-    Ok(Some((is_registered(&installs, own), newer_installs(&installs, own, own_version, query))))
+    // A host another one handed over to serves only if it is registered itself, and hands over no further: it probes nothing.
+    let candidates = if delegated { Vec::new() } else { newer_installs(&installs, own, own_version, query) };
+    Ok(Some((is_registered(&installs, own), candidates)))
 }
 
 /// The folder holding the registry: the launcher's, when Chrome started this through it.
@@ -374,7 +401,7 @@ pub fn delegate(args: &[String]) -> Option<i32> {
     let dir = host_dir();
     // The identity is the path the launcher started; run directly, without a launcher, it is this executable.
     let own = std::env::var_os(HOST_PATH).map(PathBuf::from).or_else(|| std::env::current_exe().ok())?;
-    let (registered, mut candidates) = match plan(&dir, &own, env!("CARGO_PKG_VERSION"), &reported_version) {
+    let (registered, candidates) = match plan(&dir, &own, env!("CARGO_PKG_VERSION"), delegated, &reported_version) {
         Ok(Some(plan)) => plan,
         // No registry: a launcher from before installs were recorded serves as it always did. A launcher that knows
         // the registry (it sets the path) and finds it gone was started just before the last uninstall: it must not serve.
@@ -385,10 +412,6 @@ pub fn delegate(args: &[String]) -> Option<i32> {
             return Some(1);
         }
     };
-    // A host another one handed over to serves only if it is registered itself, and hands over no further.
-    if delegated {
-        candidates.clear();
-    }
     for newer in candidates {
         let mut command = handover_command(&newer, args);
         #[cfg(unix)]
@@ -901,16 +924,18 @@ mod tests {
         let (started, other) = (dir.join("tool/bin/fastbrowse"), dir.join("other/fastbrowse"));
         let none = |_: &Path| None;
         // No registry: a launcher from before installs were recorded.
-        assert_eq!(plan(&dir, &started, "0.15.0", &none), Ok(None));
+        assert_eq!(plan(&dir, &started, "0.15.0", false, &none), Ok(None));
         // A Python install: the started script is registered whatever executable runs it.
         let installs = vec![at(&started, "0.15.0")];
         write_host(&dir, &installs).unwrap();
-        let Ok(Some((registered, candidates))) = plan(&dir, &started, "0.15.0", &none) else { panic!("no plan") };
+        let Ok(Some((registered, candidates))) = plan(&dir, &started, "0.15.0", false, &none) else {
+            panic!("no plan")
+        };
         assert!(registered && candidates.is_empty());
-        let Ok(Some((registered, _))) = plan(&dir, &other, "0.15.0", &none) else { panic!("no plan") };
+        let Ok(Some((registered, _))) = plan(&dir, &other, "0.15.0", false, &none) else { panic!("no plan") };
         assert!(!registered);
         std::fs::write(dir.join(INSTALLS), "{").unwrap();
-        let corrupt = plan(&dir, &started, "0.15.0", &none);
+        let corrupt = plan(&dir, &started, "0.15.0", false, &none);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(corrupt.unwrap_err().contains("installs.json"));
     }
@@ -939,6 +964,31 @@ mod tests {
         let via_path = this_fastbrowse(program.to_str().unwrap());
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(via_link, via_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_version_probe_is_killed_and_a_delegated_host_probes_nothing() {
+        let dir = scratch("hung");
+        let (hung, own, probed) = (dir.join("hung/fastbrowse"), dir.join("own/fastbrowse"), dir.join("probed"));
+        script(&hung, &format!("touch {}\nexec sleep 30", probed.display()));
+        script(&own, "echo fastbrowse 0.13.0");
+        let started = std::time::Instant::now();
+        let version = reported_version_within(&hung, std::time::Duration::from_millis(300));
+        let waited = started.elapsed();
+        assert!(probed.exists());
+        std::fs::remove_file(&probed).unwrap();
+        let installs = vec![at(&own, "0.13.0"), at(&hung, "0.16.0")];
+        write_host(&dir, &installs).unwrap();
+        let Ok(Some((registered, candidates))) = plan(&dir, &own, "0.13.0", true, &reported_version) else {
+            panic!("no plan")
+        };
+        let probed_by_delegate = probed.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(version, None);
+        assert!(waited < std::time::Duration::from_secs(5), "{waited:?}");
+        assert!(registered && candidates.is_empty());
+        assert!(!probed_by_delegate, "a delegated host ran a version probe");
     }
 
     #[cfg(unix)]
