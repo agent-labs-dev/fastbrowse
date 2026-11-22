@@ -89,14 +89,26 @@ fn command_seconds(method: &str) -> f64 {
 pub enum CdpError {
     /// The connection is gone. Carries why, the same for every call it failed.
     Closed(Arc<str>),
-    /// The browser answered with an error. Its message is kept out: it can quote page text or evaluated source.
-    Protocol { code: i64, failure: Option<ProtocolFailure> },
+    /// The browser answered with an error. Its message is kept out: it can quote page text or evaluated source, so
+    /// the refusals whose text Chrome fixes are named by `failure` instead.
+    /// `reason` is text the extension shim wrote for a browser-level call, such as Chrome refusing to open or attach a
+    /// tab, which quotes no page (#1314).
+    Protocol { code: i64, failure: Option<ProtocolFailure>, reason: Option<String> },
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolFailure {
     NavigationDenied,
+    /// Chrome refused a Page-domain command because the session no longer has a page behind it.
+    NotAttached,
+}
+
+impl ProtocolFailure {
+    /// Chrome's own fixed wording, matched whole: a message that merely contains it can be quoting page text.
+    fn of_chrome_message(message: &str) -> Option<Self> {
+        (message == "Not attached to an active page").then_some(Self::NotAttached)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -138,8 +150,12 @@ impl Incoming {
 #[derive(Deserialize)]
 struct RemoteError {
     code: i64,
+    #[serde(default)]
+    message: String,
     #[serde(default, rename = "fastbrowseFailure")]
     failure: Option<ProtocolFailure>,
+    #[serde(default, rename = "fastbrowseReason")]
+    reason: Option<String>,
 }
 
 type Reply = Result<Value, CdpError>;
@@ -570,17 +586,27 @@ pub fn browser_error(method: &str, error: &CdpError, lost_is_outage: bool) -> Br
             BrowserError::BrowserUnresponsive(format!("{method} failed ({why})"))
         }
         CdpError::Closed(why) => BrowserError::failed(format!("{method}/{why}"), format!("{method} failed ({why})")),
-        CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NavigationDenied) }
+        CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NavigationDenied), .. }
             if method == "Page.navigate" =>
         {
             BrowserError::failed("Page.navigate/denied", "Page.navigate was denied by the browser access policy")
         }
-        CdpError::Protocol { code: SERVER_ERROR, .. } => {
-            BrowserError::ContextLost(format!("{method} failed (CDP {SERVER_ERROR})"))
+        CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NotAttached), .. } => {
+            BrowserError::ContextLost(format!("{method} failed (CDP {SERVER_ERROR}, not attached to an active page)"))
         }
-        CdpError::Protocol { code, .. } => {
-            BrowserError::failed(format!("{method}/cdp-{code}"), format!("{method} failed (CDP {code})"))
+        CdpError::Protocol { code: SERVER_ERROR, reason, .. } => {
+            BrowserError::ContextLost(protocol_failed(method, SERVER_ERROR, reason.as_deref()))
         }
+        CdpError::Protocol { code, reason, .. } => {
+            BrowserError::failed(format!("{method}/cdp-{code}"), protocol_failed(method, *code, reason.as_deref()))
+        }
+    }
+}
+
+fn protocol_failed(method: &str, code: i64, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("{method} failed (CDP {code}): {reason}"),
+        None => format!("{method} failed (CDP {code})"),
     }
 }
 
@@ -590,7 +616,10 @@ impl Inner {
             // A reply nobody waits for any more (its caller was dropped) is read and discarded here.
             let Some(tx) = self.state.lock().unwrap().pending.remove(&id) else { return };
             let reply = match message.error {
-                Some(error) => Err(CdpError::Protocol { code: error.code, failure: error.failure }),
+                Some(error) => {
+                    let failure = error.failure.or_else(|| ProtocolFailure::of_chrome_message(&error.message));
+                    Err(CdpError::Protocol { code: error.code, failure, reason: error.reason })
+                }
                 None => Ok(message.result),
             };
             let _ = tx.send(reply);
@@ -634,11 +663,65 @@ impl Drop for PendingGuard<'_> {
 mod tests {
     use super::*;
 
+    /// The error a browser reply with this body becomes.
+    async fn error_of(response: serde_json::Value) -> CdpError {
+        let (tx, rx) = oneshot::channel();
+        let (out, _) = mpsc::unbounded_channel();
+        let inner = Inner {
+            state: Mutex::new(State { pending: HashMap::from([(7, tx)]), ..Default::default() }),
+            handlers: Default::default(),
+            out,
+            answered: false.into(),
+            deadlines: Default::default(),
+            pong: false.into(),
+        };
+        inner.dispatch(serde_json::from_value(response).unwrap());
+        rx.await.unwrap().unwrap_err()
+    }
+
     #[tokio::test]
     async fn navigation_denial_is_typed_without_reporting_remote_text() {
         for (method, marked, denied) in
             [("Page.navigate", true, true), ("Page.navigate", false, false), ("Runtime.evaluate", true, false)]
         {
+            let mut response = serde_json::json!({"id": 7, "error": {"code": -32000,
+                "message": "private page text and https://private.test/"}});
+            if marked {
+                response["error"]["fastbrowseFailure"] = serde_json::json!("navigation_denied");
+            }
+            let public = browser_error(method, &error_of(response).await, true);
+            assert_eq!(matches!(public, BrowserError::Failed(_)), denied);
+            assert_eq!(matches!(public, BrowserError::ContextLost(_)), !denied);
+            let text = public.to_string();
+            assert!(!text.contains("private"));
+            if denied {
+                assert!(text.contains("access policy"));
+            }
+        }
+    }
+
+    /// Chrome's fixed refusal is named; the same words inside other text are page text and are not.
+    #[tokio::test]
+    async fn a_refusal_with_chromes_fixed_text_names_its_reason_and_nothing_else_of_the_message() {
+        for (message, named) in [
+            ("Not attached to an active page", true),
+            ("Not attached to an active page: private page text", false),
+            ("private page text", false),
+        ] {
+            let response = serde_json::json!({"id": 7, "error": {"code": -32000, "message": message}});
+            let public = browser_error("Page.startScreencast", &error_of(response).await, true);
+            assert!(matches!(public, BrowserError::ContextLost(_)));
+            let text = public.to_string();
+            assert_eq!(text.contains("not attached to an active page"), named, "{text}");
+            assert!(!text.contains("private"), "{text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reason_the_extension_shim_wrote_is_reported_and_a_native_message_is_not() {
+        // #1314: Chrome's refusal to open or attach a tab reached the run only as "Target.createTarget failed (CDP
+        // -32000)", so twelve runs in a row failed with nothing saying why.
+        for (reason, reported) in [(Some("Cannot attach to this target"), true), (None, false)] {
             let (tx, rx) = oneshot::channel();
             let (out, _) = mpsc::unbounded_channel();
             let inner = Inner {
@@ -649,21 +732,15 @@ mod tests {
                 deadlines: Default::default(),
                 pong: false.into(),
             };
-            let mut response = serde_json::json!({"id": 7, "error": {"code": -32000,
-                "message": "private page text and https://private.test/"}});
-            if marked {
-                response["error"]["fastbrowseFailure"] = serde_json::json!("navigation_denied");
+            let mut response = serde_json::json!({"id": 7, "error": {"code": -32000, "message": "private page text"}});
+            if let Some(reason) = reason {
+                response["error"]["fastbrowseReason"] = reason.into();
             }
             inner.dispatch(serde_json::from_value(response).unwrap());
-            let error = rx.await.unwrap().unwrap_err();
-            let public = browser_error(method, &error, true);
-            assert_eq!(matches!(public, BrowserError::Failed(_)), denied);
-            assert_eq!(matches!(public, BrowserError::ContextLost(_)), !denied);
-            let text = public.to_string();
-            assert!(!text.contains("private"));
-            if denied {
-                assert!(text.contains("access policy"));
-            }
+            let text = browser_error("Target.createTarget", &rx.await.unwrap().unwrap_err(), true).to_string();
+            assert!(text.contains("Target.createTarget failed (CDP -32000)"), "{text}");
+            assert_eq!(text.contains("Cannot attach to this target"), reported, "{text}");
+            assert!(!text.contains("private"), "{text}");
         }
     }
 

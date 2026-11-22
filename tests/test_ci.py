@@ -203,7 +203,20 @@ def _campaign_step(name: str) -> dict[str, Any]:
     ],
 )
 def test_campaign_admits_positive_concurrency_without_extra_arms(concurrency: str, passes: bool) -> None:
-    env = dict.fromkeys(("EXTRA_ARMS", "HEAD_TO_HEAD_ARMS", "OFFICIAL_RUNS", "ONLY"), "")
+    result = _require_protocol(RUN_CONCURRENCY=concurrency)
+    assert (result.returncode == 0) is passes, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "arm,passes", [("agent-browser", True), ("browser-harness", True), ("cua-codex", False), ("nonesuch", False)]
+)
+def test_campaign_head_to_head_arms_admit_only_competitor_arms(arm: str, passes: bool) -> None:
+    result = _require_protocol(GROUPS_CHOSEN="head-to-head", HEAD_TO_HEAD_ARMS=arm)
+    assert (result.returncode == 0) is passes, result.stdout + result.stderr
+
+
+def _require_protocol(**overrides: str) -> subprocess.CompletedProcess[str]:
+    env = dict.fromkeys(("EXTRA_ARMS", "HEAD_TO_HEAD_ARMS", "OFFICIAL_RUNS", "ONLY", "RUN_CONCURRENCY"), "")
     env |= {
         "GROUPS_CHOSEN": "all",
         "CANDIDATE_ONLY": "false",
@@ -214,16 +227,14 @@ def test_campaign_admits_positive_concurrency_without_extra_arms(concurrency: st
         "REPEAT": "3",
         "BUDGET": "38",
         "RESERVE": "3",
-        "RUN_CONCURRENCY": concurrency,
         "CAMPAIGN_ID": "test",
-    }
-    result = subprocess.run(
+    } | overrides
+    return subprocess.run(
         ["bash", "-e", "-c", _campaign_step("Require the full comparison protocol")["run"]],
         env=os.environ | env,
         capture_output=True,
         text=True,
     )
-    assert (result.returncode == 0) is passes, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("concurrency", ["", "4"])

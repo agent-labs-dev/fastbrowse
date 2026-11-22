@@ -844,14 +844,16 @@ async fn count_reads(h: &Harness) {
         &h.session,
         "(() => { const scripts = globalThis.__fastbrowseScripts; const key = Object.keys(scripts)[0]; \
          const installed = scripts[key]; globalThis.__fbReads = { total: 0, unchanged: 0, delta: 0 }; \
-         scripts[key] = (mode, base) => { const read = installed(mode, base); globalThis.__fbReads.total++; \
+         scripts[key] = (mode, base) => { const read = installed(mode, base); \
+         if (mode === 'listeners') return read; globalThis.__fbReads.total++; \
          if (read && read.unchanged) globalThis.__fbReads.unchanged++; \
          if (read && read.control_delta) globalThis.__fbReads.delta++; return read; }; })()",
     )
     .await;
 }
 
-/// How many reads the main frame has made, and how many it answered from the read it kept.
+/// How many reads the main frame has made, and how many it answered from the read it kept. A document's listener
+/// reading (snapshot.js `listeners`) reads no page, and a new frame document asks for it in every page world.
 async fn reads(h: &Harness) -> (i64, i64) {
     let value = common::eval_active(&h.session, "globalThis.__fbReads").await;
     (value["total"].as_i64().unwrap_or(-1), value["unchanged"].as_i64().unwrap_or(-1))

@@ -329,6 +329,8 @@ pub fn isolated_binary() -> std::process::Command {
     std::fs::create_dir_all(&empty).unwrap();
     let mut command = std::process::Command::new(binary());
     command.env_clear().current_dir(empty);
+    // A failed run keeps its trace under HOME, and a test's failures are not the user's to read later.
+    command.env("FASTBROWSE_TRACE", "0");
     // Windows cannot start a process without SystemRoot.
     for name in ["PATH", "HOME", "SystemRoot"] {
         if let Some(value) = std::env::var_os(name) {

@@ -781,8 +781,7 @@
     "kind": "heading",
     "text": "Notes",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Login"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -808,8 +807,7 @@
     "kind": "heading",
     "text": "Table",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Notes"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -844,8 +842,7 @@
     "kind": "heading",
     "text": "Code",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Table"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -862,8 +859,7 @@
     "kind": "heading",
     "text": "Reference",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Code"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -880,8 +876,7 @@
     "kind": "heading",
     "text": "Modal",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Reference"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -898,8 +893,7 @@
     "kind": "heading",
     "text": "Catalogue",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Modal"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -943,8 +937,7 @@
     "kind": "heading",
     "text": "Lazy menu",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Catalogue"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -961,8 +954,7 @@
     "kind": "heading",
     "text": "Swap",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Lazy menu"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -979,8 +971,7 @@
     "kind": "heading",
     "text": "Hydrating field",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Swap"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -988,8 +979,7 @@
     "kind": "heading",
     "text": "Rejecting field",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Hydrating field"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -997,8 +987,7 @@
     "kind": "heading",
     "text": "Upload",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Rejecting field"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -1006,8 +995,7 @@
     "kind": "heading",
     "text": "Download",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Upload"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -1024,8 +1012,7 @@
     "kind": "heading",
     "text": "Cross-origin iframe",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Download"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -1033,8 +1020,7 @@
     "kind": "heading",
     "text": "Shadow DOM",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Cross-origin iframe"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -1042,8 +1028,7 @@
     "kind": "heading",
     "text": "Popup",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Shadow DOM"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -1060,8 +1045,7 @@
     "kind": "heading",
     "text": "Dialog",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Popup"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -1078,8 +1062,7 @@
     "kind": "heading",
     "text": "Quotations",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Dialog"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -1141,8 +1124,7 @@
     "kind": "heading",
     "text": "Rankings",
     "heading_path": [
-     "Fastbrowse fixture",
-     "Quotations"
+     "Fastbrowse fixture"
     ],
     "href": null
    },
@@ -2704,8 +2686,7 @@
     "kind": "heading",
     "text": "Two",
     "heading_path": [
-     "One",
-     "Three"
+     "One"
     ],
     "href": null
    },
