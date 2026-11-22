@@ -877,6 +877,29 @@ async fn a_window_the_action_opened_during_a_slow_lookup_is_followed_by_the_next
 }
 
 #[tokio::test]
+async fn a_step_is_stale_while_the_window_list_still_does_not_answer() {
+    let fake = two_apps("followed-twice-late");
+    let dialog = named("0x123", "org.gnome.TextEditor", "Save As");
+    let button = json!({"id":"e2", "role":"push button", "name":"Save", "states":["showing", "enabled"]});
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "children": [button]});
+    fake.replies("elements@0xabc", [ok(&root)]);
+    fake.replies("click", [ok(&json!({"x": 1, "y": 1}))]);
+    fake.replies("windows", [list(&[window(false), calculator(), dialog])]);
+    let page = open_both(&fake).await;
+    let before = page.observe().await.unwrap();
+    let delay = fake.dir().join("windows.delay");
+    std::fs::write(&delay, "1").unwrap();
+    let mut click = Action::new(Operation::Click);
+    click.target_id = Some("e2".into());
+    page.act(&click, &before).await.unwrap();
+    // Both the step's own lookup and the next step's lookup before sending time out.
+    let clicks = calls(&fake, "click").len();
+    let result = page.act(&click, &before).await.unwrap();
+    std::fs::remove_file(&delay).unwrap();
+    assert_eq!((result.outcome, calls(&fake, "click").len()), (StepOutcome::Stale, clicks), "{result:?}");
+}
+
+#[tokio::test]
 async fn a_drag_end_whose_twin_was_gone_from_the_fresh_read_is_stale() {
     // Two rows named report.pdf when observed; the chosen one then vanishes and the other keeps one row. The fresh read
     // has one report.pdf only, but the agent chose between two, so the id is not provably the file it picked.
@@ -897,10 +920,11 @@ async fn a_drag_end_whose_twin_was_gone_from_the_fresh_read_is_stale() {
     fake.replies("shot", [shot(&fake, "placed", b"placed")]).replies("drag", [ok(&json!({"x": 1, "y": 1}))]);
     let page = open(&fake).await;
     let before = page.observe().await.unwrap();
-    fake.replies("elements", [ok(&root(vec![cell("e2", "report.pdf", 40), cell("e3", "target", 200)]))]);
+    // The destination keeps its id, name and box across both reads: only the vanished twin differs.
+    fake.replies("elements", [ok(&root(vec![cell("e2", "report.pdf", 40), cell("e4", "target", 200)]))]);
     let mut drag = Action::new(Operation::Drag);
     drag.target_id = Some("e2".into());
-    drag.destination_id = Some("e3".into());
+    drag.destination_id = Some("e4".into());
     let result = page.act(&drag, &before).await.unwrap();
     assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
     assert!(calls(&fake, "drag").is_empty());

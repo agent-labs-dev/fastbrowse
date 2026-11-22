@@ -883,6 +883,16 @@ impl DeskpilotPage {
             if let Ok(Err(error)) = opened {
                 return Err(error);
             }
+            // The list still does not answer: a modal may sit over the window, so nothing is sent until it is read.
+            if self.lookup_missed.load(Ordering::SeqCst) {
+                return Ok(ActResult {
+                    outcome: StepOutcome::Stale,
+                    failure: None,
+                    page_changed: false,
+                    detail: Some("the window list did not answer".to_string()),
+                    moved: false,
+                });
+            }
         }
         // Only the latest snapshot's ids are live; deskpilot refuses the rest too, but a glance has no snapshot.
         let latest = self.latest.lock().unwrap().clone();
