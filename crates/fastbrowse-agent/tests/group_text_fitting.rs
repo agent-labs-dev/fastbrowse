@@ -56,7 +56,7 @@ fn a_group_with_text_larger_than_the_initial_question_does_not_spin() {
     let state_chars = dumps(&request.state).chars().count();
     config.tokens.state_plus_largest_question =
         ((state_chars + largest + 100) as f64 / JSON_CHARS_PER_TOKEN).ceil() as i64;
-    assert!(fits(&request, &config));
+    assert!(fits(&request, &config, 0));
     assert!(request.images.is_empty());
     assert!(request.groups.contains_key(&Operation::Click));
 

@@ -72,6 +72,7 @@ which passes bot checks and prints a URL to watch the run live.
 `AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. With both keys,
 the automatically selected OpenRouter LLM moves to the gateway for the rest of the run if OpenRouter refuses its key.
 Jev can also run through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
+OpenRouter decision model pins use the catalog's context, price and image support, including for aliases.
 [Jev routing](docs/jev.md#provider-failover) covers the order and [other hosts](docs/jev.md#other-decision-hosts).
 
 Set `EXA_API_KEY` to let Jev choose web search without opening a browser. The LLM proposes queries,

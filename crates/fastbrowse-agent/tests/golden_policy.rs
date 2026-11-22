@@ -6,6 +6,7 @@ use common::*;
 use fastbrowse_agent::batches::{Known, knowing};
 use fastbrowse_agent::policy::{StepContext, build_request, decide, fits};
 use fastbrowse_core::config::Config;
+use fastbrowse_core::decision::image_tokens;
 use fastbrowse_core::page::Observation;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, write};
@@ -86,7 +87,7 @@ fn requests_are_built_as_python_builds_them() {
         let built = json!({
             "state": write(&request.state, Style::HTTPX),
             "questions": write(&Value::Object(questions), Style::HTTPX),
-            "fits": fits(&request, &config),
+            "fits": fits(&request, &config, image_tokens(&request.images, &request.state, &request.questions)),
         });
         for key in ["state", "questions", "fits"] {
             if updating {

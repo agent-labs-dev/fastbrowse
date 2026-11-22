@@ -181,9 +181,14 @@ async fn test_an_options_picture_is_sent_to_jev_and_left_out_for_another_model()
     let images = Images::from([
         ("shot-1".to_string(), b"shot".to_vec()),
         ("crop-1".to_string(), b"crop".to_vec()),
+        ("history-1".to_string(), b"history".to_vec()),
         ("spare".to_string(), b"spare".to_vec()),
     ]);
-    let state = json!({"page": "text", "viewport_screenshot": "shot-1"});
+    let state = json!({
+        "page": "text",
+        "viewport_screenshot": "shot-1",
+        "history": [{"text": "previous page", "picture": "history-1"}],
+    });
     let pick: Question = ChoiceQuestion::new(
         "Which kettle?",
         IndexMap::from([
@@ -199,11 +204,13 @@ async fn test_an_options_picture_is_sent_to_jev_and_left_out_for_another_model()
             let assets: Vec<&String> = body["assets"].as_object().unwrap().keys().collect();
             let option = &body["questions"]["pick"]["criteria"]["a"];
             if jev {
-                assert_eq!(assets, ["shot-1", "crop-1"]);
+                assert_eq!(assets, ["shot-1", "crop-1", "history-1"]);
                 assert_eq!(option, &json!({"label": "Add", "looks_like": "crop-1"}));
+                assert_eq!(body["state"]["history"][0]["picture"], "history-1");
             } else {
                 assert_eq!(assets, ["shot-1"]);
                 assert_eq!(option, &json!({"label": "Add"}));
+                assert_eq!(body["state"][0]["history"], json!([{"text": "previous page"}]));
             }
             let response = Response::json(
                 200,
@@ -214,7 +221,7 @@ async fn test_an_options_picture_is_sent_to_jev_and_left_out_for_another_model()
         let model = if jev { OPENROUTER_MODEL } else { "perplexity/pplx-decider-v1.2" };
         let client = SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, model).images();
         let result = client.evaluate_images(&state, &questions([("pick", pick.clone())]), &images).await.unwrap();
-        assert_eq!(result.cost.images, Some(if jev { 2 } else { 1 }), "{route}");
+        assert_eq!(result.cost.images, Some(if jev { 3 } else { 1 }), "{route}");
     }
 }
 
@@ -370,6 +377,92 @@ async fn test_direct_encodes_all_question_types_and_estimates_usage() {
     assert_eq!(score.score, 1.99);
 }
 
+#[test]
+fn test_a_model_is_charged_for_the_pictures_its_route_sends_it() {
+    let png = |side: u32| {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend(side.to_be_bytes());
+        png.extend(side.to_be_bytes());
+        png
+    };
+    let images = Images::from([("ref-1".to_string(), png(280)), ("ref-2".to_string(), png(560))]);
+    let state = json!({"viewport_screenshot": "ref-1"});
+    let asked = questions([(
+        "target",
+        ChoiceQuestion::new("Which?", IndexMap::from([("e1".into(), json!({"what": "Buy", "look": "ref-2"}))])).into(),
+    )]);
+    let http = answering(|_| unreachable!("nothing is sent"));
+    let tokens = |model: &str| {
+        SystemOneClient::new("key", http.clone(), OPENROUTER_URL, model)
+            .openrouter()
+            .image_tokens(&state, &asked, &images)
+    };
+    // Jev reads the option's picture in place; another model is given only the screenshot.
+    assert_eq!(tokens("jev-1.14"), 213 + 813);
+    assert_eq!(tokens("~typesafe/jev-latest"), 213 + 813);
+    assert_eq!(tokens("google/gemini-decision-1"), 1120);
+    assert_eq!(tokens("liquid/d1.2"), 122);
+    assert_eq!(tokens("perplexity/pplx-decider-v1.2"), 79);
+    assert_eq!(tokens("microsoft/microsoft-decision-1.1"), 0, "no documented image token rule");
+    assert_eq!(tokens("parallel/decisions-fast"), 0, "a route OpenRouter lists without image input");
+    let custom = SystemOneClient::new("key", http, "https://custom.test", "vendor/jev-1.14").images();
+    assert_eq!(custom.image_tokens(&state, &asked, &images), 0);
+}
+
+#[test]
+fn test_clef_reserves_patches_and_markers_for_each_top_level_image() {
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend(320_u32.to_be_bytes());
+    png.extend(320_u32.to_be_bytes());
+    let images = Images::from([("sample".to_string(), png)]);
+    let client = SystemOneClient::new(
+        "key",
+        answering(|_| unreachable!("nothing is sent")),
+        OPENROUTER_URL,
+        "cloudflare/clef-flash",
+    )
+    .openrouter();
+    let state = json!(["sample", "sample", "sample mentioned in text", {"nested": "sample"}]);
+    let asked = questions([("q", noul("Red?")), ("q2", noul("Square?"))]);
+    assert_eq!(client.image_tokens(&state, &asked, &images), 2 * (10 * 10 + 3));
+}
+
+#[tokio::test]
+async fn test_question_keys_go_out_legal_and_answers_come_back_under_the_keys_asked() {
+    let long = "x".repeat(70);
+    let asked: IndexMap<String, Question> = [
+        ("w0.0".to_string(), noul("Bears on it?")),
+        ("w0_0".to_string(), noul("Bears on it?")),
+        ("field2/check".to_string(), noul("Bears on it?")),
+        (long.clone(), noul("Bears on it?")),
+    ]
+    .into_iter()
+    .collect();
+    let http = answering(|request| {
+        let payload: Value = serde_json::from_slice(&request.body).unwrap();
+        let sent: Vec<String> = payload["questions"].as_object().unwrap().keys().cloned().collect();
+        let short = "x".repeat(56);
+        assert_eq!(sent, ["w0_0_1", "w0_0", "field2_check", short.as_str()]);
+        let answers: serde_json::Map<String, Value> = sent
+            .iter()
+            .zip([0.1, 0.2, 0.3, 0.4])
+            .map(|(key, p)| (key.clone(), json!({"type": "noul", "noul": p})))
+            .collect();
+        let response = Response::json(200, &json!({"answers": answers, "usage": {"input_tokens": 9}}));
+        Box::pin(async move { Ok(response) })
+    });
+    let client = SystemOneClient::new("key", http, "https://direct.test/", "google/gemini-decision-1");
+    let result = client.evaluate(&json!({}), &asked).await.unwrap();
+    let probability = |key: &str| match &result.answers[key] {
+        Answer::Noul(answer) => answer.probability,
+        other => panic!("a noul, not {other:?}"),
+    };
+    assert_eq!(
+        [probability("w0.0"), probability("w0_0"), probability("field2/check"), probability(&long)],
+        [0.1, 0.2, 0.3, 0.4]
+    );
+}
+
 #[tokio::test]
 async fn test_an_unmetered_answer_from_a_model_with_no_price_is_an_unknown_cost() {
     let http = answering(|_| {
@@ -488,6 +581,30 @@ async fn test_a_gateway_failure_names_what_the_provider_said() {
     assert!(matches!(error, DecisionError::RetriesExhausted(_)));
     assert!(error.to_string().contains("the model is unavailable"));
     assert!(error.to_string().contains("via typesafe-ai"));
+}
+
+#[tokio::test]
+async fn test_gateway_recovers_question_keys_and_confidence_after_wire_renaming() {
+    let asked = questions([("section.0", choice()), ("section_0", noul("Green?"))]);
+    let script = Script::new([reply(
+        200,
+        json!({
+            "answers": {
+                "section_0": {"type": "boolean", "probability": 0.2},
+                "section_0_1": {"type": "choice", "choice": "blue", "probabilities": {"blue": 0.8, "red": 0.2}},
+            },
+            "usage": {"inputTokens": 30},
+            "providerMetadata": {"typesafe": {"confidence": {"section_0_1": 0.8}}},
+        }),
+    )]);
+    let result = gateway(script.http()).evaluate(&json!("page"), &asked).await.unwrap();
+    let body = &script.bodies()[0]["questions"];
+    assert_eq!(body["section_0_1"]["type"], "choice");
+    assert_eq!(body["section_0"]["type"], "boolean");
+    assert_eq!(body.as_object().unwrap().len(), 2);
+    let Answer::Choice(choice) = &result.answers["section.0"] else { panic!("a choice") };
+    assert_eq!(choice.confidence, 0.8);
+    assert_eq!(result.answers["section_0"].probability(), Some(0.2));
 }
 
 #[tokio::test(start_paused = true)]

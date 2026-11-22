@@ -12,7 +12,8 @@ export OPENROUTER_API_KEY=...
 ```
 
 `OPENROUTER_API_KEY` is the recommended route for Jev and the LLM. Without it, the LLM uses `AI_GATEWAY_API_KEY`
-and Jev uses `TYPESAFE_API_KEY` when set.
+and Jev uses `TYPESAFE_API_KEY` when set. OpenRouter model pins in `FASTBROWSE_DECISION_MODEL` use the
+model's catalog limits and image support.
 
 With it npm installs the binary for your platform as an optional dependency: `@fastbrowse/darwin-arm64`,
 `darwin-x64`, `linux-arm64`, `linux-x64` or `win32-x64`. No install script runs and nothing is downloaded on

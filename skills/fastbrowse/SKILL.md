@@ -41,7 +41,8 @@ Allow time for the browser run and wait for the process to finish. Progress goes
 goes to stdout. Preserve stdout even on a nonzero exit, since it can contain an unfinished run's evidence.
 
 fastbrowse recommends one `OPENROUTER_API_KEY` for Jev and the LLM. `AI_GATEWAY_API_KEY` serves the LLM when
-OpenRouter is absent, and Jev as a last resort; `TYPESAFE_API_KEY` is the direct Jev route. `--cloud` needs
+OpenRouter is absent, and Jev as a last resort; `TYPESAFE_API_KEY` is the direct Jev route. An OpenRouter pin in
+`FASTBROWSE_DECISION_MODEL` uses the model's catalog limits and image support. `--cloud` needs
 `BROWSER_USE_API_KEY`; the default needs Chrome with the extension. Optional `EXA_API_KEY` offers web search without
 a browser; its result links can be read or opened, and search charges count against the run's dollar budget.
 A cloud browser cannot reach the caller's localhost. Check for configured keys without printing their values; if

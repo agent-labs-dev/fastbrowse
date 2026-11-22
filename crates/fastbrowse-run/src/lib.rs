@@ -998,7 +998,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     }
     let jev: Arc<dyn DecisionClient> = match host.jev.take() {
         Some(jev) => jev,
-        None => Arc::from(settings.decision(&http)?),
+        None => Arc::from(settings.resolve_decision(&http).await?),
     };
     let profile = jev.profile();
     if !profile.validated() {

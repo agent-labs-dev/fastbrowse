@@ -28,7 +28,58 @@ use tokio::time::Instant;
 
 use crate::http::{Handoff, Http, Response, TransportError};
 
+/// Longest question key the decision APIs take.
+const WIRE_KEY_CHARS: usize = 64;
+
+/// The key each question is sent under. Google's and Parallel's decision models refuse a request whose question keys
+/// are not `[A-Za-z0-9_-]{1,64}` with a 400, and fastbrowse names questions `w0.0` and `field2/check`, so an illegal
+/// character goes to `_` on the wire and the answer is mapped back to the key code asked by. A key the change makes
+/// equal to another one takes the first free numbered suffix. The map is built from the keys in order, so the request
+/// and its parse build the same one.
+pub struct WireKeys {
+    wire: IndexMap<String, String>,
+}
+
+impl WireKeys {
+    pub fn of(questions: &IndexMap<String, Question>) -> WireKeys {
+        let legal = |key: &str| {
+            (1..=WIRE_KEY_CHARS).contains(&key.len())
+                && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        };
+        let mut taken: std::collections::HashSet<String> = questions.keys().filter(|key| legal(key)).cloned().collect();
+        let wire = questions
+            .keys()
+            .map(|key| {
+                if legal(key) {
+                    return (key.clone(), key.clone());
+                }
+                let mut base: String = key
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                    .take(WIRE_KEY_CHARS - 8)
+                    .collect();
+                if base.is_empty() {
+                    base.push('q');
+                }
+                let sent = std::iter::once(base.clone())
+                    .chain((1..).map(|n| format!("{base}_{n}")))
+                    .find(|candidate| !taken.contains(candidate))
+                    .expect("an unbounded run of suffixes has a free one");
+                taken.insert(sent.clone());
+                (key.clone(), sent)
+            })
+            .collect();
+        WireKeys { wire }
+    }
+
+    /// The key `key` is sent under.
+    pub fn sent(&self, key: &str) -> String {
+        self.wire.get(key).cloned().unwrap_or_else(|| key.to_string())
+    }
+}
+
 pub fn wire_questions(questions: &IndexMap<String, Question>, gateway: bool) -> Value {
+    let keys = WireKeys::of(questions);
     let mut result = Map::new();
     for (key, question) in questions {
         let mut body = Map::new();
@@ -62,7 +113,7 @@ pub fn wire_questions(questions: &IndexMap<String, Question>, gateway: bool) -> 
                 body.insert("type".into(), "box".into());
             }
         }
-        result.insert(key.clone(), Value::Object(body));
+        result.insert(keys.sent(key), Value::Object(body));
     }
     Value::Object(result)
 }
@@ -699,12 +750,13 @@ pub fn parse_answers(
     confidence: Option<&Map<String, Value>>,
 ) -> Result<IndexMap<String, Answer>, String> {
     let raw = object_value(value)?;
-    if raw.len() != questions.len() || !raw.keys().all(|key| questions.contains_key(key)) {
+    let keys = WireKeys::of(questions);
+    if raw.len() != questions.len() || !questions.keys().all(|key| raw.contains_key(&keys.sent(key))) {
         return Err("answer ids differ from question ids".into());
     }
     let mut answers = IndexMap::new();
     for (key, question) in questions {
-        let answer = object_value(raw.get(key))?;
+        let answer = object_value(raw.get(&keys.sent(key)))?;
         let expected_type = match question {
             Question::Choice(_) => "choice",
             Question::Noul(_) if gateway => "boolean",
@@ -715,7 +767,8 @@ pub fn parse_answers(
         if answer.get("type").and_then(Value::as_str) != Some(expected_type) {
             return Err(format!("incorrect answer type for {key}"));
         }
-        let confidence_value = if gateway { confidence.and_then(|c| c.get(key)) } else { answer.get("confidence") };
+        let confidence_value =
+            if gateway { confidence.and_then(|c| c.get(&keys.sent(key))) } else { answer.get("confidence") };
         let parsed = match question {
             Question::Choice(q) => {
                 let criteria: Vec<String> = q.criteria.keys().cloned().collect();
@@ -805,6 +858,10 @@ impl DecisionClient for Sourced {
 
     fn profile(&self) -> DecisionProfile {
         self.client.profile()
+    }
+
+    fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
+        self.client.image_tokens(state, questions, images)
     }
 
     fn reserves(&self, purpose: JevPurpose) -> Option<CostComponent> {
