@@ -1111,7 +1111,8 @@ fn list_case() -> Value {
     case["config"] = serde_json::json!({"plan_ahead":true});
     case["jev"]["pick"] = serde_json::json!({
         "operation": ["read_list", "read_list", "read_list", "done"],
-        "extent": "every_page", "pick": "text", "steps": "reads"
+        // Each page's status is one part of the answer, so Jev's read says it is composed across the pages.
+        "extent": "every_page", "task": "synthesis", "pick": "text", "steps": "reads"
     });
     case["jev"]["nouls"] = serde_json::json!({
         "claim0": 0.9, "claim1": 0.9, "claim2": 0.9, "coverage": 0.9, "actions": 0.9
