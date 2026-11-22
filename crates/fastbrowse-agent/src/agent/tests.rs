@@ -11319,6 +11319,33 @@ async fn test_the_next_key_is_asked_in_the_control_the_last_press_set_going() {
     assert!(asked.iter().any(|q| q.contains("Which key should be pressed in 'Barrens'")), "{asked:?}");
 }
 
+/// Jev named the lifted control itself as the target (#1466): the key is still asked with what the last press did and
+/// whether the item has moved, and the control need not be reported focused.
+#[tokio::test]
+async fn test_the_key_for_the_control_the_last_press_acted_on_is_asked_with_where_it_stands() {
+    let mut lifted = Control::new("a", "button", "Test image", [Operation::Click, Operation::Press]);
+    lifted.item_position = Some(6);
+    lifted.item_count = Some(6);
+    let page = observation(std::slice::from_ref(&lifted));
+    let jev = Arc::new(FirstChoice { wants: Some("ArrowUp"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let mut last = executed(Some(Operation::Press), Some("Test image"), true);
+    last.text = Some("Space".into());
+    last.place = Some((6, 6));
+    state.history.push(last);
+    let action = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(lifted))).await.expect("action");
+    assert_eq!(action.text.as_deref(), Some("ArrowUp"));
+    let asked = jev.asked.lock().unwrap();
+    assert!(
+        asked.iter().any(|q| q.contains("The last action pressed 'Space' in 'Test image'")
+            && q.contains("it has not moved: it is still item 6 of the 6.")
+            && !q.contains("a press in another control")),
+        "{asked:?}"
+    );
+}
+
 /// Jev does not count, so code says whether the lifted item has moved since the press that lifted it.
 #[tokio::test]
 async fn test_the_carried_key_question_says_whether_the_item_has_moved() {

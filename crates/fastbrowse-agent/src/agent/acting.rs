@@ -494,7 +494,7 @@ impl Agent {
                 }
                 let carried = if decision.replayed { None } else { self.carried_on(state, observation, target) };
                 let carried_key = match carried {
-                    Some(control) => self.carried_key(state, observation, control).await?,
+                    Some(control) => self.carried_key(state, observation, control, target).await?,
                     None => None,
                 };
                 let (target, chord) = match (carried, carried_key) {
@@ -1348,9 +1348,11 @@ impl Agent {
         if last.operation != Some(Operation::Press) || last.outcome != StepOutcome::Executed || !last.page_changed {
             return None;
         }
+        // Jev may name the lifted control itself as the target: the key is still asked with what its last press did and
+        // whether it has moved, or "Space" read as a fresh pick-up and dropped it where it was (#1466). A different
+        // control must hold focus to be carried on.
         observation.controls.iter().find(|control| {
-            control.id != target.id
-                && control.focused == Some(true)
+            (control.id == target.id || control.focused == Some(true))
                 && control.operations.contains(&Operation::Press)
                 && last.target.as_deref() == Some(describe(control).as_str())
         })
@@ -1363,6 +1365,7 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         carried: &Control,
+        target: &Control,
     ) -> Step<Option<String>> {
         let Some(last) = state.history.last() else { return Ok(None) };
         let mut did = format!(
@@ -1385,12 +1388,18 @@ impl Agent {
             }
             _ => String::new(),
         };
-        let preface = format!(
-            "{did}. That control still holds keyboard focus, and a press in another control moves focus away from it.{moved} "
-        );
+        // The target is this control, so the key cannot be for another one.
+        let (focus, instead): (&str, &[(&'static str, &str)]) = if carried.id == target.id {
+            ("", &[])
+        } else {
+            (
+                " That control still holds keyboard focus, and a press in another control moves focus away from it.",
+                &[(OTHER_CONTROL, OTHER_CONTROL_SAID)],
+            )
+        };
+        let preface = format!("{did}.{focus}{moved} ");
         let (question, options) = key_question(carried, &preface);
-        match self.choose_among(state, observation, &question, &options, &[(OTHER_CONTROL, OTHER_CONTROL_SAID)]).await?
-        {
+        match self.choose_among(state, observation, &question, &options, instead).await? {
             Chosen::Option(key) => Ok(Some(key)),
             Chosen::Instead(_) => Ok(None),
         }
