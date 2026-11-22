@@ -179,8 +179,14 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
             environ: options::environ(),
             streams: Streams::stdio(),
             build,
+            kept_at: crate::kept_trace::KeptAt::default(),
         };
-        runtime().block_on(until_interrupted(cli::main(args, &context), interrupted(), INTERRUPT_SETTLE))
+        runtime().block_on(until_interrupted(
+            cli::main(args, &context),
+            interrupted(),
+            INTERRUPT_SETTLE,
+            &context.kept_at,
+        ))
     }
 }
 
@@ -188,11 +194,13 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
 const INTERRUPT_SETTLE: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// `run`'s exit code, or `interrupt`'s when that ends first. An interrupted run is dropped, which sets off the stops
-/// its resources' `Drop` spawns, and those get up to `settle` to finish before the process exits (#773).
+/// its resources' `Drop` spawns, and those get up to `settle` to finish before the process exits (#773). The trace a
+/// dropped run keeps is named here, since the run no longer can.
 async fn until_interrupted(
     run: impl std::future::Future<Output = i32>,
     interrupt: impl std::future::Future<Output = i32>,
     settle: std::time::Duration,
+    kept_at: &crate::kept_trace::KeptAt,
 ) -> i32 {
     let mut run = Box::pin(run);
     let code = tokio::select! {
@@ -200,7 +208,7 @@ async fn until_interrupted(
         code = interrupt => code,
     };
     drop(run);
-    eprintln!("fastbrowse: interrupted, stopping the browser");
+    eprintln!("{}", interrupted_notice(kept_at));
     let metrics = tokio::runtime::Handle::current().metrics();
     let _ = tokio::time::timeout(settle, async {
         while metrics.num_alive_tasks() > 0 {
@@ -209,6 +217,15 @@ async fn until_interrupted(
     })
     .await;
     code
+}
+
+/// What an interrupted run prints: that it stops, and where its trace is kept when it keeps one.
+fn interrupted_notice(kept_at: &crate::kept_trace::KeptAt) -> String {
+    let kept = kept_at.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    match kept {
+        Some(path) => format!("fastbrowse: interrupted, stopping the browser\n  trace: {}", path.display()),
+        None => "fastbrowse: interrupted, stopping the browser".to_owned(),
+    }
 }
 
 /// The exit code of the first Ctrl-C or SIGTERM: 130 or 143, as a shell reports a process those signals ended.
@@ -247,7 +264,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
-    use super::until_interrupted;
+    use super::{interrupted_notice, until_interrupted};
 
     /// Spawns, when dropped, a task that marks `stopped` a little later, as a cloud browser's stop does.
     struct StopsOnDrop(Arc<AtomicBool>);
@@ -270,13 +287,24 @@ mod tests {
             let _guard = guard;
             std::future::pending::<i32>().await
         };
-        let code = until_interrupted(run, std::future::ready(130), Duration::from_secs(5)).await;
+        let code = until_interrupted(run, std::future::ready(130), Duration::from_secs(5), &Default::default()).await;
         assert_eq!(code, 130);
         assert!(stopped.load(Ordering::SeqCst), "the stop the run's drop spawned was cut off");
     }
 
+    #[test]
+    fn an_interrupted_run_names_the_trace_it_keeps() {
+        let kept_at = crate::kept_trace::KeptAt::default();
+        assert!(!interrupted_notice(&kept_at).contains("trace:"));
+        *kept_at.lock().unwrap() = Some(std::path::PathBuf::from("/state/fastbrowse/traces/1-abcdef01.jsonl"));
+        assert!(interrupted_notice(&kept_at).ends_with("\n  trace: /state/fastbrowse/traces/1-abcdef01.jsonl"));
+    }
+
     #[tokio::test]
     async fn a_run_that_ends_first_gives_its_own_code() {
-        assert_eq!(until_interrupted(async { 3 }, std::future::pending(), Duration::ZERO).await, 3);
+        assert_eq!(
+            until_interrupted(async { 3 }, std::future::pending(), Duration::ZERO, &Default::default()).await,
+            3
+        );
     }
 }
