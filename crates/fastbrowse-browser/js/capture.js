@@ -462,12 +462,29 @@
   };
   // A contenteditable host is a field too: what a run typed into it reads back as its text, and is told apart as the
   // run's typing the same way, by the host's identity. Only the host counts, not the editable nodes inside it.
-  const fields = (el, own = false) =>
+  // A field in a table cell is told apart by where it sits: its row's first cell and its column's header. Without
+  // them two editable "Price" cells read as the same field.
+  const cellPlace = e => {
+    const cell = e.closest('td,th');
+    const row = cell?.parentElement;
+    const table = row?.closest('table');
+    if (!table) return '';
+    const cells = r => [...r.querySelectorAll(':scope > th, :scope > td')];
+    const index = cells(row).indexOf(cell);
+    const rows = [...table.querySelectorAll('tr')].filter(r => r.closest('table') === table);
+    const head = table.querySelector('thead tr') || (rows[0] && cells(rows[0]).every(c => c.tagName === 'TH') ? rows[0] : null);
+    const first = cells(row)[0];
+    const rowName = first && first !== cell && row !== head ? clean(textOf(first)) : '';
+    const columnName = head && head !== row && cells(head)[index] ? clean(textOf(cells(head)[index])) : '';
+    return [rowName && `row ${rowName}`, columnName && `column ${columnName}`].filter(Boolean).join(', ');
+  };
+  // scope: 'all' is every field under el, 'self' only el, 'inside' every field under el but el itself.
+  const fields = (el, scope = 'all') =>
     (CONTROLS.has(el.tagName)
       ? [el]
       : [
-          ...(isHost(el) ? [el] : []),
-          ...(own ? [] : [...el.querySelectorAll('input,select,textarea,[contenteditable]')].filter(e => CONTROLS.has(e.tagName) || isHost(e))),
+          ...(isHost(el) && scope !== 'inside' ? [el] : []),
+          ...(scope === 'self' ? [] : [...el.querySelectorAll('input,select,textarea,[contenteditable]')].filter(e => CONTROLS.has(e.tagName) || isHost(e))),
         ]
     )
       .filter(visible)
@@ -475,14 +492,18 @@
       .filter(([, , value]) => value)
       // The field is named as the observation names it, by its identity, so a step that typed into it is the same
       // control here: provenance is never read back from the words.
-      .map(([e, name, value]) => ({
-        text: name ? `${name}: ${value}` : value,
+      .map(([e, name, value]) => ({ e, name, value, place: cellPlace(e) }))
+      .map(({ e, name, value, place }) => ({
+        text: `${[name, place && `(${place})`].filter(Boolean).join(' ')}${name || place ? ': ' : ''}${value}`,
         control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
         control_element: String(identity(e)),
         ...(isHost(e) ? { links: linksIn([e]) } : {}),
         // The value as the page holds it: the text above is collapsed, so only this tells what was typed.
         ...(e.tagName === 'SELECT' ? {} : { control_value: isHost(e) ? (e.innerText ?? '') : e.value }),
       }));
+
+  // A host is one field block; native controls and editors nested inside it follow as their own, as elsewhere.
+  const hostFields = el => [...fields(el, 'self'), ...fields(el, 'inside')];
 
   const renderTable = table => {
     // A table filter hides what it excludes with `hidden`, display or visibility (`collapse` is the one CSS made
@@ -655,7 +676,7 @@
     // An editing host is decided before any other block kind: emitted once, as the field block that carries its
     // identity and raw value, and never walked, so no copy of its text reads as an ordinary source.
     if (isHost(el)) {
-      for (const { text, ...control } of fields(el, true)) push('paragraph', text, control);
+      for (const { text, ...control } of hostFields(el)) push('paragraph', text, control);
       return;
     }
     if (el.matches('nav,[role="navigation"]')) {
@@ -748,7 +769,7 @@
     framePath = frame;
     sourcePath = source;
     // A body that is itself the editing host is the field block for the whole document, never walked as prose.
-    if (isHost(root)) for (const { text, ...control } of fields(root, true)) push('paragraph', text, control);
+    if (isHost(root)) for (const { text, ...control } of hostFields(root)) push('paragraph', text, control);
     else walk(root);
     path = [...headings];
     headingLevels = [];

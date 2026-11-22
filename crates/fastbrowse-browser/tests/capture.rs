@@ -1544,12 +1544,12 @@ async fn an_editable_cell_or_a_design_mode_body_is_read_once_as_its_field() {
     let capture = h.page.capture().await.expect("capture");
     let holding: Vec<_> = capture.blocks.iter().filter(|b| capture.block_text(b).contains("cell words")).collect();
     assert_eq!(holding.len(), 1, "{:?}", holding.iter().map(|b| capture.block_text(b)).collect::<Vec<_>>());
-    assert_eq!(capture.block_text(holding[0]), "Cell: cell words");
+    assert_eq!(capture.block_text(holding[0]), "Cell (column Item): cell words");
     assert!(holding[0].control_context.as_ref().is_some_and(|c| c.value.is_some()));
     // The table survives with its cell empty, and precedes the field block.
     let position = |text: &str| capture.blocks.iter().position(|b| capture.block_text(b) == text);
     let table = capture.blocks.iter().position(|b| capture.block_text(b).contains("Item")).expect("the table survives");
-    let field = position("Cell: cell words").expect("field block");
+    let field = position("Cell (column Item): cell words").expect("field block");
     assert!(table < field, "the table precedes the field block");
     assert!(!capture.block_text(&capture.blocks[table]).contains("cell words"), "the cell reads empty in the table");
 
@@ -1564,6 +1564,36 @@ async fn an_editable_cell_or_a_design_mode_body_is_read_once_as_its_field() {
     let body = capture.blocks.iter().find(|b| capture.block_text(b).contains("First")).expect("body field");
     assert!(body.control_context.as_ref().is_some_and(|c| c.value.is_some()), "the body is one field block");
     assert!(body.links.iter().any(|l| l.href == "https://a.test/x"), "the body field keeps its links: {:?}", body.links);
+    h.close().await;
+}
+
+/// Two editable cells with the same name stay told apart by their row and column, and a native control inside a
+/// host is its own field block after the host's.
+#[tokio::test(flavor = "multi_thread")]
+async fn editable_cells_keep_their_row_and_column_and_a_host_keeps_its_nested_controls() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<table><tr><th>Item</th><th>Q1</th><th>Q2</th></tr>
+<tr><td>Widget</td><td contenteditable="true" aria-label="Price">5</td><td contenteditable="true" aria-label="Price">6</td></tr>
+<tr><td>Gadget</td><td contenteditable="true" aria-label="Price">7</td><td><input aria-label="Stock" value="9"></td></tr></table>
+<div contenteditable="true" aria-label="Editor">intro<span contenteditable="false"><input aria-label="Qty" value="3"></span></div>"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let texts: Vec<String> = capture.blocks.iter().map(|b| capture.block_text(b).to_string()).collect();
+    for want in [
+        "Price (row Widget, column Q1): 5",
+        "Price (row Widget, column Q2): 6",
+        "Price (row Gadget, column Q1): 7",
+        "Stock (row Gadget, column Q2): 9",
+    ] {
+        assert!(texts.iter().any(|t| t == want), "{want} missing from {texts:?}");
+    }
+    let host = texts.iter().position(|t| t.starts_with("Editor: intro")).expect("host block");
+    let nested = texts.iter().position(|t| t == "Qty: 3").expect("nested native field block");
+    assert!(host < nested, "the nested control follows its host: {texts:?}");
     h.close().await;
 }
 
