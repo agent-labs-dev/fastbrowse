@@ -105,12 +105,15 @@ pub(crate) fn cited_quote(evidence: &Evidence, notes: &Notes, redact: impl Fn(&s
 /// A claim may also cite one of the run's own `steps` as sN, for a value it typed there. A step has no page to link,
 /// so it is written beside the claim's page links as the step's own record, such as `[fill 'Postcode' with 'N1']`.
 pub fn assemble_answer(claims: &[Claim], notes: &Notes, steps: &[Value]) -> ComposedAnswer {
+    let known = noted_evidence(notes);
     let supports: Vec<Vec<String>> = claims
         .iter()
         .map(|claim| {
-            latest_reads(notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)), |id: &String| {
-                fact_evidence(notes, id).cloned()
-            })
+            latest_reads(
+                notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)),
+                |id: &String| fact_evidence(notes, id).cloned(),
+                &known,
+            )
         })
         .collect();
     // A derived fact has no page to link; its basis records carry the citations. They are numbered in the order the
@@ -2263,9 +2266,12 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
     for (key, fact) in notes.supporting() {
         claims.entry(fact.text).or_default().push(key);
     }
+    let known = noted_evidence(notes);
     claims
         .into_iter()
-        .map(|(text, keys)| Claim::new(&text, latest_reads(keys, |id: &String| fact_evidence(notes, id).cloned())))
+        .map(|(text, keys)| {
+            Claim::new(&text, latest_reads(keys, |id: &String| fact_evidence(notes, id).cloned(), &known))
+        })
         .collect()
 }
 
@@ -2274,7 +2280,10 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
 /// capture taken before the run's own edit (#1436); collapsing spans of one capture gave two records with the same
 /// words one record's provenance. The same quote under another heading, control, page location or link destination is
 /// another record, so it is kept whatever its capture time, as are reads whose records the page does not tell apart. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
-pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evidence>) -> Vec<T> {
+///
+/// `known` is every read the run holds, not only the cited ones: a sibling the claim does not cite still makes two reads
+/// ambiguous.
+pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evidence>, known: &[Evidence]) -> Vec<T> {
     let alike = |a: &Evidence, b: &Evidence| {
         a.url == b.url
             && a.quote == b.quote
@@ -2290,6 +2299,7 @@ pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evi
         reads
             .iter()
             .flatten()
+            .chain(known)
             .any(|o| o.capture_sha256 == e.capture_sha256 && (o.start, o.end) != (e.start, e.end) && alike(e, o))
     };
     let same_record = |a: &Evidence, b: &Evidence| alike(a, b) && !ambiguous(a) && !ambiguous(b);
@@ -2311,6 +2321,11 @@ pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evi
         kept.push((item, read.as_ref()));
     }
     kept.into_iter().map(|(item, _)| item).collect()
+}
+
+/// The evidence of every note the run holds.
+fn noted_evidence(notes: &Notes) -> Vec<Evidence> {
+    notes.facts().into_iter().filter_map(|fact| fact.evidence.clone()).collect()
 }
 
 fn fact_evidence<'a>(notes: &'a Notes, id: &String) -> Option<&'a Evidence> {

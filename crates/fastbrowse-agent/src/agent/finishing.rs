@@ -824,7 +824,8 @@ pub(super) fn outcome_notes(state: &RunState) -> Notes {
 
 /// The answer's notes and each schema field cite independently; the same read is one citation, its latest.
 pub(super) fn one_citation_per_quote(evidence: Vec<Evidence>) -> Vec<Evidence> {
-    crate::retrieval::latest_reads(evidence, |e| Some(e.clone()))
+    let known = evidence.clone();
+    crate::retrieval::latest_reads(evidence, |e| Some(e.clone()), &known)
 }
 
 #[cfg(test)]
