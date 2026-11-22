@@ -159,7 +159,7 @@ async fn copy_message(block_count: usize) {
         blocks.push(json!({"source_id": format!("s{n}"), "kind": "paragraph",
             "frame_id": null, "start": start, "end": text.len()}));
         if n != block_count - 1 {
-            text.push_str("\n");
+            text.push('\n');
         }
     }
     let capture: Capture = serde_json::from_value(json!({
