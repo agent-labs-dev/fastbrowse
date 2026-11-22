@@ -1,5 +1,8 @@
 //! A native desktop app as a `Page`, driven through deskpilot (<https://github.com/cjber/deskpilot>).
 //!
+//! The page reads and acts on an app only through its accessibility tree, so an app that exposes none, such as a
+//! terminal or an app that draws its own interface, cannot be driven: its first read fails as `deskpilot/no_tree`.
+//!
 //! The run starts its apps itself with deskpilot's `launch`, as a deskpilot agent of its own, so their windows open on
 //! that agent's hidden workspace and close when the run closes its `deskpilot mcp`. Every window on that workspace,
 //! the apps' first windows and the dialogs and windows they open later, is a tab of the page; one is active, and the
@@ -95,10 +98,27 @@ pub struct DeskpilotPage {
     /// The latest frame, taken when the app opens or after an action, held until the next observation shows no
     /// secret: the action may be what put one on screen, and only that reading can tell.
     pending: Mutex<Option<Vec<u8>>>,
+    /// The latest action sent since an observation last found a window open, named as a step names it: when every
+    /// window is gone after it, that action is what closed the app.
+    sent: Mutex<Option<String>>,
+    /// Set once every window of the run closed after `sent`. A dialog closes when the run presses the button the task
+    /// asked for, and calling that a lost connection ended a finished task `unavailable` before its last step was
+    /// recorded (#1405); the page now shows a closed app, which Jev reads like any other state.
+    closed: Mutex<Option<String>>,
 }
 
 fn unavailable(error: ToolError) -> BrowserError {
     BrowserError::Unavailable(format!("deskpilot: {}", error.message()))
+}
+
+/// `action` as a step names it: its operation and the label of its target in `observation`.
+fn step_name(action: &Action, observation: &Observation) -> String {
+    let operation = action.operation.as_str().replace('_', " ");
+    let target = action.target_id.as_deref().and_then(|id| observation.controls.iter().find(|c| c.id == id));
+    match target {
+        Some(control) => format!("{operation} {:?}", control.label),
+        None => operation,
+    }
 }
 
 fn read_window(value: &Value) -> Option<Window> {
@@ -179,6 +199,8 @@ impl DeskpilotPage {
             observed: Mutex::new(None),
             withheld: AtomicBool::new(false),
             pending: Mutex::new(None),
+            sent: Mutex::new(None),
+            closed: Mutex::new(None),
         })
     }
 
@@ -281,39 +303,95 @@ impl DeskpilotPage {
     }
 
     /// The active window as it is now: its title follows the app's state. When it closed, the window active before
-    /// it is active again, or another window of the run; the run's page ends only when every window closed.
-    async fn refresh(&self) -> PageResult<Window> {
+    /// it is active again, or another window of the run. None once every window closed after an action the run sent;
+    /// every window closing with no action since the last observation ends the page.
+    async fn current(&self) -> PageResult<Option<Window>> {
+        if self.closed.lock().unwrap().is_some() {
+            return Ok(None);
+        }
         let address = self.address();
         if let Ok(found) = self.client.call_json("wait_for", json!({"window": address, "timeout": 0})).await {
             let window = read_window(&found)
                 .ok_or_else(|| BrowserError::failed("deskpilot/no-window", "deskpilot described no window"))?;
             *self.window.lock().unwrap() = window.clone();
-            return Ok(window);
+            return Ok(Some(window));
         }
         let windows = self.windows().await?;
         let visited = self.visited.lock().unwrap().clone();
         let back = visited.iter().rev().find_map(|address| windows.iter().find(|window| window.address == *address));
         let Some(window) = back.or(windows.first()).cloned() else {
-            return Err(BrowserError::Unavailable(format!(
-                "the desktop window {address} is gone, and no other window of the run is open"
-            )));
+            let sent = self.sent.lock().unwrap().clone();
+            let Some(action) = sent else {
+                return Err(BrowserError::Unavailable(format!(
+                    "the desktop window {address} is gone, and no other window of the run is open"
+                )));
+            };
+            *self.closed.lock().unwrap() = Some(action);
+            return Ok(None);
         };
         self.visited.lock().unwrap().retain(|visited| *visited != address);
         self.activate(window.clone());
-        Ok(window)
+        Ok(Some(window))
     }
 
-    /// The window's tree. A peek reads it without replacing the snapshot the latest observation's ids belong to.
-    async fn tree(&self, peek: bool) -> PageResult<(Window, Element)> {
-        let window = self.refresh().await?;
+    /// Why nothing more can be done in the run's windows: an action closed the last of them. Said so, since an error
+    /// that only called the window gone left the user to work out that the run's own click closed it (#1399).
+    fn ended(&self) -> BrowserError {
+        let action = self.closed.lock().unwrap().clone().unwrap_or_default();
+        BrowserError::Unavailable(format!(
+            "every window of the run is closed: the last one closed after the run's {action}, so nothing more can be \
+             done in the app"
+        ))
+    }
+
+    /// The closed app as a window tree: the last window the run read, holding only the sentence that says every
+    /// window closed and after which action, so an observation and a capture of it state that as the window's text.
+    fn closed_app(&self) -> (Window, Element) {
+        let action = self.closed.lock().unwrap().clone().unwrap_or_default();
+        let element = |id: &str, role: &str, text: Option<String>, children| Element {
+            id: id.into(),
+            role: role.into(),
+            name: String::new(),
+            states: vec!["showing".into()],
+            text,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            children,
+            snapshot: None,
+        };
+        let said = format!("Every window of this app is closed. The last one closed after the run's {action}.");
+        let root = element("e1", "frame", None, vec![element("e2", "label", Some(said), Vec::new())]);
+        (self.window.lock().unwrap().clone(), root)
+    }
+
+    /// The active window's tree, or None once the app closed after an action.
+    async fn read(&self, peek: bool) -> PageResult<Option<(Window, Element)>> {
+        match self.current().await? {
+            Some(window) => Ok(Some(self.tree(window, peek).await?)),
+            None => Ok(None),
+        }
+    }
+
+    /// `window`'s tree. A peek reads it without replacing the snapshot the latest observation's ids belong to.
+    async fn tree(&self, window: Window, peek: bool) -> PageResult<(Window, Element)> {
         let value = self
             .client
             .call_json("elements", self.client.placed("elements", json!({"window": window.address, "peek": peek})))
             .await
             .map_err(|error| match error {
-                ToolError::Refused { code, message } if code == "no_tree" => {
-                    BrowserError::failed("deskpilot/no_tree", message)
-                }
+                // deskpilot's words are about making a browser or Electron app expose its tree, and read as if a flag
+                // fixed every app; for a terminal or an app that draws its own interface nothing does (#1400). The
+                // run says what it needs first, and quotes deskpilot, which names the case a variable fixes.
+                ToolError::Refused { code, message } if code == "no_tree" => BrowserError::failed(
+                    "deskpilot/no_tree",
+                    format!(
+                        "{} exposes no accessibility tree, and a desktop run reads and acts on an app only through \
+                         its accessibility tree, so it cannot drive this app as it runs now. deskpilot says: {message}",
+                        window.class
+                    ),
+                ),
                 // Two windows share the title deskpilot finds the window's tree by: a run's own windows, or an app
                 // left open by an earlier one. deskpilot works, so this is not an outage (#1345).
                 ToolError::Refused { code, message } if code == "ambiguous" => BrowserError::failed(
@@ -347,7 +425,8 @@ impl DeskpilotPage {
         if opened {
             return Ok(true);
         }
-        let (window, root) = self.tree(true).await?;
+        // Every window closing is a change, whatever the window showed.
+        let Some((window, root)) = self.read(true).await? else { return Ok(true) };
         let now = tree::observation(&window, &root, &[]);
         Ok(match target_id {
             Some(id) => {
@@ -387,10 +466,10 @@ impl DeskpilotPage {
 
     /// Waits until two reads of the tree agree, or the deadline.
     async fn settle(&self, deadline: Instant) -> PageResult<()> {
-        let mut last = self.tree(true).await?.1;
+        let Some((_, mut last)) = self.read(true).await? else { return Ok(()) };
         while Instant::now() < deadline {
             tokio::time::sleep(POLL).await;
-            let now = self.tree(true).await?.1;
+            let Some((_, now)) = self.read(true).await? else { return Ok(()) };
             if now == last {
                 break;
             }
@@ -598,7 +677,11 @@ impl DeskpilotPage {
             Ok(None) => {
                 self.generation.fetch_add(1, Ordering::Relaxed);
                 let changed = self.changed_within(observation, seconds, None).await?;
-                let detail = (!changed).then(|| "the window did not change".to_string());
+                let detail = if self.closed.lock().unwrap().is_some() {
+                    Some("every window of the app closed".to_string())
+                } else {
+                    (!changed).then(|| "the window did not change".to_string())
+                };
                 Ok(ActResult {
                     outcome: StepOutcome::Executed,
                     failure: None,
@@ -618,6 +701,9 @@ impl DeskpilotPage {
     }
 
     async fn act_within(&self, action: &Action, observation: &Observation, seconds: f64) -> PageResult<ActResult> {
+        if self.closed.lock().unwrap().is_some() {
+            return Err(self.ended());
+        }
         // Only the latest snapshot's ids are live; deskpilot refuses the rest too, but a glance has no snapshot.
         let latest = self.latest.lock().unwrap().clone();
         if observation.page_key.is_empty() || latest.as_deref() != Some(observation.page_key.as_str()) {
@@ -629,6 +715,7 @@ impl DeskpilotPage {
                 moved: false,
             });
         }
+        *self.sent.lock().unwrap() = Some(step_name(action, observation));
         let sent = self.dispatch(action, observation).await;
         let measured = if action.operation == Operation::SwitchTab && matches!(sent, Ok(None)) {
             // Another window is read next, so the step changed what the run sees whatever that window shows.
@@ -658,7 +745,12 @@ impl DeskpilotPage {
 
     /// The observation of the active window with every window of the run as a tab.
     async fn observed(&self, peek: bool) -> PageResult<(Element, Observation)> {
-        let (window, root) = self.tree(peek).await?;
+        let Some((window, root)) = self.read(peek).await? else {
+            let (window, root) = self.closed_app();
+            // No window is open, so none is a tab to switch to.
+            let observation = Observation { tabs: Vec::new(), ..tree::observation(&window, &root, &[]) };
+            return Ok((root, observation));
+        };
         let windows = self.windows().await?;
         // A window that appeared without an action, such as a second window an app opens as it starts, is listed
         // and is not an action's later.
@@ -677,6 +769,10 @@ impl Page for DeskpilotPage {
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         Box::pin(async move {
             let (root, observation) = self.observed(false).await?;
+            // A window is open again to act in, so a later closing of every window is not this action's doing.
+            if self.closed.lock().unwrap().is_none() {
+                *self.sent.lock().unwrap() = None;
+            }
             *self.latest.lock().unwrap() = root.snapshot.clone();
             *self.observed.lock().unwrap() = Some(root);
             Ok(observation)
@@ -692,8 +788,10 @@ impl Page for DeskpilotPage {
     /// document.
     fn document_changed<'a>(&'a self, observation: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
         Box::pin(async move {
-            let window = self.refresh().await?;
-            Ok(window.address != observation.document_key || window.title != observation.title)
+            Ok(match self.current().await? {
+                Some(window) => window.address != observation.document_key || window.title != observation.title,
+                None => true,
+            })
         })
     }
 
@@ -703,7 +801,7 @@ impl Page for DeskpilotPage {
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
         Box::pin(async move {
-            let (window, root) = self.tree(true).await?;
+            let (window, root) = self.read(true).await?.unwrap_or_else(|| self.closed_app());
             Ok(tree::capture(&window, &root))
         })
     }
@@ -754,10 +852,14 @@ impl Page for DeskpilotPage {
                     moved: false,
                 });
             }
+            if self.closed.lock().unwrap().is_some() {
+                return Err(self.ended());
+            }
             let Some(shot) = self.shot.lock().unwrap().clone() else {
                 return Err(BrowserError::ScreenshotsUnavailable("no screenshot of the window was taken".into()));
             };
             let before = self.glance().await?;
+            *self.sent.lock().unwrap() = Some("click on the screenshot".into());
             let point = json!({
                 "window": self.address(), "x": x * shot.width, "y": y * shot.height, "shot": shot.id,
             });
@@ -780,7 +882,10 @@ impl Page for DeskpilotPage {
     }
 
     fn address(&self) -> BoxFuture<'_, PageResult<String>> {
-        Box::pin(async move { Ok(self.refresh().await?.url()) })
+        Box::pin(async move {
+            let window = self.current().await?.unwrap_or_else(|| self.window.lock().unwrap().clone());
+            Ok(window.url())
+        })
     }
 
     fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {

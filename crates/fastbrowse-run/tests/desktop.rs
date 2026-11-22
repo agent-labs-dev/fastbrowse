@@ -557,3 +557,97 @@ async fn a_window_deskpilot_cannot_tell_apart_by_title_fails_the_read_without_ca
     assert_eq!(failure.reason, "deskpilot/ambiguous");
     assert!(failure.message.contains("same title") && failure.message.contains(message), "{}", failure.message);
 }
+
+/// Answers `slow` with a reply split in two, a second apart, `noisy` with a line that is not JSON, and any other tool
+/// at once.
+const SPLITTING: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  [ -z "$id" ] && continue
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"tools/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id" ;;
+    *'"name":"slow"'*) printf '{"jsonrpc":"2.0","id":%s,' "$id"; sleep 1; printf '"result":{"content":[]}}\n' ;;
+    *'"name":"noisy"'*) printf 'Gtk-WARNING: not a reply\n' ;;
+    *) printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"fast"}]}}\n' "$id" ;;
+  esac
+done
+"#;
+
+fn splitting(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("desktop").join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let program = dir.join("deskpilot");
+    std::fs::write(&program, SPLITTING).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    program
+}
+
+/// #1401: a call abandoned partway through a reply line dropped the bytes it had read, and the next call began
+/// mid-line and ended the run as "not JSON".
+#[tokio::test]
+async fn a_call_abandoned_mid_line_leaves_the_next_call_a_whole_line() {
+    let program = splitting("split-line");
+    let client = connect(program.to_str().unwrap(), View::Hidden).await.unwrap();
+    let abandoned = tokio::time::timeout(std::time::Duration::from_millis(300), client.call("slow", json!({}))).await;
+    assert!(abandoned.is_err(), "the slow call must still be waiting for the rest of its line");
+    let content = client.call("fast", json!({})).await.unwrap();
+    assert_eq!(content, [json!({"type": "text", "text": "fast"})]);
+}
+
+#[tokio::test]
+async fn a_line_that_is_not_json_is_quoted_in_the_error() {
+    let program = splitting("not-json");
+    let client = connect(program.to_str().unwrap(), View::Hidden).await.unwrap();
+    let error = client.call("noisy", json!({})).await.unwrap_err();
+    assert!(error.message().contains("Gtk-WARNING: not a reply"), "{error:?}");
+}
+
+/// #1400: deskpilot's message for an app with no tree is about Chromium flags, and read as if a flag fixed a terminal.
+#[tokio::test]
+async fn an_app_with_no_accessibility_tree_is_named_as_one_a_desktop_run_cannot_drive() {
+    let fake = editor("no-tree", &[launch_tool()]);
+    let message = "Application PID 7 exposes no accessibility tree. Chromium and Electron join the bus only when...";
+    fake.replies("wait_for", [ok(&window(false))]).replies("elements", [refused("no_tree", message)]);
+    let page = open(&fake).await;
+    let BrowserError::Failed(failure) = page.observe().await.unwrap_err() else { panic!("an outage") };
+    assert_eq!(failure.reason, "deskpilot/no_tree");
+    assert!(failure.message.starts_with("org.gnome.TextEditor exposes no accessibility tree"), "{}", failure.message);
+    assert!(failure.message.contains("only through its accessibility tree"), "{}", failure.message);
+    assert!(failure.message.ends_with(message), "{}", failure.message);
+}
+
+/// A dialog with one button, No, whose click closes its window and so the run's only window.
+fn closing_dialog(name: &str) -> Fake {
+    let button = json!({"id":"e2", "role":"push button", "name":"No", "states":["showing", "enabled"]});
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "children": [button]});
+    let fake = editor(name, &[launch_tool()]);
+    fake.replies("wait_for", [ok(&window(false)), refused("not_found", "no window 0xabc")]);
+    fake.replies("elements", [ok(&root)]).replies("windows", [list(&[window(false)]), list(&[])]);
+    fake.replies("click", [ok(&json!({"x": 1, "y": 1}))]);
+    fake
+}
+
+/// #1405: the click the task asked for closed the dialog, and the read after it called that a lost connection, so a
+/// finished task ended `unavailable` before its step was recorded.
+#[tokio::test]
+async fn a_click_that_closes_the_last_window_is_a_step_that_leaves_a_closed_app() {
+    let fake = closing_dialog("closed-by-click");
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    let mut click = Action::new(Operation::Click);
+    click.target_id = Some("e2".into());
+    let result = page.act(&click, &before).await.unwrap();
+    assert_eq!((result.outcome, result.page_changed), (StepOutcome::Executed, true), "{result:?}");
+    assert_eq!(result.detail.as_deref(), Some("every window of the app closed"));
+    let after = page.observe().await.unwrap();
+    assert!(after.controls.is_empty() && after.tabs.is_empty(), "{after:?}");
+    assert!(after.viewport_text.contains("Every window of this app is closed"), "{}", after.viewport_text);
+    assert!(after.viewport_text.contains(r#"click "No""#), "{}", after.viewport_text);
+    assert!(page.capture().await.unwrap().text.contains(r#"after the run's click "No""#));
+    // #1399: nothing more can be done, and the error says the run's own click closed the app.
+    let BrowserError::Unavailable(message) = page.act(&click, &after).await.unwrap_err() else { panic!("not ended") };
+    assert!(message.contains(r#"the last one closed after the run's click "No""#), "{message}");
+}

@@ -194,7 +194,7 @@ pub struct Args {
     /// Which browser the extension is connected in, by its label; implies `extension`.
     pub extension_browser: Option<String>,
     /// The desktop apps to start and drive through deskpilot instead of a browser, each a command line, one per
-    /// `--desktop`.
+    /// `--desktop`. Each is driven through its accessibility tree, so an app that exposes none cannot be.
     pub desktop: Vec<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
