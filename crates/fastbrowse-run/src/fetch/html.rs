@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use encoding_rs::{Encoding, UTF_8};
 use fastbrowse_core::models::Operation;
-use fastbrowse_core::page::{BlockKind, Control};
+use fastbrowse_core::page::{BlockKind, Control, ItemPlace};
 use fastbrowse_core::py::text;
 use html5ever::Attribute;
 use html5ever::tendril::StrTendril;
@@ -450,6 +450,13 @@ impl Tags for Tree {
     }
 }
 
+/// A list item and the tag token that closes it, which ends the item's hold on the blocks read inside it.
+#[derive(Clone, Copy)]
+struct OpenItem {
+    place: ItemPlace,
+    close: usize,
+}
+
 /// A repeated card, read as one block: what `capture.js` calls a record.
 struct Record {
     heading_level: Option<usize>,
@@ -488,6 +495,28 @@ impl Holds {
 }
 
 impl Tree {
+    /// Where each rendered item of a list sits among its list's rendered items, by the token that opens it. A label
+    /// does not say it is the third of its list, nor does the page's text. A list of one has no place worth stating.
+    fn item_places(&self) -> HashMap<usize, OpenItem> {
+        let mut places = HashMap::new();
+        for list in self.elements.iter().filter(|element| matches!(element.tag.as_str(), "ul" | "ol" | "menu")) {
+            let items: Vec<&Element> = list
+                .children
+                .iter()
+                .map(|&child| &self.elements[child])
+                .filter(|child| child.tag == "li" && !child.hidden)
+                .collect();
+            if items.len() < 2 || list.hidden {
+                continue;
+            }
+            for (index, item) in items.iter().enumerate() {
+                let place = ItemPlace { position: index as i64 + 1, count: items.len() as i64 };
+                places.insert(item.start, OpenItem { place, close: item.close });
+            }
+        }
+        places
+    }
+
     fn link(&self, i: usize) -> bool {
         self.elements[i].tag == "a" && self.elements[i].href.is_some()
     }
@@ -649,6 +678,8 @@ pub struct Found {
     pub frame_id: Option<String>,
     /// The block is a card's whole text, what it only draws named after it, as `capture.js` marks a record.
     pub whole_record: bool,
+    /// The place of the list item the block is or sits inside, as `capture.js` states it.
+    pub item_place: Option<ItemPlace>,
     pub fields: Vec<fastbrowse_core::page::SourceField>,
 }
 
@@ -662,6 +693,7 @@ impl From<fastbrowse_core::page::json::Found> for Found {
             links: Vec::new(),
             frame_id: None,
             whole_record: block.whole_record,
+            item_place: None,
             fields: block.fields,
         }
     }
@@ -736,6 +768,10 @@ struct Reader<'a> {
     empty: HashSet<usize>,
     /// The cards the first read found, by the tag token that opens each.
     records: HashMap<usize, Record>,
+    /// The list items the first read found, by the tag token that opens each.
+    item_places: HashMap<usize, OpenItem>,
+    /// The list items open now, innermost last: every block read inside one is a part of that item.
+    places: Vec<OpenItem>,
     /// The open card, whose whole text is one block.
     record: Option<Record>,
     /// The tag tokens opening footnote references, whose text is left out as `capture.js` leaves it out.
@@ -756,6 +792,12 @@ impl Tags for Reader<'_> {
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
         }
+        while self.places.pop_if(|open| open.close == at).is_some() {}
+        if let Some(open) = self.item_places.remove(&at) {
+            // What was read before the item belongs to the item before it, not to this one.
+            self.flush(None, None, false);
+            self.places.push(open);
+        }
         // `<svg/>` is foreign content, where a self-closing tag ends the element: it opens nothing to skip.
         if !(tag.self_closing && &*tag.name == "svg") {
             self.open(&tag.name, &tag.attrs, at);
@@ -774,6 +816,7 @@ impl Tags for Reader<'_> {
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
         }
+        while self.places.pop_if(|open| open.close == at).is_some() {}
     }
 
     fn data(&mut self, data: &str) {
@@ -804,6 +847,7 @@ impl<'a> Reader<'a> {
     fn new(
         url: &'a str,
         records: HashMap<usize, Record>,
+        item_places: HashMap<usize, OpenItem>,
         notes: HashSet<usize>,
         ends: HashMap<usize, usize>,
         empty: HashSet<usize>,
@@ -838,6 +882,8 @@ impl<'a> Reader<'a> {
             ends,
             empty,
             records,
+            item_places,
+            places: Vec::new(),
             record: None,
             notes,
             link: None,
@@ -1283,6 +1329,7 @@ impl<'a> Reader<'a> {
                 links: links.next().unwrap_or_default(),
                 frame_id: None,
                 whole_record: false,
+                item_place: None,
                 fields: Vec::new(),
             });
         }
@@ -1333,6 +1380,7 @@ impl<'a> Reader<'a> {
             links,
             frame_id: None,
             whole_record: false,
+            item_place: self.places.last().map(|open| open.place),
             fields: Vec::new(),
         });
         if let Some(level) = level {
@@ -1359,6 +1407,7 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
     // A card is told by its siblings, which come after it, so the tree is read before the text.
     let mut tree = tokenize(html, Sink::new(Tree::new(url))).into_inner();
     let notes = tree.note_references();
+    let item_places = tree.item_places();
     let ends = tree
         .elements
         .iter()
@@ -1389,7 +1438,8 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
         })
         .map(|element| element.start)
         .collect();
-    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends, empty))).into_inner();
+    let mut reader =
+        tokenize(html, Sink::new(Reader::new(url, tree.records(), item_places, notes, ends, empty))).into_inner();
     reader.emit_titles(usize::MAX);
     reader.close_record();
     reader.flush(None, None, false);
@@ -2184,6 +2234,31 @@ mod tests {
         let (_, _, controls, _) = read(&markup, "https://example.test/");
         assert_eq!(controls.len(), 3);
         assert!(controls.iter().all(|control| control.context.as_deref() == Some("Group")));
+    }
+
+    /// "The third link" is a place the link's text does not state; a read that could not say it left a claim of it
+    /// unevidenced (#1108). A list item and each block inside it carry the item's place among its list's items.
+    #[test]
+    fn a_list_items_blocks_carry_its_place_in_the_list() {
+        let (_, found) = blocks(
+            "<h2>Available Examples</h2><ul>\
+             <li><a href='/abtest'>A/B Testing</a></li>\
+             <li hidden><a href='/hidden'>Hidden</a></li>\
+             <li><a href='/accessibility'>Accessibility Issues</a></li>\
+             <li><a href='/add'>Add/Remove Elements</a> <span>(new)</span></li>\
+             </ul><p>After</p><ul><li>Alone</li></ul>",
+            "https://example.test/",
+        );
+        let place = |text: &str| {
+            let block = found.iter().find(|block| block.text == text).unwrap();
+            block.item_place.map(|place| (place.position, place.count))
+        };
+        assert_eq!(place("A/B Testing"), Some((1, 3)));
+        assert_eq!(place("Accessibility Issues"), Some((2, 3)), "a hidden item takes no place");
+        assert_eq!(place("Add/Remove Elements"), Some((3, 3)));
+        assert_eq!(place("(new)"), Some((3, 3)), "text beside the link is the same item");
+        assert_eq!(place("After"), None, "text after the list is no item");
+        assert_eq!(place("Alone"), None, "a list of one has no place to state");
     }
 
     #[test]

@@ -684,6 +684,21 @@
     }
   }
 
+  // Where an item sits in its list: "the third link" is a place, which neither its text nor the page's text states.
+  // The page's own `aria-posinset` and `aria-setsize` say it where it declares them, as a virtualised list must;
+  // otherwise it is the item's place among the rendered items of its list.
+  function itemPlace(el) {
+    const declared = Number.parseInt(el.getAttribute('aria-posinset'), 10);
+    const size = Number.parseInt(el.getAttribute('aria-setsize'), 10);
+    const list = el.parentElement;
+    const siblings = list && el.tagName === 'LI' && list.matches('ul,ol,menu,[role="list"]')
+      ? [...list.children].filter(c => c.tagName === 'LI' && !hidden(c))
+      : [];
+    const position = declared > 0 ? declared : siblings.indexOf(el) + 1;
+    const count = size > 0 ? size : siblings.length;
+    return position > 0 && count > 1 && position <= count ? { item_place: { position, count } } : {};
+  }
+
   function block(el) {
     if (el.matches('nav,[role="navigation"]')) {
       // Navigation help headings describe their menu, not product facts in the following main content.
@@ -727,6 +742,7 @@
           // All an item the page repeats renders, its textless parts named: what it does not show, it does not show.
           // A comment is often an `li`, so its kind does not say this (#992).
           ...(record !== null ? { whole_record: true } : {}),
+          ...itemPlace(el),
         },
         [el],
       );

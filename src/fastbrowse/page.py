@@ -166,6 +166,14 @@ class SourceField(Frozen):
     end: int = Field(ge=0)
 
 
+class ItemPlace(Frozen):
+    """Where an item sits in the list the page draws it in, counted from 1: the page's own `aria-posinset` and
+    `aria-setsize` where it declares them, otherwise its place among the rendered items of its list."""
+
+    position: int = Field(ge=0)
+    count: int = Field(ge=0)
+
+
 class Block(Frozen):
     source_id: str
     source_url: str | None = None
@@ -186,6 +194,8 @@ class Block(Frozen):
     """This block is all the text the page renders for one item it repeats, such as a comment, card or list row, with
     each part of it that shows no text named in square brackets. A record can be a `list_item` as well as a `record`,
     so its kind does not say this."""
+    item_place: ItemPlace | None = Field(default=None, exclude_if=lambda place: place is None)
+    """The place of the list item this block is, or sits inside: a label does not say it is the third of the list."""
     fields: tuple[SourceField, ...] = Field(default=(), exclude_if=lambda fields: not fields)
     """Structured values retain their boundaries, so copying one never requires retyping its whitespace."""
 

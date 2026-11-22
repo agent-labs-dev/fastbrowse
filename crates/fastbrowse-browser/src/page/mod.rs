@@ -23,7 +23,7 @@ use fastbrowse_core::models::{Artifact, ArtifactKind, Held, Link, Operation, Sou
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::json as json_document;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, FillReceiver, Media,
+    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, FillReceiver, ItemPlace, Media,
     Observation, Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
@@ -291,6 +291,9 @@ struct SnapshotBlock {
     /// The block is a record's whole text, its textless parts named.
     #[serde(default)]
     whole_record: bool,
+    /// The place of the list item the block is or sits inside.
+    #[serde(default)]
+    item_place: Option<ItemPlace>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1214,6 +1217,7 @@ impl CdpPage {
                         href: None,
                         links: Vec::new(),
                         whole_record: block.whole_record,
+                        item_place: None,
                         fields: block.fields.into_iter().map(|field| field.shifted(int(start))).collect(),
                     });
                 }
@@ -1269,6 +1273,7 @@ impl CdpPage {
                     href: block.href.clone(),
                     links,
                     whole_record: block.whole_record,
+                    item_place: block.item_place,
                     fields: Vec::new(),
                 });
             }
@@ -1310,6 +1315,7 @@ impl CdpPage {
                     href: None,
                     links: Vec::new(),
                     whole_record: false,
+                    item_place: None,
                     fields: Vec::new(),
                 });
                 text.push_str("\n\n");

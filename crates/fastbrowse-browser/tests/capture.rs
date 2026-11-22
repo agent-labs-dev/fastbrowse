@@ -520,6 +520,36 @@ async fn test_json_in_an_html_pre_stays_one_code_block() {
     h.close().await;
 }
 
+/// "The third link" is a place the link's text does not state; the page's own `aria-posinset` wins where it declares one,
+/// as a virtualised list must, and a list of one has no place to state (#1108).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_list_item_block_carries_its_place_in_the_list() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<h2>Available Examples</h2><ul>\
+         <li><a href='/abtest'>A/B Testing</a></li>\
+         <li hidden><a href='/hidden'>Hidden</a></li>\
+         <li><a href='/accessibility'>Accessibility Issues</a></li>\
+         <li><a href='/add'>Add/Remove Elements</a></li></ul>\
+         <ul><li>Alone</li></ul>\
+         <ul><li aria-posinset='41' aria-setsize='90'>Forty-first</li><li>Next</li></ul>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).unwrap();
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("A/B Testing"), Some((1, 3)));
+    assert_eq!(place("Accessibility Issues"), Some((2, 3)), "a hidden item takes no place");
+    assert_eq!(place("Add/Remove Elements"), Some((3, 3)));
+    assert_eq!(place("Alone"), None);
+    assert_eq!(place("Forty-first"), Some((41, 90)));
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_quote_cards_are_whole_records_with_local_titles() {
     let Some(h) = harness().await else { return };
