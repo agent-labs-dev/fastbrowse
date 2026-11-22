@@ -10749,6 +10749,16 @@ fn typed_by(state: &RunState, url: &str, document: &str, element: &str, value: &
     notes.typed_by_step(&quote)
 }
 
+/// Only a field's latest typing counts: the run typed one value, then another, and the site restored the first. The
+/// restored value is the site's, not the run's earlier typing.
+#[tokio::test]
+async fn test_a_value_the_site_restored_after_a_later_typing_is_not_the_runs() {
+    let mut state = typed_run(Some("field")).await;
+    state.notes.remember_typing(1, "doc-1", "field", "2026-12-01");
+    assert_eq!(typed_by(&state, "https://example.test/", "doc-1", "field", "2026-11-04"), None);
+    assert_eq!(typed_by(&state, "https://example.test/", "doc-1", "field", "2026-12-01"), Some(1));
+}
+
 /// A step that typed into a control records the page, the document and the control the browser reported the text in,
 /// so a later read of that control, and no other, is told apart as the run's own typing (#1398). The same id in
 /// another document (a reload numbers a prefilled field the same), and a value the typing did not leave (a site's

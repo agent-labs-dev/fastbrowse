@@ -331,8 +331,8 @@ impl Notes {
         });
     }
 
-    /// The last step before this quote's read that typed, into an editable field its block holds, exactly the value the
-    /// field held when read, compared as typed and as held, whitespace and all. The field is the same one by its
+    /// The last step before this quote's read that typed into an editable field its block holds, when that typing is
+    /// exactly the value the field held when read, compared as typed and as held, whitespace and all. The field is the same one by its
     /// document and id, never by its URL (a same-document navigation keeps the document) or the quote's words; a value
     /// the typing did not leave (the site replaced it, or another source wrote it) is not the run's typing.
     pub fn typed_by_step(&self, evidence: &Evidence) -> Option<usize> {
@@ -346,12 +346,10 @@ impl Notes {
                 self.typed
                     .iter()
                     .rev()
-                    .find(|typed| {
-                        typed.step <= taken
-                            && typed.document == document
-                            && typed.element == held.element
-                            && *typed.text == *held.value
-                    })
+                    // Only the field's latest typing counts: a value an earlier typing left that a later one replaced
+                    // came back from the site, not from the run.
+                    .find(|typed| typed.step <= taken && typed.document == document && typed.element == held.element)
+                    .filter(|typed| *typed.text == *held.value)
                     .map(|typed| typed.step)
             })
             .max()
