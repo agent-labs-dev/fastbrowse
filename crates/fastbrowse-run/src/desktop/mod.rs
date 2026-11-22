@@ -801,10 +801,7 @@ impl Page for DeskpilotPage {
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
         Box::pin(async move {
-            let (window, root) = match self.read(true).await? {
-                Some(read) => read,
-                None => self.closed_app(),
-            };
+            let (window, root) = self.read(true).await?.unwrap_or_else(|| self.closed_app());
             Ok(tree::capture(&window, &root))
         })
     }
