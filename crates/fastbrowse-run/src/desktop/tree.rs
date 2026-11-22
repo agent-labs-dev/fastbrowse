@@ -88,9 +88,12 @@ impl Window {
     }
 }
 
-/// Roles whose element does something when clicked, by AT-SPI's role names. at-spi2-core renamed `push button` to
-/// `button`; an app on an older one still says the first.
-const CLICKABLE: [&str; 17] = [
+/// Roles whose element does something when clicked, by the role names the app reports over AT-SPI. at-spi2-core
+/// renamed `push button` to `button`; an app on an older one still says the first. A toolkit can name a role its own
+/// way: GTK 4 says `tab`, `switch`, `grid cell` and `menu item checkbox` where at-spi2-core says `page tab` or
+/// `check menu item`, and Qt 5 says `spin box`. A role missing here is never offered, so GNOME Text Editor's tabs,
+/// its line numbers switch and GNOME Files' file icons could not be picked (#1397).
+const CLICKABLE: &[&str] = &[
     "button",
     "push button",
     "toggle button",
@@ -108,10 +111,26 @@ const CLICKABLE: [&str; 17] = [
     "table cell",
     "icon",
     "push button menu",
+    "tab",
+    "switch",
+    "grid cell",
+    "menu item checkbox",
+    "menu item radio",
+    "spin button",
+    "spin box",
 ];
 
 /// Roles whose checked state is a value of their own, so an unchecked one says so rather than saying nothing.
-const CHECKABLE: [&str; 5] = ["check box", "radio button", "toggle button", "check menu item", "radio menu item"];
+const CHECKABLE: &[&str] = &[
+    "check box",
+    "radio button",
+    "toggle button",
+    "check menu item",
+    "radio menu item",
+    "switch",
+    "menu item checkbox",
+    "menu item radio",
+];
 
 fn operations(element: &Element) -> Vec<Operation> {
     // Editable is a state the app sets, on entries, spin buttons, password fields and editable combo boxes alike.
@@ -140,13 +159,14 @@ fn aria_role(role: &str) -> &str {
         "radio button" => "radio",
         "combo box" => "combobox",
         "menu item" => "menuitem",
-        "check menu item" => "menuitemcheckbox",
-        "radio menu item" => "menuitemradio",
+        "check menu item" | "menu item checkbox" => "menuitemcheckbox",
+        "radio menu item" | "menu item radio" => "menuitemradio",
         "page tab" => "tab",
+        "grid cell" => "gridcell",
         "list item" => "listitem",
         "tree item" => "treeitem",
         "table cell" => "cell",
-        "spin button" => "spinbutton",
+        "spin button" | "spin box" => "spinbutton",
         other => other,
     }
 }
@@ -561,6 +581,53 @@ mod tests {
         assert_eq!(password.input_type.as_deref(), Some("password"));
         assert_eq!(observation.viewport_text, "Not submitted");
         assert_eq!(observation.offscreen_text, "Scrolled away");
+    }
+
+    #[test]
+    fn tabs_switches_grid_cells_and_spin_boxes_are_offered_in_aria_words() {
+        // As deskpilot read GNOME Text Editor's tab bar and Preferences, GNOME Files' icon view and a Qt 5 spin box
+        // (#1396, #1397): the tab was never offered, only its Close Tab button, so the run closed the tab it meant.
+        let gtk4 = |extra: &[&'static str]| -> Vec<&'static str> {
+            shown(&["focusable"]).into_iter().chain(extra.iter().copied()).collect()
+        };
+        let root = node(
+            "e1",
+            "window",
+            "contacts.txt - Text Editor",
+            &SHOWN,
+            None,
+            vec![
+                node("e2", "tab", "contacts.txt", &gtk4(&["selectable", "selected"]), None, vec![]),
+                node("e3", "button", "Close Tab", &gtk4(&[]), None, vec![]),
+                node("e4", "tab", "form.txt", &gtk4(&["selectable"]), None, vec![]),
+                node("e5", "button", "Close Tab", &gtk4(&[]), None, vec![]),
+                node("e6", "switch", "Display Line Numbers", &gtk4(&["checkable"]), None, vec![]),
+                node("e7", "grid cell", "IMG_4471.txt. File", &gtk4(&["selectable"]), None, vec![]),
+                node("e8", "spin box", "Double click interval", &gtk4(&[]), None, vec![]),
+                node("e9", "menu item radio", "Light", &gtk4(&["checkable", "checked"]), None, vec![]),
+            ],
+        );
+        let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "x".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let summary: Vec<(&str, &str, Option<bool>)> =
+            controls.iter().map(|c| (c.role.as_str(), c.label.as_str(), c.checked)).collect();
+        assert_eq!(
+            summary,
+            [
+                ("tab", "contacts.txt", None),
+                ("button", "Close Tab", None),
+                ("tab", "form.txt", None),
+                ("button", "Close Tab", None),
+                ("switch", "Display Line Numbers", Some(false)),
+                ("gridcell", "IMG_4471.txt. File", None),
+                ("spinbutton", "Double click interval", None),
+                ("menuitemradio", "Light", Some(true)),
+            ]
+        );
+        assert_eq!(controls[0].selected, Some(true));
+        assert!(controls.iter().all(|c| c.operations.contains(&Operation::Click)));
+        // What the window says names them too, so a quote of a file name is found in it.
+        assert!(capture(&window, &root).text.contains("IMG_4471.txt. File"));
     }
 
     #[test]
