@@ -11305,9 +11305,13 @@ async fn test_the_next_key_is_asked_in_the_control_the_last_press_set_going() {
                 && q.contains("still holds keyboard focus")
                 && q.contains("Which key should be pressed in 'Test image'")
         }));
+        // The key is authorized as a press in the control it goes to, not the card Jev named.
+        let gate = asked.iter().find(|q| q.contains("The exact key chord to press is 'ArrowUp'")).expect("a gate");
+        assert!(gate.contains("press the element labelled 'Test image'"), "{gate}");
     }
     // "elsewhere" leaves the press on the control Jev chose.
-    let jev = Arc::new(FirstChoice { wants: Some("different control"), noul: Some(0.0), ..Default::default() });
+    let jev =
+        Arc::new(FirstChoice { wants: Some("the control chosen to press"), noul: Some(0.0), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.edits = Some(Edits::Allowed);
@@ -11386,6 +11390,26 @@ async fn test_the_carried_key_question_says_whether_the_item_has_moved() {
     assert!(!unknown.contains("Since the press that set it going"), "{unknown}");
     let unseen = asked_with(Some((6, 6)), None).await;
     assert!(!unseen.contains("Since the press that set it going"), "{unseen}");
+}
+
+/// A second press in a control whose first changed the page still takes a chord the task states: the carried key
+/// question offered only the role's keys.
+#[tokio::test]
+async fn test_the_carried_key_question_still_takes_a_chord_the_task_gives() {
+    let editor = Control::new("e", "textbox", "Editor", [Operation::Click, Operation::Press]);
+    let page = observation(std::slice::from_ref(&editor));
+    let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let mut last = executed(Some(Operation::Press), Some("Editor"), true);
+    last.text = Some("Backspace".into());
+    state.history.push(last);
+    let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(editor))).await;
+    let asked = jev.asked.lock().unwrap();
+    let picked =
+        asked.iter().position(|q| q.contains("The last action pressed 'Backspace'")).expect("the key question");
+    assert!(asked.len() > picked + 1, "the chord is copied from the task: {asked:?}");
 }
 
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.

@@ -1043,6 +1043,8 @@ impl Agent {
         let facts_before = state.notes.facts().len();
         let mut label = decision_label(decision);
         let mut place = decision.target.as_ref().and_then(fastbrowse_core::safety::item_place);
+        // The decision as carried out: a press carried to the control the last press set going acts on that one.
+        let mut carried_to: Option<Decision> = None;
         let mut typed: Option<String> = None;
         let mut effect_now: Option<String> = None;
         let mut setting = false;
@@ -1099,10 +1101,18 @@ impl Agent {
             {
                 let named = describe(pressed);
                 // Keys that carry a lift on keep the place it started from.
-                let carrying = state.history.last().filter(|last| last.target.as_deref() == Some(named.as_str()));
+                let carrying = state.history.last().filter(|last| {
+                    last.operation == Some(Operation::Press) && last.target.as_deref() == Some(named.as_str())
+                });
                 place = carrying.and_then(|last| last.place).or_else(|| fastbrowse_core::safety::item_place(pressed));
                 label = Some(named);
+                // The rest of the step acts on the control pressed: a recipe recorded the key on the control Jev
+                // named, and replayed it there, which moved focus off the lifted item and dropped it in place.
+                if decision.target.as_ref().is_none_or(|target| target.id != pressed.id) {
+                    carried_to = Some(Decision { target: Some(pressed.clone()), ..decision.clone() });
+                }
             }
+            let decision = carried_to.as_ref().unwrap_or(decision);
             if action.operation == Operation::Fill
                 && action.text.as_deref().is_none_or(str::is_empty)
                 && require(decision.target.as_ref())?.value.as_deref().is_none_or(str::is_empty)
@@ -1427,6 +1437,8 @@ impl Agent {
             choices: Vec::new(),
         };
         self.record_step(state, step, false, frame).await?;
+        // The stall is the press as carried out, or the control Jev named lost the key it never took.
+        let decision = carried_to.as_ref().unwrap_or(decision);
         match progressed {
             Some(progressed) => {
                 let stalled = Idle { action: withheld(decision), outcome: act.outcome, refused };

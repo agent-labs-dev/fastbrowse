@@ -77,7 +77,6 @@ const NO_VALUE: &str = "none";
 /// A press whose key the task states, which is copied from the task rather than picked from the role's keys.
 const TASK_KEY: &str = "task";
 const OTHER_CONTROL: &str = "elsewhere";
-const OTHER_CONTROL_SAID: &str = "The next key is for a different control, not this one.";
 const TASK_KEY_SAID: &str = "The task gives the key or key chord to press, and it is none of these.";
 /// The task asks nothing of the field: it is left as it is, and is no input the run lacks. Asked as one with NO_VALUE,
 /// a blank optional field Jev reached for read as a value the caller had to give (#935).
@@ -494,16 +493,18 @@ impl Agent {
                 }
                 let carried = if decision.replayed { None } else { self.carried_on(state, observation, target) };
                 let carried_key = match carried {
-                    Some(control) => self.carried_key(state, observation, control, target).await?,
+                    Some(control) => self.carried_key(state, observation, decision, control, target).await?,
                     None => None,
                 };
                 let (target, chord) = match (carried, carried_key) {
-                    (Some(control), Some(key)) => {
-                        state.text_source = Some(RecipeText::Literal(key.clone()));
-                        (control, key)
-                    }
+                    (Some(control), Some(key)) => (control, key),
                     _ => (target, self.key(state, observation, decision, target).await?),
                 };
+                // A key carried to another control is authorized as a press in that control: asked about the control
+                // Jev named, a key that commits in the lifted item was judged as a press on a harmless card.
+                let pressed = (decision.target.as_ref().is_none_or(|named| named.id != target.id))
+                    .then(|| Decision { target: Some(target.clone()), ..decision.clone() });
+                let decision = pressed.as_ref().unwrap_or(decision);
                 self.gate_key_edit(state, observation, decision, target, &chord).await?;
                 let fact = format!("\nThe exact key chord to press is {}.\n", text::repr(&chord));
                 self.gate_irreversible_with_fact(state, observation, decision, Some(&fact)).await?;
@@ -1364,6 +1365,7 @@ impl Agent {
         &self,
         state: &mut RunState,
         observation: &Observation,
+        decision: &Decision,
         carried: &Control,
         target: &Control,
     ) -> Step<Option<String>> {
@@ -1388,19 +1390,31 @@ impl Agent {
             }
             _ => String::new(),
         };
-        // The target is this control, so the key cannot be for another one.
-        let (focus, instead): (&str, &[(&'static str, &str)]) = if carried.id == target.id {
-            ("", &[])
+        // The target is this control, so the key cannot be for another one. A key the task states is copied from it,
+        // as `key` does: a second press in a control whose first changed the page was offered only the role's keys.
+        // The other control is named: "a different control" alone left Jev nothing to weigh the lifted item against.
+        let elsewhere = format!(
+            "The next key is for {}, the control chosen to press, not this one.",
+            text::repr(&describe(target))
+        );
+        let mut instead = vec![(TASK_KEY, TASK_KEY_SAID)];
+        let focus = if carried.id == target.id {
+            ""
         } else {
-            (
-                " That control still holds keyboard focus, and a press in another control moves focus away from it.",
-                &[(OTHER_CONTROL, OTHER_CONTROL_SAID)],
-            )
+            instead.push((OTHER_CONTROL, elsewhere.as_str()));
+            " That control still holds keyboard focus, and a press in another control moves focus away from it."
         };
         let preface = format!("{did}.{focus}{moved} ");
         let (question, options) = key_question(carried, &preface);
-        match self.choose_among(state, observation, &question, &options, instead).await? {
-            Chosen::Option(key) => Ok(Some(key)),
+        match self.choose_among(state, observation, &question, &options, &instead).await? {
+            Chosen::Option(key) => {
+                state.text_source = Some(RecipeText::Literal(key.clone()));
+                Ok(Some(key))
+            }
+            Chosen::Instead(TASK_KEY) => {
+                let decision = Decision { target: Some(carried.clone()), ..decision.clone() };
+                Ok(Some(self.text_with_scope(state, observation, &decision, carried, true).await?))
+            }
             Chosen::Instead(_) => Ok(None),
         }
     }
