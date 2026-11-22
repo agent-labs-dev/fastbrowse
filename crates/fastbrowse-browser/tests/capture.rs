@@ -1310,6 +1310,34 @@ async fn test_a_field_value_names_the_control_the_observation_gives_it() {
             capture.blocks.iter().find(|b| capture.block_text(b) == format!("Notes: {value}")).expect("field block");
         let reported = block.control_context.as_ref().and_then(|context| context.element.as_deref());
         assert_eq!(reported, Some(control.id.as_str()), "{value}");
+        let document = block.control_context.as_ref().and_then(|context| context.document.as_deref());
+        assert_eq!(document, Some(observed.document_key.as_str()), "{value}");
     }
+    h.close().await;
+}
+
+/// A fill reports the control that holds its text as the focused editable when the typing ended, the same identity
+/// and document the capture then gives that field, so a later read of it is told apart as the run's own typing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fill_reports_the_field_the_capture_names() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<label>Notes <textarea></textarea></label><label>Other <textarea></textarea></label>"#)
+        .await;
+    let observed = h.observe().await;
+    let notes = observed.controls.iter().find(|c| c.label == "Notes").expect("notes field");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(notes.id.clone()),
+        text: Some("typed words".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_deref(), Some(notes.id.as_str()));
+    let capture = h.page.capture().await.expect("capture");
+    let block =
+        capture.blocks.iter().find(|b| capture.block_text(b) == "Notes: typed words").expect("typed field block");
+    let control = block.control_context.as_ref().expect("control");
+    assert_eq!(control.element, result.landed);
+    assert_eq!(control.document.as_deref(), Some(observed.document_key.as_str()));
     h.close().await;
 }

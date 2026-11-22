@@ -821,6 +821,7 @@
     blocks,
     inaccessible_frames: inaccessible,
     content_type: document.contentType,
+    document_key: String(performance.timeOrigin),
     ...(json && served ? { json_text: served.textContent } : {}),
   };
 })

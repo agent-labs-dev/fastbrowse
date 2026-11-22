@@ -592,6 +592,7 @@ impl DeskpilotPage {
             page_changed: false,
             detail,
             moved: false,
+            landed: None,
         };
         match sent {
             Ok(Some(refused)) => Ok(outcome(StepOutcome::Failed, Some(refused))),
@@ -605,6 +606,7 @@ impl DeskpilotPage {
                     page_changed: changed,
                     detail,
                     moved: false,
+                    landed: None,
                 })
             }
             Err(ToolError::Refused { code, message }) => match code.as_str() {
@@ -627,6 +629,7 @@ impl DeskpilotPage {
                 page_changed: false,
                 detail: Some("the window was read again since this observation".to_string()),
                 moved: false,
+                landed: None,
             });
         }
         let sent = self.dispatch(action, observation).await;
@@ -639,6 +642,7 @@ impl DeskpilotPage {
                 page_changed: true,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         } else {
             self.followed(self.measured(sent, observation, seconds).await).await
@@ -752,6 +756,7 @@ impl Page for DeskpilotPage {
                     page_changed: false,
                     detail: Some("deskpilot cannot tell which control a point is on".into()),
                     moved: false,
+                    landed: None,
                 });
             }
             let Some(shot) = self.shot.lock().unwrap().clone() else {

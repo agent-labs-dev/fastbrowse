@@ -307,6 +307,8 @@ struct CaptureSnapshot {
     /// The frame document's MIME type, as `document.contentType` gives it.
     #[serde(default)]
     content_type: String,
+    /// The frame document's key, as an observation of it names it.
+    document_key: String,
     /// The served text of a JSON document, as Chrome renders it into the body's first `pre`.
     #[serde(default)]
     json_text: Option<String>,
@@ -1183,6 +1185,8 @@ impl CdpPage {
         let mut coverage: Vec<(String, usize)> = vec![];
         let main = frames.iter().find(|(k, _)| k == MAIN).map(|(_, f)| f);
         let title = main.map(|m| m.raw.title.clone()).unwrap_or_default();
+        // An observation names its document by the main frame's key, so a control's document is that one.
+        let document_key = main.map(|m| m.raw.document_key.clone());
         let url = match main {
             Some(main) => main.raw.url.clone(),
             None => self.origin_once().await?,
@@ -1245,6 +1249,7 @@ impl CdpPage {
                     control_context: block.control_context.clone().map(|mut control| {
                         control.element =
                             block.control_element.as_ref().map(|element| format!("{frame_key}:{element}"));
+                        control.document = document_key.clone();
                         control
                     }),
                     href: block.href.clone(),

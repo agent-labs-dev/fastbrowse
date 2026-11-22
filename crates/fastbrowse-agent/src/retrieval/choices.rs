@@ -924,6 +924,7 @@ mod tests {
                         label: "Avatar".into(),
                         context: Some((*position).into()),
                         element: None,
+                        document: None,
                     }),
                     ..base.clone()
                 },

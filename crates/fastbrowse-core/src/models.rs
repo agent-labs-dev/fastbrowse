@@ -173,6 +173,10 @@ pub struct SourceControl {
     /// bookkeeping, held in process: never part of the protocol, so never written or read.
     #[serde(skip)]
     pub element: Option<String>,
+    /// The document that control was read from (its `document_key`): ids are numbered within a document, so the
+    /// same id after a reload names another control. Held with `element`, and as unwritten.
+    #[serde(skip)]
+    pub document: Option<String>,
 }
 
 impl Schema for SourceControl {

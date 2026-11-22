@@ -3521,6 +3521,7 @@ impl Page for Screenshots {
                     page_changed: false,
                     detail: None,
                     moved: false,
+                    landed: None,
                 })
             });
         }
@@ -3534,6 +3535,7 @@ impl Page for Screenshots {
                 page_changed: false,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }
@@ -3564,6 +3566,7 @@ impl Page for Screenshots {
                 page_changed: false,
                 detail: None,
                 moved: false,
+                landed: None,
             };
             return Box::pin(async move { Ok(refused) });
         }
@@ -3585,6 +3588,7 @@ impl Page for Screenshots {
             page_changed: self.6,
             detail: None,
             moved: false,
+            landed: None,
         };
         Box::pin(async move { Ok(clicked) })
     }
@@ -5960,6 +5964,8 @@ fn test_a_synthesis_read_reports_the_source_material_it_kept() {
 /// A Reference field a blur leaves. Chrome's page fingerprint reads neither field values nor focus, so the browser
 /// reports that the blur changed nothing, as this page does.
 struct LeavingPage {
+    /// The control a fill reports its text landed in.
+    landed: Option<String>,
     expected: Operation,
     now: std::sync::Mutex<Observation>,
     left: Observation,
@@ -5990,13 +5996,15 @@ impl Page for LeavingPage {
     fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         assert_eq!(action.operation, self.expected);
         *self.now.lock().unwrap() = self.left.clone();
-        Box::pin(async {
+        let landed = self.landed.clone();
+        Box::pin(async move {
             Ok(ActResult {
                 outcome: StepOutcome::Executed,
                 failure: None,
                 page_changed: false,
                 detail: None,
                 moved: false,
+                landed,
             })
         })
     }
@@ -6038,6 +6046,7 @@ fn reference(value: &str, focused: bool) -> Observation {
 /// Leave the typed Reference field from `typing`, the way the loop does: settle, step, then observe and note.
 async fn leave(seen: &[Observation], typing: Observation) -> RunState {
     let page = LeavingPage {
+        landed: None,
         expected: Operation::Blur,
         now: std::sync::Mutex::new(typing.clone()),
         left: reference("Alpha-17", false),
@@ -6178,7 +6187,8 @@ fn card(revealed: bool) -> Observation {
 
 /// Hover the card on a page whose fingerprint reports no change, landing on `landed`, then build the next ask.
 async fn hover(seen: &[Observation], landed: Observation) -> (RunState, Observation) {
-    let page = LeavingPage { expected: Operation::Hover, now: std::sync::Mutex::new(card(false)), left: landed };
+    let page =
+        LeavingPage { landed: None, expected: Operation::Hover, now: std::sync::Mutex::new(card(false)), left: landed };
     let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
     let mut state = run_state();
     for earlier in seen {
@@ -6222,7 +6232,8 @@ async fn test_focus_changes_do_not_block_an_ordinary_twin_retry() {
     let mut fresh = before.clone();
     fresh.controls[0].id = "replacement".into();
     fresh.controls[0].focused = Some(false);
-    let page = LeavingPage { expected: Operation::Fill, now: std::sync::Mutex::new(fresh.clone()), left: fresh };
+    let page =
+        LeavingPage { landed: None, expected: Operation::Fill, now: std::sync::Mutex::new(fresh.clone()), left: fresh };
     let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
     let action =
         Action { target_id: Some(target.id.clone()), text: Some("Alpha-17".into()), ..Action::new(Operation::Fill) };
@@ -6466,7 +6477,9 @@ impl Page for Scripted {
         assert_eq!(action.operation, expected);
         let page_changed = landed != *self.now.lock().unwrap();
         *self.now.lock().unwrap() = landed;
-        Box::pin(async move { Ok(ActResult { outcome, failure: None, page_changed, detail: None, moved: false }) })
+        Box::pin(async move {
+            Ok(ActResult { outcome, failure: None, page_changed, detail: None, moved: false, landed: None })
+        })
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -6696,6 +6709,7 @@ impl Page for Unmoved {
                 page_changed: false,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }
@@ -8391,6 +8405,7 @@ impl Page for HungPage {
                     page_changed: false,
                     detail: None,
                     moved: false,
+                    landed: None,
                 })
             }
         })
@@ -9687,6 +9702,7 @@ impl Page for Picker {
                 page_changed: true,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }
@@ -10688,13 +10704,13 @@ async fn a_text_task_concluded_with_no_answer_is_not_complete() {
     assert_eq!(result.error.as_deref(), Some(super::finishing::UNANSWERED));
 }
 
-/// A step that typed into a control records the page and the control as the observation names them, so a later read
-/// of that control, and no other, is told apart as the run's own typing (#1398).
-#[tokio::test]
-async fn test_a_fill_records_the_page_and_control_it_typed_into() {
+/// A run's fill, as the browser reports where the text landed: `landed` is the control the browser found focused when
+/// the typing ended, or None when it reported none.
+async fn typed_run(landed: Option<&str>) -> RunState {
     let page = LeavingPage {
+        landed: landed.map(str::to_string),
         expected: Operation::Fill,
-        now: std::sync::Mutex::new(observation(&[field("Date")])),
+        now: std::sync::Mutex::new(Observation { document_key: "doc-1".into(), ..observation(&[field("Date")]) }),
         left: observation(&[Control { value: Some("2026-11-04".into()), ..field("Date") }]),
     };
     let agent = Agent::new(Arc::new(page), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
@@ -10711,22 +10727,51 @@ async fn test_a_fill_records_the_page_and_control_it_typed_into() {
     let target = observed.controls[0].clone();
     agent.step(&mut state, &observed, &code_decision(Operation::Fill, Some(target))).await.expect("stepped");
     assert_eq!(state.history.last().and_then(|entry| entry.text.as_deref()), Some("2026-11-04"));
+    state
+}
 
-    let read = |url: &str, element: &str| {
-        let page = results_page_720(url, "Date: 2026-11-04");
-        let mut quote = block_evidence(&page, "s1");
-        quote.control_context = Some(fastbrowse_core::models::SourceControl {
-            role: "textarea".into(),
-            label: "Date".into(),
-            context: None,
-            element: Some(element.into()),
-        });
-        let mut notes = state.notes.clone();
-        notes.remember_capture(&page, 1);
-        notes.typed_by_step(&quote)
+/// The step a later read of a field is attributed to: the page `url` shows the control `element` of the document
+/// `document` holding `value`.
+fn typed_by(state: &RunState, url: &str, document: &str, element: &str, value: &str) -> Option<usize> {
+    let mut page = results_page_720(url, &format!("Date: {value}"));
+    let control = fastbrowse_core::models::SourceControl {
+        role: "textarea".into(),
+        label: "Date".into(),
+        context: None,
+        element: Some(element.into()),
+        document: Some(document.into()),
     };
-    assert_eq!(read("https://example.test/", "field"), Some(1));
-    assert_eq!(read("https://example.test/#details", "field"), Some(1));
-    assert_eq!(read("https://example.test/", "other"), None);
-    assert_eq!(read("https://example.test/elsewhere", "field"), None);
+    page.blocks[1].control_context = Some(control.clone());
+    let mut quote = block_evidence(&page, "s1");
+    quote.control_context = Some(control);
+    let mut notes = state.notes.clone();
+    notes.remember_capture(&page, 1);
+    notes.typed_by_step(&quote)
+}
+
+/// A step that typed into a control records the page, the document and the control the browser reported the text in,
+/// so a later read of that control, and no other, is told apart as the run's own typing (#1398). The same id in
+/// another document (a reload numbers a prefilled field the same), and a value the typing did not leave (a site's
+/// autosave replaced it), are not the run's typing.
+#[tokio::test]
+async fn test_a_fill_records_the_page_document_and_control_it_typed_into() {
+    let state = typed_run(Some("field")).await;
+    let read = |url, document, element, value| typed_by(&state, url, document, element, value);
+    assert_eq!(read("https://example.test/", "doc-1", "field", "2026-11-04"), Some(1));
+    assert_eq!(read("https://example.test/#details", "doc-1", "field", "2026-11-04"), Some(1));
+    assert_eq!(read("https://example.test/", "doc-1", "other", "2026-11-04"), None);
+    assert_eq!(read("https://example.test/elsewhere", "doc-1", "field", "2026-11-04"), None);
+    assert_eq!(read("https://example.test/", "doc-2", "field", "2026-11-04"), None);
+    assert_eq!(read("https://example.test/", "doc-1", "field", "2026-11-05"), None);
+}
+
+/// The browser moved focus to an overlay editor and typed there: the typing is the overlay's, not the requested
+/// control's, and a browser that reports no editor leaves nothing recorded.
+#[tokio::test]
+async fn test_a_fill_is_recorded_where_the_browser_reports_it_landed() {
+    let state = typed_run(Some("overlay")).await;
+    assert_eq!(typed_by(&state, "https://example.test/", "doc-1", "overlay", "2026-11-04"), Some(1));
+    assert_eq!(typed_by(&state, "https://example.test/", "doc-1", "field", "2026-11-04"), None);
+    let unreported = typed_run(None).await;
+    assert_eq!(typed_by(&unreported, "https://example.test/", "doc-1", "field", "2026-11-04"), None);
 }

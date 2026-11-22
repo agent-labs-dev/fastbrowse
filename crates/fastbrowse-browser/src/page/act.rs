@@ -445,6 +445,7 @@ impl CdpPage {
             page_changed,
             detail: Some(detail.to_owned()),
             moved: false,
+            landed: None,
         };
         let Some(last) = self.last().filter(|last| last.page_key == observation.page_key) else {
             return Ok(result(StepOutcome::Stale, false, "observation is out of date", None));
@@ -627,6 +628,12 @@ impl CdpPage {
             None => None,
         };
         let (outcome, mut detail, failure) = dispatched?;
+        let landed = match &target {
+            Some(target) if action.operation == Operation::Fill && outcome == StepOutcome::Executed => {
+                self.focused_editable(target).await
+            }
+            _ => None,
+        };
         if outcome == StepOutcome::Executed
             // The page's own script can answer for the listener, so the address is checked here too.
             && let Some(url) = held.filter(|url| url.starts_with("http://") || url.starts_with("https://"))
@@ -645,6 +652,7 @@ impl CdpPage {
                         page_changed: true,
                         detail: Some(format!("opened a new tab, now active, whose page failed to load: {error}")),
                         moved: true,
+                        landed: None,
                     });
                 }
                 Ok(()) => {}
@@ -655,6 +663,7 @@ impl CdpPage {
                 page_changed: true,
                 detail: Some("opened a new tab, now active".into()),
                 moved: true,
+                landed: None,
             });
         }
         if outcome != StepOutcome::Executed {
@@ -664,6 +673,7 @@ impl CdpPage {
                 page_changed: self.session.pending_dialog().is_some(),
                 detail,
                 moved: false,
+                landed: None,
             });
         }
         if action.operation == Operation::Click
@@ -685,6 +695,7 @@ impl CdpPage {
                 page_changed: true,
                 detail: Some("opened a new tab, now active".into()),
                 moved: true,
+                landed: None,
             });
         }
         let moved = self.moved_by_input(document);
@@ -705,7 +716,7 @@ impl CdpPage {
                 })
             });
         }
-        Ok(ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: changed, detail, moved })
+        Ok(ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: changed, detail, moved, landed })
     }
 
     /// Whether a download landed since `since`, waiting the capture's own task out briefly.
@@ -1357,6 +1368,20 @@ impl CdpPage {
             self.await_suggestions(session_id, local_id).await;
         }
         Ok((StepOutcome::Executed, None, None))
+    }
+
+    /// The editable the page holds focus in once a fill has typed, named as the observation names a control: the
+    /// field the text went to, which a page that hands focus to another editor makes a different one from the field
+    /// asked for. None when focus is in no editable of this document, or the page cannot be asked.
+    async fn focused_editable(&self, target: &Target) -> Option<String> {
+        let script = "(() => { let e = document.activeElement; \
+             while (e?.shadowRoot?.activeElement) e = e.shadowRoot.activeElement; \
+             const registry = window.__fastbrowse; \
+             if (!registry || !e || !(e.isContentEditable || ['INPUT', 'TEXTAREA'].includes(e.tagName))) return null; \
+             if (!registry.ids.has(e)) registry.ids.set(e, registry.next++); \
+             return registry.ids.get(e); })()";
+        let id = self.evaluate(&target.0, script).await.ok()?.as_i64()?;
+        Some(format!("{}:{id}", target.1))
     }
 
     /// Commit an ISO value to a native date/time input the way its own picker would.

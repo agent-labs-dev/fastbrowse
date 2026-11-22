@@ -3736,6 +3736,7 @@ mod tests {
             label: "Record B".into(),
             context: Some("right panel".into()),
             element: None,
+            document: None,
         });
         let notes = Notes::new([source]);
         let llm = RecordingLlm {
@@ -5754,15 +5755,17 @@ mod tests {
         use crate::retrieval::text::Page;
 
         let typed = "Order 49309 shipped successfully; no error code is listed.";
-        // Step 1 typed into the control `main:7` of the page `https://a.test/doc`.
-        let read = |url: &str, element: Option<&str>, taken: Option<usize>| {
-            let mut captured = capture(&[(BlockKind::Paragraph, typed)]);
+        // Step 1 typed into the control `main:7` of the document `doc-1` of the page `https://a.test/doc`.
+        let read_value = |url: &str, element: Option<&str>, document: &str, value: &str, taken: Option<usize>| {
+            let field = format!("Notes: {value}");
+            let mut captured = capture(&[(BlockKind::Paragraph, field.as_str())]);
             captured.url = url.into();
             captured.blocks[0].control_context = element.map(|element| fastbrowse_core::models::SourceControl {
                 role: "textarea".into(),
                 label: "Notes".into(),
                 context: None,
                 element: Some(element.into()),
+                document: Some(document.into()),
             });
             let page = Page::new(&captured);
             let block = &captured.blocks[0];
@@ -5772,9 +5775,11 @@ mod tests {
             if let Some(taken) = taken {
                 notes.remember_capture(&captured, taken);
             }
-            notes.remember_typing(1, "https://a.test/doc#top", "main:7");
+            notes.remember_typing(1, "https://a.test/doc#top", "doc-1", "main:7", typed);
             notes
         };
+        let read =
+            |url: &str, element: Option<&str>, taken: Option<usize>| read_value(url, element, "doc-1", typed, taken);
         let steps = [json!({"operation": "fill", "target": "Notes", "text": typed})];
         let task = "Report the order's status and error code from the document";
         let asked_for_support = |notes: Notes, rejected: Option<String>| {
@@ -5803,6 +5808,14 @@ mod tests {
             ("a prefilled control of another page", read("https://a.test/other", Some("main:7"), Some(1))),
             ("a read before the typing", read("https://a.test/doc", Some("main:7"), Some(0))),
             ("a read with no recorded step", read("https://a.test/doc", Some("main:7"), None)),
+            (
+                "the same id in a reloaded document",
+                read_value("https://a.test/doc", Some("main:7"), "doc-2", typed, Some(1)),
+            ),
+            (
+                "a value the site replaced",
+                read_value("https://a.test/doc", Some("main:7"), "doc-1", "Order 49309 failed: E42.", Some(1)),
+            ),
         ] {
             let (_, asked) = asked_for_support(notes, None).await;
             assert!(!asked.contains_key("claim0"), "{case}");
