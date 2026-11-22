@@ -1416,6 +1416,7 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
                     "requested" => self.requested,
                     "lasting" => self.lasting,
                     "conditional" | "prohibits" | "forbidden" => 0.0,
+                    // A drafted answer states what the task asks, so a run that reads one can finish.
                     "coverage" | "exact" => 1.0,
                     "edits" => {
                         self.edits_asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1848,6 +1849,63 @@ async fn test_the_condition_check_reads_the_masked_page_and_the_request_check_ne
     assert!(second["dialog"]["message"].as_str().is_some_and(|m| m.starts_with("Reply saved for")), "{second}");
     assert!(!second.to_string().contains("hunter2"), "{second}");
     assert_eq!(second["task"], run_task());
+}
+
+/// A thread's Post after a top-level Post that changed nothing was refused as already done (#881): the earlier step
+/// read only "click Post". The condition check is told which form each earlier submission sent beside the one now
+/// asked about, and what it held.
+#[tokio::test]
+async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([("irreversible", 0.95), ("requested", 0.97), ("lasting", 0.95), ("conditional", 0.1)]),
+        chosen: IndexMap::from([("values", "first"), ("met", "asked")]),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Reply under the comment by Syrberus with 'Thanks for the log', then click Post once.".into();
+    state.authorization = Authorization { irreversible_actions: true };
+    state.commits = 1;
+    let in_form = |control: Control, form: &str| Control { form_id: Some(form.into()), ..control };
+    let comment = in_form(Control::new("c", "textbox", "Comment text area", [Operation::Fill]), "top");
+    let top = in_form(Control { id: "top-post".into(), ..button("Post") }, "top");
+    let mut text = in_form(Control::new("r", "textbox", "Comment text area", [Operation::Fill]), "reply");
+    text.value = Some("Thanks for the log".into());
+    let post = in_form(button("Post"), "reply");
+    let controls = [comment, top.clone(), text, post.clone()];
+    let page = observation(&controls);
+    assert_eq!(crate::policy::Submitted::of(Operation::Fill, &controls[2], &page), None, "a fill submits nothing");
+    // Form ids are numbered per document: the same id on another page is another form.
+    let elsewhere = Observation { document_key: "later-document".into(), ..page.clone() };
+    for (target, seen) in [(&top, &page), (&post, &page), (&post, &elsewhere)] {
+        state.history.push(HistoryEntry {
+            submitted: crate::policy::Submitted::of(Operation::Click, target, seen),
+            ..executed(Some(Operation::Click), Some("Post"), false)
+        });
+    }
+    let decision = code_decision(Operation::Click, Some(post));
+    agent.gate_irreversible(&mut state, &page, &decision).await.expect("the reply is asked for");
+    let asked = jev.asked.lock().unwrap();
+    let actions = &asked[1].0["recent_actions"];
+    assert_eq!(
+        actions[0]["form"],
+        "a different form from the one the action now asked about submits; the observation recorded no field values"
+    );
+    assert_eq!(
+        actions[1]["form"],
+        "the same form the action now asked about submits; in it, 'Comment text area' holds 'Thanks for the log'"
+    );
+    assert!(actions[2]["form"].as_str().is_some_and(|form| form.starts_with("a different form")), "{actions}");
+    let mut password = in_form(Control::new("p", "textbox", "Password", [Operation::Fill]), "top");
+    (password.sensitive, password.value) = (true, Some("hunter2".into()));
+    let signed = observation(&[password, top.clone()]);
+    let masked = crate::policy::Submitted::of(Operation::Click, &top, &signed).expect("a submission");
+    let told = HistoryEntry { submitted: Some(masked), ..executed(Some(Operation::Click), Some("Post"), false) }
+        .shown_beside(Some(&top), &signed);
+    assert_eq!(
+        told["form"],
+        "the same form the action now asked about submits; in it, 'Password' holds a masked value"
+    );
 }
 
 fn run_task() -> &'static str {
@@ -3554,6 +3612,80 @@ async fn test_a_field_already_holding_the_lines_still_offers_items_set_out_as_li
     );
 }
 
+/// Records each request's state and composes every read.
+#[derive(Default)]
+struct ReadsRecorded(Mutex<Vec<serde_json::Value>>);
+
+impl DecisionClient for ReadsRecorded {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.0.lock().unwrap().push(state.clone());
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let answer = match question {
+                    Question::Choice(_) => Answer::Choice(ChoiceAnswer {
+                        kind: Default::default(),
+                        choice: "synthesis".into(),
+                        probabilities: IndexMap::from([("synthesis".to_string(), 1.0)]),
+                        confidence: 1.0,
+                    }),
+                    _ => Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.5 }),
+                };
+                (key.clone(), answer)
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+/// Asked for the title of the page "Learn more" leads to, Jev read the help page the run reached as a list of reserved
+/// domains and picked a heading in it (#1174): the read was shown the page alone. A read of a page the run navigated to
+/// is told the action that led there and the page it was taken on.
+#[tokio::test]
+async fn test_a_read_is_told_how_the_run_reached_the_page() {
+    let jev = Arc::new(ReadsRecorded::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let help = at("https://www.iana.org/help/example-domains", &[]);
+    let page = capture(&[(BlockKind::Paragraph, "Example Domains")]);
+    agent.read(&mut state, page.clone(), &help, true).await.unwrap();
+    state.history.push(executed(Some(Operation::Click), Some("Learn more"), true));
+    state.acted_from = Some(at("https://example.com/", &[]));
+    agent.note_effect(&mut state, &help);
+    state.read_documents.clear();
+    agent.read(&mut state, page, &help, true).await.unwrap();
+    let reads = jev.0.lock().unwrap();
+    assert_eq!(reads[0].get("page_reached_by"), None, "a page the run did not navigate to");
+    assert_eq!(reads.last().unwrap()["page_reached_by"], "click 'Learn more' on https://example.com/");
+}
+
+/// A click that went stale dispatched nothing, so a page that arrived after it was not reached by it.
+#[tokio::test]
+async fn test_a_read_is_not_told_a_step_that_dispatched_nothing_reached_the_page() {
+    let jev = Arc::new(ReadsRecorded::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let help = at("https://www.iana.org/help/example-domains", &[]);
+    state.history.push(HistoryEntry {
+        outcome: StepOutcome::Stale,
+        ..executed(Some(Operation::Click), Some("Learn more"), true)
+    });
+    state.acted_from = Some(at("https://example.com/", &[]));
+    agent.note_effect(&mut state, &help);
+    agent.read(&mut state, capture(&[(BlockKind::Paragraph, "Example Domains")]), &help, true).await.unwrap();
+    assert_eq!(jev.0.lock().unwrap()[0].get("page_reached_by"), None);
+}
+
 #[tokio::test]
 async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
     let field = "Capacity: 12";
@@ -3745,6 +3877,55 @@ async fn an_absent_read_marks_the_page_at_once() {
     agent.read(&mut state, capture(&[(BlockKind::Paragraph, "Trains run hourly.")]), &seen, false).await.unwrap();
     assert!(Agent::page_read(&state, &seen), "a read that found nothing for the task finished");
     assert_eq!(Agent::reads_before_leaving(&state, &seen, &code_decision(Operation::Click, None)), None);
+}
+
+/// On example.com, asked for the title of the page "Learn more" opens, the step judged the start page to show a fact the
+/// task needs, the link to follow, so its read was not offered absent and, made to pick, took "Learn more" as the title
+/// (#1174). The read says instead that the page holds a fact for the steps and nothing that answers the task: the page
+/// is read and its text kept in the notes the steps see, answering nothing.
+#[tokio::test]
+async fn a_page_holding_only_a_fact_for_the_steps_is_read_as_no_answer() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "steps")])), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let start = read_document();
+    let page = capture(&[
+        (BlockKind::Paragraph, "This domain is for use in documentation examples."),
+        (BlockKind::Paragraph, "Learn more"),
+    ]);
+    assert!(agent.read(&mut state, page, &start, true).await.unwrap(), "the page's text is new evidence");
+    assert!(Agent::page_read(&state, &start), "the read finished");
+    assert!(!state.notes.answered());
+    assert!(!state.compose, "nothing is written from a page that answers nothing");
+    assert!(state.notes.facts().iter().any(|fact| fact.text == "Learn more"), "the steps still see the link");
+    assert_eq!(state.read_note(), "Read this content. The notes hold nothing that answers the task.");
+    // A fill can type what such a page holds, as a sign-in code shown on a Phone page.
+    let read = agent.value(&state, &field("Code")).sources.get(super::acting::IN_READ).map(ToString::to_string);
+    assert!(read.is_some_and(|read| read.contains("Learn more")));
+}
+
+/// A page kept for the steps is kept whole, so what a fill could type from it may be longer than one decision request
+/// holds; it is then offered by its ends, and a fact a later read replaced is not offered at all.
+#[tokio::test]
+async fn a_fill_offers_a_long_read_by_its_ends_and_never_a_replaced_fact() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "steps")])), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let long = "word ".repeat(400_000);
+    let page = capture(&[(BlockKind::Paragraph, "Your code is 4821"), (BlockKind::Paragraph, long.trim())]);
+    state.step_pages.insert(page.sha256.clone());
+    for fact in crate::retrieval::whole_page_facts(&page) {
+        state.notes.add(fact);
+    }
+    let offered = |state: &RunState| agent.value(state, &field("Code")).sources[super::acting::IN_READ].to_string();
+    let read = offered(&state);
+    assert!(read.contains("Your code is 4821") && read.contains("words ...]"));
+    assert!(read.chars().count() < 1000, "offered by its ends, not whole");
+    // The page read again holds a new code, which replaces the one it showed before.
+    agent
+        .read(&mut state, capture(&[(BlockKind::Paragraph, "Your code is 7310")]), &read_document(), true)
+        .await
+        .unwrap();
+    let read = offered(&state);
+    assert!(read.contains("7310") && !read.contains("4821"), "{read}");
 }
 
 #[tokio::test]
@@ -4673,6 +4854,23 @@ async fn test_text_and_image_cannot_finish_without_text_evidence() {
     assert!(
         matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Unverified && stop.error.as_deref().is_some_and(|error| error.contains("Nothing read so far answers")))
     );
+}
+
+/// A read that kept only a fact for the steps leaves notes that answer nothing, so DONE there is a step short of the
+/// answer, as DONE on nothing read is: a run ended complete with no answer on the page it was told to leave (#1174).
+#[tokio::test]
+async fn test_done_on_notes_that_answer_nothing_is_not_finished() {
+    let page = Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false, false);
+    let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let seen = observation(&[]);
+    let reader = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "steps")])), Arc::new(ScriptedLLM));
+    let start = capture(&[(BlockKind::Paragraph, "Learn more")]);
+    reader.read(&mut state, start, &seen, true).await.unwrap();
+    assert!(!state.notes.facts().is_empty() && !state.notes.answered());
+    let result = agent.finish(&mut state, &seen, None, None).await;
+    assert!(matches!(result, Ok(None)), "the run goes on: {result:?}");
 }
 
 /// A hover only shows what is under the pointer, as a scroll shows what is below: a gallery run that hovered an image

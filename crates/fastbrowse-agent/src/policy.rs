@@ -192,6 +192,9 @@ pub struct HistoryEntry {
     /// judged not to have made the text bold, and pressed Bold again.
     #[serde(skip)]
     pub look: Option<Look>,
+    /// The form the step submitted, kept out of what models are shown but for a question about another submission.
+    #[serde(skip)]
+    pub submitted: Option<Submitted>,
     /// The commit the step sent, if it sent one: a run that posted two replies and then stopped reported both as typed
     /// but unsent. Kept out of what models are shown: it is the run's own record.
     #[serde(skip)]
@@ -238,6 +241,62 @@ pub enum Commit {
     Taken,
 }
 
+/// The form a step submitted, and what its other fields held as it went.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Submitted {
+    /// The document the form was in: form ids are numbered per document, so the same id on another page is another form.
+    document: (String, String),
+    frame_id: Option<String>,
+    form_id: String,
+    held: Vec<String>,
+}
+
+impl Submitted {
+    /// The form `operation` on `target` submits in `observation`; None for a step that submits no form. A field
+    /// Enter submits from is among what the form held.
+    pub fn of(operation: Operation, target: &Control, observation: &Observation) -> Option<Submitted> {
+        let form_id = target.form_id.clone().filter(|_| fastbrowse_core::safety::submits(operation, target))?;
+        let own = target
+            .value
+            .as_deref()
+            .filter(|value| !value.is_empty() && !target.sensitive && target.role != "button")
+            .map(|value| format!("{} holds {}", text::repr(&target.label), text::repr(value)));
+        // A masked field is said to hold a value without the value, so a form whose only entry was a password is not
+        // told as empty.
+        let masked = observation.controls.iter().filter(|c| {
+            c.sensitive
+                && c.value.as_deref().is_some_and(|value| !value.is_empty())
+                && (&c.frame_id, &c.form_id) == (&target.frame_id, &target.form_id)
+        });
+        let held = own
+            .into_iter()
+            .chain(fastbrowse_core::safety::form_held(target, &observation.controls))
+            .chain(masked.map(|c| format!("{} holds a masked value", text::repr(&c.label))))
+            .collect();
+        Some(Submitted {
+            document: (observation.url.clone(), observation.document_key.clone()),
+            frame_id: target.frame_id.clone(),
+            form_id,
+            held,
+        })
+    }
+
+    /// Which form this was beside the one `target` submits, and what it held.
+    fn told(&self, target: Option<&Control>, observation: &Observation) -> String {
+        let same = (&observation.url, &observation.document_key) == (&self.document.0, &self.document.1)
+            && target.is_some_and(|t| (&t.frame_id, t.form_id.as_ref()) == (&self.frame_id, Some(&self.form_id)));
+        let which = match same {
+            true => "the same form the action now asked about submits",
+            false => "a different form from the one the action now asked about submits",
+        };
+        // The observation can omit fields in the submitted form, so no recorded values is not proof of emptiness.
+        match self.held.is_empty() {
+            true => format!("{which}; the observation recorded no field values"),
+            false => format!("{which}; in it, {}", self.held.join("; ")),
+        }
+    }
+}
+
 /// What the place a step acted on looked like: the card the decision saw and, for a click placed in pixels, the same
 /// place after it. A click inside a drawn surface changes nothing but its picture, and the card from before shows the
 /// map's Library pin unselected: shown that card alone, the step after the right click put done at 0.2 and clicked the
@@ -272,6 +331,7 @@ impl HistoryEntry {
             set: Vec::new(),
             for_step: None,
             look: None,
+            submitted: None,
             commit: None,
             form: None,
         }
@@ -284,6 +344,18 @@ impl HistoryEntry {
         let mut shown = self.dump_exclude_none();
         if let (Some(step), Some(target)) = (&self.for_step, &self.target) {
             shown["target"] = format!("{target}, for the task step {step:?}").into();
+        }
+        shown
+    }
+
+    /// The entry as shown to a question about submitting `target`'s form: a submission says which form it sent and
+    /// what that held. Shown only "click Post" with the page unchanged after the run had pressed the empty top-level
+    /// Post, Jev judged a thread's reply already posted, 0.6 to 0.4, and refused it; told the Post sent another,
+    /// empty form, it judged the reply asked for (#881).
+    pub fn shown_beside(&self, target: Option<&Control>, observation: &Observation) -> Value {
+        let mut shown = self.shown();
+        if let Some(submitted) = &self.submitted {
+            shown["form"] = submitted.told(target, observation).into();
         }
         shown
     }
