@@ -34,7 +34,7 @@ pub const ALLOWED_METHODS: &str = include_str!("../../extension/allowed-methods.
 /// The extension version that relays every method [`required_methods`] names. The extension reaches users from the
 /// Chrome Web Store, on the Store's review schedule, while a fastbrowse release reaches them from PyPI hours after a
 /// tag: the two drift unless a release is held, so a run names this version when the browser's copy is older.
-pub const MIN_EXTENSION_VERSION: &str = "0.1.1";
+pub const MIN_EXTENSION_VERSION: &str = "0.1.2";
 
 /// Methods a run sends best-effort, which an older copy lacks and the run still works without. Each is logged as a
 /// warning when the extension does not relay it, never a reason to refuse the run before it starts.

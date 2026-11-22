@@ -705,7 +705,7 @@ mod tests {
     fn an_old_store_copy_names_the_required_extension_before_the_run() {
         let error = validate_hello(&json!({"protocol": PROTOCOL})).unwrap_err().to_string();
         assert!(error.contains("version not reported"));
-        assert!(error.contains("extension 0.1.1 or newer"));
+        assert!(error.contains("extension 0.1.2 or newer"));
         assert!(!error.contains("does not relay DOM"));
         let error = validate_hello(&json!({
             "protocol": PROTOCOL, "extensionVersion": "0.1.0", "methods": null
