@@ -39,6 +39,7 @@ async fn proxy_url_credentials_are_sent_on_each_matching_tunnel() {
                 body: Vec::new(),
                 timeout: Duration::from_secs(5),
                 max_bytes: None,
+                handoff: Default::default(),
             })
             .await;
     }

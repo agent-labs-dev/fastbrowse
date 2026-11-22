@@ -360,8 +360,7 @@ class Cassette:
     """Every exchange of one task, in the order the responses arrived.
 
     A cassette file is plain JSONL, so a diff shows which exchanges a change added or dropped. The order is kept, not
-    sorted: the same request is served its responses in recorded order, and the newest exchange names the port the
-    fixture is served on (`fixture_port`).
+    sorted: the same request is served its responses in recorded order.
     """
 
     task: str
@@ -374,20 +373,6 @@ class Cassette:
         lines = [json.dumps(head, sort_keys=True)]
         lines.extend(json.dumps(exchange.to_json(), ensure_ascii=False) for exchange in self.exchanges)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    def fixture_port(self) -> int | None:
-        """The port to serve the fixture on so a replay sends the requests this cassette recorded.
-
-        A note id digests its page address, port included, which the key's port placeholder cannot reach. Each fill
-        pass appends its whole note-citing tail at its own port, so the newest exchange's port reproduces the current
-        pass. A cassette with no per-exchange origin falls back to the port its head records.
-        """
-        for exchange in reversed(self.exchanges):
-            if exchange.fixture_origin:
-                with contextlib.suppress(ValueError):
-                    return int(exchange.fixture_origin.rsplit(":", 1)[1])
-        port = self.meta.get("recorded_port", self.meta.get("port"))
-        return port if isinstance(port, int) and 0 < port <= 65535 else None
 
     @staticmethod
     def is_cassette(path: Path) -> bool:

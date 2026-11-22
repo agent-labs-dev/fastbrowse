@@ -6,7 +6,7 @@
 
 use fastbrowse_core::decision::DecisionError;
 use fastbrowse_core::llm::LLMError;
-use fastbrowse_core::models::MaybeUnavailable;
+use fastbrowse_core::models::{FailureKind, MaybeUnavailable};
 use fastbrowse_core::telemetry::BudgetExceeded;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -44,6 +44,19 @@ impl From<LLMError> for AgentError {
         match error {
             LLMError::Budget(budget) => AgentError::Budget(budget),
             other => AgentError::Llm(other),
+        }
+    }
+}
+
+impl FailureKind for AgentError {
+    fn failure_kind(&self) -> String {
+        match self {
+            AgentError::Jev(error) => format!("Jev.{}", error.failure_kind()),
+            AgentError::Llm(error) => format!("Llm.{}", error.failure_kind()),
+            AgentError::Budget(exceeded) => exceeded.failure_kind(),
+            AgentError::ObservationTooLarge(_) => "ObservationTooLarge".into(),
+            AgentError::NotesTooLarge(_) => "NotesTooLarge".into(),
+            AgentError::Invalid(_) => "Invalid".into(),
         }
     }
 }

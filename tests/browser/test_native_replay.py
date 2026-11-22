@@ -7,7 +7,9 @@ passes depends on timing and is a benchmark measurement, so only the tasks in PA
 pass.
 """
 
+import errno
 import os
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -74,9 +76,30 @@ async def test_a_recorded_task_replays_without_a_miss(task: BenchTask, tmp_path:
     if "FASTBROWSE_REPLAY_MISSES" in os.environ:
         # The refill workflow reads the missed task ids from these files, never from this output.
         record_misses(Path(os.environ["FASTBROWSE_REPLAY_MISSES"]), task.id, entry["misses"])
-    assert entry["fixture_port_fallback"] is None, "fixture port taken, environmental, rerun"
     assert entry["misses"] == [], _misses(entry)
     if task.id in PASSING:
         assert entry["result"]["grade"]["passed"], entry["result"]
     if task.id == "table-extract":
         assert entry["result"]["data"] == {"city": "Lyon", "population": 522250}
+
+
+@pytest.mark.timeout(300)
+async def test_a_replay_does_not_need_the_port_it_was_recorded_on(tmp_path: Path) -> None:
+    """A replay bound the cassette's recorded fixture port, an ephemeral one another socket on a CI runner sometimes
+    held, and failed the job (#675, #1285). Note ids are numbered in the request key and swapped back into the
+    response, so a task whose requests cite notes replays with that port taken."""
+    task = next(task for task in corpus() if task.id == "mock-long-description")
+    cassette = Cassette.load(CASSETTES / f"{task.id}.jsonl")
+    origin = next(e.fixture_origin for e in reversed(cassette.exchanges) if e.fixture_origin)
+    with socket.socket() as held:
+        try:
+            held.bind(("127.0.0.1", int(origin.rsplit(":", 1)[1])))
+            held.listen()
+        except OSError as exc:
+            # Another socket already holds the port, which is the condition under test.
+            if exc.errno != errno.EADDRINUSE:
+                raise
+        entry = await replayed(task, tmp_path)
+    assert entry["fixture_origin"] != origin
+    assert entry["misses"] == [], _misses(entry)
+    assert entry["result"]["grade"]["passed"], entry["result"]

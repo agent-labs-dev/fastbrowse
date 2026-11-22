@@ -1,14 +1,9 @@
 import dataclasses
-import errno
-import gc
 import hashlib
 import json
 import re
-import socket
 import threading
-import warnings
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import httpx
@@ -17,17 +12,14 @@ import pytest
 from fastbrowse.evals import bench
 from fastbrowse.evals.bench import (
     BenchTask,
-    _serve,
     agent_environment,
     compare_runs,
     corpus,
-    fixture_site,
     load_run,
     priced,
     run_dollars,
     run_params,
 )
-from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.replay import (
     BUDGET_STATUS,
     EMBEDDED_JSON,
@@ -278,7 +270,6 @@ def test_a_fill_pass_a_provider_refused_leaves_the_cassette_as_it_was(
             proxy.answer(JEV, json.dumps(question).encode())
         return {
             "task": task.id,
-            "fixture_port_fallback": None,
             "metrics": {"wall_s": 1.0, "cpu_s": 0.0, "rss_bytes": 0, "steps": 0},
             "result": {"status": "error", "grade": {"passed": False, "failure": "refused"}},
             "misses": [miss.to_json() for miss in proxy.misses],
@@ -699,95 +690,21 @@ def test_an_unpriced_exchange_is_counted_and_a_partial_run_cost_is_not_a_cost() 
     assert run_dollars(CostBreakdown(lines=(metered,))) == 0.25
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
-def _port(origin: str) -> int:
-    return int(origin.rsplit(":", 1)[1])
-
-
-def _suite_task(suite: str) -> BenchTask:
-    return next(task for task in corpus() if task.suite == suite)
-
-
-def test_fixture_port_is_the_newest_exchange_origin() -> None:
-    a, b = 40001, 40002
-    exchanges = [
-        _exchange(JEV, {"q": 1}, "{}"),
-        dataclasses.replace(_exchange(JEV, {"q": 2}, "{}"), fixture_origin=f"http://127.0.0.1:{a}"),
-        dataclasses.replace(_exchange(JEV, {"q": 3}, "{}"), fixture_origin=f"http://127.0.0.1:{b}"),
-        _exchange(JEV, {"q": 4}, "{}"),
-    ]
-    assert Cassette(task="t", exchanges=exchanges, meta={"port": 47312}).fixture_port() == b
-    assert Cassette(task="t", exchanges=exchanges[:1], meta={"port": 47312}).fixture_port() == 47312
-    assert Cassette(task="t", meta={"recorded_port": 47313, "port": 47312}).fixture_port() == 47313
-    assert Cassette(task="t", exchanges=exchanges[:1]).fixture_port() is None
-
-
-@pytest.mark.parametrize("suite", ["local", "mock"])
-def test_fixture_site_binds_the_given_port(suite: str) -> None:
-    port = _free_port()
-    with fixture_site(_suite_task(suite), "http://127.0.0.1:9", port=port) as (base_url, _):
-        assert _port(base_url) == port
-
-
-@pytest.mark.parametrize("suite", ["local", "mock"])
-def test_fixture_site_falls_back_and_warns_when_the_port_is_taken(
-    suite: str, capsys: pytest.CaptureFixture[str]
-) -> None:
-    with socket.socket() as held:
-        held.bind(("127.0.0.1", 0))
-        held.listen()
-        port = held.getsockname()[1]
-        with fixture_site(_suite_task(suite), "http://127.0.0.1:9", port=port) as (base_url, _):
-            assert _port(base_url) != port
-    assert str(port) in capsys.readouterr().err
-
-
-def test_a_bind_error_other_than_a_taken_port_is_raised() -> None:
-    @contextmanager
-    def refused(port: int):
-        if port:
-            raise OSError(errno.EACCES, "permission denied")
-        yield "http://127.0.0.1:1", None
-
-    with ExitStack() as stack, pytest.raises(PermissionError):
-        _serve(_suite_task("local"), refused, _free_port(), stack)
-
-
-def test_fixture_server_releases_its_port() -> None:
-    """The next fill pass rebinds the same port at once, so the socket is closed on exit, not left to finalizers."""
-    port = _free_port()
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", ResourceWarning)
-        for _ in range(2):
-            with fixture_server(port) as (base_url, _):
-                assert _port(base_url) == port
-        gc.collect()
-    assert not [w for w in caught if issubclass(w.category, ResourceWarning)]
-
-
-def test_a_note_citing_request_hits_when_the_bench_binds_the_cassette_port() -> None:
-    """A note id digests its page address, port included, which the key's port placeholder cannot reach."""
+def test_a_note_citing_request_hits_on_a_port_other_than_the_recorded_one() -> None:
+    """A note id digests its page address, port included. The request key numbers those digests and the proxy swaps
+    the requested ones into the recorded response, so a replay serves its site on any free port (#675, #1285)."""
 
     def note(origin: str) -> dict[str, str]:
         address = hashlib.sha256(f"{origin}/shop.html".encode()).hexdigest()[:16]
-        return {"note": f"[9c20:0:12:{address}] quote=Your account"}
+        return {"note": f"[{'c' * 64}:0:12:{address}] quote=Your account"}
 
-    stale, recorded = _free_port(), _free_port()
-    cassette = Cassette(task="t", meta={"port": stale})
-    for origin in (f"http://127.0.0.1:{stale}", f"http://127.0.0.1:{recorded}"):
-        exchange = _exchange(JEV, note(origin), '{"ok": true}')
-        cassette.exchanges.append(dataclasses.replace(exchange, fixture_origin=origin))
-    cassette.exchanges.pop(0)
-    assert request_key(JEV, note(f"http://127.0.0.1:{_free_port()}")) != cassette.exchanges[0].key
-
-    with fixture_site(_suite_task("local"), "http://127.0.0.1:9", port=cassette.fixture_port() or 0) as (base, _):
-        proxy = Proxy(cassette)
-        proxy.set_fixture_origin(base)
-        with proxy as proxy_url:
-            response = _post(proxy_url, JEV, note(base))
+    recorded, requested = "http://127.0.0.1:40001", "http://127.0.0.1:40002"
+    cassette = Cassette(task="t", meta={"port": 40001})
+    exchange = _exchange(JEV, note(recorded), json.dumps(note(recorded)))
+    cassette.exchanges.append(dataclasses.replace(exchange, fixture_origin=recorded))
+    proxy = Proxy(cassette)
+    proxy.set_fixture_origin(requested)
+    with proxy as proxy_url:
+        response = _post(proxy_url, JEV, note(requested))
     assert response.status_code == 200 and proxy.misses == []
+    assert response.json() == note(requested)

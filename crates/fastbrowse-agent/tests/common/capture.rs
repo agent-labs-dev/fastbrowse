@@ -489,12 +489,17 @@ impl LLMClient for KeyedLLM<'_> {
             let response = &call["response"];
             let message = response["message"].as_str().unwrap_or_default().to_string();
             match response["error"].as_str() {
-                Some("llm_retries_exhausted") => return Err(LLMError::RetriesExhausted(message)),
+                Some("llm_retries_exhausted") => {
+                    return Err(LLMError::RetriesExhausted(fastbrowse_core::llm::Fault::new(
+                        fastbrowse_core::llm::FaultClass::Transport,
+                        message,
+                    )));
+                }
                 Some("budget") => return Err(LLMError::Budget(budget(&message))),
-                Some(_) => return Err(LLMError::Failed(message)),
+                Some(_) => return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, message)),
                 None => {}
             }
-            let data = schema.validate_json(&dumps(&response["data"])).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&dumps(&response["data"])).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: parse(&response["cost"]) })
         })
     }
