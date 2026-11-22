@@ -1524,15 +1524,6 @@ impl CdpPage {
         {
             return Err(BrowserError::OriginNotAllowed);
         }
-        // Opening the address the tab is already on, fragment included, is a same-document navigation: Chrome
-        // keeps the document, so a reload meant to show what the site serves now never reached the site. The
-        // address without its fragment is a new document, and the fragment is then reached below as ordinary
-        // same-document navigation.
-        if let Some((document, _)) = url.split_once('#')
-            && self.address().await.is_ok_and(|current| current == url)
-        {
-            Box::pin(self.navigate_within(document, load_timeout_seconds, back_to)).await?;
-        }
         let mut session_id = self.session.active_session_id()?;
         if self.session.client()?.wedged(&session_id).await {
             // Page.navigate to a hung renderer waits behind its script, so the page is opened in a fresh tab whose
@@ -1554,6 +1545,24 @@ impl CdpPage {
                 None => state.back_to.remove(&session_id),
                 Some(back_to) => state.back_to.insert(session_id.clone(), back_to.to_owned()),
             };
+        }
+        // Page.navigate to the address the tab is on, fragment included, is a same-document navigation: Chrome keeps
+        // the document, so a reload meant to show what the site serves never reached it. The page reloads itself
+        // instead, which keeps the fragment for the scripts that read it as the document starts. Page.reload is not
+        // used because the Chrome extension relays only the methods its published versions list.
+        if url.contains('#') && self.address().await.is_ok_and(|current| current == url) {
+            let mark = self.session.lifecycle_mark();
+            // The document being replaced drops its context, so the reply may be an error.
+            let _ = self.evaluate(&session_id, "location.reload()").await;
+            self.session.wait_for_lifecycle(mark, load_timeout_seconds).await;
+            if self.ready(&session_id, load_timeout_seconds).await? {
+                let _ = self.changed_since("", None).await;
+                return Ok(());
+            }
+            return Err(BrowserError::NavigationTimeout(Failure::new(
+                "Page.reload/TimeoutError",
+                format!("Page.reload timed out for {url}"),
+            )));
         }
         // A cloud browser's proxy drops a first connection now and then, or leaves a document loading, and a run that
         // never started was scored as a failed task. Chrome's error names (net::ERR_...) carry no page content, so
