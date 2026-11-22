@@ -897,3 +897,45 @@ def test_capture_document_title_kind_crosses_the_python_model_boundary() -> None
     assert capture.blocks[0].kind is BlockKind.DOCUMENT_TITLE
     assert capture.blocks[0].heading_path == ()
     assert Capture.model_validate_json(capture.model_dump_json()).blocks == capture.blocks
+
+
+def test_the_entry_passes_the_running_launchers_resolved_path_as_identity_and_keeps_the_command_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real = tmp_path / "install-b" / "fastbrowse"
+    real.parent.mkdir()
+    real.write_text("")
+    real.chmod(0o755)
+    renamed = tmp_path / "bin" / "fb-entry"
+    renamed.parent.mkdir()
+    renamed.symlink_to(real)
+    passed: list[tuple[str, object]] = []
+
+    class Core:
+        @staticmethod
+        def cli_main(program: str, *_: object, identity: object = None, **__: object) -> int:
+            passed.append((program, identity))
+            return 0
+
+    real_import = native.importlib.import_module
+    monkeypatch.setattr(
+        native.importlib, "import_module", lambda name: Core if name == "fastbrowse._native" else real_import(name)
+    )
+    monkeypatch.setattr(native.build, "identity", lambda: {"git_sha": "x", "git_dirty": False})
+    monkeypatch.setattr(native.build, "install_facts", lambda: {})
+    monkeypatch.setattr(native.signal, "signal", lambda *_: None)
+
+    def run(argv0: str, *, module: bool = False, program: str = "fastbrowse") -> tuple[str, object]:
+        monkeypatch.setattr(sys, "argv", [argv0, "extension", "uninstall"])
+        monkeypatch.setattr(sys.modules["__main__"], "__spec__", object() if module else None, raising=False)
+        with pytest.raises(SystemExit):
+            native.command(program)
+        return passed[-1]
+
+    # A symlink under another name is the file it points to: the name is never looked up.
+    assert run(str(renamed)) == ("fastbrowse", str(real.resolve()))
+    assert run(str(real)) == ("fastbrowse", str(real.resolve()))
+    # The command is chosen by the program name, so a renamed MCP entry still runs MCP.
+    assert run(str(renamed), program="fastbrowse-mcp") == ("fastbrowse-mcp", str(real.resolve()))
+    # Run as a module (`python -m`), no script is known: there is no identity.
+    assert run(str(tmp_path / "__main__.py"), module=True) == ("fastbrowse", None)
