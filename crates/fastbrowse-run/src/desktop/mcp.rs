@@ -36,6 +36,10 @@ struct Pipe {
     /// None once the client is closed: the server reads end of input and exits.
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
+    /// The bytes of a line read so far. A call abandoned partway through a line, by its timeout or by the run being
+    /// cancelled, left them in a buffer local to the call, and the next call began mid-line and failed as "not JSON"
+    /// (#1401); kept here, the next read finishes the line instead.
+    partial: Vec<u8>,
     next_id: u64,
 }
 
@@ -89,6 +93,7 @@ impl Deskpilot {
         let pipe = Pipe {
             stdin: Some(child.stdin.take().expect("stdin is piped")),
             stdout: BufReader::new(child.stdout.take().expect("stdout is piped")),
+            partial: Vec::new(),
             next_id: 0,
         };
         let mut client = Deskpilot {
@@ -162,17 +167,24 @@ impl Deskpilot {
         let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         write_line(pipe.stdin.as_mut(), &request).await?;
         let read = async {
-            let mut line = String::new();
+            let Pipe { stdout, partial, .. } = &mut *pipe;
             loop {
-                line.clear();
-                let read = pipe.stdout.read_line(&mut line).await;
-                match read {
+                // `read_until` is cancel safe: what it read before a cancellation stays in `partial`.
+                match stdout.read_until(b'\n', partial).await {
                     Ok(0) => return Err(ToolError::Transport("deskpilot mcp exited".into())),
                     Err(error) => return Err(ToolError::Transport(format!("reading deskpilot mcp: {error}"))),
+                    Ok(_) if partial.last() != Some(&b'\n') => {
+                        return Err(ToolError::Transport("deskpilot mcp exited partway through a line".into()));
+                    }
                     Ok(_) => {}
                 }
-                let message: Value = serde_json::from_str(&line).map_err(|error| {
-                    ToolError::Transport(format!("deskpilot mcp sent a line that is not JSON: {error}"))
+                let line = std::mem::take(partial);
+                // The line itself is the evidence of which side wrote it, so the error quotes it whole.
+                let message: Value = serde_json::from_slice(&line).map_err(|error| {
+                    ToolError::Transport(format!(
+                        "deskpilot mcp sent a line that is not JSON ({error}): {}",
+                        String::from_utf8_lossy(&line).trim_end()
+                    ))
                 })?;
                 // Notifications and log messages carry no id; only this request's reply ends the wait.
                 if message.get("id").and_then(Value::as_u64) != Some(id) {
