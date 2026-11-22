@@ -1322,6 +1322,7 @@ impl Agent {
             .ok_or_else(|| self.missing(state, observation, target))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn copy_read_window(
         &self,
         state: &mut RunState,
