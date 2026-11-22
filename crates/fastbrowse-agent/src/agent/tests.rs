@@ -23,12 +23,12 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::json;
 
-use super::Agent;
 use super::acting::{Carried, IN_RECORD};
 use super::driving::edit_progress;
 use super::helpers::{describe, doing, read_sources, unsent_fact};
 use super::state::Written;
 use super::state::{Edits, Extent, FailureCause, Flow, RunState, SiteFailure};
+use super::{Agent, Outcome};
 use crate::memory::{Fact, Notes};
 use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::testing::capture;
@@ -91,6 +91,31 @@ impl Page for NoPage {
 
 fn agent() -> Agent {
     Agent::new(Arc::new(NoPage), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
+}
+
+#[test]
+fn result_normalizes_evidence_to_the_latest_capture() {
+    let read = |sha: &str, start: u32, at: &str| {
+        serde_json::from_value(json!({
+            "source_id": "main/:76", "url": "https://example.test/#/edit", "frame_id": null, "captured_at": at,
+            "capture_sha256": sha, "start": start, "end": start + 14, "quote": "Save: disabled",
+        }))
+        .unwrap()
+    };
+    let result = agent().result(
+        None,
+        &Ledger::new(Limits::default()),
+        Status::Complete,
+        Outcome {
+            evidence: vec![
+                read("after-reload", 17234, "2026-11-21T20:30:12Z"),
+                read("before-edit", 17198, "2026-11-21T20:29:37Z"),
+            ],
+            ..Outcome::default()
+        },
+    );
+    assert_eq!(result.evidence.len(), 1);
+    assert_eq!(result.evidence[0].capture_sha256, "after-reload");
 }
 
 #[tokio::test]
@@ -11664,3 +11689,6 @@ async fn test_a_fill_is_recorded_where_the_browser_reports_it_landed() {
     let unreported = typed_run(None).await;
     assert_eq!(typed_by(&unreported, "https://example.test/", "doc-1", "field", "2026-11-04"), None);
 }
+
+#[path = "tests/citation_record_selected_results.rs"]
+mod citation_record_selected_results;

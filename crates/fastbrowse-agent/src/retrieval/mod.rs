@@ -17,8 +17,8 @@ mod screenshot;
 mod tally;
 pub(crate) mod text;
 
-pub(crate) use answers::cited_quote;
 pub use answers::{Claim, ComposedAnswer, assemble_answer, compose, draft_answer, marked_partial, partial_answer};
+pub(crate) use answers::{cited_quote, latest_reads, noted_evidence};
 pub use choices::read_candidates;
 pub(crate) use choices::{PageRead, read_page, whole_page_facts};
 pub use chunks::page_quotes;

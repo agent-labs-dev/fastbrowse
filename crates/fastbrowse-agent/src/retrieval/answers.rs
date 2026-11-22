@@ -105,8 +105,17 @@ pub(crate) fn cited_quote(evidence: &Evidence, notes: &Notes, redact: impl Fn(&s
 /// A claim may also cite one of the run's own `steps` as sN, for a value it typed there. A step has no page to link,
 /// so it is written beside the claim's page links as the step's own record, such as `[fill 'Postcode' with 'N1']`.
 pub fn assemble_answer(claims: &[Claim], notes: &Notes, steps: &[Value]) -> ComposedAnswer {
-    let supports: Vec<Vec<String>> =
-        claims.iter().map(|claim| notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))).collect();
+    let known = noted_evidence(notes);
+    let supports: Vec<Vec<String>> = claims
+        .iter()
+        .map(|claim| {
+            latest_reads(
+                notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)),
+                |id: &String| fact_evidence(notes, id).cloned(),
+                &known,
+            )
+        })
+        .collect();
     // A derived fact has no page to link; its basis records carry the citations. They are numbered in the order the
     // answer first cites them: numbered by the run's notes, a two-claim answer cited [124] and [157].
     let facts: HashMap<String, _> = notes
@@ -2284,7 +2293,70 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
     for (key, fact) in notes.supporting() {
         claims.entry(fact.text).or_default().push(key);
     }
-    claims.into_iter().map(|(text, keys)| Claim::new(&text, keys)).collect()
+    let known = noted_evidence(notes);
+    claims
+        .into_iter()
+        .map(|(text, keys)| {
+            Claim::new(&text, latest_reads(keys, |id: &String| fact_evidence(notes, id).cloned(), &known))
+        })
+        .collect()
+}
+
+/// Keep the newest capture of each record's quote on a page, and every distinct span within that capture. Reads arrive
+/// out of capture order (a schema field's evidence is appended after the notes'), and keeping the first cited a
+/// capture taken before the run's own edit (#1436); collapsing spans of one capture gave two records with the same
+/// words one record's provenance. The same quote under another heading, control, page location or link destination is
+/// another record, so it is kept whatever its capture time, as are reads whose records the page does not tell apart. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
+///
+/// `known` is every read the run holds, not only the cited ones: a sibling the claim does not cite still makes two reads
+/// ambiguous.
+pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evidence>, known: &[Evidence]) -> Vec<T> {
+    let alike = |a: &Evidence, b: &Evidence| {
+        a.url == b.url
+            && a.quote == b.quote
+            && a.heading_path == b.heading_path
+            && a.control_context == b.control_context
+            && a.source_path() == b.source_path()
+            && a.links.iter().map(|link| &link.href).eq(b.links.iter().map(|link| &link.href))
+    };
+    let reads: Vec<Option<Evidence>> = items.iter().map(&evidence).collect();
+    // A block's index shifts between captures and its path can be empty (an ordinary document block), so a read whose
+    // capture holds another span reading alike has no identity to match a later capture by: it and its siblings are kept.
+    let ambiguous = |e: &Evidence| {
+        reads
+            .iter()
+            .flatten()
+            .chain(known)
+            .any(|o| o.capture_sha256 == e.capture_sha256 && (o.start, o.end) != (e.start, e.end) && alike(e, o))
+    };
+    let same_record = |a: &Evidence, b: &Evidence| alike(a, b) && !ambiguous(a) && !ambiguous(b);
+    let newest = |e: &Evidence| {
+        let mut newest = e.captured_at.timestamp();
+        for other in reads.iter().flatten().filter(|other| same_record(e, other)) {
+            newest = newest.zip(other.captured_at.timestamp()).map(|(t, at)| t.max(at));
+        }
+        newest
+    };
+    let mut kept: Vec<(T, Option<&Evidence>)> = Vec::new();
+    for (item, read) in items.into_iter().zip(&reads) {
+        if let Some(e) = read {
+            let stale = newest(e).is_some_and(|t| e.captured_at.timestamp() != Some(t));
+            if stale || kept.iter().any(|(_, k)| *k == Some(e)) {
+                continue;
+            }
+        }
+        kept.push((item, read.as_ref()));
+    }
+    kept.into_iter().map(|(item, _)| item).collect()
+}
+
+/// The evidence of every note the run holds.
+pub(crate) fn noted_evidence(notes: &Notes) -> Vec<Evidence> {
+    notes.facts().into_iter().filter_map(|fact| fact.evidence.clone()).collect()
+}
+
+fn fact_evidence<'a>(notes: &'a Notes, id: &String) -> Option<&'a Evidence> {
+    notes.facts_by_id().get(id)?.evidence.as_ref()
 }
 
 /// Whether each picked note is the answer itself, as the task asks for it. A read picks a span code cut from the page:
@@ -2458,6 +2530,7 @@ mod tests {
     use fastbrowse_core::BoxFuture;
     use fastbrowse_core::llm::{Generation, LLMError, ResponseSchema};
     use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Evidence, FactReader};
+    use fastbrowse_core::py::datetime::DateTime;
 
     use super::*;
     use crate::memory::Fact;
@@ -3655,6 +3728,52 @@ mod tests {
         assert!(links[1].contains(") [1]("), "{links:?}");
         let cited: Vec<(i64, &str)> = answer.citations.iter().map(|c| (c.id, c.text.as_str())).collect();
         assert_eq!(cited, [(1, "Note 4"), (2, "Note 2")]);
+    }
+
+    #[test]
+    fn repeated_reads_of_one_quote_make_one_answer_citation() {
+        let mut old = fact(0, "Save: disabled".into());
+        let mut new = fact(1, "Save: disabled".into());
+        old.evidence.as_mut().unwrap().source_id = "main/div[1]:0".into();
+        new.evidence.as_mut().unwrap().source_id = "main/div[1]:4".into();
+        old.evidence.as_mut().unwrap().captured_at = DateTime::new(2026, 1, 1, 0, 0, 0).utc();
+        new.evidence.as_mut().unwrap().captured_at = DateTime::new(2026, 1, 1, 0, 0, 1).utc();
+        let old_id = crate::memory::fact_id(&old);
+        let new_id = crate::memory::fact_id(&new);
+        let notes = Notes::new([old.answering(), new.answering()]);
+        let draft = draft_answer(&notes).expect("answering notes produce a draft");
+        assert_eq!(draft.claims[0].evidence_ids, std::slice::from_ref(&new_id));
+        let answer = assemble_answer(&[Claim::new("Save: disabled", vec![old_id, new_id])], &notes, &[]);
+        assert_eq!(answer.citations.len(), 1, "repeated reads must not produce duplicate answer citations");
+        assert_eq!(answer.linked_answer.matches("[1](").count(), 1);
+    }
+
+    #[test]
+    fn identical_quotes_in_one_capture_keep_both_answer_citations() {
+        let first = fact(0, "GBP 5".into());
+        let mut second = fact(1, "GBP 5".into());
+        second.evidence.as_mut().unwrap().capture_sha256 = first.evidence.as_ref().unwrap().capture_sha256.clone();
+        second.evidence.as_mut().unwrap().source_id = "record-b".into();
+        second.evidence.as_mut().unwrap().start = 10;
+        second.evidence.as_mut().unwrap().end = 15;
+        let first_id = crate::memory::fact_id(&first);
+        let second_id = crate::memory::fact_id(&second);
+        let answer =
+            assemble_answer(&[Claim::new("GBP 5", vec![first_id, second_id])], &Notes::new([first, second]), &[]);
+        assert_eq!(answer.citations.len(), 2, "distinct source spans need distinct answer citations");
+    }
+
+    #[test]
+    fn identical_quotes_of_different_records_in_different_captures_keep_both_citations() {
+        let mut first = fact(0, "GBP 5".into());
+        let mut second = fact(1, "GBP 5".into());
+        first.evidence.as_mut().unwrap().heading_path = vec!["Plan A".into()];
+        second.evidence.as_mut().unwrap().heading_path = vec!["Plan B".into()];
+        first.evidence.as_mut().unwrap().captured_at = DateTime::new(2026, 1, 1, 0, 0, 0).utc();
+        second.evidence.as_mut().unwrap().captured_at = DateTime::new(2026, 1, 1, 0, 0, 1).utc();
+        let ids = vec![crate::memory::fact_id(&first), crate::memory::fact_id(&second)];
+        let answer = assemble_answer(&[Claim::new("GBP 5", ids)], &Notes::new([first, second]), &[]);
+        assert_eq!(answer.citations.len(), 2, "records under different headings are not repeated reads");
     }
 
     #[tokio::test]

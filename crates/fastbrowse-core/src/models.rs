@@ -304,6 +304,15 @@ pub struct Evidence {
     pub links: Vec<Link>,
 }
 
+impl Evidence {
+    /// Where the quote's block sits in the page, without its position among the capture's blocks. The browser builds
+    /// `source_id` as `<frame>/<path>:<index>`; the index shifts when the page changes between captures, so only the
+    /// path says two captures read the same record.
+    pub fn source_path(&self) -> &str {
+        self.source_id.rsplit_once(':').map_or(&self.source_id, |(path, _)| path)
+    }
+}
+
 impl Schema for Evidence {
     fn ty() -> Ty {
         ModelTy::frozen(
