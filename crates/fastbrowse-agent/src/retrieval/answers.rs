@@ -2043,19 +2043,28 @@ struct QuoteState<'a> {
     typed_by_step: Option<usize>,
 }
 
-/// The step, numbered from 1, that typed this quote's text before it was read, when one did. A page shows back what
-/// the run typed into it: a run that typed its own report into a document, then read the document, cited that read as
-/// what the document says, and its answer passed as the source's content (#1398).
+/// The last step, numbered from 1, that typed into the control this quote was read from before the read, when one
+/// did. A page shows back what the run typed into it: a run that typed its own report into a document, then read the
+/// document, cited that read as what the document says, and its answer passed as the source's content (#1398).
+///
+/// Provenance is the control, never the words: the quote's `control_context` names the control it lies in, and a step
+/// records the control it acted on as that control's label and context, the form `describe` gives it. A quote read
+/// outside any control, or from a read with no recorded step count, is not the run's typing, however much its text
+/// overlaps what the run typed. The steps record no role, so two controls sharing a label and context cannot be told
+/// apart; one such control is the only residue.
 fn typed_by_step(quote: &Evidence, notes: &Notes, steps: &[Value]) -> Option<usize> {
-    let quoted = quote.quote.trim();
-    if quoted.is_empty() {
-        return None;
-    }
-    let taken = notes.steps_taken(quote).unwrap_or(steps.len());
+    let control = quote.control_context.as_ref()?;
+    let taken = notes.steps_taken(quote)?;
+    let described = match control.context.as_deref() {
+        Some(context) if !context.is_empty() => format!("{} ({context})", control.label),
+        _ => control.label.clone(),
+    };
     steps
         .iter()
         .take(taken)
-        .position(|step| step.get("text").and_then(Value::as_str).is_some_and(|typed| typed.contains(quoted)))
+        .rposition(|step| {
+            step.get("text").is_some_and(Value::is_string) && step.get("target").and_then(Value::as_str) == Some(&described)
+        })
         .map(|index| index + 1)
 }
 
@@ -5754,33 +5763,68 @@ mod tests {
     }
 
     /// A run typed its report into a document, read the document back and picked that read as the answer: the draft's
-    /// note was taken for the document's own statement and passed (#1398). The run's typing is shown beside the quote,
-    /// and the claim's support is asked; a pick no step typed is not.
+    /// note was taken for the document's own statement and passed (#1398). The quote read from the control the run
+    /// typed into is shown with the step that typed it, and the claim's support is asked. The same words read from
+    /// the page outside that control, a read made before the typing, or a read with no recorded step are not the
+    /// run's typing, whatever they overlap.
     #[tokio::test]
-    async fn a_pick_holding_text_the_run_typed_is_asked_for_support() {
+    async fn a_pick_read_from_the_control_the_run_typed_into_is_asked_for_support() {
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+
         let typed = "Order 49309 shipped successfully; no error code is listed.";
-        let notes = Notes::new([Fact { answers: true, ..fact(0, typed.into()) }]);
-        let steps = [json!({"operation": "fill", "target": "Document body", "text": typed})];
-        let jev = Support { rejected: Some("claim0".into()), ..Support::new(true) };
-        let task = "Report the order's status and error code from the document";
-        let Some(Draft::Reviewed(reviewed)) =
-            draft_reviewed(&jev, task, Screenshot::Absent, &notes, None, &steps).await.unwrap()
-        else {
-            panic!("an unsupported pick stands as it is");
+        let steps = [json!({"operation": "fill", "target": "Document body (Notes)", "text": typed})];
+        let read = |taken: Option<usize>, in_control: bool| {
+            let mut captured = capture(&[(BlockKind::Paragraph, typed)]);
+            if in_control {
+                captured.blocks[0].control_context = Some(fastbrowse_core::models::SourceControl {
+                    role: "textbox".into(),
+                    label: "Document body".into(),
+                    context: Some("Notes".into()),
+                });
+            }
+            let page = Page::new(&captured);
+            let block = &captured.blocks[0];
+            let mut notes = Notes::new([Fact::read(
+                typed,
+                evidence(&page, block, block.start, block.end),
+                FactReader::JevChoice,
+            )
+            .answering()]);
+            if let Some(taken) = taken {
+                notes.remember_capture(&captured, taken);
+            }
+            notes
         };
+        let task = "Report the order's status and error code from the document";
+        let asked_for_support = |notes: Notes, rejected: Option<String>| {
+            let steps = steps.clone();
+            async move {
+                let jev = Support { rejected, ..Support::new(true) };
+                let drafted = draft_reviewed(&jev, task, Screenshot::Absent, &notes, None, &steps).await.unwrap();
+                let asked = jev.asked.lock().unwrap()[0].clone();
+                (drafted, asked)
+            }
+        };
+
+        let (drafted, asked) = asked_for_support(read(Some(1), true), Some("claim0".into())).await;
+        let Some(Draft::Reviewed(reviewed)) = drafted else { panic!("an unsupported pick stands as it is") };
         assert!(reviewed.answer.problem.unwrap().contains("text the run typed"));
         let rejection: Value = serde_json::from_str(&reviewed.rejection.unwrap()).unwrap();
         assert_eq!(rejection["rejected_checks"], json!(["claim0"]));
-        let Question::Noul(support) = jev.asked.lock().unwrap()[0]["claim0"].clone() else {
-            panic!("support is asked")
-        };
+        let Question::Noul(support) = asked["claim0"].clone() else { panic!("support is asked") };
         assert!(support.instructions.contains(r#""typed_by_step": 1"#), "{}", support.instructions);
         assert!(support.instructions.contains("never that the source stated it"));
 
-        let read = Notes::new([Fact { answers: true, ..fact(0, "Order 49309 is pending".into()) }]);
-        let jev = Support::new(true);
-        draft_reviewed(&jev, task, Screenshot::Absent, &read, None, &steps).await.unwrap();
-        assert!(!jev.asked.lock().unwrap()[0].contains_key("claim0"));
+        for (case, notes) in [
+            ("the page's own text", read(Some(1), false)),
+            ("a read before the typing", read(Some(0), true)),
+            ("a read with no recorded step", read(None, true)),
+        ] {
+            let (_, asked) = asked_for_support(notes, None).await;
+            assert!(!asked.contains_key("claim0"), "{case}");
+        }
     }
 
     /// The frame's heading reads "Send updates to my inbox ...": shown without its element, the exact check took the
