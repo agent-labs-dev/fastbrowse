@@ -2175,6 +2175,27 @@ async fn test_a_real_dnd_kit_card_is_lifted_moved_and_dropped_by_keys() {
     h.close().await;
 }
 
+/// The same list moved with the pointer, as its PointerSensor takes it: the last card dragged onto the first. The card
+/// declares itself a draggable, so it is offered as a drag source though it carries no `draggable` attribute.
+#[tokio::test]
+async fn test_a_real_dnd_kit_card_is_dragged_onto_the_first_by_the_pointer() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dndkit-sortable.html").await;
+    let order = || eval_active(&h.page, "document.getElementById('order').textContent");
+    let now = h.observe().await;
+    let last = find(&now, "Third image");
+    assert!(last.operations.contains(&Operation::Drag), "a declared draggable is a drag source: {last:?}");
+    let drag = Action {
+        target_id: Some(last.id.clone()),
+        destination_id: Some(find(&now, "Test image").id.clone()),
+        ..Action::new(Operation::Drag)
+    };
+    let result = h.page.act(&drag, &now).await.expect("drag");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(order().await, json!("Third image,Test image,Second image"));
+    h.close().await;
+}
+
 #[tokio::test]
 async fn test_role_keys_capture_orientation_and_count_custom_slider_progress() {
     let Some(h) = harness().await else { return };

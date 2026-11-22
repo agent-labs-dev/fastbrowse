@@ -1932,7 +1932,7 @@ impl CdpPage {
         }
         // The drop target is hit-tested exactly as the source is: its point is only computed when the live guard still
         // matches the observed one, so a target that moved or was covered since the observation is stale.
-        let (_, _, drop_point, _, _, _, _) = self.before_action(Some(&drop), true, false, false, true, false).await?;
+        let (drop_point, _) = self.drop_point(&drop, true).await?;
         if !matches!(drop_point, Point::At(..)) {
             return Ok((StepOutcome::Stale, Some("drop target disconnected".into()), None));
         }
@@ -1943,7 +1943,7 @@ impl CdpPage {
             return Ok((outcome, detail, failure));
         }
         // Pointer entry on the source can repurpose the destination after its first guard check.
-        let (_, _, drop_point, _, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+        let (drop_point, _) = self.drop_point(&drop, false).await?;
         let Point::At(end_x, end_y) = drop_point else {
             return Ok((StepOutcome::Stale, Some("drop target changed before pointer press".into()), None));
         };
@@ -1961,8 +1961,7 @@ impl CdpPage {
                 .await?;
             sleep(secs(DRAG_STEP_SECONDS)).await;
             if step == 1 {
-                let (_, _, landed, _, _, _, _) =
-                    self.before_action(Some(&drop), true, false, false, false, false).await?;
+                let (landed, _) = self.drop_point(&drop, false).await?;
                 if !matches!(landed, Point::At(..)) {
                     self.cancel_drag(session_id, (start_x, start_y)).await?;
                     return Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None));
@@ -1981,9 +1980,9 @@ impl CdpPage {
                 self.drag_move(session_id, at.0, at.1).await?;
                 sleep(secs(DRAG_STEP_SECONDS)).await;
             }
-            let (_, _, landed, _, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+            let (landed, no_hits) = self.drop_point(&drop, false).await?;
             let Point::At(x, y) = landed else { break };
-            if (x, y) == at {
+            if no_hits || (x, y) == at {
                 self.release(session_id, at.0, at.1).await?;
                 return Ok((StepOutcome::Executed, None, None));
             }
@@ -1991,6 +1990,31 @@ impl CdpPage {
         }
         self.cancel_drag(session_id, (start_x, start_y)).await?;
         Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))
+    }
+
+    /// Where a drag is released on its drop target, and whether the target takes no pointer hits. A sortable sets
+    /// pointer-events: none on its cards while one is held, so the point at a card's centre lands on the list holding
+    /// it. A target nothing is drawn over still takes the drop, which the library works out from where the pointer
+    /// rests, so its centre is the point and the pointer stays where it is: the card slides aside as the held one
+    /// arrives, and following it moves the pointer onto the next slot.
+    async fn drop_point(&self, drop: &Target, first: bool) -> Result<(Point, bool), BrowserError> {
+        let (_, _, point, _, _, _, _) = self.before_action(Some(drop), true, false, false, first, false).await?;
+        if point != Point::Covered || self.cover(&drop.0, drop.2).await? != Cover::None {
+            return Ok((point, false));
+        }
+        let script = format!(
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected) return null; \
+             const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }})()",
+            drop.2
+        );
+        let centre = match self.evaluate(&drop.0, &script).await? {
+            Value::Array(xy) => match (xy.first().and_then(Value::as_f64), xy.get(1).and_then(Value::as_f64)) {
+                (Some(x), Some(y)) => Point::At(x, y),
+                _ => Point::Gone,
+            },
+            _ => Point::Gone,
+        };
+        Ok((centre, true))
     }
 
     /// Abandon a drag in progress without dropping it anywhere.

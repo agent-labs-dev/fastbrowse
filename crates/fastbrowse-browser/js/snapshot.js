@@ -1398,8 +1398,10 @@
       base.value = reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
       // Only an element that names itself draggable is offered as a drag source: `draggable` reports true for
-      // every <a> and <img> by default, which would offer the whole page as draggable.
-      if (e.getAttribute('draggable') === 'true') base.operations.push('drag');
+      // every <a> and <img> by default, which would offer the whole page as draggable. A custom widget names itself
+      // with an `aria-roledescription` (a sortable card, which its pointer sensor also takes by drag), as a press
+      // is offered it; Jev reads the description and decides whether to drag or press.
+      if (e.getAttribute('draggable') === 'true' || e.hasAttribute('aria-roledescription')) base.operations.push('drag');
     }
     // Focus determines whether the widget can receive keys. A button, link, checkbox or switch answers Enter and
     // Space by activating, which a click already does, unless its page says it is something else: an
