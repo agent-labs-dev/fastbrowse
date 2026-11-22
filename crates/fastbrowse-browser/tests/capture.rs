@@ -1487,7 +1487,10 @@ async fn a_fill_reports_the_field_the_capture_names() {
     let block =
         capture.blocks.iter().find(|b| capture.block_text(b) == "Notes: typed words").expect("typed field block");
     let control = block.control_context.as_ref().expect("control");
-    assert_eq!(control.held.first().map(|held| &held.element), result.landed.as_ref());
+    assert_eq!(
+        control.held.first().map(|held| &held.element),
+        result.landed.as_ref().map(|receiver| &receiver.element)
+    );
     assert_eq!(control.document.as_deref(), Some(observed.document_key.as_str()));
     h.close().await;
 }
