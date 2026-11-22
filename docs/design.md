@@ -645,7 +645,8 @@ Downloaded XLSX workbooks, DOCX documents and ZIP archives use the same killable
 worksheet's name and each stored cell's row, column and value. Empty coordinates are omitted, so sparse sheets
 are read without allocating the rectangle between their cells. Formulas are not evaluated. Word
 text retains paragraph, table-cell, tab and line-break boundaries, with its package part named. Archive members
-are read in memory, never extracted onto the host. Text, CSV, TSV, JSON, XML, Markdown and HTML members are read
+are read in memory, never extracted onto the host, and each readable member is its own downloaded text named
+`archive.zip/member`, so a CSV member is read row by row as a downloaded CSV is. Text, CSV, TSV, JSON, XML, Markdown and HTML members are read
 as UTF-8 text; XLSX, DOCX and PDF members use their document readers. Other or invalid members remain named with
 an explicit notice that their contents were not read. Nested archives are not expanded. Generic or missing MIME types use the download filename to select these readers.
 The configured `max_download_bytes` also bounds aggregate decompressed container bytes and extracted output; a
