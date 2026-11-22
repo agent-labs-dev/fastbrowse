@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_clients::search::{Exa, SEARCH_DOLLARS};
 use fastbrowse_core::BoxFuture;
+use fastbrowse_core::decision::Edges;
 use fastbrowse_core::models::{Artifact, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{
     ActResult, Action, BrowserError, CaptchaSolve, Capture, Control, Observation, Page, PageResult, SearchOutcome,
@@ -220,6 +221,12 @@ impl Page for SearchPage {
             self.inner.screenshot()
         }
     }
+    fn reveal<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<()>> {
+        self.view().reveal(id)
+    }
+    fn edges<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
+        self.view().edges(id)
+    }
     fn click_viewport<'a>(&'a self, x: f64, y: f64, within: Option<&'a str>) -> BoxFuture<'a, PageResult<ActResult>> {
         self.view().click_viewport(x, y, within)
     }
@@ -258,7 +265,11 @@ mod tests {
     use fastbrowse_clients::environment::Secret;
     use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 
-    struct RetainedBrowser(AtomicBool);
+    #[derive(Default)]
+    struct RetainedBrowser {
+        frames_withheld: AtomicBool,
+        surface_revealed: AtomicBool,
+    }
 
     impl Page for RetainedBrowser {
         fn artifacts(&self) -> Vec<Artifact> {
@@ -298,11 +309,29 @@ mod tests {
         fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
             Box::pin(async { unreachable!() })
         }
+        fn reveal<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<()>> {
+            Box::pin(async move {
+                assert_eq!(id, "drawing-pad");
+                self.surface_revealed.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+        }
+        fn edges<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
+            Box::pin(async move {
+                assert_eq!(id, "drawing-pad");
+                Ok(self.surface_revealed.load(Ordering::Relaxed).then_some(Edges {
+                    left: 0.1,
+                    top: 0.1,
+                    right: 0.5,
+                    bottom: 0.5,
+                }))
+            })
+        }
         fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
             Box::pin(async { unreachable!() })
         }
         fn withhold_frames(&self, withheld: bool) {
-            self.0.store(withheld, Ordering::Relaxed);
+            self.frames_withheld.store(withheld, Ordering::Relaxed);
         }
         fn address(&self) -> BoxFuture<'_, PageResult<String>> {
             Box::pin(async { unreachable!() })
@@ -319,13 +348,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_enabled_browser_reveals_the_surface_before_measuring_it() {
+        let http = Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+            Box::pin(async { panic!("preparing a browser gesture should make no search request") })
+        }));
+        let inner = Arc::new(RetainedBrowser::default());
+        let page = SearchPage::new(
+            inner.clone(),
+            FetchedPage::new(http.clone(), None, None),
+            Exa::new(http, Secret::new("key")),
+        );
+        page.reveal("drawing-pad").await.unwrap();
+        assert!(inner.surface_revealed.load(Ordering::Relaxed));
+        assert!(page.edges("drawing-pad").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
     async fn observing_search_results_cannot_release_the_retained_browsers_secret_frames() {
         let http = Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
             Box::pin(async {
                 Ok(Response::json(200, &serde_json::json!({"results":[],"costDollars":{"total":0.007}})))
             })
         }));
-        let inner = Arc::new(RetainedBrowser(AtomicBool::new(true)));
+        let inner = Arc::new(RetainedBrowser { frames_withheld: AtomicBool::new(true), ..RetainedBrowser::default() });
         let page = SearchPage::new(
             inner.clone(),
             FetchedPage::new(http.clone(), None, None),
@@ -334,11 +379,11 @@ mod tests {
         assert!(page.search("question", 30.0).await.error.is_none());
         page.observe().await.unwrap();
         page.withhold_frames(false);
-        assert!(inner.0.load(Ordering::Relaxed));
+        assert!(inner.frames_withheld.load(Ordering::Relaxed));
         page.navigate("https://example.org/", None).await.unwrap();
-        assert!(inner.0.load(Ordering::Relaxed));
+        assert!(inner.frames_withheld.load(Ordering::Relaxed));
         page.withhold_frames(false);
-        assert!(!inner.0.load(Ordering::Relaxed));
+        assert!(!inner.frames_withheld.load(Ordering::Relaxed));
     }
     /// Search results are code's own page, with no script: the unrun scripts of the document read before the search
     /// are that document's alone, and come back with it (#1380).
@@ -370,7 +415,7 @@ mod tests {
                 Ok(Response::json(200, &serde_json::json!({"results":[],"costDollars":{"total":0.007}})))
             })
         }));
-        let inner = Arc::new(RetainedBrowser(AtomicBool::new(false)));
+        let inner = Arc::new(RetainedBrowser::default());
         let page = SearchPage::new(
             inner.clone(),
             FetchedPage::new(http.clone(), None, None),

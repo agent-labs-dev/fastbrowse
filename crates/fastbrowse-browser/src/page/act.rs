@@ -266,6 +266,13 @@ type Outcome = (StepOutcome, Option<String>, Option<StepFailure>);
 /// A box in viewport CSS pixels: left, top, width, height.
 type DragBox = (f64, f64, f64, f64);
 
+const DRAG_BOX_JS: &str = "(e, topRect) => { \
+    if (!e?.isConnected || !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null; \
+    const r = topRect(e); if (!r) return null; \
+    const left = Math.max(r.left, 0), top = Math.max(r.top, 0); \
+    const right = Math.min(r.right, innerWidth), bottom = Math.min(r.bottom, innerHeight); \
+    return right > left && bottom > top ? [left, top, right - left, bottom - top] : null; }";
+
 /// A pressed left button. A drag that ends any way but its own release or cancel, on an error or a cancelled run,
 /// lets go where it pressed, or Chrome keeps the button down and the run's next input lands as part of the stale drag.
 struct Held {
@@ -2000,19 +2007,9 @@ impl CdpPage {
         if let Some(cursor) = &self.cursor {
             cursor.glide(press.0, press.1).await;
         }
-        if !self.drag_target_unchanged(target, target_box).await? {
-            return Ok((StepOutcome::Stale, Some("drag target changed before pointer press".into()), None));
-        }
         self.trace_action_cursor(&points, duration).await;
-        let exact_press = format!(
-            "(() => {{ const id = {}; const r = window.__fastbrowse; \
-             return r?.guardKey(r.nodes.get(id), id) === {} && Array.isArray(({HIT_TEST_JS})(id, false, {}, {TOP_RECT_JS})); }})()",
-            target.2,
-            json!(target.3),
-            json!(press),
-        );
-        if self.evaluate(session_id, &exact_press).await? != Value::Bool(true) {
-            return Ok((StepOutcome::Covered, Some("the drag press point is covered".into()), None));
+        if !self.drag_destination(target, target_box, press, true).await? {
+            return Ok((StepOutcome::Covered, Some("the drag press point is no longer on the target".into()), None));
         }
         let press_event = json!({
             "type": "mousePressed",
@@ -2024,17 +2021,21 @@ impl CdpPage {
             "modifiers": modifiers,
         });
         // Chrome can receive the press even if this future is dropped while its reply is pending.
-        let mut held = self.held(session_id, press, modifiers);
+        // A drop guard cannot check where the page moved its controls, so release outside the viewport.
+        let outside = (-1.0, -1.0);
+        let mut held = self.held(session_id, outside, modifiers);
         self.input(self.session.send("Input.dispatchMouseEvent", press_event, Some(session_id))).await?;
-        // The pointer moves to the release point too, so a surface that strokes on pointer moves draws the last leg.
-        for &(x, y) in &points[1..] {
+        // A surface that strokes on pointer moves needs a move at the release point too. Its handler can move or
+        // cover the surface, so check again before sending the release.
+        for &at in &points[1..] {
             sleep(secs(DRAG_STEP_SECONDS)).await;
-            self.drag_move(session_id, x, y, modifiers).await?;
-            if !self.drag_target_unchanged(target, target_box).await? {
-                self.cancel_drag(session_id, press, modifiers).await?;
-                held.done();
-                return Ok((StepOutcome::Stale, Some("drag target changed during the drag".into()), None));
+            if !self.drag_destination(target, target_box, at, false).await? {
+                return self.abort_drawn_drag(&mut held).await;
             }
+            self.drag_move(session_id, at.0, at.1, modifiers).await?;
+        }
+        if !self.drag_destination(target, target_box, release, false).await? {
+            return self.abort_drawn_drag(&mut held).await;
         }
         self.release(session_id, release.0, release.1, modifiers).await?;
         held.done();
@@ -2045,28 +2046,67 @@ impl CdpPage {
         Held { session: self.session.clone(), session_id: session_id.to_owned(), at, modifiers, armed: true }
     }
 
-    /// Whether a same-control drag's target is still the checked control, topmost under its point, in the same box.
-    async fn drag_target_unchanged(&self, target: &Target, target_box: DragBox) -> Result<bool, BrowserError> {
-        let (_, guard, point, _, _, _, connected) =
-            self.before_action(Some(target), true, false, false, false, false).await?;
-        Ok(guard == target.3
-            && connected
-            && matches!(point, Point::At(..))
-            && self.drag_box(target).await? == Some(target_box))
+    /// Validate the live box and the actual recipient in the same renderer task before each pointer event.
+    async fn drag_destination(
+        &self,
+        target: &Target,
+        target_box: DragBox,
+        at: (f64, f64),
+        press: bool,
+    ) -> Result<bool, BrowserError> {
+        let script = format!(
+            r"((id, guard, expected, at, press) => {{
+                const r = window.__fastbrowse, e = r?.nodes.get(id);
+                if (!e?.isConnected) return false;
+                const captures = r.drawnPointers ??= new WeakMap();
+                let state = captures.get(e);
+                if (press) {{
+                    if (!state) {{
+                        state = {{pointer: null}};
+                        captures.set(e, state);
+                        e.addEventListener('pointerdown', event => {{
+                            if (event.isTrusted && event.pointerType === 'mouse') state.pointer = event.pointerId;
+                        }}, true);
+                    }}
+                    state.pointer = null;
+                }}
+                const valid = r.guardKey?.(e, id) === guard
+                    && JSON.stringify(({DRAG_BOX_JS})(e, {TOP_RECT_JS})) === JSON.stringify(expected);
+                // Pointer capture overrides elementFromPoint, including pending capture set by pointerdown.
+                const pointer = press ? null : state?.pointer;
+                if (pointer != null && e.hasPointerCapture(pointer)) return valid;
+                if (pointer != null) {{
+                    const roots = [e.ownerDocument];
+                    for (const root of roots) {{
+                        for (const node of root.querySelectorAll('*')) {{
+                            if (node.hasPointerCapture(pointer)) {{
+                                node.releasePointerCapture(pointer);
+                                return false;
+                            }}
+                            if (node.shadowRoot) roots.push(node.shadowRoot);
+                        }}
+                    }}
+                }}
+                return valid && Array.isArray(({HIT_TEST_JS})(id, false, at, {TOP_RECT_JS}));
+            }})({}, {}, {}, {}, {press})",
+            target.2,
+            json!(target.3),
+            json!(target_box),
+            json!(at),
+        );
+        Ok(self.evaluate(&target.0, &script).await? == Value::Bool(true))
     }
 
-    /// The part of the target in view, in the top viewport's CSS pixels: left, top, width, height. It is the box the
-    /// drag path was drawn against, which `CdpPage::edges` measured from the same screenshot's viewport.
+    async fn abort_drawn_drag(&self, held: &mut Held) -> Result<Outcome, BrowserError> {
+        self.input(self.session.send("Input.cancelDragging", json!({}), Some(&held.session_id))).await?;
+        self.release(&held.session_id, held.at.0, held.at.1, held.modifiers).await?;
+        held.done();
+        Ok((StepOutcome::Stale, Some("drag path no longer targets the drawing surface".into()), None))
+    }
+
+    /// The part of the target in view, measured in the top viewport's CSS pixels like `CdpPage::edges`.
     async fn drag_box(&self, target: &Target) -> Result<Option<DragBox>, BrowserError> {
-        let script = format!(
-            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); \
-             if (!e?.isConnected || !e.checkVisibility({{checkOpacity:true,checkVisibilityCSS:true}})) return null; \
-             const r = ({TOP_RECT_JS})(e); if (!r) return null; \
-             const left = Math.max(r.left, 0), top = Math.max(r.top, 0); \
-             const right = Math.min(r.right, innerWidth), bottom = Math.min(r.bottom, innerHeight); \
-             return right > left && bottom > top ? [left, top, right - left, bottom - top] : null; }})()",
-            target.2
-        );
+        let script = format!("({DRAG_BOX_JS})(window.__fastbrowse?.nodes.get({}), {TOP_RECT_JS})", target.2);
         Ok(serde_json::from_value(self.evaluate(&target.0, &script).await?).ok().flatten())
     }
 
