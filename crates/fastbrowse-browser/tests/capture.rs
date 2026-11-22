@@ -1498,11 +1498,8 @@ async fn an_editing_host_is_read_once_in_place_with_provenance_on_its_block() {
 async fn a_hidden_editing_host_gives_its_block_no_provenance() {
     let Some(h) = harness().await else { return };
     h.goto("/token.html").await;
-    set_body(
-        &h.session,
-        r#"<p>Server note <span contenteditable="true" style="display:none">typed words</span></p>"#,
-    )
-    .await;
+    set_body(&h.session, r#"<p>Server note <span contenteditable="true" style="display:none">typed words</span></p>"#)
+        .await;
     let capture = h.page.capture().await.expect("capture");
     let block = capture.blocks.iter().find(|b| capture.block_text(b).contains("Server note")).expect("block");
     assert!(block.control_context.is_none(), "{:?}", block.control_context);
