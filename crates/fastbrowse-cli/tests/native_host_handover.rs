@@ -56,7 +56,7 @@ fn an_unregistered_native_host_exits_naming_the_registry_when_no_install_starts(
 fn host(host_dir: &Path, started: Option<&Path>) -> std::process::Output {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_fastbrowse"));
     command
-        .args(["native-host", "chrome-extension://x/"])
+        .args(["native-host", "chrome-extension://ghodfgfhbfaghhfdabopagbfopdjgpop/"])
         .env("FASTBROWSE_HOST_DIR", host_dir)
         .env_remove("FASTBROWSE_HOST_DELEGATED")
         .env_remove("FASTBROWSE_HOST_PATH")
@@ -82,14 +82,31 @@ fn the_host_identity_is_the_path_the_launcher_started_not_this_executable() {
     // No registry at all: a launcher from before installs were recorded.
     std::fs::remove_file(host_dir.join("installs.json")).unwrap();
     let before_registry = host(&host_dir, None);
+    let after_uninstall = host(&host_dir, Some(&started));
+    // The registry's folder denies traversal, so its metadata cannot be read.
+    std::fs::write(host_dir.join("installs.json"), "[]").unwrap();
+    std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let unreadable = host(&host_dir, Some(&started));
+    std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(host_dir.join("installs.json")).unwrap();
     // A registry that cannot be parsed is an error that names it.
     std::fs::write(host_dir.join("installs.json"), "{").unwrap();
     let corrupt = host(&host_dir, Some(&started));
     let _ = std::fs::remove_dir_all(&root);
+    // Serving: the host got past the handover decision and waits for the extension's hello, which a closed stdin denies.
+    let serving = |out: &std::process::Output| String::from_utf8_lossy(&out.stderr).contains("before saying hello");
     let said = |out: &std::process::Output| String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(!said(&registered).contains("not registered"), "{}", said(&registered));
+    assert!(serving(&registered), "{}", said(&registered));
     assert!(said(&unregistered).contains("not registered"), "{}", said(&unregistered));
-    assert!(!said(&before_registry).contains("not registered"), "{}", said(&before_registry));
+    assert!(serving(&before_registry), "{}", said(&before_registry));
+    // A registry-aware launcher (it names the path) that finds no registry was started just before the last uninstall.
+    assert_eq!(after_uninstall.status.code(), Some(1));
+    assert!(said(&after_uninstall).contains("installs.json"), "{}", said(&after_uninstall));
+    assert!(!serving(&after_uninstall));
+    // A registry that cannot be inspected is not a missing one.
+    assert_eq!(unreadable.status.code(), Some(1));
+    assert!(said(&unreadable).contains("installs.json"), "{}", said(&unreadable));
+    assert!(!serving(&unreadable));
     assert_eq!(corrupt.status.code(), Some(1));
     assert!(said(&corrupt).contains("installs.json"), "{}", said(&corrupt));
 }

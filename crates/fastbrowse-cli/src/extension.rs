@@ -334,16 +334,18 @@ fn without_handover(registered: bool, dir: &Path) -> Option<i32> {
     Some(1)
 }
 
-/// Whether `own` is registered and the installs to hand over to first; None when there is no registry, which is a
-/// launcher from before installs were recorded: it serves as it always did. A registry that cannot be read is an error.
+/// Whether `own` is registered and the installs to hand over to first; None when there is no registry (the caller
+/// decides whether that serves). A registry that cannot be read is an error.
 fn plan(
     dir: &Path,
     own: &Path,
     own_version: &str,
     query: &dyn Fn(&Path) -> Option<String>,
 ) -> Result<Option<(bool, Vec<Install>)>, String> {
-    if !dir.join(INSTALLS).exists() {
-        return Ok(None);
+    match std::fs::metadata(dir.join(INSTALLS)) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot read {}: {e}", dir.join(INSTALLS).display())),
     }
     let installs = read_installs(dir)?;
     Ok(Some((is_registered(&installs, own), newer_installs(&installs, own, own_version, query))))
@@ -365,7 +367,7 @@ const GUARD: &str = "FASTBROWSE_HOST_DELEGATED";
 
 /// Run the newest registered fastbrowse as the host instead of this one, when one is newer; its exit code. Newer
 /// installs are tried newest first until one starts. `None` runs this one: it is registered and the newest (or no newer
-/// one starts), or there is no registry yet. An unregistered one, or an unreadable registry, exits 1 instead of serving
+/// one starts), or there is no registry and no launcher named this host. An unregistered one, or an unreadable registry, exits 1 instead of serving
 /// (see [`without_handover`]).
 pub fn delegate(args: &[String]) -> Option<i32> {
     if std::env::var_os(GUARD).is_some() {
@@ -376,7 +378,10 @@ pub fn delegate(args: &[String]) -> Option<i32> {
     let own = std::env::var_os(HOST_PATH).map(PathBuf::from).or_else(|| std::env::current_exe().ok())?;
     let (registered, candidates) = match plan(&dir, &own, env!("CARGO_PKG_VERSION"), &reported_version) {
         Ok(Some(plan)) => plan,
-        Ok(None) => return None,
+        // No registry: a launcher from before installs were recorded serves as it always did. A launcher that knows
+        // the registry (it sets the path) and finds it gone was started just before the last uninstall: it must not serve.
+        Ok(None) if std::env::var_os(HOST_PATH).is_none() => return None,
+        Ok(None) => return without_handover(false, &dir),
         Err(error) => {
             eprintln!("fastbrowse native-host: {error}");
             return Some(1);
