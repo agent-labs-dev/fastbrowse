@@ -147,7 +147,7 @@ impl SystemOneClient {
         // round trip that uploads it: a page whose cards outgrew it sent each step's decision 28 times (#1301).
         let bytes = serde_json::to_vec(&body).map_or(0, |bytes| bytes.len());
         if bytes > JEV_REQUEST_BYTES {
-            return Err(DecisionError::InputTooLarge(format!(
+            return Err(DecisionError::input_too_large(format!(
                 "Jev input too large; the request body is {bytes} bytes, over the limit of {JEV_REQUEST_BYTES}"
             ))
             .into());

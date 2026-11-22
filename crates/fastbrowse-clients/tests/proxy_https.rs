@@ -29,6 +29,7 @@ async fn an_https_proxy_is_contacted_using_tls() {
             body: Vec::new(),
             timeout: Duration::from_secs(5),
             max_bytes: None,
+            handoff: Default::default(),
         })
         .await;
     // The proxy double closes after the first byte: certificate validation is not part of this check.

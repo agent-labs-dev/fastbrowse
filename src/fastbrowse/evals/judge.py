@@ -33,6 +33,24 @@ a few seconds rather than the row of a run already paid for."""
 
 RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
 
+ACCOUNT_STATUS = {
+    401: "the provider rejected the key",
+    402: "the key's credit is spent",
+    403: "the key's limit or credit is the likely cause",
+}
+"""What a refusal of the key itself means, by status code, so a nightly run whose key hit its daily limit says so
+rather than ending in a bare HTTP traceback (#1307)."""
+
+
+class ProviderError(httpx.HTTPStatusError):
+    """The judge's provider refused a judgement after any retries, with its status, host and what it likely means."""
+
+    def __init__(self, response: httpx.Response) -> None:
+        self.status = response.status_code
+        self.host = response.request.url.host
+        self.hint = ACCOUNT_STATUS.get(self.status, "the provider failed the request")
+        super().__init__(f"{self.status} from {self.host}: {self.hint}", request=response.request, response=response)
+
 
 @dataclass(frozen=True, slots=True)
 class Claim:
@@ -75,7 +93,8 @@ class Jev:
                     raise
             else:
                 if delay is None or response.status_code not in RETRYABLE_STATUS:
-                    response.raise_for_status()
+                    if response.is_error:
+                        raise ProviderError(response)
                     answers: Mapping[str, Mapping[str, float]] = response.json()["answers"]
                     return {key: self._probability(answers[key]) for key in questions}
             await asyncio.sleep(delay)

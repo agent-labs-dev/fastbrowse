@@ -25,7 +25,7 @@ use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
-use crate::error::BrowserError;
+use crate::error::{BrowserError, Failure};
 
 /// How long an ordinary CDP command waits before the browser is asked whether it is still there. A cloud browser's
 /// proxy can keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock
@@ -241,7 +241,10 @@ impl Cdp {
                 )));
             }
             Ok(Err(error)) => {
-                return Err(BrowserError::Failed(format!("CDP.start failed ({})", handshake_detail(&error))));
+                return Err(BrowserError::failed(
+                    "CDP.start/handshake",
+                    format!("CDP.start failed ({})", handshake_detail(&error)),
+                ));
             }
             Err(_) => {
                 return Err(BrowserError::BrowserUnresponsive(format!(
@@ -408,9 +411,12 @@ impl Cdp {
     pub async fn send(&self, method: &str, params: Value, session: Option<&str>) -> Result<Value, BrowserError> {
         let deadlines = session.map_or(0, |id| self.deadlines().get(id).copied().unwrap_or(0));
         if deadlines >= CDP_DEADLINES_BEFORE_STOP {
-            return Err(BrowserError::PageUnresponsive(format!(
-                "{method} not sent: the page stopped answering, {deadlines} commands already exceeded their deadline \
+            return Err(BrowserError::PageUnresponsive(Failure::new(
+                format!("{method}/not-sent"),
+                format!(
+                    "{method} not sent: the page stopped answering, {deadlines} commands already exceeded their deadline \
                  while the browser answered"
+                ),
             )));
         }
         let reply = self.call(method, params, session);
@@ -470,8 +476,11 @@ impl Cdp {
                         if let Some(id) = session {
                             *self.deadlines().entry(id.to_string()).or_default() += 1;
                         }
-                        return Err(BrowserError::PageUnresponsive(format!(
-                            "{method} exceeded its command deadline; the page did not answer while the browser did"
+                        return Err(BrowserError::PageUnresponsive(Failure::new(
+                            format!("{method}/deadline"),
+                            format!(
+                                "{method} exceeded its command deadline; the page did not answer while the browser did"
+                            ),
                         )));
                     }
                 }
@@ -564,17 +573,17 @@ pub fn browser_error(method: &str, error: &CdpError, lost_is_outage: bool) -> Br
         CdpError::Closed(why) if lost_is_outage => {
             BrowserError::BrowserUnresponsive(format!("{method} failed ({why})"))
         }
-        CdpError::Closed(why) => BrowserError::Failed(format!("{method} failed ({why})")),
+        CdpError::Closed(why) => BrowserError::failed(format!("{method}/{why}"), format!("{method} failed ({why})")),
         CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NavigationDenied), .. }
             if method == "Page.navigate" =>
         {
-            BrowserError::Failed("Page.navigate was denied by the browser access policy".into())
+            BrowserError::failed("Page.navigate/denied", "Page.navigate was denied by the browser access policy")
         }
         CdpError::Protocol { code: SERVER_ERROR, reason, .. } => {
             BrowserError::ContextLost(protocol_failed(method, SERVER_ERROR, reason.as_deref()))
         }
         CdpError::Protocol { code, reason, .. } => {
-            BrowserError::Failed(protocol_failed(method, *code, reason.as_deref()))
+            BrowserError::failed(format!("{method}/cdp-{code}"), protocol_failed(method, *code, reason.as_deref()))
         }
     }
 }
