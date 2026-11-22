@@ -264,13 +264,14 @@
       };
       // Run only once Chrome has sent the message: a send that throws, such as a DataCloneError, leaves the ports here.
       const away = list => {
-        if (Array.isArray(list)) for (const port of list) if (peers.has(port)) forget(port);
+        if (Array.isArray(list)) for (const port of list) if (inboxes.has(port)) forget(port);
       };
       const nativeClose = MessagePort.prototype.close;
       MessagePort.prototype.close = function () {
         const peer = peers.get(this);
         forget(this);
-        if (peer) forget(peer);
+        // Closing a sender stops new posts, but its peer can still deliver messages already queued there.
+        if (peer) peers.delete(peer);
         return Reflect.apply(nativeClose, this, arguments);
       };
       const nativePost = MessagePort.prototype.postMessage;

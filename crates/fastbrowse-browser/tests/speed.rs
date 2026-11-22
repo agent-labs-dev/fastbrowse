@@ -584,6 +584,34 @@ async fn test_a_settle_waits_for_work_the_click_posted_through_a_message_channel
     h.close().await;
 }
 
+/// Closing the sender does not discard messages already queued at the receiver. Their handlers can still render
+/// the action's result, so the receiver's queued work must hold the settle until delivery.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_closing_a_sender_keeps_its_queued_message_in_the_receivers_work() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Queued</button>'; \
+         const channel = new MessageChannel(); \
+         channel.port1.addEventListener('message', () => setTimeout(() => { \
+           document.querySelector('button').textContent = 'Rendered'; }, 150)); \
+         document.querySelector('button').onclick = () => { \
+           channel.port2.postMessage(null); channel.port2.close(); \
+           window.__fastbrowse.nativeSetTimeout(() => channel.port1.start(), 100); };",
+    )
+    .await;
+    let before = h.observe().await;
+    h.page.act(&targeted(Operation::Click, &find(&before, "Queued").id), &before).await.expect("act");
+    let after = h.observe().await;
+    assert!(
+        after.controls.iter().any(|control| control.label == "Rendered"),
+        "settle returned before the closed sender's queued message rendered"
+    );
+    h.close().await;
+}
+
 /// A port sent to a worker delivers there, so a message posted to it never holds a settle here.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_message_to_a_transferred_port_does_not_hold_a_settle() {
