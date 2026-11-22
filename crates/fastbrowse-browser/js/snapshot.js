@@ -1981,9 +1981,12 @@
       ? [...list.querySelectorAll(SET_ITEM)].filter(i => i.parentElement.closest(SET_LIST) === list && visible(i))
       : [];
     const declared = Number.parseInt(item.getAttribute('aria-posinset'), 10);
-    const size = Number.parseInt(item.getAttribute('aria-setsize'), 10);
+    // `aria-setsize="-1"` says the list's size is unknown (a virtualised feed); counting the rendered items instead
+    // would state a size the page says it does not know.
+    const declaredSize = item.getAttribute('aria-setsize');
+    const size = declaredSize === null ? siblings.length : Number.parseInt(declaredSize, 10);
     const position = declared > 0 ? declared : siblings.indexOf(item) + 1;
-    const count = size > 0 ? size : siblings.length;
+    const count = size > 0 ? size : 0;
     if (position > 0 && count > 1 && position <= count) {
       c.item_position = position;
       c.item_count = count;

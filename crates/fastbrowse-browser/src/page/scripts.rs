@@ -238,6 +238,7 @@ pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
         "const hit = deepHit(doc, x, y); ",
         // An ancestor at the centre means the control takes no hits itself (a sortable's picked-up card, set to
         // pointer-events: none for the drag), not that anything is drawn over it: a box paints beneath its content.
+        // A centre outside the viewport hits nothing, and is covered rather than a point to release on.
         "if (hit && !holds(node, hit) && !holds(hit, node)) { let obstruction = null; ",
         "for (let n = hit; n && !obstruction; n = up(n)) if (n.matches(OBSTRUCTIONS)) obstruction = n; ",
         "if (obstruction && !holds(obstruction, node)) return 'obstruction'; ",
@@ -245,7 +246,7 @@ pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
         "if (!['fixed', 'sticky'].includes(view.getComputedStyle(n).position)) continue; ",
         "const r = n.getBoundingClientRect(); ",
         "if (r.width * r.height >= view.innerWidth * view.innerHeight / 2) return 'other'; band = true; } ",
-        "return band ? 'band' : 'other'; } ",
+        "return band ? 'band' : 'other'; } if (!hit) return 'other'; ",
         "if (doc === document) return 'none'; node = view.frameElement; if (!node) return 'none'; ",
         "const frame = node.getBoundingClientRect(); ",
         "x = frame.x + (node.clientLeft + x) * frame.width / node.offsetWidth; ",

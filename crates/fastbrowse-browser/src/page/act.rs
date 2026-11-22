@@ -2004,7 +2004,13 @@ impl CdpPage {
         }
         let script = format!(
             "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected) return null; \
-             const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }})()",
+             if (e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents !== 'none') return null; \
+             let r = e.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2, \
+                 node = e, view = e.ownerDocument.defaultView; \
+             while (view.frameElement) {{ const frame = view.frameElement.getBoundingClientRect(); \
+               x = frame.x + (view.frameElement.clientLeft + x) * frame.width / view.frameElement.offsetWidth; \
+               y = frame.y + (view.frameElement.clientTop + y) * frame.height / view.frameElement.offsetHeight; \
+               node = view.frameElement; view = node.ownerDocument.defaultView; }} return [x, y]; }})()",
             drop.2
         );
         let centre = match self.evaluate(&drop.0, &script).await? {

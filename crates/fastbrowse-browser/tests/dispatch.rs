@@ -2256,3 +2256,46 @@ async fn test_a_wait_sees_a_change_made_after_the_observation_it_was_decided_on(
     }
     h.close().await;
 }
+
+#[tokio::test]
+async fn test_unknown_aria_setsize_does_not_fall_back_to_visible_siblings() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<ul><li role=button aria-label=First aria-posinset=1 aria-setsize=-1>First</li><li role=button aria-label=Second aria-posinset=2 aria-setsize=-1>Second</li></ul>'; true",
+    )
+    .await;
+    let observed = h.observe().await;
+    for label in ["First", "Second"] {
+        let control = find(&observed, label);
+        assert_eq!((control.item_position, control.item_count), (None, None), "{label}: {control:?}");
+    }
+    h.close().await;
+}
+
+#[tokio::test]
+async fn test_a_covered_drop_target_is_not_released_on_a_nested_control() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = `
+          <div id=source draggable=true style='position:fixed;left:20px;top:20px;width:100px;height:80px'>Card</div>
+          <div id=drop role=button tabindex=0 aria-label=Target style='position:fixed;left:220px;top:20px;width:100px;height:80px'>
+            <button id=delete style='position:absolute;inset:0'>Delete</button>
+          </div>`;
+        window.presses = [];
+        document.addEventListener('pointerdown', e => window.presses.push(e.target.id));
+        source.ondragstart = e => e.dataTransfer.setData('text/plain', 'Card');
+        drop.ondragover = e => e.preventDefault();
+        drop.ondrop = e => e.preventDefault();
+        true",
+    )
+    .await;
+    let observed = h.observe().await;
+    let result = h.page.act(&drag(find(&observed, "Card"), find(&observed, "Target")), &observed).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
+    assert_eq!(eval_active(&h.page, "window.presses").await, json!([]));
+    h.close().await;
+}

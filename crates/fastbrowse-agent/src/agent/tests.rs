@@ -10015,6 +10015,23 @@ async fn test_a_secret_a_modal_is_named_with_is_masked() {
 }
 
 #[tokio::test]
+async fn test_secret_control_metadata_is_masked_before_observation() {
+    let mut control = button("Account");
+    control.role_description = Some("hunter2 is invalid".into());
+    control.description = Some("hunter2 was rejected".into());
+    control.validation_message = Some("hunter2 is not accepted".into());
+    let page = Observation { controls: vec![control], ..observation(&[]) };
+    let agent =
+        Agent::new(Arc::new(Scripted::new(page, vec![])), Arc::new(ScriptedJev::new(vec![])), Arc::new(ScriptedLLM));
+    agent.redactor().register("password", "hunter2", None);
+    let observed = agent.observe().await.expect("observed");
+    let control = &observed.controls[0];
+    assert_eq!(control.role_description.as_deref(), Some("••••••• is invalid"));
+    assert_eq!(control.description.as_deref(), Some("••••••• was rejected"));
+    assert_eq!(control.validation_message.as_deref(), Some("••••••• is not accepted"));
+}
+
+#[tokio::test]
 async fn test_a_plan_stops_at_the_step_limit() {
     // One step allowed and one taken: the planned fill is a step too, so none is taken.
     let form = delivery("1", "", "");
