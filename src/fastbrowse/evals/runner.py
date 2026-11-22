@@ -183,6 +183,7 @@ def _row(
     result: RunResult, *, task_id: str, failure: str | None, seconds: float, lost: float, limit: int | None
 ) -> dict[str, object]:
     """The fields every suite's row carries, so one report can read both."""
+    last = result.steps[-1] if result.steps else None
     return {
         "normalized_status": normalize(result.status),
         "task": task_id,
@@ -202,6 +203,8 @@ def _row(
         "answer": result.answer,
         "data": result.data,
         "error": result.error,
+        "failure_kind": result.failure_kind,
+        "last_step": f"{last.operation.value} -> {last.outcome.value}" if last else None,
         "trace": [f"{s.operation.value} {s.target or ''} -> {s.outcome.value}" for s in result.steps],
     } | _efficiency(result.cost)
 
@@ -433,6 +436,14 @@ async def main(argv: list[str]) -> int:
                     row["failure"] or "",
                     flush=True,
                 )
+                if not row["passed"]:
+                    # The artifacts are encrypted, so the plain log is all a nightly flake leaves to diagnose from.
+                    # Only the stop rule and the last step's operation and outcome: never a target or page text.
+                    print(
+                        f"      repeat {repeat} of {task.id}: stop reason {row['failure_kind']}, "
+                        f"last step {row['last_step']}, {row['steps']} steps",
+                        flush=True,
+                    )
                 used = cast("int", row["steps"])
                 budget = limits.max_steps
                 if budget is not None and used > HEADROOM * budget:

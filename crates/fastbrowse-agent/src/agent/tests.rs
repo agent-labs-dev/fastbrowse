@@ -10255,6 +10255,23 @@ async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
     assert!(asked.len() > picked + 1, "{asked:?}");
 }
 
+/// A press on a field whose role defines no keys copies its key from the task. Told to make a document's text bold and
+/// save it, Jev pressed the editor and the copy came out "document.", which the browser refused, ending the run as an
+/// error (#1212). Copied words that are no key leave the press unmade, and Jev is asked again.
+#[tokio::test]
+async fn test_a_press_copied_from_a_task_that_names_no_key_is_not_made() {
+    let editor = Control::new("e", "textbox", "Editor", [Operation::Fill, Operation::Press]);
+    let page = observation(std::slice::from_ref(&editor));
+    let jev = Arc::new(FirstChoice { wants: Some("document"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Make the document's text bold, then save the document.".into();
+    state.edits = Some(Edits::Allowed);
+    let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(editor))).await;
+    let Err(Flow::Unsure(unsure)) = result else { panic!("words that are no key were pressed: {result:?}") };
+    assert!(unsure.reason.contains("no key"), "{}", unsure.reason);
+}
+
 #[tokio::test]
 async fn test_a_role_key_is_classified_before_an_unauthorized_press() {
     let tab = Control::new("t", "tab", "Saved report", [Operation::Click]);
