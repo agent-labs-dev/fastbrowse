@@ -41,6 +41,22 @@ pub fn origin_of(url: &str) -> Option<String> {
     Some(parsed.origin().ascii_serialization())
 }
 
+/// The site an http(s) address belongs to: its registrable domain by the Public Suffix List, as a browser groups hosts
+/// into one site, so www.example.com and docs.example.com are one site while two hosts on pages.dev are two. A host
+/// the list cannot place, an IP address or localhost, is its own site. Scheme and port do not split a site.
+pub fn site_of(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    let site = match parsed.host()? {
+        url::Host::Domain(domain) => psl::domain_str(domain).unwrap_or(domain),
+        _ => host,
+    };
+    Some(site.to_string())
+}
+
 /// The normalized origin a grant entry names.
 ///
 /// An entry is configuration a person wrote, so it is held to the plain form: `http(s)://host[:port]` with an

@@ -558,6 +558,10 @@ public enum Operation
 {
     [JsonStringEnumMemberName("click")]
     Click,
+    [JsonStringEnumMemberName("right_click")]
+    RightClick,
+    [JsonStringEnumMemberName("double_click")]
+    DoubleClick,
     [JsonStringEnumMemberName("hover")]
     Hover,
     [JsonStringEnumMemberName("drag")]

@@ -513,8 +513,9 @@ timeout if it has one (`MCP_TOOL_TIMEOUT` in Claude Code).
 
 ## Safety model
 
-- **Irreversible actions.** Jev judges each click, key chord and dialog acceptance, including Enter presses. Without authorization, a
-  irreversible action stops at `needs_confirmation`. This is a
+- **Irreversible actions.** Jev judges each click, key chord, file attached to an input and dialog acceptance,
+  including Enter presses. Without authorization, an irreversible action stops at `needs_confirmation`. An action the
+  task says not to take ("do not click Upload") is refused, authorized or not. This is a
   classifier, not a guarantee: a page can word a harmful control to look harmless.
 - **Secrets.** Models see names only. A value is resolved at the moment it is typed, only on its declared origin,
   and redacted from everything the run returns. A password field is typed only from a stored secret.

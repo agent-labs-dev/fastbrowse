@@ -113,7 +113,9 @@ impl Agent {
         if added > 0 {
             self.seen().read_captures.entry(capture.sha256.clone()).or_insert_with(|| capture.text.clone());
         }
-        state.record_read(&capture, facts, compose);
+        // The trace keeps the typed capture and each fact's evidence, so `Notes::record` rebuilds these notes from it.
+        let read_facts = facts.clone();
+        let steps_taken = state.record_read(&capture, facts, compose);
         // A timer changes the capture hash, so only a new source quote is progress.
         // The same page read again in a browser after a fetch differs in small print, which is not new evidence.
         let again = state.fetched.remove(&capture.url);
@@ -124,9 +126,12 @@ impl Agent {
                 ("url".into(), capture.url.clone().into()),
                 ("title".into(), capture.title.clone().into()),
                 ("sha256".into(), capture.sha256.clone().into()),
-                ("text".into(), capture.text.clone().into()),
                 ("chars".into(), text::len(&capture.text).into()),
                 ("facts_added".into(), added.into()),
+                ("capture".into(), serde_json::to_value(&capture).unwrap_or_default()),
+                ("facts".into(), serde_json::to_value(&read_facts).unwrap_or_default()),
+                ("steps_taken".into(), steps_taken.into()),
+                ("compose".into(), compose.into()),
             ])
         });
         if progressed {

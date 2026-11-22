@@ -22,15 +22,15 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--extension-browser LABEL` | with the extension connected in more than one browser, use the one its popup labels `LABEL` |
 | `--cloud` | run in a Browser Use Cloud browser instead, which needs `BROWSER_USE_API_KEY` |
 | `--cloud-profile ID` | with `--cloud`, run on a signed-in Browser Use Cloud profile |
-| `--fetch` | read pages over HTTP with no browser, for a task that only reads |
-| `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); repeat it for each app to start in one run; see [Desktop apps](#desktop-apps) |
+| `--fetch` | read pages over HTTP with no browser, for a task that only reads; without `--start`, a first page it cannot read, such as one scripts build, is replaced by another page proposed knowing why, and the run ends `blocked` only when no readable page is known |
+| `--desktop APP` | start a Linux desktop app that exposes an accessibility tree and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); repeat it for each app to start in one run; see [Desktop apps](#desktop-apps) |
 | `--browser` | start a cloud browser from the first step, rather than reading over HTTP until the task needs one; extension runs already start in Chrome |
 | `--viewport WIDTHxHEIGHT` | with `--cloud`, the screen size requested from the cloud Chrome; does not emulate mobile, touch, device scale or user agent. Refused without `--cloud` |
 | `--attach` | with the extension, drive the window you have open instead of a tab of its own |
 | `--target-match TEXT` | with the extension, attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
 | `--foreground` | bring the run's tab to the front instead of working behind the current one |
 | `--proxy-country CC` | with `--cloud`, browse from that country (`uk`, `de`, ...; default `us`); starts the cloud browser before reading |
-| `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation`. It does not override a task that says to change nothing or not to download |
+| `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation`. It does not override a task that says to change nothing, not to download, or not to take an action |
 | `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on `ORIGIN` (`https://*.site.com` covers its hosts), or on the `--start` origin; models see `NAME` only |
 | `--bitwarden ITEM` | use a vault login on the origin its saved URIs match, including its one-time code |
 | `--max-steps N`, `--max-dollars N` | bound steps and model and web-search spend; unlimited by default |
@@ -242,7 +242,10 @@ its own, so the window opens on that agent's hidden workspace. When the run ends
 deskpilot to stop its agent, which closes every app the run launched. A window that is already open is not driven: deskpilot sends input in the background only to an app its agent launched. It needs a
 deskpilot with `launch` ([cjber/deskpilot#86](https://github.com/cjber/deskpilot/pull/86)); with an older one the run
 ends `unavailable`. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types in the
-background, so the pointer and keyboard focus stay where you left them:
+background, so the pointer and keyboard focus stay where you left them. An app that exposes no accessibility tree,
+such as a terminal or an app that draws its own interface, cannot be driven: the run ends `error` before its first
+step, naming the app and quoting deskpilot, whose message says when a variable such as Chromium's makes the app
+expose one:
 
 ```sh
 fastbrowse --desktop gnome-text-editor "Write 'hello' in a new document."
@@ -268,7 +271,11 @@ instance when it has one.
 
 A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window of
 that app class. `--authorize` and the step and spend ceilings work as for a browser. An open combo box's list and a
-popup menu's entries are controls like any other, and the run clicks the item it wants. Choosing a combo box's option
+popup menu's entries are controls like any other, and the run clicks the item it wants. The items of a list, tree,
+table, grid or icon view can also be double-clicked to open them, right-clicked for their context menu, such as a
+file's Rename or Compress, and dragged onto another control; a text field can be right-clicked for its edit menu.
+deskpilot refuses a drag and drop out of view, so dragging a file between folders needs
+`FASTBROWSE_DESKTOP_SHOWN=1`. Choosing a combo box's option
 by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. Recipes,
 `--start` and every browser option are refused, `--cursor` among them: a desktop run never brings its window to the
 front, so it draws its cursor in the recording, or on screen with `FASTBROWSE_DESKTOP_SHOWN=1`, described below. Two
