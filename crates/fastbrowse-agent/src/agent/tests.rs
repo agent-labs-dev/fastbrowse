@@ -995,7 +995,7 @@ impl LLMClient for StartProposer {
         }
         let url = if retold { self.again } else { Some("https://search.test/search?q=ruff") };
         Box::pin(async move {
-            let data = schema.validate_json(&json!({"url": url}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"url": url}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
