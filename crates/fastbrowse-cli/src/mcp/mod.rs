@@ -974,6 +974,11 @@ impl McpServer {
             outbox(info("waiting for another browse call to finish".into()));
         }
         let _slot = self.slots.acquire().await.map_err(|error| error.to_string())?;
+        // A call cancelled while it waited has been answered already; starting it then kept a trace its reply never
+        // named, and opened a browser for a run nobody waits on.
+        if cancel.is_tripped() {
+            return Err(ToolFailure::Cancelled(CancellationReceipt::default()));
+        }
         // The deadline starts once the slot is held, so a queued call does not spend its own time waiting for it.
         let deadline =
             limits.max_seconds.map(|seconds| Duration::from_secs_f64((seconds + config.grace_seconds).max(0.0)));
