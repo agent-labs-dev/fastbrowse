@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 
 /// Answers each request with the next reply for its tool, `<tool>.<n>`, repeating the last one once they run out: a
 /// page polls the same tool until what it waits for shows. A reply kept for one window, `<tool>@<window>.<n>`, answers
-/// that window's requests. Notifications get no reply.
+/// that window's requests. A tool with a `<tool>.delay` file sleeps that many seconds before it answers. Notifications
+/// get no reply.
 const SCRIPT: &str = r#"#!/bin/sh
 dir=$(dirname "$0")
 printf '%s\n' "$DESKPILOT_AGENT" > "$dir/agent"
@@ -29,6 +30,7 @@ while IFS= read -r line; do
   esac
   window=$(printf '%s' "$line" | sed -n 's/.*"window":"\([^"]*\)".*/\1/p')
   if [ -n "$window" ] && [ -f "$dir/$key@$window.1" ]; then key="$key@$window"; fi
+  [ -f "$dir/$key.delay" ] && sleep "$(cat "$dir/$key.delay")"
   n=$(cat "$dir/$key.n" 2>/dev/null || echo 0)
   if [ -f "$dir/$key.$((n + 1))" ]; then n=$((n + 1)); echo "$n" > "$dir/$key.n"; fi
   if [ -f "$dir/$key.$n" ]; then
@@ -354,7 +356,8 @@ async fn a_filmed_click_marks_its_element_centre_for_the_recording_cursor() {
     assert!(result.page_changed, "{result:?}");
     let points = kept.points.lock().unwrap();
     let points: Vec<_> = points.iter().map(|m| (m.operation, m.x, m.y, m.width, m.height)).collect();
-    assert_eq!(points, [(Operation::Click, 140.0, 50.0, 800.0, 600.0)]);
+    // In the pixels of the 640 by 480 frames filmed of the 800 by 600 window, where the film has the button.
+    assert_eq!(points, [(Operation::Click, 112.0, 40.0, 640.0, 480.0)]);
     page.withhold_frames(false);
     assert_eq!(*kept.frames.lock().unwrap(), [b"launched".to_vec(), b"clicked".to_vec()]);
 }
@@ -747,4 +750,75 @@ async fn a_click_that_closes_the_last_window_is_a_step_that_leaves_a_closed_app(
     // #1399: nothing more can be done, and the error says the run's own click closed the app.
     let BrowserError::Unavailable(message) = page.act(&click, &after).await.unwrap_err() else { panic!("not ended") };
     assert!(message.contains(r#"the last one closed after the run's click "No""#), "{message}");
+}
+
+#[tokio::test]
+async fn a_wait_with_no_deadline_watches_for_the_pages_bound_and_hands_the_step_back_unchanged() {
+    // Both the wait the agent gives no deadline and the plain WAIT action end at the page's bound, not never.
+    let fake = waiting_window("wait-bound", 600, false);
+    let page = open(&fake).await.watching(0.3);
+    let before = page.observe().await.unwrap();
+    let wait = Action::new(Operation::Wait);
+    for result in [page.wait(&wait, &before, f64::INFINITY).await, page.act(&wait, &before).await] {
+        let result = result.unwrap();
+        assert_eq!(result.outcome, StepOutcome::Executed);
+        assert!(!result.page_changed, "{result:?}");
+        assert_eq!(result.detail.as_deref(), Some("the window did not change"));
+    }
+}
+
+#[tokio::test]
+async fn a_wait_ends_at_its_deadline_though_a_poll_of_the_window_is_slow() {
+    let fake = waiting_window("wait-slow-poll", 600, false);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    std::fs::write(fake.dir().join("elements.delay"), "3").unwrap();
+    let changed = tokio::time::timeout(std::time::Duration::from_millis(1500), page.redrawn(&before, 0.3, None))
+        .await
+        .expect("the deadline must end a wait whose poll has not returned")
+        .unwrap();
+    assert!(!changed);
+}
+
+#[tokio::test]
+async fn a_drag_whose_window_was_reordered_since_the_observation_is_stale() {
+    // GNOME Files sorted a new file in between the decision and the act: e2 is now another file, so dragging by the
+    // old ids would pick up and drop the wrong ones.
+    let fake = folder("drag-reordered");
+    let reordered = |first: &str, second: &str| {
+        let cell = |id: &str, name: &str, x: i64, y: i64| {
+            json!({"id": id, "role": "grid cell", "name": name, "states": ["showing", "enabled", "selectable"],
+                "x": x, "y": y, "width": 80, "height": 20})
+        };
+        json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "width": 800, "height": 600,
+            "children": [cell("e2", first, 100, 40), cell("e3", second, 300, 200)]})
+    };
+    fake.replies("shot", [shot(&fake, "placed", b"placed")]).replies("drag", [ok(&json!({"x": 1, "y": 1}))]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    // Every read from here on, the peek the drag takes first included, sees the folder reordered.
+    fake.replies("elements", [ok(&reordered("keep", "photo-1.txt"))]);
+    let mut drag = Action::new(Operation::Drag);
+    drag.target_id = Some("e2".into());
+    drag.destination_id = Some("e3".into());
+    let result = page.act(&drag, &before).await.unwrap();
+    assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
+    assert!(calls(&fake, "drag").is_empty());
+}
+
+#[tokio::test]
+async fn a_window_the_app_opens_after_every_window_closed_is_where_the_run_goes_on() {
+    // An unlock or startup window replaced by the real one leaves the list empty between the two.
+    let fake = closing_dialog("closed-then-reopened");
+    fake.replies("wait_for@0xdef", [ok(&named("0xdef", "app", "Main"))]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    let mut click = Action::new(Operation::Click);
+    click.target_id = Some("e2".into());
+    let result = page.act(&click, &before).await.unwrap();
+    assert_eq!(result.detail.as_deref(), Some("every window of the app closed"));
+    // The app opens its next window: the next listing has it.
+    fake.replies("windows", [list(&[named("0xdef", "app", "Main")])]);
+    let after = page.observe().await.unwrap();
+    assert_eq!(after.document_key, "0xdef", "{after:?}");
 }

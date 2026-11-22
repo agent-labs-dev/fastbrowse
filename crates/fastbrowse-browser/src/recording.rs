@@ -490,7 +490,10 @@ impl Recording {
             match self.frame_dimensions().await {
                 Some((width, height)) => {
                     if !marks.is_empty() {
-                        overlays.push(("cursor.ass", cursor_ass(&marks, origin, card_at, width, height)));
+                        overlays.push((
+                            "cursor.ass",
+                            cursor_ass(&marks, origin, card_at, width, height, self.session.is_none()),
+                        ));
                     }
                     if let Some(card) = &self.drawn_card {
                         overlays.push(("card.ass", card_ass(card, since(card_at), width, height)));
@@ -868,7 +871,10 @@ fn disc(radius: f64) -> String {
 /// The cursor as an ASS overlay, drawn as deskpilot's agent cursor is (see `agent_cursor`): brackets at one size glide
 /// to each action point along an eased arc; a press moves them in towards the centre dot and back, and leaves a disc
 /// that grows and fades where it was pressed. Points are CSS pixels, scaled to the frame.
-fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32) -> String {
+///
+/// A `fitted` recording, a fed one, shrinks each frame to fit inside the first and centres it on black, never
+/// enlarging it, so a mark's own frame pixels are placed the same way, not stretched across the whole video.
+fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32, fitted: bool) -> String {
     use agent_cursor::*;
     let mut out = format!(
         "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,1,0,7,0,0,0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -877,7 +883,14 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
     const COLOUR: &str = "&H3052C5&";
     let unit = f64::from(width) / 1280.0;
     let seconds = |mark: &PointerMark| mark.at.saturating_duration_since(origin).as_secs_f64();
-    let point = |mark: &PointerMark| (mark.x * f64::from(width) / mark.width, mark.y * f64::from(height) / mark.height);
+    let point = |mark: &PointerMark| {
+        let (w, h) = (f64::from(width), f64::from(height));
+        if !fitted {
+            return (mark.x * w / mark.width, mark.y * h / mark.height);
+        }
+        let shrink = (w / mark.width).min(h / mark.height).min(1.0);
+        ((w - mark.width * shrink) / 2.0 + mark.x * shrink, (h - mark.height * shrink) / 2.0 + mark.y * shrink)
+    };
     let until = until.saturating_duration_since(origin).as_secs_f64();
     // When each mark's glide begins: as long as deskpilot's for its length, but not before the mark before it landed.
     let starts: Vec<f64> = marks
@@ -1062,7 +1075,7 @@ mod tests {
     fn brackets_stay_at_rest_size_while_gliding_and_move_in_on_a_press_only() {
         let origin = Instant::now();
         let marks = [mark(origin, Operation::Click, true, 1, 100.0), mark(origin, Operation::Hover, false, 3, 600.0)];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720, false);
         let layer = lines(&ass, 2);
         // A glide is straight pieces of an arc ending at the landing, at the resting size and full opacity.
         let moves = layer.iter().filter(|line| line.contains("\\move(")).collect::<Vec<_>>();
@@ -1096,7 +1109,7 @@ mod tests {
     fn a_press_leaves_a_fading_disc_where_it_was_pressed_and_a_hover_none() {
         let origin = Instant::now();
         let marks = [mark(origin, Operation::Fill, true, 1, 100.0), mark(origin, Operation::Hover, false, 3, 600.0)];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720, false);
         let discs = lines(&ass, 1);
         // 380 ms in 20 ms steps, all at the press, from 0.3 opacity to none.
         assert_eq!(discs.len(), 19);
@@ -1109,7 +1122,7 @@ mod tests {
     fn shapes_are_drawn_about_the_press_point() {
         let origin = Instant::now();
         let marks = [mark(origin, Operation::Fill, true, 1, 100.0)];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720, false);
         // Every event anchors its drawing's origin at the position, and the disc and the brackets are symmetric about it.
         for line in ass.lines().filter(|line| line.starts_with("Dialogue")) {
             assert!(line.contains("\\an7\\p1}"), "{line}");
@@ -1140,7 +1153,7 @@ mod tests {
             height: 720.0,
         };
         let marks = [mark(1000, 100.0, Operation::Fill, true), mark(1500, 600.0, Operation::Hover, false)];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(3), 1280, 720);
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(3), 1280, 720, false);
         let squeezed = ass
             .lines()
             .filter(|line| {
@@ -1151,11 +1164,29 @@ mod tests {
     }
 
     #[test]
+    fn a_fed_frame_smaller_than_the_video_keeps_its_pixels_centred_and_the_cursor_with_them() {
+        // A 640 by 360 window frame on a 1280 by 720 video is drawn at 640 by 360 in its middle: its centre is the
+        // video's, and a mark at the frame's left edge is a quarter of the way across, not at the video's left edge.
+        let origin = Instant::now();
+        let at =
+            |x, y| PointerMark { x, y, width: 640.0, height: 360.0, ..mark(origin, Operation::Click, false, 1, 0.0) };
+        let until = origin + std::time::Duration::from_secs(2);
+        let fitted = cursor_ass(&[at(0.0, 0.0)], origin, until, 1280, 720, true);
+        assert!(fitted.contains("\\pos(320.0,180.0)"), "{fitted}");
+        let centre = cursor_ass(&[at(320.0, 180.0)], origin, until, 1280, 720, true);
+        assert!(centre.contains("\\pos(640.0,360.0)"), "{centre}");
+        // A frame larger than the video is shrunk to fit: 2560 by 1440 halves.
+        let large = PointerMark { x: 2560.0, y: 1440.0, width: 2560.0, height: 1440.0, ..at(0.0, 0.0) };
+        let shrunk = cursor_ass(&[large], origin, until, 1280, 720, true);
+        assert!(shrunk.contains("\\pos(1280.0,720.0)"), "{shrunk}");
+    }
+
+    #[test]
     fn sizes_follow_the_frame_width() {
         let origin = Instant::now();
         let marks = [mark(origin, Operation::Click, true, 1, 100.0)];
-        let wide = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 2560, 1440);
-        let narrow = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 1280, 720);
+        let wide = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 2560, 1440, false);
+        let narrow = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 1280, 720, false);
         // The resting brackets' corner is 15 logical pixels out: 15 frame pixels at 1280 wide, 30 at 2560.
         assert!(narrow.contains("m -15.00 "));
         assert!(wide.contains("-30.00"));

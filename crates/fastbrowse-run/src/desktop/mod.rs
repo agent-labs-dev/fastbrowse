@@ -45,10 +45,6 @@ const SETTLE_SECONDS: f64 = 0.5;
 /// (#1406). Handed back unchanged, the step is counted, and Jev may wait again.
 const WATCH_SECONDS: f64 = 60.0;
 
-/// The seconds a WAIT given `seconds` watches the window for.
-fn watched(seconds: f64) -> f64 {
-    if seconds.is_finite() { seconds } else { WATCH_SECONDS }
-}
 const POLL: Duration = Duration::from_millis(100);
 /// Wheel clicks one SCROLL turns.
 const SCROLL_CLICKS: i64 = 5;
@@ -116,6 +112,10 @@ pub struct DeskpilotPage {
     /// asked for, and calling that a lost connection ended a finished task `unavailable` before its last step was
     /// recorded (#1405); the page now shows a closed app, which Jev reads like any other state.
     closed: Mutex<Option<String>>,
+    /// The size of the latest frame filmed, in pixels: where a mark lies in the film.
+    framed: Mutex<Option<(f64, f64)>>,
+    /// How long a WAIT with no deadline watches the window: `WATCH_SECONDS`.
+    watch: f64,
     /// The run's trace, where each input sent to an element is recorded with what the page took that element to be.
     trace: Trace,
 }
@@ -215,6 +215,8 @@ impl DeskpilotPage {
             sent: Mutex::new(None),
             trace: Trace::disabled(),
             closed: Mutex::new(None),
+            framed: Mutex::new(None),
+            watch: WATCH_SECONDS,
         })
     }
 
@@ -238,7 +240,8 @@ impl DeskpilotPage {
         if self.film.is_none() || self.withheld.load(Ordering::SeqCst) {
             return None;
         }
-        let (_, png, path) = self.shoot().await.ok()?;
+        let (shot, png, path) = self.shoot().await.ok()?;
+        *self.framed.lock().unwrap() = Some((shot.width, shot.height));
         // The frame is only film: its PNG must not outlive the bytes, whether the next observation films or drops it.
         let _ = tokio::fs::remove_file(&path).await;
         // Withheld while the shot was taken: a secret fill may have just begun.
@@ -250,6 +253,14 @@ impl DeskpilotPage {
     /// this point.
     fn point(&self, operation: Operation, (x, y, width, height): (f64, f64, f64, f64)) {
         if let Some(film) = &self.film {
+            // The film shows the window in the pixels of its shots, which need not be the window's own: the mark is put
+            // where that frame has it, as the recording fits frames, not stretches them, to its video.
+            let (x, y, width, height) = match *self.framed.lock().unwrap() {
+                Some((frame_width, frame_height)) => {
+                    (x * frame_width / width, y * frame_height / height, frame_width, frame_height)
+                }
+                None => (x, y, width, height),
+            };
             let pressed = matches!(
                 operation,
                 Operation::Click | Operation::RightClick | Operation::DoubleClick | Operation::Drag
@@ -321,17 +332,16 @@ impl DeskpilotPage {
     }
 
     /// The active window as it is now: its title follows the app's state. When it closed, the window active before
-    /// it is active again, or another window of the run. None once every window closed after an action the run sent;
-    /// every window closing with no action since the last observation ends the page.
+    /// it is active again, or another window of the run. None while every window is closed after an action the run sent;
+    /// every window closing with no action since the last observation ends the page. A closed app is looked at again on
+    /// every read: an app may replace a window, as it does a startup or unlock one, and the run goes on in the new one.
     async fn current(&self) -> PageResult<Option<Window>> {
-        if self.closed.lock().unwrap().is_some() {
-            return Ok(None);
-        }
         let address = self.address();
         if let Ok(found) = self.client.call_json("wait_for", json!({"window": address, "timeout": 0})).await {
             let window = read_window(&found)
                 .ok_or_else(|| BrowserError::failed("deskpilot/no-window", "deskpilot described no window"))?;
             *self.window.lock().unwrap() = window.clone();
+            *self.closed.lock().unwrap() = None;
             return Ok(Some(window));
         }
         let windows = self.windows().await?;
@@ -339,7 +349,8 @@ impl DeskpilotPage {
         let back = visited.iter().rev().find_map(|address| windows.iter().find(|window| window.address == *address));
         let Some(window) = back.or(windows.first()).cloned() else {
             let sent = self.sent.lock().unwrap().clone();
-            let Some(action) = sent else {
+            let closed = self.closed.lock().unwrap().clone();
+            let Some(action) = sent.or(closed) else {
                 return Err(BrowserError::Unavailable(format!(
                     "the desktop window {address} is gone, and no other window of the run is open"
                 )));
@@ -349,7 +360,16 @@ impl DeskpilotPage {
         };
         self.visited.lock().unwrap().retain(|visited| *visited != address);
         self.activate(window.clone());
+        *self.closed.lock().unwrap() = None;
         Ok(Some(window))
+    }
+
+    /// Whether every window is still closed, read again if it was: a window the app opened since reopens the run.
+    async fn still_closed(&self) -> PageResult<bool> {
+        if self.closed.lock().unwrap().is_none() {
+            return Ok(false);
+        }
+        Ok(self.current().await?.is_none())
     }
 
     /// Why nothing more can be done in the run's windows: an action closed the last of them. Said so, since an error
@@ -460,6 +480,14 @@ impl DeskpilotPage {
         })
     }
 
+    /// `work` unless `deadline` comes first, None then.
+    async fn until<T>(deadline: Option<Instant>, work: impl Future<Output = T>) -> Option<T> {
+        match deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline.into(), work).await.ok(),
+            None => Some(work.await),
+        }
+    }
+
     /// Waits up to `seconds` for the window to differ from `observation`, and once it does, for it to stop changing.
     async fn changed_within(
         &self,
@@ -468,11 +496,20 @@ impl DeskpilotPage {
         target_id: Option<&str>,
     ) -> PageResult<bool> {
         let deadline = seconds.is_finite().then(|| Instant::now() + Duration::from_secs_f64(seconds.max(0.0)));
+        // A poll is several deskpilot calls, each of which may take as long as the app is slow to answer: the deadline
+        // bounds the poll itself, not only the gap between two.
         loop {
-            if self.differs(observation, target_id).await? {
+            let Some(differs) = Self::until(deadline, self.differs(observation, target_id)).await else {
+                return Ok(false);
+            };
+            if differs? {
                 // A continuously updating window must not spend the run settling after the wait found its change.
                 let settle = Instant::now() + Duration::from_secs_f64(SETTLE_SECONDS);
-                self.settle(deadline.map_or(settle, |deadline| deadline.min(settle))).await?;
+                if let Some(settled) =
+                    Self::until(deadline, self.settle(deadline.map_or(settle, |deadline| deadline.min(settle)))).await
+                {
+                    settled?;
+                }
                 return Ok(true);
             }
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -522,6 +559,17 @@ impl DeskpilotPage {
                 ("name".into(), json!(found.map(|element| &element.name))),
             ])
         });
+    }
+
+    /// This page, watching the window `seconds` for a WAIT with no deadline instead of `WATCH_SECONDS`.
+    pub fn watching(mut self, seconds: f64) -> Self {
+        self.watch = seconds;
+        self
+    }
+
+    /// The seconds a WAIT given `seconds` watches the window for.
+    fn watched(&self, seconds: f64) -> f64 {
+        if seconds.is_finite() { seconds } else { self.watch }
     }
 
     /// This page, recording each input it sends to an element in `trace`.
@@ -659,13 +707,25 @@ impl DeskpilotPage {
         let (Some(source), Some(destination)) = (action.target_id.as_deref(), action.destination_id.as_deref()) else {
             return Ok(Some("drag needs an element to drag and one to drop it onto".into()));
         };
+        // Ids are numbered by the tree's order, so the window may have reordered since the observation: a file manager
+        // that sorted a new file in renumbers its items, and a stale id then names another file. Both ends are read in
+        // the window now, and each must still be the element the run chose, or the step is stale.
+        let fresh = self.peeked(window).await?;
         let ends = {
             let observed = self.observed.lock().unwrap();
-            let root = observed.as_ref();
-            (root.and_then(|root| tree::aim(root, source)), root.and_then(|root| tree::aim(root, destination)))
+            let chosen = |id: &str| {
+                let was = tree::find(observed.as_ref()?, id)?;
+                let now = tree::find(&fresh, id)?;
+                (was.role == now.role && was.name == now.name).then(|| tree::aim(&fresh, id)).flatten()
+            };
+            (chosen(source), chosen(destination))
         };
         let (Some((x1, y1, width, height)), Some((x2, y2, _, _))) = ends else {
-            return Ok(Some("the window does not say where both ends of the drag are".into()));
+            return Err(ToolError::Refused {
+                code: "stale".into(),
+                message: "the window changed since this observation: an end of the drag is no longer where it was"
+                    .into(),
+            });
         };
         let shot = match self.shoot().await {
             Ok((shot, _, path)) => {
@@ -800,7 +860,7 @@ impl DeskpilotPage {
     }
 
     async fn act_within(&self, action: &Action, observation: &Observation, seconds: f64) -> PageResult<ActResult> {
-        if self.closed.lock().unwrap().is_some() {
+        if self.still_closed().await? {
             return Err(self.ended());
         }
         // Only the latest snapshot's ids are live; deskpilot refuses the rest too, but a glance has no snapshot.
@@ -907,7 +967,7 @@ impl Page for DeskpilotPage {
 
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move {
-            let seconds = if action.operation == Operation::Wait { WATCH_SECONDS } else { SETTLE_SECONDS };
+            let seconds = if action.operation == Operation::Wait { self.watch } else { SETTLE_SECONDS };
             self.act_within(action, observation, seconds).await
         })
     }
@@ -918,7 +978,7 @@ impl Page for DeskpilotPage {
         observation: &'a Observation,
         seconds: f64,
     ) -> BoxFuture<'a, PageResult<ActResult>> {
-        Box::pin(async move { self.act_within(action, observation, watched(seconds)).await })
+        Box::pin(async move { self.act_within(action, observation, self.watched(seconds)).await })
     }
 
     fn redrawn<'a>(
@@ -951,7 +1011,7 @@ impl Page for DeskpilotPage {
                     moved: false,
                 });
             }
-            if self.closed.lock().unwrap().is_some() {
+            if self.still_closed().await? {
                 return Err(self.ended());
             }
             let Some(shot) = self.shot.lock().unwrap().clone() else {
@@ -1012,16 +1072,5 @@ impl Drop for RemoveOnDrop {
         if let Some(path) = self.0.take() {
             let _ = std::fs::remove_file(path);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_wait_with_no_deadline_watches_the_window_for_one_call_and_hands_the_step_back() {
-        assert_eq!(watched(f64::INFINITY), WATCH_SECONDS);
-        assert_eq!(watched(0.15), 0.15);
     }
 }
