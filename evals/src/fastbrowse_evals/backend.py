@@ -265,9 +265,16 @@ def read_pages(events: Iterable[object]) -> tuple[list[dict[str, object]], dict[
     for event in events:
         if not isinstance(event, Mapping) or event.get("event") not in ("page", "read"):
             continue
-        if not isinstance(event.get("text"), str) or not isinstance(event.get("step"), int):
+        # A read event's text is its capture's, kept typed beside the blocks and sources the notes were built from.
+        page = event.get("capture") if event["event"] == "read" else event
+        if (
+            not isinstance(page, Mapping)
+            or not isinstance(page.get("text"), str)
+            or not isinstance(event.get("step"), int)
+        ):
             continue
-        record = {key: event[key] for key in ("url", "title", "text", "controls") if event.get(key) is not None}
+        record = {key: event[key] for key in ("url", "title", "controls") if event.get(key) is not None}
+        record["text"] = page["text"]
         key = (record.get("url"), record.get("title"), record["text"])
         if key not in index:
             index[key] = len(pages)

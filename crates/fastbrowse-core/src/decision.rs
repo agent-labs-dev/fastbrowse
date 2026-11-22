@@ -56,14 +56,30 @@ pub fn asset_bytes(reference: &str, png: &[u8]) -> usize {
 /// Whether TypeSafe takes `png` as a Jev image: a PNG 280 to 1568 pixels a side and 78,400 to 2,458,624 in all, of at
 /// most 16 MiB. An image outside these is refused with the whole request, never resized.
 pub fn jev_takes_png(png: &[u8]) -> bool {
-    if png.len() < 24 || !png.starts_with(b"\x89PNG\r\n\x1a\n") || png.len() > 16 * 1024 * 1024 {
+    let Some((width, height)) = png_size(png).filter(|_| png.len() <= 16 * 1024 * 1024) else {
         return false;
-    }
-    let side = |at: usize| u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]) as u64;
-    let (width, height) = (side(16), side(20));
+    };
     (280..=JEV_IMAGE_SIDE as u64).contains(&width)
         && (280..=JEV_IMAGE_SIDE as u64).contains(&height)
         && (78_400..=2_458_624).contains(&(width * height))
+}
+
+/// A PNG's width and height in pixels, read from its header.
+fn png_size(png: &[u8]) -> Option<(u64, u64)> {
+    if png.len() < 24 || !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
+    let side = |at: usize| u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]) as u64;
+    Some((side(16), side(20)))
+}
+
+/// The input tokens Jev counts for one use of the image `png`: two for each 28 pixel square it covers, each side
+/// rounded up, and 15 more. Measured against Jev 1.14 through OpenRouter on 2026-11-19, one request each beside a
+/// 284 token state: 280x280 added 215 tokens, 560x280 415, 800x600 1,291, 1000x1000 2,607, 1568x882 3,599 and
+/// 1568x1568 6,287, each exactly this count; two images and one image referred to twice both added 7,198. Left
+/// uncounted, a step showing eight cards was sent past Jev's limit and refused with `max_tokens_exceeded` (#1303).
+pub fn jev_image_tokens(png: &[u8]) -> i64 {
+    png_size(png).map_or(0, |(width, height)| (2 * width.div_ceil(28) * height.div_ceil(28) + 15) as i64)
 }
 
 /// `state` with every value that is an image reference left out, for a route that takes no image.
@@ -855,6 +871,22 @@ mod tests {
         assert!(!jev_takes_png(&png(2560, 1800)), "a HiDPI viewport");
         assert!(!jev_takes_png(&png(1280, 279)));
         assert!(!jev_takes_png(b"\xff\xd8\xff\xe0 a JPEG is not asked about here"));
+    }
+
+    #[test]
+    fn an_images_tokens_are_counted_as_jev_counted_them() {
+        let measured = [
+            ((280, 280), 215),
+            ((560, 280), 415),
+            ((800, 600), 1291),
+            ((1000, 1000), 2607),
+            ((1568, 882), 3599),
+            ((1568, 1568), 6287),
+        ];
+        for ((width, height), tokens) in measured {
+            assert_eq!(jev_image_tokens(&png(width, height)), tokens, "{width}x{height}");
+        }
+        assert_eq!(jev_image_tokens(b"not a png"), 0);
     }
 
     #[test]

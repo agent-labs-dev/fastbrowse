@@ -26,7 +26,7 @@ use super::state::{
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
+use crate::policy::{Commit, Decision, FieldChange, Form, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_readable_start, propose_start};
 use crate::verification::RecordSchema;
@@ -182,7 +182,7 @@ impl Agent {
                     }
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
-                    state.mark_read_links(&mut offered);
+                    state.mark_links(&mut offered);
                     state.mark_shown(&mut offered);
                     // The next saved step, when its page and control are certain, is the one control Jev is offered:
                     // Jev still judges the page, and may read or stop instead, but has no target to choose and no
@@ -282,12 +282,20 @@ impl Agent {
             // Only a commit that was sent counts: one the page redrew, covered or replaced before it went is not one
             // the run has made. One that opened a dialog is not made yet: accepting the dialog makes it, through its
             // own gate.
-            if committed
+            let taken = committed
                 && !state.page_failed
                 && observation.dialog.is_none()
-                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
-            {
+                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed);
+            if taken {
                 state.commits += 1;
+            }
+            if observation.dialog.is_none() {
+                state.dialog_form = None;
+            }
+            if committed
+                && let Some(entry) = state.history.last_mut().filter(|entry| entry.commit == Some(Commit::Sent))
+            {
+                entry.commit = taken.then_some(Commit::Taken);
             }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
@@ -1011,7 +1019,7 @@ impl Agent {
         let mut typed: Option<String> = None;
         let mut effect_now: Option<String> = None;
         let mut setting = false;
-        let mut set: Vec<(String, String)> = Vec::new();
+        let mut set: Vec<FieldChange> = Vec::new();
         let frames = self.on_event.is_some() && self.config.step_frames;
         let act: ActResult;
         let changed: bool;
@@ -1268,8 +1276,8 @@ impl Agent {
                 set = done
                     .set
                     .iter()
-                    .filter_map(|(id, held)| Some((describe(landed.controls.iter().find(|c| c.id == *id)?), held)))
-                    .map(|(field, held)| {
+                    .filter_map(|(id, held)| {
+                        let field = landed.controls.iter().find(|c| c.id == *id)?;
                         let left = match held {
                             Setting::Value(Some(value)) => text::repr(value),
                             Setting::Value(None) => "empty".to_string(),
@@ -1278,14 +1286,26 @@ impl Agent {
                                 (if *selected { "selected" } else { "not selected" }).to_string()
                             }
                         };
-                        (field, left)
+                        Some(FieldChange {
+                            label: describe(field),
+                            value: left,
+                            form: Form::of(&landed, field),
+                            was_target: observation.document_key == landed.document_key
+                                && field.frame_id == target.frame_id
+                                && field.id == target.id,
+                        })
                     })
                     .collect();
                 // A page that shows a choice only in a label or in text holds it in no field it reports, so the run
                 // cannot say which field it set: it says what it clicked.
                 let stayed = observation.url == landed.url && observation.document_key == landed.document_key;
                 if set.is_empty() && done.set_something && stayed {
-                    set.push((describe(target), UNREPORTED.to_string()));
+                    set.push(FieldChange {
+                        label: describe(target),
+                        value: UNREPORTED.to_string(),
+                        form: None,
+                        was_target: false,
+                    });
                 }
                 effect_now = Some(done.summary);
             }
@@ -1297,6 +1317,15 @@ impl Agent {
             }
             act = result;
         }
+        let sent = state.committing && act.outcome == StepOutcome::Executed;
+        let form = if decision.operation == Operation::Dialog && act.outcome == StepOutcome::Executed {
+            state.dialog_form.take().filter(|_| sent)
+        } else {
+            decision.target.as_ref().and_then(|target| Form::of(observation, target))
+        };
+        if act.outcome == StepOutcome::Executed && observation.dialog.is_none() {
+            state.dialog_form.clone_from(&form);
+        }
         state.history.push(HistoryEntry {
             text: typed,
             effect: effect_now,
@@ -1304,6 +1333,8 @@ impl Agent {
             setting: setting.then_some(true),
             set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
+            commit: sent.then_some(Commit::Sent),
+            form,
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {

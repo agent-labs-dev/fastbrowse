@@ -86,6 +86,17 @@ impl Default for TokenBudget {
 }
 
 impl TokenBudget {
+    /// The characters of decision state that `tokens` counted exactly, as an image's are, take from the room
+    /// `input_chars` gives, at the ratio that room was fitted at.
+    pub fn decision_chars_of(&self, tokens: i64) -> i64 {
+        let ratio = if self.decision_chars.is_some() {
+            crate::decision::JEV_LONG_CONTEXT_CHARS_PER_TOKEN
+        } else {
+            JSON_CHARS_PER_TOKEN
+        };
+        (tokens as f64 * ratio).ceil() as i64
+    }
+
     /// Characters of decision state that fit beside `questions` within Jev's limits, measured as Python measures them,
     /// in code points.
     pub fn input_chars<S: AsRef<str>>(&self, questions: &[S]) -> i64 {
