@@ -3,6 +3,8 @@
     "Operation": {
       "enum": [
         "click",
+        "right_click",
+        "double_click",
         "hover",
         "drag",
         "fill",
