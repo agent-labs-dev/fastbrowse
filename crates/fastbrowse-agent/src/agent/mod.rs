@@ -450,15 +450,21 @@ impl Agent {
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first
         // address worked out from the task.
         let open = async {
+            let mut chosen = false;
             if opening.is_none() {
                 opening = match start {
                     Some(start) => Some(start.to_string()),
-                    None if options.choose_start => self.first_page(task, ledger).await?,
+                    None if options.choose_start => {
+                        chosen = true;
+                        self.first_page(task, ledger).await?
+                    }
                     None => None,
                 };
             }
-            if let Some(opening) = &opening {
-                self.trace.phase("open", self.page.navigate(opening, None)).await?;
+            // Left holding the address the run began with when none opens, so a run that moves to a browser opens it
+            // instead of choosing its start page again.
+            if let Some(first) = opening.as_mut() {
+                self.open_start(first, chosen, task, ledger).await?;
             }
             if let (None, Some(opening)) = (start, &opening) {
                 // The caller gave a goal and no page, so this address was worked out from the task.
