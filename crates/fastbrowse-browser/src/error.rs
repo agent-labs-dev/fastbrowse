@@ -3,8 +3,9 @@
 
 use std::fmt;
 
-use fastbrowse_core::models::MaybeUnavailable;
+use fastbrowse_core::models::{FailureKind, MaybeUnavailable};
 use fastbrowse_core::page::BrowserError as PageError;
+pub use fastbrowse_core::page::Failure;
 
 /// Every browser failure, with a message safe to put in a run result: never page text.
 ///
@@ -13,18 +14,18 @@ use fastbrowse_core::page::BrowserError as PageError;
 /// the core variant their Python base class is, except `PageUnresponsive`, which ends the run `unavailable`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserError {
-    Failed(String),
+    Failed(Failure),
     /// CDP's -32000: the document a command addressed was replaced while it ran.
     ContextLost(String),
     /// `BrowserUnavailable`: the session has no page left for this run.
     Unavailable(String),
     ScreenshotsUnavailable(String),
-    NavigationTimeout(String),
-    SiteUnreachable(String),
+    NavigationTimeout(Failure),
+    SiteUnreachable(Failure),
     /// The browser stopped answering: an outage, so `Unavailable` above the seam.
     BrowserUnresponsive(String),
     /// A tab that stopped answering while the browser behind it still answers.
-    PageUnresponsive(String),
+    PageUnresponsive(Failure),
     /// A document outside `allowed_origins`. The message never names it: an address can carry a credential.
     OriginNotAllowed,
     /// A script this layer evaluated threw in the page.
@@ -32,6 +33,10 @@ pub enum BrowserError {
 }
 
 impl BrowserError {
+    pub fn failed(reason: impl Into<String>, message: impl Into<String>) -> BrowserError {
+        BrowserError::Failed(Failure::new(reason, message))
+    }
+
     /// Whether Python's `isinstance(error, Unavailable)` holds: an outage, not a failed task.
     pub fn is_unavailable(&self) -> bool {
         matches!(self, Self::Unavailable(_) | Self::BrowserUnresponsive(_))
@@ -61,14 +66,14 @@ impl BrowserError {
 impl fmt::Display for BrowserError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Failed(m)
-            | Self::ContextLost(m)
+            Self::Failed(failure)
+            | Self::NavigationTimeout(failure)
+            | Self::SiteUnreachable(failure)
+            | Self::PageUnresponsive(failure) => f.write_str(&failure.message),
+            Self::ContextLost(m)
             | Self::Unavailable(m)
             | Self::ScreenshotsUnavailable(m)
-            | Self::NavigationTimeout(m)
-            | Self::SiteUnreachable(m)
-            | Self::BrowserUnresponsive(m)
-            | Self::PageUnresponsive(m) => f.write_str(m),
+            | Self::BrowserUnresponsive(m) => f.write_str(m),
             Self::OriginNotAllowed => f.write_str("the page is outside allowed_origins"),
             Self::Script => f.write_str("Runtime.evaluate failed (JavaScriptError)"),
         }
@@ -76,6 +81,17 @@ impl fmt::Display for BrowserError {
 }
 
 impl std::error::Error for BrowserError {}
+
+impl FailureKind for BrowserError {
+    fn failure_kind(&self) -> String {
+        match self {
+            Self::BrowserUnresponsive(_) => "BrowserUnresponsive".into(),
+            Self::OriginNotAllowed => "OriginNotAllowed".into(),
+            Self::Script => "Script".into(),
+            other => PageError::from(other.clone()).failure_kind(),
+        }
+    }
+}
 
 impl MaybeUnavailable for BrowserError {
     fn is_unavailable(&self) -> bool {
@@ -91,13 +107,13 @@ impl From<BrowserError> for PageError {
             BrowserError::Unavailable(_) | BrowserError::BrowserUnresponsive(_) => PageError::Unavailable(message),
             // Kept apart so the agent can reopen a page that hung during an action once; any other, and a second,
             // ends the run `unavailable` rather than retrying a dead page (#737).
-            BrowserError::PageUnresponsive(_) => PageError::PageUnresponsive(message),
+            BrowserError::PageUnresponsive(failure) => PageError::PageUnresponsive(failure),
             BrowserError::ScreenshotsUnavailable(_) => PageError::ScreenshotsUnavailable(message),
-            BrowserError::NavigationTimeout(_) => PageError::NavigationTimeout(message),
-            BrowserError::SiteUnreachable(_) => PageError::SiteUnreachable(message),
-            BrowserError::Failed(_) | BrowserError::OriginNotAllowed | BrowserError::Script => {
-                PageError::Failed(message)
-            }
+            BrowserError::NavigationTimeout(failure) => PageError::NavigationTimeout(failure),
+            BrowserError::SiteUnreachable(failure) => PageError::SiteUnreachable(failure),
+            BrowserError::Failed(failure) => PageError::Failed(failure),
+            BrowserError::OriginNotAllowed => PageError::failed("OriginNotAllowed", message),
+            BrowserError::Script => PageError::failed("Runtime.evaluate/JavaScriptError", message),
         }
     }
 }
@@ -109,12 +125,18 @@ mod tests {
     #[test]
     fn each_error_crosses_the_seam_as_the_core_variant_it_ends_the_run_as() {
         let cases = [
-            (BrowserError::Failed("f".into()), PageError::Failed("f".into())),
+            (BrowserError::failed("r", "f"), PageError::failed("r", "f")),
             (BrowserError::ContextLost("c".into()), PageError::ContextLost("c".into())),
             (BrowserError::BrowserUnresponsive("b".into()), PageError::Unavailable("b".into())),
-            (BrowserError::PageUnresponsive("p".into()), PageError::PageUnresponsive("p".into())),
-            (BrowserError::OriginNotAllowed, PageError::Failed("the page is outside allowed_origins".into())),
-            (BrowserError::SiteUnreachable("s".into()), PageError::SiteUnreachable("s".into())),
+            (
+                BrowserError::PageUnresponsive(Failure::new("r", "p")),
+                PageError::PageUnresponsive(Failure::new("r", "p")),
+            ),
+            (
+                BrowserError::OriginNotAllowed,
+                PageError::failed("OriginNotAllowed", "the page is outside allowed_origins"),
+            ),
+            (BrowserError::SiteUnreachable(Failure::new("r", "s")), PageError::SiteUnreachable(Failure::new("r", "s"))),
         ];
         for (error, expected) in cases {
             assert_eq!(PageError::from(error), expected);

@@ -24,7 +24,7 @@ type Outcome = Result<RunResult, RunError>;
 pub type Requests = Arc<Mutex<Vec<Value>>>;
 
 fn result(status: Status) -> RunResult {
-    RunResult { status, error: None, ..crate::options::error_result("") }
+    RunResult { status, error: None, failure_kind: None, ..crate::options::error_result("", "") }
 }
 
 fn browser(live_url: Option<&str>, browser_id: Option<&str>) -> Event {

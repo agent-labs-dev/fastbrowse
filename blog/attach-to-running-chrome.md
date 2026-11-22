@@ -3,9 +3,9 @@ title: Connect an agent to a running Chrome over CDP
 description: "Drive signed-in Chrome through the fastbrowse extension, or connect an SDK to an Electron app over its DevTools port."
 topic: Browsers and logins
 published: 2026-11-01
-updated: 2026-11-19
+updated: 2026-11-20
 verifiedAgainst: v0.11.0
-verifiedOn: 2026-11-19
+verifiedOn: 2026-11-20
 ---
 
 fastbrowse can drive a browser you already have open, signed in with your profile. From the command line that is your own Chrome, through the extension. Any other Chromium app, including an Electron app, needs its DevTools port and an SDK.

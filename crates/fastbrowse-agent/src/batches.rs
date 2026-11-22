@@ -458,7 +458,7 @@ mod tests {
             _: &'a Value,
             _: &'a IndexMap<String, Question>,
         ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
-            Box::pin(async { Err(DecisionError::Failed("down".into())) })
+            Box::pin(async { Err(DecisionError::failed("down")) })
         }
     }
 
@@ -472,6 +472,6 @@ mod tests {
         );
         let error = block_on(evaluate_batches(JevPurpose::Verify, &Failing, &json!({}), &asked, &tokens, None, false))
             .unwrap_err();
-        assert_eq!(error, AgentError::Jev(DecisionError::Failed("down".into())));
+        assert_eq!(error, AgentError::Jev(DecisionError::failed("down")));
     }
 }

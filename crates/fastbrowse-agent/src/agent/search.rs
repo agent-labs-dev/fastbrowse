@@ -89,7 +89,12 @@ impl Agent {
             options.insert(format!("search/{index}"), json!(format!("Search the web without a browser: {query}")));
         }
         if options.is_empty() {
-            return Err(Stop::new(Status::NeedsInput, "the task names no page or searchable information").into());
+            return Err(Stop::new(
+                Status::NeedsInput,
+                "Start/nothing-to-open",
+                "the task names no page or searchable information",
+            )
+            .into());
         }
         let choice = self.choose_entry(&task, ledger, options).await?;
         if choice == "url" {
@@ -99,14 +104,26 @@ impl Agent {
             .strip_prefix("search/")
             .and_then(|index| index.parse::<usize>().ok())
             .and_then(|index| proposal.data.queries.get(index))
-            .ok_or_else(|| Stop::new(Status::NeedsInput, "the starting search was not one of the proposed queries"))?;
+            .ok_or_else(|| {
+                Stop::new(
+                    Status::NeedsInput,
+                    "Start/unproposed-query",
+                    "the starting search was not one of the proposed queries",
+                )
+            })?;
         if self.reveals_text(query) {
-            return Err(Stop::new(Status::NeedsInput, "search query contains a resolved secret").into());
+            return Err(Stop::new(
+                Status::NeedsInput,
+                "Search/secret-in-query",
+                "search query contains a resolved secret",
+            )
+            .into());
         }
         let result = self.search_web(ledger.clone(), query).await?;
         if result.outcome == StepOutcome::Failed {
             return Err(Stop::new(
                 Status::Unavailable,
+                "Search/failed",
                 result.detail.unwrap_or_else(|| "web search was unavailable".into()),
             )
             .into());
@@ -159,7 +176,9 @@ impl Agent {
                 }
                 _ => None,
             }
-            .ok_or_else(|| Stop::new(Status::NeedsInput, "no offered starting page or search was chosen"))?;
+            .ok_or_else(|| {
+                Stop::new(Status::NeedsInput, "Start/none-chosen", "no offered starting page or search was chosen")
+            })?;
             if !grouped {
                 return Ok(selected[0].0.clone());
             }
@@ -186,20 +205,32 @@ impl Agent {
             .filter(|query| !query.trim().is_empty() && !self.reveals_text(query))
             .collect();
         if queries.is_empty() {
-            return Err(Stop::new(Status::NeedsInput, "no web search query could be proposed for the task").into());
+            return Err(Stop::new(
+                Status::NeedsInput,
+                "Search/no-query",
+                "no web search query could be proposed for the task",
+            )
+            .into());
         }
         let query = self
             .choose(state, observation, "Which web search query finds what the task still needs?", &queries)
             .await?;
         if self.reveals_text(&query) {
-            return Err(Stop::new(Status::NeedsInput, "search query contains a resolved secret").into());
+            return Err(Stop::new(
+                Status::NeedsInput,
+                "Search/secret-in-query",
+                "search query contains a resolved secret",
+            )
+            .into());
         }
         Ok(query)
     }
 
     pub(super) async fn search_web(&self, ledger: Arc<Ledger>, query: &str) -> Step<ActResult> {
-        let price =
-            self.page.search_price().ok_or_else(|| Stop::new(Status::Blocked, "web search is not configured"))?;
+        let price = self
+            .page
+            .search_price()
+            .ok_or_else(|| Stop::new(Status::Blocked, "Search/not-configured", "web search is not configured"))?;
         ledger.reserve(CostComponent::Search, price, 0)?;
         let mut pending = PendingSearch { ledger: ledger.clone(), price: Some(price) };
         let seconds = super::browsing_deadline(&ledger, false)

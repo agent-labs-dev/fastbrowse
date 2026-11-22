@@ -61,6 +61,15 @@ pub enum BrowserUseCloudError {
     },
 }
 
+impl fastbrowse_core::models::FailureKind for BrowserUseCloudError {
+    fn failure_kind(&self) -> String {
+        match self {
+            Self::Error(_) => "Error".into(),
+            Self::Unavailable { .. } => "Unavailable".into(),
+        }
+    }
+}
+
 impl BrowserUseCloudError {
     /// Whether Python's `isinstance(error, Unavailable)` holds: an outage, not a failed task.
     pub fn is_unavailable(&self) -> bool {

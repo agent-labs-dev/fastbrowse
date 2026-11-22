@@ -116,7 +116,7 @@ impl DecisionClient for Inspect {
         if questions.contains_key("operation") {
             assert!(state.get("viewport_screenshot").is_some());
             *self.action.lock().unwrap() = Some((questions.clone(), images.clone()));
-            return Box::pin(async { Err(DecisionError::Failed("inspection finished".into())) });
+            return Box::pin(async { Err(DecisionError::failed("inspection finished")) });
         }
         self.inner.evaluate(state, questions)
     }

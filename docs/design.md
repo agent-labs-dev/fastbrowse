@@ -4,7 +4,7 @@ fastbrowse splits a browser agent into three owners:
 
 - **Jev decides, reads and finishes.** A batched request chooses an operation and its possible targets from indexed controls. Its shared state retains each control's context and available operations, so the operation choice can tell which open widget the task needs. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. Large target sets use a second choice within the selected group. Jev also checks sign-in and bot walls on fresh pages, picks what a page says from its quoted spans, and ends the run by choosing DONE.
 - **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. When Jev says a field takes a value the task asks for without stating it word for word, such as a search query, it writes that value from the task and the field's label, never from the page. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose values and answers Jev can quote calls no LLM.
-- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, an answer its composer says leaves a requested value unestablished, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`).
+- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, an answer its composer says leaves a requested value unestablished, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`). It judges from the current page and the run's actions, the first of which is the run's own opening of its start page, so a task that says to open a page and go on from it is not held undone for the opening.
 
 When a field value or key chord is copied, Jev selects its source and first word. If its end needs a separate choice,
 each choice shows a candidate span from that first word to the candidate end, with one more
@@ -194,7 +194,13 @@ offered, as a browser capture leaves it out, so a disabled next link is no next 
 take starts one on the same page, and the run carries on with
 what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
 build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a
-browser does it.
+browser does it. A served page with no links or controls is stated to Jev as leading nowhere only when nothing a
+browser would add is missing from the read: no `<script>` the HTML standard runs (a classic script with a
+JavaScript type and no `nomodule`, or a module, with a `src` or text, outside `<template>` and `<noscript>`), no
+non-empty event handler attribute, such as `onload` or `onanimationstart` (every one the web's specs add to
+elements, and those Chrome adds), in the page or a frame read into it,
+and no frame left unread. Otherwise Jev is told what was left out and whether a step can open a browser: by
+default a wait or other step it picks there opens one on the page, and with `fetch` none opens.
 `fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
 A JSON response, including `application/*+json`, is read by its structure: each object key is a heading, and each
@@ -276,7 +282,9 @@ writes page text. A span Jev picks becomes a fact, and identical values from the
 with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
 answer is composed when the run tries to finish, with recovery for a rejected draft. The recovery decision is told
 which claim failed which check, and a draft rejected for leaving out something the task asks for is shown to it whole,
-since no one claim is to blame and only the draft says what it lacks.
+since no one claim is to blame and only the draft says what it lacks. A run that stops with a rejected draft, its
+recoveries spent, returns the claims that passed while the notes behind them are unchanged; otherwise it writes its
+answer once more as that draft's rewrite, told what was rejected.
 
 A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
 quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.
@@ -490,7 +498,9 @@ This safety reading preserves the pending action's guards and leaves download no
 Jev identifies whether the task requests a final image, text, both, or an action without a report. A requested
 final screenshot does not require step frames. Image-only output skips answer composition and text evidence
 requirements; a request for both keeps the text evidence checks. An HTTP-first run opens a browser when
-its requested output needs pixels. A fresh secret check can withhold the image; a completed task without
+its requested output needs pixels. When the run has a browser page, the done check, the composer and the coverage
+check are told that code attaches one screenshot, of the page the run ends on: a requested screenshot is given when
+that page is the one the task asks to have pictured, and the answer need not say whether one is attached. A fresh secret check can withhold the image; a completed task without
 its requested image becomes `unverified`. Python and Rust expose the PNG as `RunResult.final_frame`.
 JSON clients receive a `screenshot` artifact with an `image/png` MIME type, SHA-256 digest and a base64 data URI.
 `Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried

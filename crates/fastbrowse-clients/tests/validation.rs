@@ -345,6 +345,38 @@ async fn test_cancelled_dispatched_request_retains_estimated_input_cost() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn test_a_request_cancelled_in_the_transports_queue_costs_nothing() {
+    // An embedder's client holds a request past its connection limit until one frees; cancelled there, it never
+    // reached the provider, while one the transport had let go may have been billed.
+    for taken in [false, true] {
+        let queued = Arc::new(Notify::new());
+        let signal = queued.clone();
+        let http = answering(move |request| {
+            request.handoff.queue();
+            if taken {
+                assert!(request.handoff.take());
+            }
+            let signal = signal.clone();
+            Box::pin(async move {
+                signal.notify_one();
+                std::future::pending().await
+            })
+        });
+        let paid = Paid::default();
+        let trace = Trace::collecting();
+        let client = direct(http.with_trace(trace.clone()));
+        let page = json!("page");
+        let questions = one();
+        tokio::select! {
+            _ = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&page, &questions)) => panic!("cancelled"),
+            _ = queued.notified() => {}
+        }
+        assert_eq!(paid.lines().len(), usize::from(taken), "taken: {taken}");
+        assert_eq!(events(&trace, "cancelled_request_cost").len(), usize::from(taken), "taken: {taken}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn text_cancellation_preserves_trace_tokens_without_a_price() {
     for unpriced in [false, true] {
         let script = Script::new([common::Step::Cancel]);

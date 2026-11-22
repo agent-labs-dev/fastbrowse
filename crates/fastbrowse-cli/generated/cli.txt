@@ -70,7 +70,9 @@ options:
   --recipe FILE         replay a saved run: Jev is offered each saved action
                         alone where its page and control match
   --save-recipe FILE    save the steps of a completed run as recipe JSON
-  --record FILE         save a video of the run, ending on its answer (needs
+  --record FILE         save a captioned video of the run, ending on its
+                        answer, and an uncaptioned copy beside it with .plain
+                        before the extension, e.g. run.plain.mp4 (needs
                         ffmpeg); a --desktop run is filmed from its window,
                         and --fetch, which starts no browser, cannot record
   --fetch               never start a browser: a step that needs one ends the
@@ -98,6 +100,19 @@ options:
   --no-cursor           do not draw the agent's cursor (by default it is
                         drawn over a visible Chrome with the Cua Driver on
                         Linux X11, and skipped where unsupported)
+
+Refused together: --fetch starts no browser, so it refuses --browser, --cloud,
+--local, --extension, --extension-browser, --headed, --profile,
+--cloud-profile, --cdp-url, --cdp-port, --attach, --target-match,
+--foreground, --proxy-country, --viewport, --record, --recipe, --save-recipe,
+--downloads, --cursor, --secret, --bitwarden, --input, --file and --authorize.
+--cloud refuses --headed, --profile, --cdp-url, --cdp-port, --extension,
+--extension-browser, --attach, --target-match and --desktop. --desktop drives
+an app, not a browser, so it refuses --start, --fetch, --browser, --local,
+--extension, --extension-browser, --headed, --profile, --cloud-profile,
+--cdp-url, --cdp-port, --attach, --target-match, --foreground,
+--proxy-country, --viewport, --recipe, --save-recipe, --downloads and
+--cursor.
 
 Update: fastbrowse self-update names how this copy was installed and the
 command that upgrades it.
