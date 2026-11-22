@@ -230,7 +230,8 @@ impl DeskpilotPage {
 
     /// Takes a frame of the window as it is now, for the next observation to film or drop.
     async fn hold_frame(&self) {
-        let png = self.frame().await;
+        // A shot that hangs costs the video a frame, never the step its time.
+        let png = tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), self.frame()).await.unwrap_or(None);
         *self.pending.lock().unwrap() = png;
     }
 
@@ -716,7 +717,7 @@ impl DeskpilotPage {
             let chosen = |id: &str| {
                 let was = tree::find(observed.as_ref()?, id)?;
                 let now = tree::find(&fresh, id)?;
-                (was.role == now.role && was.name == now.name).then(|| tree::aim(&fresh, id)).flatten()
+                was.same_place(now).then(|| tree::aim(&fresh, id)).flatten()
             };
             (chosen(source), chosen(destination))
         };
@@ -896,7 +897,16 @@ impl DeskpilotPage {
     /// `measured`, moved to a window the action opened: the step changed what the run sees.
     async fn followed(&self, measured: PageResult<ActResult>) -> PageResult<ActResult> {
         let measured = measured?;
-        if measured.outcome != StepOutcome::Executed || self.follow_opened().await?.is_none() {
+        if measured.outcome != StepOutcome::Executed {
+            return Ok(measured);
+        }
+        // The step's own time is spent by now: a window list that does not answer within a settle leaves the step as
+        // measured, and a window it opened is followed by the next read of the list.
+        let opened = tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), self.follow_opened()).await;
+        if !matches!(opened, Ok(Ok(Some(_)))) {
+            if let Ok(Err(error)) = opened {
+                return Err(error);
+            }
             return Ok(measured);
         }
         Ok(ActResult { page_changed: true, detail: None, ..measured })

@@ -39,6 +39,14 @@ pub struct Element {
 }
 
 impl Element {
+    /// Whether `other`, the element an id names in a later read, is this one: ids are numbered by the tree's order, so
+    /// two files of one name in different folders swap them when the list reorders, and role and name cannot tell
+    /// them apart. Where the element lies, and how big, can: an element that moved is not the one the run chose.
+    pub fn same_place(&self, other: &Element) -> bool {
+        (&self.role, &self.name, self.x, self.y, self.width, self.height)
+            == (&other.role, &other.name, other.x, other.y, other.width, other.height)
+    }
+
     fn has(&self, state: &str) -> bool {
         self.states.iter().any(|s| s == state)
     }

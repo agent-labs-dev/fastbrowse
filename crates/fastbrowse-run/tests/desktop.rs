@@ -781,6 +781,48 @@ async fn a_wait_ends_at_its_deadline_though_a_poll_of_the_window_is_slow() {
 }
 
 #[tokio::test]
+async fn a_wait_ends_at_its_deadline_though_the_window_list_is_slow() {
+    // The step's own wait is over, but a window list that never answers must not keep the WAIT action pending.
+    let fake = waiting_window("wait-slow-windows", 600, false);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    std::fs::write(fake.dir().join("windows.delay"), "3").unwrap();
+    let wait = Action::new(Operation::Wait);
+    let result = tokio::time::timeout(std::time::Duration::from_millis(1800), page.wait(&wait, &before, 0.3))
+        .await
+        .expect("a pending window list must not hold the WAIT")
+        .unwrap();
+    assert_eq!((result.outcome, result.page_changed), (StepOutcome::Executed, false), "{result:?}");
+}
+
+#[tokio::test]
+async fn a_drag_between_same_named_files_whose_ids_swapped_is_stale() {
+    // Two search results named report.pdf from different folders trade ids when the list reorders: role and name alone
+    // pass, and the wrong file would be dragged.
+    let fake = editor("drag-swapped", &[launch_tool(), shot_tool()]);
+    fake.replies("wait_for", [ok(&window(false))]);
+    let tree = |first: (i64, i64), second: (i64, i64)| {
+        let cell = |id: &str, (x, y): (i64, i64)| {
+            json!({"id": id, "role": "grid cell", "name": "report.pdf", "states": ["showing", "enabled", "selectable"],
+                "x": x, "y": y, "width": 80, "height": 20})
+        };
+        json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "width": 800, "height": 600,
+            "children": [cell("e2", first), cell("e3", second)]})
+    };
+    fake.replies("elements", [ok(&tree((100, 40), (300, 200)))]);
+    fake.replies("shot", [shot(&fake, "placed", b"placed")]).replies("drag", [ok(&json!({"x": 1, "y": 1}))]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    fake.replies("elements", [ok(&tree((300, 200), (100, 40)))]);
+    let mut drag = Action::new(Operation::Drag);
+    drag.target_id = Some("e2".into());
+    drag.destination_id = Some("e3".into());
+    let result = page.act(&drag, &before).await.unwrap();
+    assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
+    assert!(calls(&fake, "drag").is_empty());
+}
+
+#[tokio::test]
 async fn a_drag_whose_window_was_reordered_since_the_observation_is_stale() {
     // GNOME Files sorted a new file in between the decision and the act: e2 is now another file, so dragging by the
     // old ids would pick up and drop the wrong ones.
