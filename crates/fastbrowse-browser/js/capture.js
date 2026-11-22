@@ -245,8 +245,28 @@
     return found;
   };
   const rendered = new WeakMap();
+  const containsHost = e => [...e.querySelectorAll('[contenteditable]')].some(h => isHost(h));
+  const hostOf = a => {
+    let host = null;
+    for (let p = a.parentElement; p?.isContentEditable; p = p.parentElement) host = p;
+    return host;
+  };
   const renderedOf = e => {
     if (rendered.has(e)) return rendered.get(e);
+    // An editing host's text is read once, as its field block: whatever holds one reads without it.
+    if (containsHost(e)) {
+      const text = [...e.childNodes]
+        .map(n =>
+          n.nodeType === 3
+            ? n.textContent
+            : n.nodeType === 1 && !isHost(n) && !SKIP.has(n.tagName) && !hidden(n)
+              ? isBlock(n) ? ` ${renderedOf(n)} ` : renderedOf(n)
+              : '',
+        )
+        .join('');
+      rendered.set(e, text);
+      return text;
+    }
     let text = e.innerText ?? e.textContent ?? '';
     if (!hasGenerated(e)) {
       rendered.set(e, text);
@@ -311,6 +331,11 @@
       .flatMap(e => [...(e.matches('a[href]') ? [e] : []), ...e.querySelectorAll('a[href]')])
       // An SVG link's `href` is an animated value, not an address.
       .filter(readableLink)
+      // A link inside an editing host belongs to the host's field block alone.
+      .filter(a => {
+        const host = hostOf(a);
+        return !host || elements.some(e => e === host || host.contains(e));
+      })
       .map(a => ({ text: textOf(a), href: a.href }))
       .filter(link => link.text);
   const controlOf = nodes => {
@@ -450,6 +475,7 @@
         text: name ? `${name}: ${value}` : value,
         control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
         control_element: String(identity(e)),
+        ...(isHost(e) ? { links: linksIn([e]) } : {}),
         // The value as the page holds it: the text above is collapsed, so only this tells what was typed.
         ...(e.tagName === 'SELECT' ? {} : { control_value: isHost(e) ? (e.innerText ?? '') : e.value }),
       }));

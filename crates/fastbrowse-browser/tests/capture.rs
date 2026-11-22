@@ -1466,6 +1466,31 @@ async fn an_editing_host_is_read_once_as_its_field_block() {
     h.close().await;
 }
 
+/// An editing host inside an inline wrapper or a table cell is still read once, as its field block, and the links
+/// inside it keep their destinations.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_editing_host_inside_a_wrapper_or_cell_is_read_only_as_its_field() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<p>Summary: <strong><span contenteditable="true" aria-label="Status">Order shipped</span></strong></p>
+<table><tr><th>Item</th></tr><tr><td>Parcel <span contenteditable="true" aria-label="Note">cell words</span></td></tr></table>
+<div contenteditable="true" aria-label="Memo"><a href="/invoice/42">Invoice</a> due</div>"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    for (words, field) in [("Order shipped", "Status"), ("cell words", "Note")] {
+        let holding: Vec<_> = capture.blocks.iter().filter(|b| capture.block_text(b).contains(words)).collect();
+        assert_eq!(holding.len(), 1, "{words} is read once");
+        assert!(capture.block_text(holding[0]).starts_with(&format!("{field}: ")));
+        assert!(holding[0].control_context.is_some());
+    }
+    let memo = capture.blocks.iter().find(|b| capture.block_text(b).starts_with("Memo: ")).expect("memo");
+    assert!(memo.links.iter().any(|l| l.text == "Invoice" && l.href.ends_with("/invoice/42")), "{:?}", memo.links);
+    h.close().await;
+}
+
 /// A native date or time fill returns before the typing path, and reports its field all the same.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_native_date_fill_reports_the_field() {
