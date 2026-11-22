@@ -123,13 +123,26 @@ fn foreign_extension(url: &str) -> Option<String> {
     (!id.is_empty() && !EXTENSION_IDS.contains(&id)).then(|| format!("chrome-extension://{id}"))
 }
 
+/// The extension id a `chrome-extension://` origin carries. Chrome makes every id 32 letters from a to p. A frame an
+/// extension serves with `use_dynamic_url` has a per-session UUID in its origin instead, which names no extension, so
+/// a chrome://extensions/?id= link built from it led nowhere (#1313).
+fn extension_id(origin: &str) -> Option<&str> {
+    let host = origin.strip_prefix("chrome-extension://")?;
+    (host.len() == 32 && host.bytes().all(|letter| (b'a'..=b'p').contains(&letter))).then_some(host)
+}
+
 /// Why a run lost its tab when Chrome detached it right after `origin`'s frame appeared in it.
 fn foreign_frame_detach(origin: &str) -> String {
-    let id = origin.trim_start_matches("chrome-extension://");
+    let next = match extension_id(origin) {
+        Some(id) => format!("set that extension's Site access to On click at chrome://extensions/?id={id}"),
+        None => "that address changes each session and does not name the extension, so open chrome://extensions \
+                 and set Site access to On click for each extension that adds frames to pages, such as a password \
+                 manager"
+            .to_owned(),
+    };
     format!(
         "Chrome detached fastbrowse from the run's tab when the page loaded a frame from another extension ({origin}). \
-         Chrome lets no extension debug a tab that holds another extension's frame: set that extension's Site access \
-         to On click at chrome://extensions/?id={id}, then run again"
+         Chrome lets no extension debug a tab that holds another extension's frame: {next}, then run again"
     )
 }
 
@@ -223,6 +236,13 @@ impl Relay {
                 let mut error = json!({"code": SERVER_ERROR, "message": message});
                 if native && native_navigation_denial(&method, &message) {
                     error["fastbrowseFailure"] = json!(crate::cdp::ProtocolFailure::NavigationDenied);
+                }
+                // The shim or the extension wrote this text, such as Chrome refusing chrome.tabs.create or the
+                // debugger attach, and it quotes no page, so the run can say why the call failed (#1314). A tab's
+                // own error can quote page text or evaluated source and stays out, as does a child session's detach,
+                // which the browser route relays to the tab.
+                if !native && method != "Target.detachFromTarget" {
+                    error["fastbrowseReason"] = message.into();
                 }
                 json!({"id": id, "error": error})
             }
@@ -754,18 +774,32 @@ mod tests {
     fn a_tab_chrome_takes_away_for_another_extensions_frame_ends_the_run_naming_it() {
         let (out, mut to_extension) = mpsc::unbounded_channel();
         let relay = relay_to(out);
-        assert_eq!(relay.event(&frame("chrome-extension://abcdefgh/audio-devices.html")), None);
+        assert_eq!(relay.event(&frame("chrome-extension://abcdefghijklmnopabcdefghijklmnop/audio-devices.html")), None);
         let why = relay.event(&serde_json::from_str(DETACHED).unwrap()).expect("the run ends");
         assert!(
-            why.contains("chrome-extension://abcdefgh") && why.contains("chrome://extensions/?id=abcdefgh"),
+            why.contains("chrome-extension://abcdefghijklmnopabcdefghijklmnop")
+                && why.contains("chrome://extensions/?id=abcdefghijklmnopabcdefghijklmnop"),
             "{why}"
         );
         let lost: Vec<Value> =
             relay.trace.events().into_iter().filter(|event| event["event"] == "extension_tab_lost").collect();
-        assert_eq!(lost[0]["foreign_frame"], "chrome-extension://abcdefgh");
+        assert_eq!(lost[0]["foreign_frame"], "chrome-extension://abcdefghijklmnopabcdefghijklmnop");
         // The popup names it too.
         let taken: Value = serde_json::from_str(&to_extension.try_recv().unwrap()).unwrap();
-        assert_eq!(taken, json!({"op": "taken", "tabId": 7, "origin": "chrome-extension://abcdefgh"}));
+        assert_eq!(
+            taken,
+            json!({"op": "taken", "tabId": 7, "origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"})
+        );
+    }
+
+    #[test]
+    fn a_frame_whose_origin_is_a_per_session_address_links_to_no_extension_page() {
+        // #1313: Bitwarden's inline menu frame has a UUID origin, and the link built from it opened nothing.
+        let relay = relay();
+        relay.event(&frame("chrome-extension://f4a2011c-a215-4438-99a1-3acaa81a2208/overlay/menu.html"));
+        let why = relay.event(&serde_json::from_str(DETACHED).unwrap()).expect("the run ends");
+        assert!(why.contains("(chrome-extension://f4a2011c-a215-4438-99a1-3acaa81a2208)"), "{why}");
+        assert!(why.contains("open chrome://extensions and") && !why.contains("?id="), "{why}");
     }
 
     #[test]
@@ -780,10 +814,10 @@ mod tests {
     fn only_a_frame_still_holding_another_extensions_page_counts() {
         let relay = relay();
         let request = json!({"event": "cdp", "tabId": 7, "method": "Network.requestWillBeSent",
-            "params": {"url": "chrome-extension://abcdefgh/icon.png"}});
+            "params": {"url": "chrome-extension://abcdefghijklmnopabcdefghijklmnop/icon.png"}});
         relay.event(&request);
         assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None, "an extension's image is no frame");
-        relay.event(&frame("chrome-extension://abcdefgh/audio-devices.html"));
+        relay.event(&frame("chrome-extension://abcdefghijklmnopabcdefghijklmnop/audio-devices.html"));
         relay.event(&json!({"event": "cdp", "tabId": 7, "method": "Page.frameDetached", "params": {"frameId": "F"}}));
         assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None, "the frame went before the detach");
     }
@@ -827,6 +861,30 @@ mod tests {
             .unwrap();
         let response = commanding.await.unwrap();
         assert_eq!(response["error"]["fastbrowseFailure"], "navigation_denied");
+    }
+
+    /// Answer the one operation `method` sends to the extension with `error`, and return the CDP reply.
+    async fn failed_reply(session: Option<&str>, method: &str, error: &str) -> Value {
+        let (out, mut to_extension) = mpsc::unbounded_channel();
+        let relay = Arc::new(relay_to(out));
+        let mut message = json!({"id": 42, "method": method, "params": {"url": "https://example.test/"}});
+        if let Some(session) = session {
+            message["sessionId"] = session.into();
+        }
+        let commanding = tokio::spawn(relay.clone().command(message));
+        let sent: Value = serde_json::from_str(&to_extension.recv().await.unwrap()).unwrap();
+        let waiter = relay.pending.lock().unwrap().remove(&sent["id"].as_u64().unwrap()).unwrap();
+        waiter.send(Err(error.into())).unwrap();
+        commanding.await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn why_chrome_refused_a_tab_reaches_the_run_and_page_text_does_not() {
+        // #1314: Chrome's reason for refusing a new tab was dropped, so the run said only that createTarget failed.
+        let refused = failed_reply(None, "Target.createTarget", "Cannot attach to this target").await;
+        assert_eq!(refused["error"]["fastbrowseReason"], "Cannot attach to this target");
+        let native = failed_reply(Some(&top_session(7)), "Runtime.evaluate", "private page text").await;
+        assert!(native["error"].get("fastbrowseReason").is_none(), "{native}");
     }
 
     #[tokio::test]

@@ -172,7 +172,7 @@ Text extraction and other lists keep their object representation. Page text, not
 field and of the questions by key. It counts recorded HTTP exchanges, including retries. Its `input_tokens` are
 provider-reported totals for the state and questions together. Providers do not expose per-part token counts, so the
 report does not estimate them. To measure what the current build sends on the fixture tasks, run `just bench replay`
-and profile the `logs/*.requests.jsonl` files beside its results. A cassette (`.jsonl.gz`) is accepted too, but it
+and profile the `logs/*.requests.jsonl` files beside its results. A cassette (`.jsonl`) is accepted too, but it
 keeps every exchange ever recorded for its task, including requests the agent has since stopped sending.
 
 ## Confidence is not correctness
