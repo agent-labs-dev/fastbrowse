@@ -390,7 +390,7 @@
     const { hosts = hostsOf(nodes), ...rest } = extra;
     blocks.push({
       kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath,
-      control_context: controlOf(nodes), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
+      control_context: controlOf(nodes), ...itemPlace(first), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
       ...(inherited ? { href: hrefOf(link), links: [{ text, href: link.href }, ...(extra.links ?? [])] } : {}),
     });
   };
@@ -685,17 +685,27 @@
   }
 
   // Where an item sits in its list: "the third link" is a place, which neither its text nor the page's text states.
-  // The page's own `aria-posinset` and `aria-setsize` say it where it declares them, as a virtualised list must;
-  // otherwise it is the item's place among the rendered items of its list.
-  function itemPlace(el) {
+  // A block inside an item (a card's link, an item's paragraph) is a part of that item, so it carries the place of the
+  // nearest item around it. The page's own `aria-posinset` and `aria-setsize` say it where it declares them, as a
+  // virtualised list must, and a size of -1 says the page does not know its count; otherwise it is the item's place
+  // among the rendered items of its list.
+  const LIST = 'ul,ol,menu,[role="list"]';
+  const ITEM = 'li,[role="listitem"]';
+  function itemPlace(node) {
+    const el = (node?.nodeType === 1 ? node : node?.parentElement)?.closest(`${ITEM},[aria-posinset]`);
+    if (!el) return {};
     const declared = Number.parseInt(el.getAttribute('aria-posinset'), 10);
-    const size = Number.parseInt(el.getAttribute('aria-setsize'), 10);
-    const list = el.parentElement;
-    const siblings = list && el.tagName === 'LI' && list.matches('ul,ol,menu,[role="list"]')
-      ? [...list.children].filter(c => c.tagName === 'LI' && !hidden(c))
-      : [];
-    const position = declared > 0 ? declared : siblings.indexOf(el) + 1;
-    const count = size > 0 ? size : siblings.length;
+    let position;
+    let count;
+    if (declared > 0) {
+      position = declared;
+      count = Number.parseInt(el.getAttribute('aria-setsize'), 10);
+    } else {
+      const list = el.parentElement;
+      const siblings = list?.matches(LIST) ? [...list.children].filter(c => c.matches(ITEM) && !hidden(c)) : [];
+      position = siblings.indexOf(el) + 1;
+      count = siblings.length;
+    }
     return position > 0 && count > 1 && position <= count ? { item_place: { position, count } } : {};
   }
 
@@ -742,7 +752,6 @@
           // All an item the page repeats renders, its textless parts named: what it does not show, it does not show.
           // A comment is often an `li`, so its kind does not say this (#992).
           ...(record !== null ? { whole_record: true } : {}),
-          ...itemPlace(el),
         },
         [el],
       );

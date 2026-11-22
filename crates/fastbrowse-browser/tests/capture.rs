@@ -550,6 +550,30 @@ async fn test_a_list_item_block_carries_its_place_in_the_list() {
     h.close().await;
 }
 
+/// A block inside an item is a part of it: a card item that is not a leaf, or an ARIA list item, gives its place to the
+/// blocks read inside it, and a declared size of -1 is an unknown count, not the rendered one.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_blocks_inside_a_list_item_carry_its_place() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<ul><li><h3>First card</h3><p>First body</p></li><li><h3>Second card</h3><p>Second body</p></li></ul>\
+         <div role='list'><div role='listitem'><p>One</p></div><div role='listitem'><p>Two</p></div></div>\
+         <ul><li aria-posinset='5' aria-setsize='-1'>Unsized</li><li aria-posinset='6' aria-setsize='-1'>Also</li></ul>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).unwrap();
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("Second body"), Some((2, 2)));
+    assert_eq!(place("Two"), Some((2, 2)));
+    assert_eq!(place("Unsized"), None);
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_quote_cards_are_whole_records_with_local_titles() {
     let Some(h) = harness().await else { return };

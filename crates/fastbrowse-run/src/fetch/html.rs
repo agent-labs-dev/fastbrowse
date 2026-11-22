@@ -218,6 +218,13 @@ struct Element {
     foreign: bool,
     /// Whether it shows any text.
     text: bool,
+    /// A list (`ul`, `ol`, `menu` or `role="list"`) or an item in one (`li` or `role="listitem"`), as `capture.js` reads
+    /// them.
+    list: bool,
+    item: bool,
+    /// The page's own `aria-posinset` and `aria-setsize`, when positive: a size of -1 says the page does not know it.
+    posinset: Option<i64>,
+    setsize: Option<i64>,
     /// The tag tokens that opened and closed it.
     start: usize,
     close: usize,
@@ -253,6 +260,10 @@ impl Tree {
             control_role: false,
             foreign: false,
             text: false,
+            list: false,
+            item: false,
+            posinset: None,
+            setsize: None,
             start: usize::MAX,
             close: usize::MAX,
             last: 0,
@@ -416,6 +427,10 @@ impl Tags for Tree {
             control_role: get("role").is_some_and(|role| CONTROL_ROLES.contains(&role.as_str())),
             foreign,
             text: false,
+            list: matches!(name, "ul" | "ol" | "menu") || get("role").as_deref() == Some("list"),
+            item: name == "li" || get("role").as_deref() == Some("listitem"),
+            posinset: positive(get("aria-posinset")),
+            setsize: positive(get("aria-setsize")),
             start: at,
             close: usize::MAX,
             last: i,
@@ -448,6 +463,11 @@ impl Tags for Tree {
             self.shows_text(top);
         }
     }
+}
+
+/// An ARIA integer attribute when it is positive: `aria-setsize="-1"` says the size is unknown.
+fn positive(value: Option<String>) -> Option<i64> {
+    value.and_then(|value| value.trim().parse::<i64>().ok()).filter(|&value| value > 0)
 }
 
 /// A list item and the tag token that closes it, which ends the item's hold on the blocks read inside it.
@@ -495,23 +515,29 @@ impl Holds {
 }
 
 impl Tree {
-    /// Where each rendered item of a list sits among its list's rendered items, by the token that opens it. A label
-    /// does not say it is the third of its list, nor does the page's text. A list of one has no place worth stating.
+    /// Where each rendered item of a list sits, by the token that opens it, as `capture.js` states it: the page's own
+    /// `aria-posinset` and `aria-setsize` where it declares both, as a virtualised list must, otherwise the item's place
+    /// among its list's rendered items. A label does not say it is the third of its list, nor does the page's text. A
+    /// list of one has no place worth stating, and a declared place with no known size has no count to state.
     fn item_places(&self) -> HashMap<usize, OpenItem> {
         let mut places = HashMap::new();
-        for list in self.elements.iter().filter(|element| matches!(element.tag.as_str(), "ul" | "ol" | "menu")) {
-            let items: Vec<&Element> = list
-                .children
-                .iter()
-                .map(|&child| &self.elements[child])
-                .filter(|child| child.tag == "li" && !child.hidden)
-                .collect();
-            if items.len() < 2 || list.hidden {
-                continue;
-            }
-            for (index, item) in items.iter().enumerate() {
-                let place = ItemPlace { position: index as i64 + 1, count: items.len() as i64 };
-                places.insert(item.start, OpenItem { place, close: item.close });
+        for (i, element) in self.elements.iter().enumerate().filter(|(_, element)| !element.hidden) {
+            let (position, count) = match element.posinset {
+                Some(position) => (position, element.setsize.unwrap_or(0)),
+                None if element.item && self.elements[element.parent].list => {
+                    let items: Vec<usize> = self.elements[element.parent]
+                        .children
+                        .iter()
+                        .copied()
+                        .filter(|&child| self.elements[child].item && !self.elements[child].hidden)
+                        .collect();
+                    let position = items.iter().position(|&item| item == i).map_or(0, |index| index as i64 + 1);
+                    (position, items.len() as i64)
+                }
+                None => continue,
+            };
+            if position > 0 && count > 1 && position <= count {
+                places.insert(element.start, OpenItem { place: ItemPlace { position, count }, close: element.close });
             }
         }
         places
@@ -791,6 +817,10 @@ impl Tags for Reader<'_> {
         // An end tag a start tag implies can close the open card.
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
+        }
+        // A start tag can close the open item (`<li>` after `<li>`): what was read in it is flushed while it holds.
+        if self.places.iter().any(|open| open.close == at) {
+            self.flush(None, None, false);
         }
         while self.places.pop_if(|open| open.close == at).is_some() {}
         if let Some(open) = self.item_places.remove(&at) {
@@ -2259,6 +2289,27 @@ mod tests {
         assert_eq!(place("(new)"), Some((3, 3)), "text beside the link is the same item");
         assert_eq!(place("After"), None, "text after the list is no item");
         assert_eq!(place("Alone"), None, "a list of one has no place to state");
+    }
+
+    /// An item closed by the next item's start tag keeps its place, the page's declared place stands where it gives a
+    /// size, and an ARIA list counts as a list.
+    #[test]
+    fn a_list_items_place_comes_from_the_page_and_survives_an_implied_close() {
+        let place = |html: &str, text: &str| {
+            let (_, found) = blocks(html, "https://example.test/");
+            let block = found.iter().find(|block| block.text == text).unwrap();
+            block.item_place.map(|place| (place.position, place.count))
+        };
+        let implied = "<ul><li>First<li>Second<li>Third</ul>";
+        assert_eq!(place(implied, "First"), Some((1, 3)));
+        assert_eq!(place(implied, "Second"), Some((2, 3)));
+        let aria = "<div role='list'><div role='listitem'><a href='/a'>One</a></div>\
+                    <div role='listitem'><a href='/b'>Two</a></div></div>";
+        assert_eq!(place(aria, "Two"), Some((2, 2)));
+        let virtual_list = "<ul><li aria-posinset='41' aria-setsize='90'>Forty-first</li>\
+                            <li aria-posinset='42' aria-setsize='-1'>Unsized</li></ul>";
+        assert_eq!(place(virtual_list, "Forty-first"), Some((41, 90)));
+        assert_eq!(place(virtual_list, "Unsized"), None, "a size of -1 is unknown, not the rendered count");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Answers built from notes: Jev's facts, each with the quotes it rests on.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use fastbrowse_core::citations::{page_text, text_fragment};
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
@@ -1427,23 +1427,6 @@ async fn review_composition(
     let drafted: Vec<Claim> = claims.iter().map(|claim| claim.claim.clone()).collect();
     let drafted_within: Vec<Option<Within>> = claims.iter().map(|claim| claim.within.clone()).collect();
     let drafted_composition: Vec<Option<Composition>> = claims.iter().map(|claim| claim.composition.clone()).collect();
-    // A claim written wholly of source parts asserts only what code copied from the notes it cites, each part checked
-    // against its note when the draft was bound, so there is nothing for Jev to judge: with the place wording left
-    // out, three such claims scored 0.59, 0.25 and 0.39 and two were dropped (#1108).
-    let copied_only: HashSet<usize> = drafted_composition
-        .iter()
-        .enumerate()
-        .filter(|(index, composition)| {
-            columns.is_none()
-                && drafted[*index].tally.is_none()
-                && composition.as_ref().is_some_and(|composition| {
-                    composition.cells.is_none()
-                        && !composition.text.is_empty()
-                        && composition.text.iter().all(|part| matches!(part, BoundPart::Source { .. }))
-                })
-        })
-        .map(|(index, _)| index)
-        .collect();
     let mut untallied = Vec::new();
     let mut unjudged_tally = false;
     let mut oversized_tally = false;
@@ -1524,10 +1507,6 @@ async fn review_composition(
                 .collect();
             required[index].push(format!("claim{index}/citations"));
             uncited.push(json!({"claim": index, "unknown_evidence_ids": unknown}));
-            continue;
-        }
-        if copied_only.contains(&index) {
-            required[index].push(format!("claim{index}/copied"));
             continue;
         }
         let shown = &shown[index];
@@ -1615,9 +1594,7 @@ async fn review_composition(
         }
     }
     let state_chars = text::len(&dumps(&state)) as i64;
-    // Claims code proved leave no question to fit beside: the report checks are then judged alone.
-    let fits_one = (questions.is_empty() && !copied_only.is_empty())
-        || questions.values().any(|question| state_chars <= tokens.input_chars(&[question.dump_json()]));
+    let fits_one = questions.values().any(|question| state_chars <= tokens.input_chars(&[question.dump_json()]));
     if require_coverage && fits_one {
         questions.insert("coverage".into(), coverage_question(task, screenshot, columns, &claims, notes, steps));
     }
@@ -1694,9 +1671,6 @@ async fn review_composition(
                 Some(Err(Unworked::Draft(_) | Unworked::Notes { .. })) => Some(false),
                 _ => None,
             });
-        }
-        if key.strip_prefix("claim").and_then(|rest| rest.strip_suffix("/copied")).is_some() {
-            return Some(true);
         }
         let answer = answered.as_ref().and_then(|pass| pass.answers.get(key));
         judged(answer)
@@ -2542,6 +2516,7 @@ pub(crate) async fn draft_reviewed(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::Mutex;
 
     use serde_json::Value;
@@ -5094,22 +5069,24 @@ mod tests {
         assert!(check.instructions.contains("a statement of that item's place"), "{}", check.instructions);
     }
 
-    /// A claim written only of parts copied from its cited notes asserts nothing code has not proved: Jev scored three
-    /// such claims 0.59, 0.25 and 0.39 and two were dropped (#1108). One with words of its own still goes to Jev.
+    /// Parts copied from two notes and set side by side assert what neither note says, and a whole quote can still name
+    /// the wrong item for the task: a claim made only of copied parts is judged by Jev like any other.
     #[tokio::test]
-    async fn a_claim_of_only_copied_parts_is_proved_by_code_and_not_asked() {
-        let notes = Notes::new([fact(0, "A/B Testing".into()), fact(1, "Accessibility Issues".into())]);
+    async fn a_claim_of_only_copied_parts_is_still_judged() {
+        let notes = Notes::new([fact(0, "Alice joined".into()), fact(1, "Bob paid $20".into())]);
         let items = initial_items(&notes, false);
-        let copied = bind_claim(&items, json!([{"note": "e1", "quoted": true, "part": "Accessibility"}]), None);
-        let worded =
-            bind_claim(&items, json!([{"prose": "The second link is "}, {"note": "e1", "quoted": true}]), None);
-        let jev = Support::new(false);
-        let checked = review_composition(
+        let spliced = bind_claim(
+            &items,
+            json!([{"note": "e0", "quoted": true, "part": "Alice"}, {"note": "e1", "quoted": true, "part": "$20"}]),
+            None,
+        );
+        let jev = Support::new(true);
+        review_composition(
             &jev,
             &READS,
-            "Report the first two links in order",
+            "Report what Alice paid",
             None,
-            vec![copied, worded],
+            vec![spliced],
             &notes,
             None,
             false,
@@ -5119,10 +5096,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(checked.claims.len(), 1, "{:?}", checked.problem);
-        assert_eq!(checked.claims[0].text, "\"Accessibility\"");
         let asked = jev.asked.lock().unwrap();
-        assert!(asked[0].contains_key("claim1") && !asked[0].contains_key("claim0"), "{:?}", asked[0].keys());
+        assert!(asked.iter().any(|pass| pass.contains_key("claim0")), "{:?}", asked);
     }
 
     /// A quote with no place gets no instruction about places: the rule would invite a claim the quote cannot hold.
@@ -5181,11 +5156,7 @@ mod tests {
         }
         let notes = Notes::new([fact(0, "Record A".into())]);
         let items = initial_items(&notes, true);
-        let bound = bind_claim(
-            &items,
-            json!([{"prose": "The cart holds "}, {"note": "e0", "quoted": true, "part": null}]),
-            None,
-        );
+        let bound = bind_claim(&items, json!([{"note": "e0", "quoted": true, "part": null}]), None);
         let steps = [json!({"operation": "click", "target": "Open cart", "outcome": "executed"})];
         let jev = Sequential { inner: Support::new(true), active: false.into() };
         let ledger = Ledger::new(fastbrowse_core::models::Limits { max_dollars: Some(100.0), ..Default::default() });
@@ -5231,11 +5202,7 @@ mod tests {
     async fn report_checks_do_not_receive_action_history() {
         let notes = Notes::new([fact(0, "Record A".into())]);
         let items = initial_items(&notes, true);
-        let bound = bind_claim(
-            &items,
-            json!([{"prose": "The cart holds "}, {"note": "e0", "quoted": true, "part": null}]),
-            None,
-        );
+        let bound = bind_claim(&items, json!([{"note": "e0", "quoted": true, "part": null}]), None);
         let steps = [json!({"operation": "click", "target": "Open cart", "outcome": "executed", "page_changed": true})];
         let jev = Support::new(true);
         review_composition(
