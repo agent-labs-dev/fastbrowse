@@ -1,6 +1,7 @@
 //! Turning a decision into an action: the gates code owns and the text a field gets.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, Images, NoulQuestion, Question};
@@ -29,7 +30,7 @@ use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Ste
 use crate::error::AgentError;
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry, screenshot_reference};
-use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
+use crate::retrieval::text::{Page, SpanKind, Word, edge_options, spans, words};
 use crate::retrieval::{SCREENSHOT_PICTURED, Screenshot};
 use crate::verification::{page_state, page_verdict_state};
 use crate::writing::write_value;
@@ -133,6 +134,11 @@ fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, JsonValue> {
         .collect()
 }
 
+fn picked_word(picks: &IndexMap<String, String>, key: &str, group: &[Word]) -> Option<Word> {
+    let index = picks.get(key)?.parse::<usize>().ok()?;
+    group.iter().find(|word| word.index == index).cloned()
+}
+
 /// Which of several values `target` takes: the first, or for a field in one of several records, its record's own.
 fn several_values(target: &Control) -> String {
     match target.context.as_deref() {
@@ -148,11 +154,57 @@ pub(super) struct Value {
     /// The task.
     task: String,
     /// What was read that answers the task.
-    read: String,
+    read: Vec<ReadSource>,
     label: String,
     pub(super) group: Vec<Word>,
     source_question: String,
     pub(super) sources: IndexMap<String, JsonValue>,
+}
+
+/// A contiguous piece of one document in one read, with its offset in that capture.
+struct ReadSource {
+    text: String,
+    start: i64,
+}
+
+/// Keep adjacent eligible blocks of a step read together, using its original separators.
+fn read_sources(state: &RunState, facts: &[&crate::memory::Fact]) -> Vec<ReadSource> {
+    let mut sources = Vec::new();
+    let mut remaining = facts.to_vec();
+    for capture in state.read_whole.iter().filter(|capture| state.step_pages.contains(&capture.sha256)) {
+        let page = Page::new(capture);
+        let mut spans = Vec::new();
+        remaining.retain(|fact| {
+            let Some(e) = fact.evidence.as_ref().filter(|e| {
+                e.capture_sha256 == capture.sha256
+                    && e.captured_at == capture.captured_at
+                    && e.rendered_text
+                    && page.slice(e.start, e.end) == e.quote
+            }) else {
+                return true;
+            };
+            spans.push(e);
+            false
+        });
+        spans.sort_by_key(|e| (e.start, e.end));
+        let mut spans = spans.into_iter().peekable();
+        while let Some(first) = spans.next() {
+            let mut end = first.end;
+            while let Some(next) = spans.next_if(|next| {
+                next.url == first.url
+                    && next.frame_id == first.frame_id
+                    && page.slice(end, next.start).chars().all(char::is_whitespace)
+            }) {
+                end = end.max(next.end);
+            }
+            sources.push(ReadSource { text: page.slice(first.start, end).into(), start: first.start });
+        }
+    }
+    sources.extend(remaining.into_iter().map(|fact| match &fact.evidence {
+        Some(e) if e.rendered_text => ReadSource { text: e.quote.clone(), start: e.start },
+        _ => ReadSource { text: fact.text.clone(), start: 0 },
+    }));
+    sources
 }
 
 /// One question about the page, with the options it offers.
@@ -1353,6 +1405,7 @@ impl Agent {
                     .copy_words(state, observation, target, (&task, "the task", &label), (begins, ends), &picks)
                     .await?
                     .ok_or_else(|| self.missing(state, observation, target))?;
+                let value: String = task.chars().skip(value.start).take(value.len()).collect();
                 state.text_source = Some(RecipeText::Literal(value.clone()));
                 Ok(value)
             }
@@ -1366,32 +1419,20 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         target: &Control,
-        read: &str,
+        reads: &[ReadSource],
         label: &str,
     ) -> Step<String> {
-        let group = words(read, target.max_length);
-        let mut windows = vec![group.as_slice()];
         let mut candidates = Vec::new();
-        let mut split = false;
-        while let Some(window) = windows.pop() {
-            let result = self.copy_read_window(state, observation, target, (read, label), window, split).await;
-            match result {
-                Ok(candidate) if !split => return candidate.ok_or_else(|| self.missing(state, observation, target)),
-                Ok(Some(candidate)) if !candidates.contains(&candidate) => candidates.push(candidate),
-                Ok(_) => {}
-                // Whole step reads can exceed the request budget even before the page state is added.
-                // Overlap the windows so a value near the cut can be located with both ends in the same window.
-                Err(Flow::Agent(AgentError::ObservationTooLarge(_) | AgentError::NotesTooLarge(_)))
-                    if window.len() > 1 =>
-                {
-                    let middle = window.len() / 2;
-                    let overlap = (middle / 2).min(middle - 1);
-                    windows.push(&window[middle - overlap..]);
-                    windows.push(&window[..middle + overlap]);
-                    split = true;
-                }
-                Err(error) => return Err(error),
+        for read in reads {
+            let spans = self.read_spans(state, observation, target, &read.text, label, reads.len() > 1).await?;
+            for span in spans {
+                let value = read.text.chars().skip(span.start).take(span.len()).collect::<String>();
+                let offsets = read.start + span.start as i64..read.start + span.end as i64;
+                candidates.push((value, offsets));
             }
+        }
+        if candidates.len() == 1 {
+            return Ok(candidates.pop().unwrap().0);
         }
         if candidates.is_empty() {
             return Err(self.missing(state, observation, target));
@@ -1399,53 +1440,156 @@ impl Agent {
         if candidates.len() >= self.jev.profile().max_choice_options {
             return Err(AgentError::ObservationTooLarge("The fill candidates exceed Jev's choice limit".into()).into());
         }
-        let mut options: IndexMap<_, _> =
-            candidates.iter().enumerate().map(|(n, value)| (n.to_string(), JsonValue::from(value.as_str()))).collect();
         let question = format!(
             "Which candidate copied from what was read is the exact value for {label}? {} Select none if no candidate states the value.",
             several_values(target)
         );
-        options.insert(NO_VALUE.into(), JsonValue::from("None of these candidates states the field's value."));
-        let asked = vec![("read_candidate", question, options)];
-        let picks = self.ask_choices(state, Some(observation), asked).await?;
+        let compare = |ends| {
+            let mut options: IndexMap<_, _> = candidates
+                .iter()
+                .enumerate()
+                .map(|(n, (value, span))| {
+                    let shown = if ends { value_ends(value) } else { value.clone() };
+                    let shown = if shown != *value {
+                        format!(
+                            "{shown} ({} characters, read offsets {} to {})",
+                            span.end - span.start,
+                            span.start,
+                            span.end
+                        )
+                    } else {
+                        shown
+                    };
+                    (n.to_string(), JsonValue::from(shown))
+                })
+                .collect();
+            options.insert(NO_VALUE.into(), JsonValue::from("None of these candidates states the field's value."));
+            options
+        };
+        let picks = match self
+            .ask_choices(state, Some(observation), vec![("read_candidate", question.clone(), compare(false))])
+            .await
+        {
+            Err(Flow::Agent(AgentError::ObservationTooLarge(_) | AgentError::NotesTooLarge(_))) => {
+                self.ask_choices(
+                    state,
+                    Some(observation),
+                    vec![("read_candidate", format!("{question}{ELIDED}"), compare(true))],
+                )
+                .await?
+            }
+            result => result?,
+        };
         picks
             .get("read_candidate")
             .and_then(|picked| picked.parse::<usize>().ok())
             .and_then(|index| candidates.into_iter().nth(index))
+            .map(|(value, _)| value)
             .ok_or_else(|| self.missing(state, observation, target))
     }
 
-    async fn copy_read_window(
+    async fn read_spans(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        target: &Control,
+        read: &str,
+        label: &str,
+        multiple: bool,
+    ) -> Step<Vec<Range<usize>>> {
+        let group = words(read, target.max_length);
+        let mut windows = vec![group.as_slice()];
+        let mut firsts = BTreeMap::new();
+        let mut lasts = BTreeMap::new();
+        let mut split = false;
+        while let Some(window) = windows.pop() {
+            match self.read_boundaries(state, observation, target, (read, label), window, split || multiple).await {
+                Ok((begins, ends, picks)) if !split => {
+                    return Ok(self
+                        .copy_words(state, observation, target, (read, "what was read", label), (begins, ends), &picks)
+                        .await?
+                        .into_iter()
+                        .collect());
+                }
+                Ok((begins, ends, picks)) => {
+                    if let Some(word) = picked_word(&picks, "first", &begins) {
+                        firsts.insert(word.index, word);
+                    }
+                    if let Some(word) = picked_word(&picks, "last", &ends) {
+                        lasts.insert(word.index, word);
+                    }
+                }
+                // Split the lookup to fit the request. Every word keeps its offset in the original source.
+                Err(Flow::Agent(AgentError::ObservationTooLarge(_) | AgentError::NotesTooLarge(_)))
+                    if window.len() > 1 =>
+                {
+                    let (left, right) = window.split_at(window.len() / 2);
+                    windows.extend([right, left]);
+                    split = true;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let mut spans = Vec::new();
+        let chars: Vec<_> = read.chars().collect();
+        let max = self.jev.profile().max_choice_options;
+        for first in firsts.values() {
+            for last in lasts.range(first.index..).map(|(_, word)| word) {
+                if target.max_length.is_some_and(|limit| last.end - first.start > limit) {
+                    continue;
+                }
+                // Reuse the punctuation selection, with the boundaries already established for this read.
+                let question = format!(
+                    "Which exact text belongs in {label}? Choose whether the punctuation next to the copied value is part of it."
+                );
+                let edges = edge_options(&chars, (first, last), (0, 0), target.max_length, max);
+                let (lead, mut trail) = self.edges(state, observation, &question, edges).await?;
+                if target.max_length.is_some_and(|limit| last.end - first.start + lead + trail > limit) {
+                    let edges = edge_options(&chars, (first, last), (lead, 0), target.max_length, max);
+                    trail = self
+                        .edges(
+                            state,
+                            observation,
+                            &question,
+                            edges.into_iter().filter(|(edge, _)| *edge == "trail").collect(),
+                        )
+                        .await?
+                        .1;
+                }
+                spans.push(first.start - lead..last.end + trail);
+            }
+        }
+        Ok(spans)
+    }
+
+    async fn read_boundaries(
         &self,
         state: &mut RunState,
         observation: &Observation,
         target: &Control,
         (read, label): (&str, &str),
         window: &[Word],
-        split: bool,
-    ) -> Step<Option<String>> {
+        optional: bool,
+    ) -> Step<(Vec<Word>, Vec<Word>, IndexMap<String, String>)> {
         let (begins, ends) = self.located(state, observation, read, label, window.to_vec()).await?;
-        let mut asked = value_questions(
-            state,
-            target,
-            (read, "what was read"),
-            label,
-            (&begins, &ends),
-            String::new(),
-            IndexMap::new(),
-        );
-        asked.remove(0);
-        if asked.is_empty() {
-            return Ok(None);
-        }
-        if split {
-            for (_, question, options) in &mut asked {
+        let mut asked = Vec::new();
+        let several = several_values(target);
+        let tried = field_history(state, target);
+        for (key, boundary, words) in [("first", "begins", &begins), ("last", "ends", &ends)] {
+            if words.is_empty() {
+                continue;
+            }
+            let mut question = word_question(("what was read", label), boundary, &several, &tried);
+            let mut options = word_options(read, words);
+            if optional {
                 question.push_str(" Select none if no word in this passage is the requested boundary.");
                 options.insert(NO_VALUE.into(), JsonValue::from("No word in this passage is the requested boundary."));
             }
+            asked.push((key, question, options));
         }
-        let picks = self.ask_choices(state, Some(observation), asked).await?;
-        self.copy_words(state, observation, target, (read, "what was read", label), (begins, ends), &picks).await
+        let picks =
+            if asked.is_empty() { IndexMap::new() } else { self.ask_choices(state, Some(observation), asked).await? };
+        Ok((begins, ends, picks))
     }
 
     async fn copy_words(
@@ -1456,12 +1600,12 @@ impl Agent {
         (task, holder, label): (&str, &str, &str),
         (begins, ends): (Vec<Word>, Vec<Word>),
         picks: &IndexMap<String, String>,
-    ) -> Step<Option<String>> {
-        let word = |key: &str, group: &[Word]| {
-            let index = picks.get(key)?.parse::<usize>().ok()?;
-            group.iter().find(|word| word.index == index).cloned()
-        };
-        let (first, last) = (word("first", &begins), word("last", &ends));
+    ) -> Step<Option<Range<usize>>> {
+        let (first, last) = (picked_word(picks, "first", &begins), picked_word(picks, "last", &ends));
+        if holder == "what was read" && matches!((&first, &last), (Some(first), Some(last)) if first.start >= last.end)
+        {
+            return Ok(None);
+        }
         // A field with a limit takes the piece the value begins at, whatever the end was picked as.
         let (first, last) = match (target.max_length, first.as_ref(), last.as_ref()) {
             (Some(limit), Some(first), Some(last)) if last.end.saturating_sub(first.start) > limit => {
@@ -1609,7 +1753,7 @@ impl Agent {
             let edges: Vec<_> = edges.into_iter().filter(|(edge, _)| *edge == "trail").collect();
             trail = self.edges(state, observation, &question, edges).await?.1;
         }
-        Ok(Some(chars[first.start - lead..last.end + trail].iter().collect()))
+        Ok(Some(first.start - lead..last.end + trail))
     }
 
     /// The word among `words` where the value begins, asked again once Jev said it does not begin at the word picked
@@ -1679,8 +1823,7 @@ impl Agent {
     }
 
     /// `group` cut down to what one choice can offer, once for where the value begins and once for where it ends, so a
-    /// value longer than one part is still found whole. Both are asked in one request a round; either finding no part
-    /// leaves both empty, as the source then does not state the value.
+    /// value longer than one part is still found whole. A part without one boundary may still hold the other.
     async fn located(
         &self,
         state: &mut RunState,
@@ -1732,7 +1875,12 @@ impl Agent {
             for (key, parts) in cut {
                 let picked = picks.get(key).map(String::as_str).unwrap_or(NO_VALUE);
                 if picked == NO_VALUE {
-                    return Ok((Vec::new(), Vec::new()));
+                    if key == "begins" {
+                        begins.clear()
+                    } else {
+                        ends.clear()
+                    }
+                    continue;
                 }
                 let chosen = picked
                     .parse::<usize>()
@@ -1759,14 +1907,15 @@ impl Agent {
         let for_steps = |fact: &crate::memory::Fact| {
             fact.evidence.as_ref().is_some_and(|evidence| state.step_pages.contains(&evidence.capture_sha256))
         };
-        let read: Vec<&str> = state
+        let facts: Vec<_> = state
             .notes
             .facts_by_id()
             .iter()
             .filter(|(key, fact)| !state.notes.superseded(key) && (fact.answers || for_steps(fact)))
-            .map(|(_, fact)| fact.text.as_str())
+            .map(|(_, fact)| fact)
             .collect();
-        let read = read.join("\n");
+        let shown = facts.iter().map(|fact| fact.text.as_str()).collect::<Vec<_>>().join("\n");
+        let read = read_sources(state, &facts);
         let task = state.task.clone();
         let group = words(&task, target.max_length);
         let mut sources: IndexMap<String, JsonValue> = state
@@ -1792,7 +1941,7 @@ impl Agent {
         );
         let said = |read: &str| JsonValue::from(format!("The task does not state it, and what was read does: {read}"));
         if !read.is_empty() {
-            sources.insert(IN_READ.into(), said(&read));
+            sources.insert(IN_READ.into(), said(&shown));
         }
         sources.insert(NO_VALUE.into(), NO_VALUE_SAID.into());
         sources.insert(LEAVE.into(), LEAVE_SAID.into());
@@ -1810,7 +1959,7 @@ impl Agent {
         let model_task = self.model_task(state);
         let whole = page_question(&model_task, &source_question, sources.clone()).dump_json();
         if !read.is_empty() && self.config.tokens.input_chars(&[whole]) == 0 {
-            sources.insert(IN_READ.into(), said(&value_ends(&read)));
+            sources.insert(IN_READ.into(), said(&value_ends(&shown)));
             source_question.push_str(ELIDED);
         }
         Value { task, read, label, group, source_question, sources }
