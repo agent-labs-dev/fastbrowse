@@ -2273,9 +2273,9 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
 /// out of capture order (a schema field's evidence is appended after the notes'), and keeping the first cited a
 /// capture taken before the run's own edit (#1436); collapsing spans of one capture gave two records with the same
 /// words one record's provenance. The same quote under another heading, control, page location or link destination is
-/// another record, so it is kept whatever its capture time. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
+/// another record, so it is kept whatever its capture time, as are reads whose records the page does not tell apart. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
 pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evidence>) -> Vec<T> {
-    let same_record = |a: &Evidence, b: &Evidence| {
+    let alike = |a: &Evidence, b: &Evidence| {
         a.url == b.url
             && a.quote == b.quote
             && a.heading_path == b.heading_path
@@ -2284,6 +2284,15 @@ pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evi
             && a.links.iter().map(|link| &link.href).eq(b.links.iter().map(|link| &link.href))
     };
     let reads: Vec<Option<Evidence>> = items.iter().map(&evidence).collect();
+    // A block's index shifts between captures and its path can be empty (an ordinary document block), so a read whose
+    // capture holds another span reading alike has no identity to match a later capture by: it and its siblings are kept.
+    let ambiguous = |e: &Evidence| {
+        reads
+            .iter()
+            .flatten()
+            .any(|o| o.capture_sha256 == e.capture_sha256 && (o.start, o.end) != (e.start, e.end) && alike(e, o))
+    };
+    let same_record = |a: &Evidence, b: &Evidence| alike(a, b) && !ambiguous(a) && !ambiguous(b);
     let newest = |e: &Evidence| {
         let mut newest = e.captured_at.timestamp();
         for other in reads.iter().flatten().filter(|other| same_record(e, other)) {
