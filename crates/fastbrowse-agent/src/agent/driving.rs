@@ -1270,8 +1270,7 @@ impl Agent {
         {
             // The control is the one the browser reported the text in, which a later read of that control reports.
             let step = state.history.iter().filter(|entry| entry.changed_site()).count();
-            let page = self.mask(&observation.url);
-            state.notes.remember_typing(step, &page, &observation.document_key, landed, text);
+            state.notes.remember_typing(step, &observation.document_key, landed, text);
         }
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {
             self.event("typed", || {

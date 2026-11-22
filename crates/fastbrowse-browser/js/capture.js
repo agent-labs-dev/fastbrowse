@@ -452,7 +452,8 @@
   const isHost = e => !CONTROLS.has(e.tagName) && e.isContentEditable && !e.parentElement?.isContentEditable;
   const fieldValue = e => {
     if (e.tagName === 'SELECT') return [...e.selectedOptions].map(o => clean(o.label || o.text)).join(', ');
-    if (isHost(e)) return clean(e.innerText ?? '');
+    // A host reads as every other block does, so its links are found by the text the field block quotes.
+    if (isHost(e)) return textOf(e);
     if (UNFILLED.has(e.type) || e.dataset?.fastbrowseSecret === '1') return '';
     return clean(e.value ?? '');
   };
@@ -672,6 +673,8 @@
         path.push(text);
         headingLevels.push(level);
       }
+      // An editor inside the heading was read out of its text, so it reads here, as its field.
+      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
       return;
     }
     if (el.tagName === 'TABLE') {
@@ -680,7 +683,11 @@
       for (const { text, ...control } of fields(el)) push('paragraph', text, control);
       return;
     }
-    if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
+    if (el.tagName === 'PRE') {
+      push('code', textOf(el), {}, [el]);
+      for (const { text, ...control } of fields(el)) push('paragraph', text, control);
+      return;
+    }
     const record = recordText(el);
     if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
       // A card's heading still ends an earlier sibling's heading, even when the card is read without walking it.
@@ -737,7 +744,9 @@
     headingLevels = [];
     framePath = frame;
     sourcePath = source;
-    walk(root);
+    // A body that is itself the editing host is the field block for the whole document, never walked as prose.
+    if (isHost(root)) for (const { text, ...control } of fields(root, true)) push('paragraph', text, control);
+    else walk(root);
     path = [...headings];
     headingLevels = [];
     for (const e of [...root.querySelectorAll(`input,select,textarea,button,${roleSelector(CONTROL_ROLES[0])}`)].filter(visible)) {

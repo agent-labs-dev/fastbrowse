@@ -10761,7 +10761,8 @@ async fn test_a_fill_records_the_page_document_and_control_it_typed_into() {
     assert_eq!(read("https://example.test/", "doc-1", "field", "2026-11-04"), Some(1));
     assert_eq!(read("https://example.test/#details", "doc-1", "field", "2026-11-04"), Some(1));
     assert_eq!(read("https://example.test/", "doc-1", "other", "2026-11-04"), None);
-    assert_eq!(read("https://example.test/elsewhere", "doc-1", "field", "2026-11-04"), None);
+    // A same-document navigation changes the URL, not the document, so the typing is still the run's.
+    assert_eq!(read("https://example.test/elsewhere", "doc-1", "field", "2026-11-04"), Some(1));
     assert_eq!(read("https://example.test/", "doc-2", "field", "2026-11-04"), None);
     assert_eq!(read("https://example.test/", "doc-1", "field", "2026-11-05"), None);
 }

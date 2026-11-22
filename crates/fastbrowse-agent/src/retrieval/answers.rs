@@ -5777,7 +5777,7 @@ mod tests {
             if let Some(taken) = taken {
                 notes.remember_capture(&captured, taken);
             }
-            notes.remember_typing(1, "https://a.test/doc#top", "doc-1", "main:7", typed);
+            notes.remember_typing(1, "doc-1", "main:7", typed);
             notes
         };
         let read =
@@ -5804,10 +5804,14 @@ mod tests {
         assert!(support.instructions.contains(r#""typed_by_step": 1"#), "{}", support.instructions);
         assert!(support.instructions.contains("never that the source stated it"));
 
+        // A history-API navigation changes the URL, not the document: the typing is still the run's own.
+        let (_, moved) = asked_for_support(read("https://a.test/doc?id=42", Some("main:7"), Some(1)), None).await;
+        let Question::Noul(support) = moved["claim0"].clone() else { panic!("support is asked after a same-document URL change") };
+        assert!(support.instructions.contains(r#""typed_by_step": 1"#), "{}", support.instructions);
+
         for (case, notes) in [
             ("the page's own text", read("https://a.test/doc", None, Some(1))),
             ("another control with the same label and context", read("https://a.test/doc", Some("main:8"), Some(1))),
-            ("a prefilled control of another page", read("https://a.test/other", Some("main:7"), Some(1))),
             ("a read before the typing", read("https://a.test/doc", Some("main:7"), Some(0))),
             ("a read with no recorded step", read("https://a.test/doc", Some("main:7"), None)),
             (

@@ -299,11 +299,10 @@ pub struct Notes {
 }
 
 /// A step's typing: its number among the run's steps that could change the site, where the browser reported the text
-/// landed (the page and its document, and the control as the observation names it), and the text.
+/// landed (its document, and the control as the observation names it), and the text.
 #[derive(Clone)]
 struct Typing {
     step: usize,
-    page: String,
     document: String,
     element: String,
     text: String,
@@ -324,11 +323,10 @@ impl Notes {
         notes
     }
 
-    /// Step number `step` typed `text` into the control `element` of the document `document` at `url`.
-    pub fn remember_typing(&mut self, step: usize, url: &str, document: &str, element: &str, text: &str) {
+    /// Step number `step` typed `text` into the control `element` of the document `document`.
+    pub fn remember_typing(&mut self, step: usize, document: &str, element: &str, text: &str) {
         self.typed.push(Typing {
             step,
-            page: address(url),
             document: document.to_string(),
             element: element.to_string(),
             text: text.to_string(),
@@ -336,13 +334,12 @@ impl Notes {
     }
 
     /// The last step before this quote's read that typed, into the control it was read from, exactly the value the
-    /// control held when read, compared as typed and as held, whitespace and all. The control is the same one by its document, page and id, never by the quote's words;
+    /// control held when read, compared as typed and as held, whitespace and all. The control is the same one by its document and id, never by its URL (a same-document navigation keeps the document) or the quote's words;
     /// a value the typing did not leave (the site replaced it, or another source wrote it) is not the run's typing.
     pub fn typed_by_step(&self, evidence: &Evidence) -> Option<usize> {
         let control = evidence.control_context.as_ref()?;
         let (element, document) = (control.element.as_deref()?, control.document.as_deref()?);
         let taken = self.steps_taken(evidence)?;
-        let page = address(&evidence.url);
         let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
         let held = self.field_values.get(&(key, element.to_string()))?;
         self.typed
@@ -350,7 +347,6 @@ impl Notes {
             .rev()
             .find(|typed| {
                 typed.step <= taken
-                    && typed.page == page
                     && typed.document == document
                     && typed.element == element
                     && typed.text == *held

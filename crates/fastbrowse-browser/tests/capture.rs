@@ -1491,6 +1491,45 @@ async fn an_editing_host_inside_a_wrapper_or_cell_is_read_only_as_its_field() {
     h.close().await;
 }
 
+/// An editor inside a heading or a code block, and a body that is itself the editing host, read as their field blocks
+/// rather than vanishing from the heading or being walked as prose; a titled link in an editor keeps its destination.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_editing_host_in_a_heading_code_block_or_body_is_its_field_block() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<h1><span contenteditable="true" aria-label="Title">Quarterly report</span></h1>
+<pre>run <span contenteditable="true" aria-label="Command">make all</span></pre>
+<div contenteditable="true" aria-label="Memo"><a href="/invoice/42" title="Download PDF">Invoice</a> due</div>"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let title = capture.blocks.iter().find(|b| capture.block_text(b) == "Title: Quarterly report").expect("title field");
+    assert!(title.control_context.is_some());
+    let command = capture.blocks.iter().find(|b| capture.block_text(b) == "Command: make all").expect("command field");
+    assert!(command.control_context.is_some());
+    let memo = capture.blocks.iter().find(|b| capture.block_text(b).starts_with("Memo: ")).expect("memo");
+    assert!(capture.block_text(memo).contains("Invoice (title: Download PDF)"), "{}", capture.block_text(memo));
+    assert!(
+        memo.links.iter().any(|l| l.text == "Invoice (title: Download PDF)" && l.href.ends_with("/invoice/42")),
+        "{:?}",
+        memo.links
+    );
+
+    crate::common::eval_active(
+        &h.session,
+        "document.body.innerHTML = '<p>First</p><p>Second</p>'; document.body.contentEditable = 'true'",
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let texts: Vec<String> = capture.blocks.iter().map(|b| capture.block_text(b).to_string()).collect();
+    assert_eq!(texts.iter().filter(|t| t.contains("First")).count(), 1, "{texts:?}");
+    let body = capture.blocks.iter().find(|b| capture.block_text(b).contains("First")).expect("body field");
+    assert!(body.control_context.as_ref().is_some_and(|c| c.value.is_some()), "the body is one field block");
+    h.close().await;
+}
+
 /// A native date or time fill returns before the typing path, and reports its field all the same.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_native_date_fill_reports_the_field() {
