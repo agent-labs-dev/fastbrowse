@@ -82,7 +82,10 @@ async function render() {
   document.getElementById('conflict').hidden = !taken;
   if (taken) {
     const id = taken.taker?.replace('chrome-extension://', '');
-    taker.firstChild.textContent = id ? `chrome://extensions/?id=${id}` : 'chrome://extensions';
+    // Chrome makes every extension id 32 letters from a to p. A frame served with use_dynamic_url has a per-session
+    // UUID in its origin instead, which names no extension (#1313), so only an id gets a link to its page.
+    const named = /^[a-p]{32}$/.test(id ?? '');
+    taker.firstChild.textContent = named ? `chrome://extensions/?id=${id}` : 'chrome://extensions';
   }
 }
 
