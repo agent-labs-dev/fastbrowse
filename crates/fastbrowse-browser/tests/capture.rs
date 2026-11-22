@@ -1480,7 +1480,7 @@ async fn an_editing_host_inside_a_wrapper_or_cell_is_read_only_as_its_field() {
     )
     .await;
     let capture = h.page.capture().await.expect("capture");
-    for (words, field) in [("Order shipped", "Status"), ("cell words", "Note")] {
+    for (words, field) in [("Order shipped", "Status"), ("cell words", "Note (column Item)")] {
         let holding: Vec<_> = capture.blocks.iter().filter(|b| capture.block_text(b).contains(words)).collect();
         assert_eq!(holding.len(), 1, "{words} is read once");
         assert!(capture.block_text(holding[0]).starts_with(&format!("{field}: ")));
