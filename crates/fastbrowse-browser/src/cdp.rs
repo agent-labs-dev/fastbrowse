@@ -89,7 +89,8 @@ fn command_seconds(method: &str) -> f64 {
 pub enum CdpError {
     /// The connection is gone. Carries why, the same for every call it failed.
     Closed(Arc<str>),
-    /// The browser answered with an error. Its message is kept out: it can quote page text or evaluated source.
+    /// The browser answered with an error. Its message is kept out: it can quote page text or evaluated source, so
+    /// the refusals whose text Chrome fixes are named by `failure` instead.
     Protocol { code: i64, failure: Option<ProtocolFailure> },
 }
 
@@ -97,6 +98,15 @@ pub enum CdpError {
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolFailure {
     NavigationDenied,
+    /// Chrome refused a Page-domain command because the session no longer has a page behind it.
+    NotAttached,
+}
+
+impl ProtocolFailure {
+    /// Chrome's own fixed wording, matched whole: a message that merely contains it can be quoting page text.
+    fn of_chrome_message(message: &str) -> Option<Self> {
+        (message == "Not attached to an active page").then_some(Self::NotAttached)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +148,8 @@ impl Incoming {
 #[derive(Deserialize)]
 struct RemoteError {
     code: i64,
+    #[serde(default)]
+    message: String,
     #[serde(default, rename = "fastbrowseFailure")]
     failure: Option<ProtocolFailure>,
 }
@@ -575,6 +587,9 @@ pub fn browser_error(method: &str, error: &CdpError, lost_is_outage: bool) -> Br
         {
             BrowserError::failed("Page.navigate/denied", "Page.navigate was denied by the browser access policy")
         }
+        CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NotAttached) } => {
+            BrowserError::ContextLost(format!("{method} failed (CDP {SERVER_ERROR}, not attached to an active page)"))
+        }
         CdpError::Protocol { code: SERVER_ERROR, .. } => {
             BrowserError::ContextLost(format!("{method} failed (CDP {SERVER_ERROR})"))
         }
@@ -590,7 +605,10 @@ impl Inner {
             // A reply nobody waits for any more (its caller was dropped) is read and discarded here.
             let Some(tx) = self.state.lock().unwrap().pending.remove(&id) else { return };
             let reply = match message.error {
-                Some(error) => Err(CdpError::Protocol { code: error.code, failure: error.failure }),
+                Some(error) => {
+                    let failure = error.failure.or_else(|| ProtocolFailure::of_chrome_message(&error.message));
+                    Err(CdpError::Protocol { code: error.code, failure })
+                }
                 None => Ok(message.result),
             };
             let _ = tx.send(reply);
@@ -634,29 +652,33 @@ impl Drop for PendingGuard<'_> {
 mod tests {
     use super::*;
 
+    /// The error a browser reply with this body becomes.
+    async fn error_of(response: serde_json::Value) -> CdpError {
+        let (tx, rx) = oneshot::channel();
+        let (out, _) = mpsc::unbounded_channel();
+        let inner = Inner {
+            state: Mutex::new(State { pending: HashMap::from([(7, tx)]), ..Default::default() }),
+            handlers: Default::default(),
+            out,
+            answered: false.into(),
+            deadlines: Default::default(),
+            pong: false.into(),
+        };
+        inner.dispatch(serde_json::from_value(response).unwrap());
+        rx.await.unwrap().unwrap_err()
+    }
+
     #[tokio::test]
     async fn navigation_denial_is_typed_without_reporting_remote_text() {
         for (method, marked, denied) in
             [("Page.navigate", true, true), ("Page.navigate", false, false), ("Runtime.evaluate", true, false)]
         {
-            let (tx, rx) = oneshot::channel();
-            let (out, _) = mpsc::unbounded_channel();
-            let inner = Inner {
-                state: Mutex::new(State { pending: HashMap::from([(7, tx)]), ..Default::default() }),
-                handlers: Default::default(),
-                out,
-                answered: false.into(),
-                deadlines: Default::default(),
-                pong: false.into(),
-            };
             let mut response = serde_json::json!({"id": 7, "error": {"code": -32000,
                 "message": "private page text and https://private.test/"}});
             if marked {
                 response["error"]["fastbrowseFailure"] = serde_json::json!("navigation_denied");
             }
-            inner.dispatch(serde_json::from_value(response).unwrap());
-            let error = rx.await.unwrap().unwrap_err();
-            let public = browser_error(method, &error, true);
+            let public = browser_error(method, &error_of(response).await, true);
             assert_eq!(matches!(public, BrowserError::Failed(_)), denied);
             assert_eq!(matches!(public, BrowserError::ContextLost(_)), !denied);
             let text = public.to_string();
@@ -664,6 +686,23 @@ mod tests {
             if denied {
                 assert!(text.contains("access policy"));
             }
+        }
+    }
+
+    /// Chrome's fixed refusal is named; the same words inside other text are page text and are not.
+    #[tokio::test]
+    async fn a_refusal_with_chromes_fixed_text_names_its_reason_and_nothing_else_of_the_message() {
+        for (message, named) in [
+            ("Not attached to an active page", true),
+            ("Not attached to an active page: private page text", false),
+            ("private page text", false),
+        ] {
+            let response = serde_json::json!({"id": 7, "error": {"code": -32000, "message": message}});
+            let public = browser_error("Page.startScreencast", &error_of(response).await, true);
+            assert!(matches!(public, BrowserError::ContextLost(_)));
+            let text = public.to_string();
+            assert_eq!(text.contains("not attached to an active page"), named, "{text}");
+            assert!(!text.contains("private"), "{text}");
         }
     }
 

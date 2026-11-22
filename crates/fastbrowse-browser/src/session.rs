@@ -2252,16 +2252,19 @@ impl Drop for AdoptionSettled<'_> {
     }
 }
 
-async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, session_id: Option<&str>) {
-    let Some(client) = shared.client.lock().unwrap().clone() else { return };
+/// Whether Chrome accepted the command: a cast that was refused is not running.
+async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, session_id: Option<&str>) -> bool {
+    let Some(client) = shared.client.lock().unwrap().clone() else { return false };
     match timeout(secs(SCREENCAST_COMMAND_SECONDS), client.send(method, params, session_id)).await {
-        Ok(Ok(_)) => {}
+        Ok(Ok(_)) => true,
         Ok(Err(error)) => {
             if let Some(operation) = screencast_operation(method) {
+                // The error text is built from the method and a typed reason, never Chrome's own message.
                 browser_warning(shared, operation, browser_warning_failure(error.kind()), || {
-                    warn(&format!("{method} failed ({})", error.kind()))
+                    warn(&format!("{method} failed ({error})"))
                 });
             }
+            false
         }
         Err(_) => {
             if let Some(operation) = screencast_operation(method) {
@@ -2269,6 +2272,7 @@ async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, s
                     warn(&format!("{method} failed (TimeoutError)"))
                 });
             }
+            false
         }
     }
 }
@@ -2325,14 +2329,17 @@ async fn update_screencast(shared: &Arc<Shared>) {
         shared.state.lock().unwrap().screencast_session_id = None;
     }
     let active = {
-        let mut state = shared.state.lock().unwrap();
-        let active = state.active_session_id().ok().filter(|_| !state.closing);
-        state.screencast_session_id.clone_from(&active);
-        active
+        let state = shared.state.lock().unwrap();
+        state.active_session_id().ok().filter(|_| !state.closing)
     };
     if let Some(active) = active {
         let params = json!({"format": "jpeg", "quality": 60, "maxWidth": 1280, "maxHeight": 800});
-        screencast_command(shared, "Page.startScreencast", params, Some(&active)).await;
+        // Recorded only once Chrome accepts the start: a refused one left marked as running would make every later
+        // switch to this tab think the cast was already going, and no frame would ever arrive. Left unrecorded, the
+        // next tab switch tries again.
+        if screencast_command(shared, "Page.startScreencast", params, Some(&active)).await {
+            shared.state.lock().unwrap().screencast_session_id = Some(active);
+        }
     }
 }
 

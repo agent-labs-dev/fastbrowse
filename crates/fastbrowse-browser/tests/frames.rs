@@ -290,8 +290,8 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
             "Page.stopScreencast" => BrowserWarningOperation::ScreencastStop,
             _ => BrowserWarningOperation::ScreencastFrameAck,
         };
-        let expected =
-            usize::from(failure == "Page.screencastFrameAck") * 2 + usize::from(failure != "Page.screencastFrameAck");
+        // A refused start is tried again on the switch; a refused stop or ack is not repeated.
+        let expected = if failure == "Page.stopScreencast" { 1 } else { 2 };
         assert_eq!(warnings.iter().filter(|warning| warning.operation == operation).count(), expected, "{failure}");
         assert!(warnings.iter().all(|warning| warning.failure == BrowserWarningFailure::BrowserError));
         let serialized = serde_json::to_string(&*warnings).unwrap();
@@ -325,6 +325,33 @@ async fn test_a_stalled_frame_ack_does_not_block_delivery_or_tab_input() {
     let client = session.client().unwrap();
     session.close().await.unwrap();
     assert_eq!(client.pending(), 0);
+}
+
+/// Chrome can refuse the first start, as while a tab is still attaching. The cast was marked running anyway, so no
+/// later switch to the tab started it again and no frame ever came.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_refused_screencast_start_is_tried_again_on_the_next_switch() {
+    let fake = FakeChrome::start().await;
+    fake.script().results.entry("Page.startScreencast".into()).or_default().push_back(Reply::Error(-32000));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let on_frame: FrameHandler = Arc::new({
+        let calls = calls.clone();
+        move |_frame| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    settle(&session).await;
+    assert_eq!(fake.script().count("Page.startScreencast"), 1);
+    session.switch_tab("owned").await.unwrap();
+    settle(&session).await;
+    assert_eq!(fake.script().count("Page.startScreencast"), 2);
+    emit_frame(&session, 1, b"jpeg", "session");
+    settle(&session).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    session.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
