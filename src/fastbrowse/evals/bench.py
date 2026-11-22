@@ -8,9 +8,8 @@
 
 The harness speaks to the agent over the protocol alone, as the JavaScript SDK does, so the same commands measure
 the Python package today and a Rust binary later (`--agent "target/release/fastbrowse serve --stdio"`). For every
-task it serves the fixture site on a loopback port. A replay or fill serves it on the cassette's port (its newest
-exchange's), so note ids, which digest the page address, come out as recorded; when another socket holds that port it
-serves on a free one with a warning. A record takes a free port. It starts one headless Chrome and hands it over by
+task it serves the fixture site on a free loopback port: the request key numbers the page-address digests in note ids,
+so a replay does not depend on the port the cassette was recorded on. It starts one headless Chrome and hands it over by
 `cdp_url`, starts the record or replay proxy (`replay.py`), and starts one agent process. Chrome belongs to the
 harness, so the agent's CPU time and peak RSS are its own.
 
@@ -29,7 +28,6 @@ import asyncio
 import base64
 import contextlib
 import difflib
-import errno
 import json
 import os
 import platform
@@ -42,7 +40,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Awaitable, Callable, Generator, Sequence
-from contextlib import AbstractContextManager, ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, distribution, version
@@ -163,30 +161,12 @@ def _jev(http: httpx.AsyncClient, proxy: str) -> Jev:
     return Jev(http, api_key=PLACEHOLDER_KEY, base_url=proxy + JEV_MOUNT, model=OPENROUTER_MODEL)
 
 
-def _serve[T](
-    task: BenchTask, serve: Callable[[int], AbstractContextManager[tuple[str, T]]], port: int, stack: ExitStack
-) -> tuple[str, T]:
-    """Serve on `port`, or on a free one with a warning when another socket holds it."""
-    try:
-        return stack.enter_context(serve(port))
-    except OSError as error:
-        if port == 0 or error.errno != errno.EADDRINUSE:
-            raise
-    print(
-        f"{task.id}: fixture port {port} is in use; serving on a free port, so requests that cite notes will miss",
-        file=sys.stderr,
-        flush=True,
-    )
-    return stack.enter_context(serve(0))
-
-
 @contextmanager
-def fixture_site(task: BenchTask, proxy: str, port: int = 0) -> Generator[tuple[str, Grader]]:
-    """The task's site on `port` (0 takes a free one), and the suite's grader bound to what that site records."""
+def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
+    """The task's site on a free port, and the suite's grader bound to what that site records."""
     if isinstance(task.task, LocalTask):
         local = task.task
-        with ExitStack() as stack:
-            base_url, recorder = _serve(task, fixture_server, port, stack)
+        with fixture_server() as (base_url, recorder):
 
             async def grade_local(result: RunResult) -> tuple[str | None, dict[str, Any]]:
                 failure = local.check(result, recorder.snapshot())
@@ -205,8 +185,7 @@ def fixture_site(task: BenchTask, proxy: str, port: int = 0) -> Generator[tuple[
             yield base_url, grade_local
         return
     mock = task.task
-    with ExitStack() as stack:
-        base_url, site = _serve(task, mock_site, port, stack)
+    with mock_site() as (base_url, site):
 
         async def grade_mock(result: RunResult) -> tuple[str | None, dict[str, Any]]:
             extra = {
@@ -495,13 +474,12 @@ async def bench_task(
 ) -> dict[str, Any]:
     """One task end to end: site, Chrome, proxy, agent, grade.
 
-    A replay or fill serves the site on the cassette's port, since note ids digest the page address; a record takes
-    a free one.
+    The site takes a free port in every mode: the request key numbers the address digests in note ids and the proxy
+    swaps them back into a recorded response, so a replay does not depend on the port the cassette was recorded on.
     """
-    wanted = (proxy.cassette.fixture_port() or 0) if proxy.replays else 0
     with (
         proxy as proxy_url,
-        fixture_site(task, proxy_url, wanted) as (base_url, grade),
+        fixture_site(task, proxy_url) as (base_url, grade),
         chrome() as cdp_url,
         tempfile.TemporaryDirectory(prefix="fastbrowse-bench-") as cwd,
     ):
@@ -543,7 +521,6 @@ async def bench_task(
         "task": task.id,
         "suite": task.suite,
         "fixture_origin": base_url,
-        "fixture_port_fallback": wanted if wanted and int(base_url.rsplit(":", 1)[1]) != wanted else None,
         "exit_code": exit_code,
         "metrics": {
             "startup_s": None if driven.startup is None else round(driven.startup, 4),
@@ -677,8 +654,6 @@ async def run_suite(args: argparse.Namespace) -> int:
                 for miss in entry["misses"]:
                     out.write(f"## {miss['purpose']} ({miss['model']}) {miss['path']}\n{miss['diff']}\n\n")
         extra = f"{len(entry['misses'])} misses"
-        if entry["fixture_port_fallback"]:
-            extra += f", fixture port {entry['fixture_port_fallback']} was taken"
         if forward is not None:
             extra += f", {entry['forwarded']} forwarded, ${cost:.4f} (total ${spent:.4f})"
             if unpriced:

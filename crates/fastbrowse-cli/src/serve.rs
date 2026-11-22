@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{
-    Event, EventHandler, FrameHandler, Image, RunResult, SecretRef, SecretResolver, UntilCheck,
+    Event, EventHandler, FailureKind, FrameHandler, Image, RunResult, SecretRef, SecretResolver, UntilCheck,
 };
 use fastbrowse_core::protocol::{
     CancellationReceipt, Error, ErrorCode, ErrorResponse, InitializeParams, InitializeResult, JsonRpc, Method,
@@ -132,6 +132,16 @@ pub struct ClientError {
     pub message: String,
     /// The code of the client's error reply. None when the client replied with a result that could not be used.
     pub code: Option<i64>,
+}
+
+impl FailureKind for ClientError {
+    /// The callback and the client's error code, never its message: the client wrote that, and it can carry anything.
+    fn failure_kind(&self) -> String {
+        match self.code {
+            Some(code) => format!("Callback/{}/error/{code}", self.method),
+            None => format!("Callback/{}/unusable-reply", self.method),
+        }
+    }
 }
 
 impl std::fmt::Display for ClientError {
@@ -478,7 +488,7 @@ pub fn arguments(
         let local = task.chrome.clone().unwrap_or_default();
         task.chrome = Some(options::chrome(&settings, local.headed, local.profile.as_deref(), local.binary.as_deref()));
     }
-    fastbrowse_run::check(&task).map_err(|error| match error {
+    fastbrowse_run::check(&task, !secrets.is_empty()).map_err(|error| match error {
         RunError::UnsupportedSchema(message) => refused(ErrorCode::UnsupportedSchema, message),
         RunError::Configuration(message) => refused(ErrorCode::Configuration, message),
         other => refused(ErrorCode::InvalidParams, other.to_string()),
@@ -567,7 +577,7 @@ pub fn reply(
         // A callback's failure stopped the run, and the reply says what the client failed, with what the run did and
         // spent before then.
         Err(RunError::Cancelled(receipt)) => match failure {
-            Some(failure) => Ok(options::cancelled_result(failure.to_string(), receipt)),
+            Some(failure) => Ok(options::cancelled_result(failure.failure_kind(), failure.to_string(), receipt)),
             None => {
                 let why = receipt
                     .reason
@@ -577,9 +587,9 @@ pub fn reply(
             }
         },
         Err(RunError::UnsupportedSchema(message)) => Err(refused(ErrorCode::UnsupportedSchema, message)),
-        Err(RunError::Invalid(message) | RunError::Recording(message)) => {
-            log::error(&format!("serve: run {} failed: {message}", repr(run_id)));
-            Ok(options::error_result(message))
+        Err(error @ (RunError::Invalid(_) | RunError::Recording(_))) => {
+            log::error(&format!("serve: run {} failed: {error}", repr(run_id)));
+            Ok(options::error_result(error.failure_kind(), error.to_string()))
         }
     }
 }

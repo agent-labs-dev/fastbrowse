@@ -20,7 +20,7 @@ use super::scripts::{
 };
 use super::{BackTarget, CdpPage, Target, truthy, value_str};
 use crate::cdp::{CDP_REPLY_SECONDS, secs};
-use crate::error::BrowserError;
+use crate::error::{BrowserError, Failure};
 use crate::session::{BrowserSession, py_json};
 use crate::urlsplit::urlsplit;
 use crate::warn;
@@ -170,8 +170,13 @@ enum Key {
 impl Key {
     /// Parse a chord by the grammar the agent checks a copied key against ([`keys::chord`]).
     fn chord(value: &str) -> Result<Self, BrowserError> {
-        let keys::Chord { modifiers, key } =
-            keys::chord(value).map_err(|error| BrowserError::Failed(error.to_string()))?;
+        let keys::Chord { modifiers, key } = keys::chord(value).map_err(|error| {
+            let reason = match error {
+                keys::ChordError::RepeatedModifier => "key/repeated-modifier",
+                keys::ChordError::NotAKey(_) => "key/unknown",
+            };
+            BrowserError::failed(reason, error.to_string())
+        })?;
         Ok(Self::Chord { modifiers, key })
     }
 
@@ -257,8 +262,8 @@ const INPUT_REPLY_SECONDS: f64 = 10.0;
 
 type Outcome = (StepOutcome, Option<String>, Option<StepFailure>);
 
-fn bad(shape: &str) -> BrowserError {
-    BrowserError::Failed(format!("page script returned an unexpected {shape}"))
+pub(super) fn bad(shape: &str) -> BrowserError {
+    BrowserError::failed("script/shape", format!("page script returned an unexpected {shape}"))
 }
 
 fn parse_point(value: &Value, unsettled: bool) -> Result<Point, BrowserError> {
@@ -394,9 +399,10 @@ impl CdpPage {
                     // The renderer may be synchronously blocked. Do not queue a second evaluation behind it.
                     Err(_) => {
                         self.session.client()?.missed_deadline(&active);
-                        return Err(BrowserError::PageUnresponsive(
-                            "page did not draw the measured layout before the deadline".into(),
-                        ));
+                        return Err(BrowserError::PageUnresponsive(Failure::new(
+                            "layout/deadline",
+                            "page did not draw the measured layout before the deadline",
+                        )));
                     }
                 }
             } else {
@@ -714,7 +720,7 @@ impl CdpPage {
     ) -> Result<Outcome, BrowserError> {
         let text = action.text.as_deref().unwrap_or_default();
         match action.operation {
-            Operation::Search => Err(BrowserError::Failed("web search is dispatched by the agent".into())),
+            Operation::Search => Err(BrowserError::failed("act/search", "web search is dispatched by the agent")),
             Operation::Navigate => {
                 let url = action.url.as_deref().unwrap_or_default();
                 if action.url.is_none() || !matches!(urlsplit(url).0.as_str(), "http" | "https") {
@@ -763,7 +769,9 @@ impl CdpPage {
                 Ok((StepOutcome::Executed, None, None))
             }
             Operation::Back => self.back().await,
-            Operation::Wait => Err(BrowserError::Failed("wait is dispatched by act, with the run's time left".into())),
+            Operation::Wait => {
+                Err(BrowserError::failed("act/wait", "wait is dispatched by act, with the run's time left"))
+            }
             Operation::SwitchTab => {
                 let Some(tab_id) = &action.tab_id else {
                     return Ok((
@@ -789,10 +797,10 @@ impl CdpPage {
                 self.session.handle_dialog(accept, action.text.as_deref()).await?;
                 Ok((StepOutcome::Executed, None, None))
             }
-            Operation::Read | Operation::Done => Err(BrowserError::Failed(format!(
-                "{} does not dispatch through the browser layer",
-                action.operation.as_str()
-            ))),
+            Operation::Read | Operation::Done => Err(BrowserError::failed(
+                "act/not-dispatched",
+                format!("{} does not dispatch through the browser layer", action.operation.as_str()),
+            )),
         }
     }
 
@@ -1438,7 +1446,10 @@ impl CdpPage {
                  top: axis === 'y' ? e.clientHeight * {direction} : 0, behavior: 'instant'}}); return true; }})()"
             );
             if !truthy(&self.evaluate(session_id, &script).await?) {
-                return Err(BrowserError::Failed("scroll target is no longer an indexed scroll area".into()));
+                return Err(BrowserError::failed(
+                    "scroll/target-gone",
+                    "scroll target is no longer an indexed scroll area",
+                ));
             }
             return Ok(());
         }
@@ -2017,9 +2028,10 @@ impl CdpPage {
                 Err(_) => match self.report_unanswered().await {
                     Some(hung) => {
                         self.session.client()?.missed_deadline(&hung);
-                        Err(BrowserError::PageUnresponsive(
-                            "an input event went unanswered, and the page did not answer a read either".into(),
-                        ))
+                        Err(BrowserError::PageUnresponsive(Failure::new(
+                            "input/unanswered",
+                            "an input event went unanswered, and the page did not answer a read either",
+                        )))
                     }
                     None => Ok(()),
                 },

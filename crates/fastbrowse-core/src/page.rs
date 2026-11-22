@@ -518,8 +518,8 @@ impl std::fmt::Debug for Action {
 /// A browser failure a `Page` returns, with a message safe to put in a run result: never page text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BrowserError {
-    #[error("{0}")]
-    Failed(String),
+    #[error("{}", .0.message)]
+    Failed(Failure),
     /// CDP's -32000 server error, which Chrome answers when the document a command addressed was replaced while it
     /// ran. Only the code is kept, as the message can carry page text, and other -32000 failures share it, so a
     /// reader treats it as a navigation only by reading the page again.
@@ -529,26 +529,62 @@ pub enum BrowserError {
     #[error("{0}")]
     Unavailable(String),
     /// The browser answered, but the renderer for this page stopped answering commands.
-    #[error("{0}")]
-    PageUnresponsive(String),
+    #[error("{}", .0.message)]
+    PageUnresponsive(Failure),
     /// A page cannot safely attribute pixels to its permitted documents.
     #[error("{0}")]
     ScreenshotsUnavailable(String),
     /// `Page.navigate` gave up waiting for a document. Before a run's first step the run ends `unavailable`; a
     /// navigation action reports a failed step so the agent can try another destination.
-    #[error("{0}")]
-    NavigationTimeout(String),
+    #[error("{}", .0.message)]
+    NavigationTimeout(Failure),
     /// `Page.navigate` got nothing from the site: a dropped, refused or empty connection. A name that does not
     /// resolve is not one of these; that can be a mistyped address.
-    #[error("{0}")]
-    SiteUnreachable(String),
+    #[error("{}", .0.message)]
+    SiteUnreachable(Failure),
     /// A page with no browser behind it was asked to act, render or read what it could not fetch. Nothing failed, so
     /// the run ends `blocked`, and no handler that recovers from a browser failure may catch it.
     #[error("{0}")]
     NeedsBrowser(String),
 }
 
+/// A browser failure with no variant of its own: its message, and a reason code that holds no content.
+///
+/// The hosted worker logs only `RunResult::failure_kind`, never the message, which can name an address; a failure
+/// named only `Failed` said nothing of what failed (#1372). The reason is set where the error is made, from what it
+/// knows as values: a CDP method and Chrome's code for its failure, or a fixed name for a check of fastbrowse's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub reason: String,
+    pub message: String,
+}
+
+impl Failure {
+    pub fn new(reason: impl Into<String>, message: impl Into<String>) -> Failure {
+        Failure { reason: reason.into(), message: message.into() }
+    }
+}
+
+impl crate::models::FailureKind for BrowserError {
+    fn failure_kind(&self) -> String {
+        match self {
+            BrowserError::Failed(failure) => format!("Failed/{}", failure.reason),
+            BrowserError::PageUnresponsive(failure) => format!("PageUnresponsive/{}", failure.reason),
+            BrowserError::NavigationTimeout(failure) => format!("NavigationTimeout/{}", failure.reason),
+            BrowserError::SiteUnreachable(failure) => format!("SiteUnreachable/{}", failure.reason),
+            BrowserError::ContextLost(_) => "ContextLost".into(),
+            BrowserError::Unavailable(_) => "Unavailable".into(),
+            BrowserError::ScreenshotsUnavailable(_) => "ScreenshotsUnavailable".into(),
+            BrowserError::NeedsBrowser(_) => "NeedsBrowser".into(),
+        }
+    }
+}
+
 impl BrowserError {
+    pub fn failed(reason: impl Into<String>, message: impl Into<String>) -> BrowserError {
+        BrowserError::Failed(Failure::new(reason, message))
+    }
+
     pub fn needs_browser(&self) -> bool {
         matches!(self, BrowserError::NeedsBrowser(_))
     }
@@ -577,6 +613,17 @@ pub struct ActResult {
 }
 
 pub type PageResult<T> = Result<T, BrowserError>;
+
+/// What a page read without a browser left out of the current document, which a browser shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unread {
+    /// The markup carries scripts a browser would run, and none of them ran.
+    pub scripts: bool,
+    /// Frames whose documents were not read.
+    pub frames: i64,
+    /// Whether a step this page cannot take opens it in a browser in this run; a run limited to fetching cannot.
+    pub browser: bool,
+}
 
 pub trait Page: Send + Sync {
     /// The documented maximum price of one configured web-search request. None leaves search unavailable.
@@ -608,6 +655,12 @@ pub trait Page: Send + Sync {
     /// Whether this page was fetched over HTTP: its scripts never ran, and it can only follow links.
     fn over_http(&self) -> bool {
         false
+    }
+
+    /// What a browser would show of the current document that this page did not take in, as a page fetched over HTTP
+    /// leaves out what scripts build and what unread frames hold, links included. None when it took in all of it.
+    fn unread(&self) -> Option<Unread> {
+        None
     }
 
     /// The error that ends this run's page and sends it on to a browser.

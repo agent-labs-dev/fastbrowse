@@ -13,9 +13,10 @@ use std::time::Duration;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{
-    Answer, BoxAnswer, ChoiceAnswer, DecisionError, Edges, Evaluation, NoulAnswer, Question, RetriesExhausted,
-    ScoreAnswer,
+    Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
+    JevCause, NoulAnswer, Question, RetriesExhausted, ScoreAnswer,
 };
+use fastbrowse_core::llm::FaultClass;
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, JevPurpose};
 use fastbrowse_core::py::json::{dumps, float_str};
 use fastbrowse_core::py::lax::float_of;
@@ -25,7 +26,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value};
 use tokio::time::Instant;
 
-use crate::http::{Http, Response, TransportError};
+use crate::http::{Handoff, Http, Response, TransportError};
 
 pub fn wire_questions(questions: &IndexMap<String, Question>, gateway: bool) -> Value {
     let mut result = Map::new();
@@ -167,7 +168,7 @@ pub fn describe(response: &Response) -> String {
 
 pub fn response_error(response: &Response, detail: &str) -> DecisionError {
     // `detail` can quote the body, as a validation error's input does.
-    DecisionError::Failed(format!("{}; {}", text::prefix(&response.scrub(detail), 300), describe(response)))
+    DecisionError::failed(format!("{}; {}", text::prefix(&response.scrub(detail), 300), describe(response)))
 }
 
 /// About 22s in all. With 6s, a Jev 503 ended 5 of 311 eval runs, and each time the next run, started 0 to 15s later,
@@ -392,17 +393,30 @@ fn backoff(response: Option<&Response>, delay: f64) -> f64 {
     delay
 }
 
-/// Counts a dispatched request that never finished, so a dropped one is charged rather than free.
+/// Counts a dispatched request that never finished, so a dropped one is charged rather than free, unless the
+/// transport still held it in its queue: that one reached no provider.
 struct InFlight<'a> {
     usage: &'a Usage,
+    handoff: Handoff,
     finished: bool,
 }
 
 impl Drop for InFlight<'_> {
     fn drop(&mut self) {
         if !self.finished {
-            self.usage.lock().unaccounted_requests += 1;
+            settle_unanswered(self.usage, &self.handoff);
         }
+    }
+}
+
+/// Records a request that brought no response: possibly billed once it left the transport, and not a request at all
+/// when the transport never let it go.
+fn settle_unanswered(usage: &Usage, handoff: &Handoff) {
+    let mut usage = usage.lock();
+    if handoff.withdraw() {
+        usage.requests -= 1;
+    } else {
+        usage.unaccounted_requests += 1;
     }
 }
 
@@ -415,8 +429,9 @@ async fn send(
     usage: &Usage,
 ) -> Result<Option<Response>, &'static str> {
     usage.lock().requests += 1;
-    let mut flight = InFlight { usage, finished: false };
-    let sent = http.post_json(url, body, headers, attempt_seconds).await;
+    let handoff = Handoff::default();
+    let mut flight = InFlight { usage, handoff: handoff.clone(), finished: false };
+    let sent = http.post_json_handed(url, body, headers, attempt_seconds, handoff.clone()).await;
     flight.finished = true;
     let (response, failure) = match sent {
         Ok(response) if !retryable(&response) => return Ok(Some(response)),
@@ -428,17 +443,18 @@ async fn send(
         // The type names the failure; its text can quote the request, credential included.
         Err(TransportError::Transient(name)) => (None, format!("no response ({name})")),
         Err(TransportError::Fatal(name)) => {
-            usage.lock().unaccounted_requests += 1;
+            settle_unanswered(usage, &handoff);
             return Err(name);
         }
     };
+    if response.is_none() {
+        // A transport that timed out waiting to send it, as httpx's PoolTimeout does, never let it go.
+        settle_unanswered(usage, &handoff);
+    }
     let mut usage = usage.lock();
     usage.consecutive_5xx =
         if response.as_ref().is_some_and(|response| response.status >= 500) { usage.consecutive_5xx + 1 } else { 0 };
     usage.failures.push(failure);
-    if response.is_none() {
-        usage.unaccounted_requests += 1;
-    }
     Ok(response)
 }
 
@@ -460,7 +476,7 @@ impl AskError {
         match self {
             AskError::Jev(error) => error,
             // Only a batch asked with `split_batch` splits, and asking_split catches that one.
-            AskError::Split { .. } => DecisionError::Failed("Jev batch split outside asking_split".into()),
+            AskError::Split { .. } => DecisionError::failed("Jev batch split outside asking_split"),
         }
     }
 }
@@ -551,7 +567,8 @@ pub(crate) async fn post(
         Ok(response) => response,
         Err(RetryStop::Budget(error)) => return Err(DecisionError::Budget(error).into()),
         Err(RetryStop::Fatal(name)) => {
-            return Err(DecisionError::Failed(format!("Jev request could not be sent ({name})")).into());
+            let error = DecisionError::failed(format!("Jev request could not be sent ({name})"));
+            return Err(error.classed(FaultClass::Transport).into());
         }
         Err(RetryStop::Split { start_attempt, usage }) => return Err(AskError::Split { start_attempt, usage }),
     };
@@ -568,10 +585,11 @@ pub(crate) async fn post(
     let usage = usage.snapshot();
     let Some(response) = response else {
         let last = usage.failures.last().cloned().unwrap_or_default();
-        return Err(DecisionError::TransportFailed(format!(
+        return Err(DecisionError::transport_failed(format!(
             "Jev transport failed after {}; last: {last}",
             usage.history(seconds)
         ))
+        .classed(FaultClass::Transport)
         .into());
     };
     if retryable(&response) {
@@ -584,6 +602,7 @@ pub(crate) async fn post(
             requests: usage.requests,
             answered: Vec::new(),
             last,
+            cause: JevCause { class: Some(FaultClass::Http(response.status)), ..JevCause::default() },
         }))
         .into());
     }
@@ -591,16 +610,16 @@ pub(crate) async fn post(
     // Telnyx answers an oversized body with 413 where TypeSafe answers 400.
     let too_large = ["max_tokens_exceeded", "request body too large"].iter().any(|r| text.contains(r));
     if response.status == 413 || (response.status == 400 && too_large) {
-        return Err(DecisionError::InputTooLarge(format!("Jev input too large; {}", describe(&response))).into());
+        let error = DecisionError::input_too_large(format!("Jev input too large; {}", describe(&response)));
+        return Err(error.classed(FaultClass::Http(response.status)).into());
     }
     if matches!(response.status, 401 | 403) {
         let host = url::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_string)).unwrap_or_default();
-        return Err(
-            DecisionError::Rejected(format!("Jev {} ({host} rejected the API key)", describe(&response))).into()
-        );
+        let error = DecisionError::rejected(format!("Jev {} ({host} rejected the API key)", describe(&response)));
+        return Err(error.classed(FaultClass::Http(response.status)).into());
     }
     if !response.is_success() {
-        return Err(response_error(&response, "Jev request failed").into());
+        return Err(response_error(&response, "Jev request failed").classed(FaultClass::Http(response.status)).into());
     }
     Ok(response)
 }
@@ -749,8 +768,48 @@ tokio::task_local! {
     static PURPOSE: JevPurpose;
 }
 
-pub(crate) fn current_jev_purpose() -> Option<JevPurpose> {
+pub fn current_jev_purpose() -> Option<JevPurpose> {
     PURPOSE.try_with(|purpose| *purpose).ok()
+}
+
+/// A decision client whose failures name the source that served it and the purpose of the call, as an LLM's do.
+pub(crate) struct Sourced {
+    pub(crate) client: Box<dyn DecisionClient>,
+    /// The decision source, as `FASTBROWSE_DECISION_SOURCE` spells it.
+    pub(crate) source: &'static str,
+}
+
+impl Sourced {
+    fn named(&self, result: Result<Evaluation, DecisionError>) -> Result<Evaluation, DecisionError> {
+        result.map_err(|error| error.from_call(self.source, current_jev_purpose()))
+    }
+}
+
+impl DecisionClient for Sourced {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move { self.named(self.client.evaluate(state, questions).await) })
+    }
+
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move { self.named(self.client.evaluate_images(state, questions, images).await) })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.client.profile()
+    }
+
+    fn reserves(&self, purpose: JevPurpose) -> Option<CostComponent> {
+        self.client.reserves(purpose)
+    }
 }
 
 pub(crate) fn jev_trace_fields() -> Map<String, Value> {
@@ -1073,6 +1132,7 @@ pub(crate) async fn asking_split(
                 requests,
                 answered,
                 last: exhausted_error.last.clone(),
+                cause: exhausted_error.cause.clone(),
             })));
         }
         return Err(error);
@@ -1199,7 +1259,7 @@ pub fn estimated_cost(price: Option<f64>, input_tokens: i64, output_tokens: i64)
 
 /// The parse of a Jev response: a value error's text, or pydantic's for a body that is not a JSON object.
 pub(crate) fn invalid_response(response: &Response, what: &str, detail: &str) -> AskError {
-    AskError::Jev(response_error(response, &format!("{what} ({detail})")))
+    AskError::Jev(response_error(response, &format!("{what} ({detail})")).classed(FaultClass::Schema))
 }
 
 /// A Jev response's `cost.seconds`: the call's wall time.
