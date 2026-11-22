@@ -370,13 +370,11 @@ const GUARD: &str = "FASTBROWSE_HOST_DELEGATED";
 /// one starts), or there is no registry and no launcher named this host. An unregistered one, or an unreadable registry, exits 1 instead of serving
 /// (see [`without_handover`]).
 pub fn delegate(args: &[String]) -> Option<i32> {
-    if std::env::var_os(GUARD).is_some() {
-        return None;
-    }
+    let delegated = std::env::var_os(GUARD).is_some();
     let dir = host_dir();
     // The identity is the path the launcher started; run directly, without a launcher, it is this executable.
     let own = std::env::var_os(HOST_PATH).map(PathBuf::from).or_else(|| std::env::current_exe().ok())?;
-    let (registered, candidates) = match plan(&dir, &own, env!("CARGO_PKG_VERSION"), &reported_version) {
+    let (registered, mut candidates) = match plan(&dir, &own, env!("CARGO_PKG_VERSION"), &reported_version) {
         Ok(Some(plan)) => plan,
         // No registry: a launcher from before installs were recorded serves as it always did. A launcher that knows
         // the registry (it sets the path) and finds it gone was started just before the last uninstall: it must not serve.
@@ -387,6 +385,10 @@ pub fn delegate(args: &[String]) -> Option<i32> {
             return Some(1);
         }
     };
+    // A host another one handed over to serves only if it is registered itself, and hands over no further.
+    if delegated {
+        candidates.clear();
+    }
     for newer in candidates {
         let mut command = handover_command(&newer, args);
         #[cfg(unix)]
@@ -733,9 +735,10 @@ mod tests {
         out
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_launcher_runs_this_fastbrowse_as_the_host() {
-        let dir = std::env::temp_dir().join(format!("fastbrowse-launcher-{}", std::process::id()));
+        let dir = scratch("launcher-text");
         let launcher = write_launcher(&dir, &[PathBuf::from("/opt/it's/fastbrowse")]).unwrap();
         let text = std::fs::read_to_string(&launcher).unwrap();
         let _ = std::fs::remove_dir_all(&dir);

@@ -54,13 +54,21 @@ fn an_unregistered_native_host_exits_naming_the_registry_when_no_install_starts(
 }
 
 fn host(host_dir: &Path, started: Option<&Path>) -> std::process::Output {
+    host_as(host_dir, started, false)
+}
+
+fn host_as(host_dir: &Path, started: Option<&Path>, delegated: bool) -> std::process::Output {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_fastbrowse"));
     command
         .args(["native-host", "chrome-extension://ghodfgfhbfaghhfdabopagbfopdjgpop/"])
         .env("FASTBROWSE_HOST_DIR", host_dir)
-        .env_remove("FASTBROWSE_HOST_DELEGATED")
         .env_remove("FASTBROWSE_HOST_PATH")
         .stdin(std::process::Stdio::null());
+    if delegated {
+        command.env("FASTBROWSE_HOST_DELEGATED", "1");
+    } else {
+        command.env_remove("FASTBROWSE_HOST_DELEGATED");
+    }
     if let Some(started) = started {
         command.env("FASTBROWSE_HOST_PATH", started);
     }
@@ -86,12 +94,18 @@ fn the_host_identity_is_the_path_the_launcher_started_not_this_executable() {
     // The registry's folder denies traversal, so its metadata cannot be read.
     std::fs::write(host_dir.join("installs.json"), "[]").unwrap();
     std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let unreadable = host(&host_dir, Some(&started));
+    // Run as the legacy launcher (no path named): only the metadata check tells this from a missing registry.
+    let unreadable = host(&host_dir, None);
     std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::remove_file(host_dir.join("installs.json")).unwrap();
     // A registry that cannot be parsed is an error that names it.
     std::fs::write(host_dir.join("installs.json"), "{").unwrap();
     let corrupt = host(&host_dir, Some(&started));
+    // A delegated host must itself be registered: here both installs were unregistered after the handover began.
+    std::fs::write(host_dir.join("installs.json"), "[]").unwrap();
+    let delegated_unregistered = host_as(&host_dir, Some(&started), true);
+    std::fs::write(host_dir.join("installs.json"), registry.to_string()).unwrap();
+    let delegated_registered = host_as(&host_dir, Some(&started), true);
     let _ = std::fs::remove_dir_all(&root);
     // Serving: the host got past the handover decision and waits for the extension's hello, which a closed stdin denies.
     let serving = |out: &std::process::Output| String::from_utf8_lossy(&out.stderr).contains("before saying hello");
@@ -107,6 +121,9 @@ fn the_host_identity_is_the_path_the_launcher_started_not_this_executable() {
     assert_eq!(unreadable.status.code(), Some(1));
     assert!(said(&unreadable).contains("installs.json"), "{}", said(&unreadable));
     assert!(!serving(&unreadable));
+    assert_eq!(delegated_unregistered.status.code(), Some(1));
+    assert!(said(&delegated_unregistered).contains("not registered"), "{}", said(&delegated_unregistered));
+    assert!(serving(&delegated_registered), "{}", said(&delegated_registered));
     assert_eq!(corrupt.status.code(), Some(1));
     assert!(said(&corrupt).contains("installs.json"), "{}", said(&corrupt));
 }
