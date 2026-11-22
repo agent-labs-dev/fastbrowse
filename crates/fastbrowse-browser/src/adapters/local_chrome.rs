@@ -9,7 +9,7 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use fastbrowse_core::models::{BrowserConnection, LocalChrome};
+use fastbrowse_core::models::{BrowserConnection, FailureKind, LocalChrome};
 use serde_json::{Map, Value};
 use tokio::process::{Child, Command};
 
@@ -45,6 +45,16 @@ impl fmt::Display for LocalChromeError {
 }
 
 impl std::error::Error for LocalChromeError {}
+
+impl FailureKind for LocalChromeError {
+    fn failure_kind(&self) -> String {
+        match self {
+            Self::Runtime(_) => "Runtime".into(),
+            Self::Browser(error) => format!("Browser.{}", error.failure_kind()),
+            Self::Io(error) => format!("Io/{:?}", error.kind()),
+        }
+    }
+}
 
 impl From<std::io::Error> for LocalChromeError {
     fn from(error: std::io::Error) -> Self {
@@ -502,7 +512,7 @@ fn set_preferences(profile: &Path) -> Result<(), LocalChromeError> {
     };
     let Some(Value::Object(mut held)) = held else {
         let message = format!("{} is not a Chrome preferences file", preferences.display());
-        return Err(LocalChromeError::Browser(BrowserError::Failed(message)));
+        return Err(LocalChromeError::Browser(BrowserError::failed("local-chrome/preferences", message)));
     };
     held.insert("credentials_enable_service".into(), Value::Bool(false));
     let mut owned = match held.remove("profile") {

@@ -2423,6 +2423,11 @@
    {
     "status": 200,
     "headers": {},
+    "body": "{\"data\": {\"id\": \"writer\", \"endpoints\": [{\"context_length\": 1000, \"pricing\": {\"prompt\": \"0.000001\", \"completion\": \"0.000004\", \"request\": \"0\"}}, {\"context_length\": 2000, \"pricing\": {\"prompt\": \"0.000002\", \"completion\": \"0.000003\", \"image\": \"0.01\", \"discount\": 0.5}}]}}"
+   },
+   {
+    "status": 200,
+    "headers": {},
     "body": "{\"choices\": [{\"message\": {\"content\": \"{\\\"count\\\":3}\"}}], \"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 5}, \"id\": \"generation-1\"}"
    },
    {
@@ -2439,17 +2444,21 @@
     "status": 200,
     "headers": {},
     "body": "{\"data\": {\"id\": \"generation-1\", \"total_cost\": -1}}"
-   },
-   {
-    "status": 200,
-    "headers": {},
-    "body": "{\"data\": {\"id\": \"writer\", \"endpoints\": [{\"context_length\": 1000, \"pricing\": {\"prompt\": \"0.000001\", \"completion\": \"0.000004\", \"request\": \"0\"}}, {\"context_length\": 2000, \"pricing\": {\"prompt\": \"0.000002\", \"completion\": \"0.000003\", \"image\": \"0.01\", \"discount\": 0.5}}]}}"
    }
   ],
   "limits": {
    "max_dollars": 28.0
   },
   "requests": [
+   {
+    "method": "GET",
+    "url": "https://openrouter.ai/api/v1/models/model-start/endpoints",
+    "headers": {
+     "authorization": "Bearer ***"
+    },
+    "body": "",
+    "canonical": ""
+   },
    {
     "method": "POST",
     "url": "https://openrouter.ai/api/v1/chat/completions",
@@ -2481,15 +2490,6 @@
    {
     "method": "GET",
     "url": "https://openrouter.ai/api/v1/generation?id=generation-1",
-    "headers": {
-     "authorization": "Bearer ***"
-    },
-    "body": "",
-    "canonical": ""
-   },
-   {
-    "method": "GET",
-    "url": "https://openrouter.ai/api/v1/models/model-start/endpoints",
     "headers": {
      "authorization": "Bearer ***"
     },
@@ -2567,93 +2567,33 @@
   ],
   "responses": [
    {
-    "raise": "ReadTimeout"
-   },
-   {
-    "raise": "ReadTimeout"
-   },
-   {
-    "raise": "ReadTimeout"
-   },
-   {
-    "raise": "ReadTimeout"
-   },
-   {
-    "raise": "ReadTimeout"
-   },
-   {
-    "raise": "ReadTimeout"
-   },
-   {
     "status": 200,
     "headers": {},
     "body": "{\"data\": {\"endpoints\": [{\"context_length\": 2000, \"pricing\": {\"prompt\": \"0.000002\", \"completion\": \"0.000004\", \"image\": \"0.01\"}}]}}"
+   },
+   {
+    "raise": "ReadTimeout"
+   },
+   {
+    "raise": "ReadTimeout"
+   },
+   {
+    "raise": "ReadTimeout"
+   },
+   {
+    "raise": "ReadTimeout"
+   },
+   {
+    "raise": "ReadTimeout"
+   },
+   {
+    "raise": "ReadTimeout"
    }
   ],
   "limits": {
    "max_dollars": 28.0
   },
   "requests": [
-   {
-    "method": "POST",
-    "url": "https://openrouter.ai/api/v1/chat/completions",
-    "headers": {
-     "authorization": "Bearer ***",
-     "content-type": "application/json"
-    },
-    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
-    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
-   },
-   {
-    "method": "POST",
-    "url": "https://openrouter.ai/api/v1/chat/completions",
-    "headers": {
-     "authorization": "Bearer ***",
-     "content-type": "application/json"
-    },
-    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
-    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
-   },
-   {
-    "method": "POST",
-    "url": "https://openrouter.ai/api/v1/chat/completions",
-    "headers": {
-     "authorization": "Bearer ***",
-     "content-type": "application/json"
-    },
-    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
-    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
-   },
-   {
-    "method": "POST",
-    "url": "https://openrouter.ai/api/v1/chat/completions",
-    "headers": {
-     "authorization": "Bearer ***",
-     "content-type": "application/json"
-    },
-    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
-    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
-   },
-   {
-    "method": "POST",
-    "url": "https://openrouter.ai/api/v1/chat/completions",
-    "headers": {
-     "authorization": "Bearer ***",
-     "content-type": "application/json"
-    },
-    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
-    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
-   },
-   {
-    "method": "POST",
-    "url": "https://openrouter.ai/api/v1/chat/completions",
-    "headers": {
-     "authorization": "Bearer ***",
-     "content-type": "application/json"
-    },
-    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
-    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
-   },
    {
     "method": "GET",
     "url": "https://openrouter.ai/api/v1/models/model-start/endpoints",
@@ -2662,6 +2602,66 @@
     },
     "body": "",
     "canonical": ""
+   },
+   {
+    "method": "POST",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "headers": {
+     "authorization": "Bearer ***",
+     "content-type": "application/json"
+    },
+    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
+    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
+   },
+   {
+    "method": "POST",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "headers": {
+     "authorization": "Bearer ***",
+     "content-type": "application/json"
+    },
+    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
+    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
+   },
+   {
+    "method": "POST",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "headers": {
+     "authorization": "Bearer ***",
+     "content-type": "application/json"
+    },
+    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
+    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
+   },
+   {
+    "method": "POST",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "headers": {
+     "authorization": "Bearer ***",
+     "content-type": "application/json"
+    },
+    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
+    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
+   },
+   {
+    "method": "POST",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "headers": {
+     "authorization": "Bearer ***",
+     "content-type": "application/json"
+    },
+    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
+    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
+   },
+   {
+    "method": "POST",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "headers": {
+     "authorization": "Bearer ***",
+     "content-type": "application/json"
+    },
+    "body": "{\"model\":\"model-start\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Write\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"max_tokens\":32768,\"reasoning\":{\"effort\":\"low\"}}",
+    "canonical": "{\"max_tokens\":32768,\"messages\":[{\"content\":[{\"text\":\"Write\",\"type\":\"text\"},{\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgppbWFnZS1ieXRlcw==\"},\"type\":\"image_url\"}],\"role\":\"user\"}],\"model\":\"model-start\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
    }
   ],
   "results": [
@@ -2827,6 +2827,11 @@
   ],
   "responses": [
    {
+    "status": 200,
+    "headers": {},
+    "body": "{\"data\": {\"id\": \"writer\", \"endpoints\": [{\"context_length\": 1000, \"pricing\": {\"prompt\": \"0.000001\", \"completion\": \"0.000004\", \"request\": \"0\"}}, {\"context_length\": 2000, \"pricing\": {\"prompt\": \"0.000002\", \"completion\": \"0.000003\", \"image\": \"0.01\", \"discount\": 0.5}}]}}"
+   },
+   {
     "stall": true
    },
    {
@@ -2840,6 +2845,15 @@
    "max_dollars": 1.0
   },
   "requests": [
+   {
+    "method": "GET",
+    "url": "https://openrouter.ai/api/v1/models/model-start/endpoints",
+    "headers": {
+     "authorization": "Bearer ***"
+    },
+    "body": "",
+    "canonical": ""
+   },
    {
     "method": "POST",
     "url": "https://openrouter.ai/api/v1/chat/completions",

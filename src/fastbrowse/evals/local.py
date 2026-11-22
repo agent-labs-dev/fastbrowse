@@ -60,12 +60,12 @@ def _handler(recorder: Recorder, roots: tuple[Path, ...]) -> type[BaseHTTPReques
 
 
 @contextmanager
-def fixture_server(port: int = 0, roots: tuple[Path, ...] = (FIXTURES,)) -> Generator[tuple[str, Recorder]]:
+def fixture_server(roots: tuple[Path, ...] = (FIXTURES,)) -> Generator[tuple[str, Recorder]]:
     """Serve the pages in `roots`, the first holding a name winning, and record every POST.
 
-    A page is served as HTML; any other file is offered as a download. `port` 0 takes a free one."""
+    A page is served as HTML; any other file is offered as a download. It takes a free port."""
     recorder = Recorder()
-    server = ThreadingHTTPServer(("127.0.0.1", port), _handler(recorder, roots))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(recorder, roots))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_port}", recorder

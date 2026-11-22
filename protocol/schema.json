@@ -1651,7 +1651,7 @@
             }
           ],
           "default": null,
-          "description": "The error's provider or browser variant path, never message text; present for failures, absent otherwise.",
+          "description": "What ended the run short of `complete`: an error's type and cause, or a stop's rule, never content.",
           "title": "Failure Kind"
         },
         "final_url": {

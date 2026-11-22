@@ -553,6 +553,7 @@ async fn a_window_deskpilot_cannot_tell_apart_by_title_fails_the_read_without_ca
     let message = "Could not choose an accessibility toplevel for 'New Document'";
     fake.replies("wait_for", [ok(&window(false))]).replies("elements", [refused("ambiguous", message)]);
     let page = open(&fake).await;
-    let BrowserError::Failed(error) = page.observe().await.unwrap_err() else { panic!("an outage") };
-    assert!(error.contains("same title") && error.contains(message), "{error}");
+    let BrowserError::Failed(failure) = page.observe().await.unwrap_err() else { panic!("an outage") };
+    assert_eq!(failure.reason, "deskpilot/ambiguous");
+    assert!(failure.message.contains("same title") && failure.message.contains(message), "{}", failure.message);
 }

@@ -413,7 +413,7 @@ class RunResult(Frozen):
     citations: tuple[Citation, ...] = ()
     error: str | None = None
     failure_kind: str | None = None
-    """The error's provider or browser variant path, never message text; present for failures, absent otherwise."""
+    """What ended the run short of `complete`: an error's type and cause, or a stop's rule, never content."""
     final_url: str | None = None
     """Where the browser was last observed; what a caller checks when the task was to arrive somewhere."""
     final_frame: bytes | None = Field(default=None, exclude=True, repr=False)
@@ -441,8 +441,12 @@ class Build(Frozen):
 
 
 class CliResult(RunResult):
-    """What `fastbrowse --json` prints: the run's result and the build that produced it."""
+    """What `fastbrowse --json` prints: the run's result, its total cost and the build that produced it."""
 
+    dollars: float
+    """The run's known cost in dollars, the sum of `cost`'s priced lines."""
+    cost_complete: bool
+    """False when a call reported no cost, so `dollars` is a lower bound."""
     build: Build
 
 

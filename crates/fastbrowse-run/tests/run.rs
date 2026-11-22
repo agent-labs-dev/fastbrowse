@@ -8,8 +8,11 @@ use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
-use fastbrowse_core::models::{BrowserUsed, BrowserVia, CostBasis, CostComponent, CostLine, Event, LLMPurpose, Status};
+use fastbrowse_core::models::{
+    Authorization, BrowserUsed, BrowserVia, CostBasis, CostComponent, CostLine, Event, LLMPurpose, SecretValue, Status,
+};
 use fastbrowse_core::protocol::CancellationReceipt;
+use fastbrowse_core::safety::ScopedSecrets;
 use fastbrowse_core::telemetry::Ledger;
 use fastbrowse_run::{Cancel, Host, RunError, RunTask, on_cloud, run_task};
 use indexmap::IndexMap;
@@ -33,7 +36,7 @@ impl DecisionClient for RecordingDecision {
         _: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         self.0.lock().unwrap().push(state.clone());
-        Box::pin(async { Err(DecisionError::Failed("stop after recording observation".into())) })
+        Box::pin(async { Err(DecisionError::failed("stop after recording observation")) })
     }
 }
 
@@ -47,7 +50,7 @@ impl DecisionClient for Silent {
         _: &'a Value,
         _: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        Box::pin(async { Err(DecisionError::Failed("not scripted".into())) })
+        Box::pin(async { Err(DecisionError::failed("not scripted")) })
     }
 }
 
@@ -59,7 +62,7 @@ impl LLMClient for Silent {
         _: &'a dyn ResponseSchema,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
-        Box::pin(async { Err(LLMError::Failed("not scripted".into())) })
+        Box::pin(async { Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "not scripted")) })
     }
 }
 
@@ -137,7 +140,7 @@ impl DecisionClient for HandoffDecision {
         }
         if state.get("page").is_some() {
             self.seen.lock().unwrap().push(state.clone());
-            return Box::pin(async { Err(DecisionError::Failed("stop on the rendered page".into())) });
+            return Box::pin(async { Err(DecisionError::failed("stop on the rendered page")) });
         }
         self.scripted.evaluate(state, questions)
     }
@@ -219,7 +222,7 @@ impl DecisionClient for ConsentDecision {
                 };
                 // The assertion needs this observation, not an unlimited wait on the static banner that follows it.
                 if recorded {
-                    return Err(DecisionError::Failed("consent observation recorded".into()));
+                    return Err(DecisionError::failed("consent observation recorded"));
                 }
                 if first {
                     // Time for the browser to refuse the banner before the next page is read.
@@ -425,6 +428,24 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
             "allowed_origins cannot be combined with extension",
         ),
         (
+            task(|o, _| {
+                o.fetch = true;
+                o.inputs = Some([("name".to_string(), "Ada".to_string())].into_iter().collect());
+                o.authorization = Some(Authorization { irreversible_actions: true });
+            }),
+            "fetch starts no browser, so it cannot be combined with inputs, authorization",
+        ),
+        (
+            task(|o, h| {
+                o.fetch = true;
+                h.secrets = Some(Arc::new(ScopedSecrets::per_secret([(
+                    "password".to_string(),
+                    (SecretValue::from("hunter2"), vec!["https://example.com".to_string()]),
+                )])));
+            }),
+            "fetch starts no browser, so it cannot be combined with secrets",
+        ),
+        (
             task(|o, h| {
                 o.cdp_url = Some("ws://localhost:1/x".into());
                 h.browser_api_key = Some("key".into());
@@ -474,6 +495,20 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
 }
 
 #[tokio::test]
+async fn a_fetch_run_given_a_resolver_that_declares_no_secret_is_not_refused_for_secrets() {
+    // Python's `ScopedSecrets.per_secret({})` installs a resolver with nothing in it, which `serve` sees as an empty
+    // list: counting the resolver itself refused that fetch run for secrets it was never given.
+    let error = run(task(|o, h| {
+        o.fetch = true;
+        o.inputs = Some([("name".to_string(), "Ada".to_string())].into_iter().collect());
+        h.secrets = Some(Arc::new(ScopedSecrets::per_secret(Vec::new())));
+    }))
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "fetch starts no browser, so it cannot be combined with inputs");
+}
+
+#[tokio::test]
 async fn a_run_naming_no_browser_needs_the_cloud_key() {
     let error = run(task(|o, _| o.browser = true)).await.unwrap_err();
     assert!(matches!(&error, RunError::Configuration(message) if message.contains("BROWSER_USE_API_KEY")), "{error}");
@@ -506,8 +541,10 @@ fn local_uses_the_extension_unless_a_launch_is_asked_for() {
     ] {
         assert!(!task(launched).wants_extension());
     }
-    assert!(fastbrowse_run::check(&task(RunTask { local: true, extension: true, ..RunTask::default() })).is_ok());
-    let refused = |given: RunTask| fastbrowse_run::check(&task(given)).unwrap_err().to_string();
+    assert!(
+        fastbrowse_run::check(&task(RunTask { local: true, extension: true, ..RunTask::default() }), false).is_ok()
+    );
+    let refused = |given: RunTask| fastbrowse_run::check(&task(given), false).unwrap_err().to_string();
     let error = refused(RunTask { local: true, viewport: Some((640, 480)), ..RunTask::default() });
     assert!(error.contains("pass launch") && error.contains("viewport"), "{error}");
     assert!(
@@ -531,20 +568,19 @@ fn local_uses_the_extension_unless_a_launch_is_asked_for() {
 fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
     let local =
         RunTask { task: "read the page".into(), launch: true, viewport: Some((640, 480)), ..RunTask::default() };
-    assert!(fastbrowse_run::check(&local).is_ok());
+    assert!(fastbrowse_run::check(&local, false).is_ok());
     let handed = RunTask {
         task: "read the page".into(),
         cdp_port: Some(9222),
         viewport: Some((640, 480)),
         ..RunTask::default()
     };
-    let error = fastbrowse_run::check(&handed).unwrap_err().to_string();
+    let error = fastbrowse_run::check(&handed, false).unwrap_err().to_string();
     assert!(error.contains("viewport"), "{error}");
-    let error = fastbrowse_run::check(&RunTask {
-        task: "read the page".into(),
-        viewport: Some((0, 480)),
-        ..RunTask::default()
-    })
+    let error = fastbrowse_run::check(
+        &RunTask { task: "read the page".into(), viewport: Some((0, 480)), ..RunTask::default() },
+        false,
+    )
     .unwrap_err()
     .to_string();
     assert!(error.contains("greater than zero"), "{error}");
@@ -553,32 +589,36 @@ fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
 #[test]
 fn a_desktop_run_refuses_browser_options_and_recipes() {
     let desktop = |app: &str| RunTask { task: "fill the form".into(), desktop: Some(app.into()), ..RunTask::default() };
-    assert!(fastbrowse_run::check(&desktop("gnome-text-editor --new-window")).is_ok());
+    assert!(fastbrowse_run::check(&desktop("gnome-text-editor --new-window"), false).is_ok());
     for app in [" ", "gedit 'unclosed"] {
-        let error = fastbrowse_run::check(&desktop(app)).unwrap_err().to_string();
+        let error = fastbrowse_run::check(&desktop(app), false).unwrap_err().to_string();
         assert!(error.contains("must name an app to start"), "{app:?}: {error}");
     }
-    let error = fastbrowse_run::check(&RunTask {
-        start: Some("https://example.com".into()),
-        recipe: Some("steps.json".into()),
-        ..desktop("gnome-text-editor")
-    })
+    let error = fastbrowse_run::check(
+        &RunTask {
+            start: Some("https://example.com".into()),
+            recipe: Some("steps.json".into()),
+            ..desktop("gnome-text-editor")
+        },
+        false,
+    )
     .unwrap_err()
     .to_string();
     assert!(error.contains("drop start, recipe"), "{error}");
     // Further apps start beside the first, so they need one.
     let alone =
         RunTask { task: "add the numbers".into(), desktop_apps: vec!["gnome-calculator".into()], ..RunTask::default() };
-    let error = fastbrowse_run::check(&alone).unwrap_err().to_string();
+    let error = fastbrowse_run::check(&alone, false).unwrap_err().to_string();
     assert!(error.contains("name the first app in desktop"), "{error}");
     let empty = RunTask { desktop_apps: vec![" ".into()], ..desktop("gnome-text-editor") };
-    let error = fastbrowse_run::check(&empty).unwrap_err().to_string();
+    let error = fastbrowse_run::check(&empty, false).unwrap_err().to_string();
     assert!(error.contains("must name an app to start"), "{error}");
     let both = RunTask { desktop_apps: vec!["gnome-calculator".into()], ..desktop("gnome-text-editor") };
-    assert!(fastbrowse_run::check(&both).is_ok());
+    assert!(fastbrowse_run::check(&both, false).is_ok());
     // A desktop run is recorded from its window's own frames.
     assert!(
-        fastbrowse_run::check(&RunTask { record: Some("clip.mp4".into()), ..desktop("gnome-text-editor") }).is_ok()
+        fastbrowse_run::check(&RunTask { record: Some("clip.mp4".into()), ..desktop("gnome-text-editor") }, false)
+            .is_ok()
     );
 }
 
@@ -696,6 +736,91 @@ async fn test_a_run_goes_to_the_browser_when_the_read_needs_one() {
     let result = run(options).await.unwrap();
     assert_eq!(result.status, Status::Error);
     assert!(result.error.as_deref().is_some_and(|error| error.contains("no browser here")), "{:?}", result.error);
+}
+
+/// Jev as `0` answers it, keeping the state of each step it is asked to choose.
+struct StepStates<J>(J, Arc<Mutex<Vec<Value>>>);
+
+impl<J: DecisionClient> DecisionClient for StepStates<J> {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.0.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if questions.contains_key("operation") {
+            self.1.lock().unwrap().push(state.clone());
+        }
+        self.0.evaluate(state, questions)
+    }
+}
+
+/// example.com's served page is a paragraph and a script that builds its heading and its one link. Read over HTTP,
+/// it offered no controls, Jev was told nothing on it led anywhere else, and a run asked to follow its link ended
+/// `complete` without following it (#1380). A page whose markup carries scripts is stated as read without running
+/// them, and the wait Jev picks there takes the run to a browser; a run limited to fetching is told no browser opens.
+/// A page with no scripts still leads nowhere.
+#[tokio::test]
+async fn test_a_fetched_page_whose_links_a_script_builds_is_not_said_to_lead_nowhere() {
+    let script_built = "<title>Example Domain</title><div><p>This domain is for use in documentation examples.</p></div>\
+                        <script src=/s.js></script>";
+    let plain = "<title>Example Domain</title><div><p>This domain is for use in documentation examples.</p></div>\
+                 <script type=application/ld+json>{\"@type\": \"WebSite\"}</script>";
+    let opens = "This page was read over HTTP: its markup holds no links or controls, but its scripts did not run. A \
+                 read takes in only this markup; a wait, scroll or other step on this page opens it in a browser, \
+                 which runs them.";
+    let cannot = "This page was read over HTTP: its markup holds no links or controls, but its scripts did not run. \
+                  This run cannot open a browser, so no step on this page runs them: a read takes in only this markup.";
+    let nowhere = "This page offers no links or controls: nothing on it leads anywhere else.";
+    for (markup, fetch, stated) in [(script_built, false, opens), (script_built, true, cannot), (plain, false, nowhere)]
+    {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let wait = fastbrowse_agent::scripted::Step {
+            operation: fastbrowse_core::models::Operation::Wait,
+            label: String::new(),
+            pick: None,
+        };
+        let jev = StepStates(fastbrowse_agent::scripted::ScriptedJev::new(vec![wait]), asked.clone());
+        let options = task(|o, h| {
+            o.fetch = fetch;
+            o.task = "Open https://docs.example.test/, follow the link on that page, and report the main heading of \
+                      the page the link opens."
+                .into();
+            o.start = Some("https://docs.example.test/".into());
+            h.http = Some(Http::new(Arc::new(
+                move |request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+                    let response = if request.url.contains("/json/version") {
+                        Response::new(404, Vec::new())
+                    } else {
+                        Response::new(200, markup).with_header("content-type", "text/html")
+                    };
+                    Box::pin(async move { Ok(response) })
+                },
+            )));
+            h.jev = Some(Arc::new(jev));
+            h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+            h.open_browser = Some(no_browser());
+        });
+        let result = run(options).await.unwrap();
+        let facts = asked.lock().unwrap()[0]["page_facts"].to_string();
+        for fact in [opens, cannot, nowhere] {
+            assert_eq!(facts.contains(fact), fact == stated, "{facts}");
+        }
+        // The wait hands the run to the browser, which here fails to start; a fetch-only run ends where it is.
+        if stated == opens {
+            assert_eq!(result.status, Status::Error, "{:?}", result.error);
+            assert!(
+                result.error.as_deref().is_some_and(|error| error.contains("no browser here")),
+                "{:?}",
+                result.error
+            );
+        } else if fetch {
+            assert_eq!(result.status, Status::Blocked, "{:?}", result.error);
+        }
+    }
 }
 
 /// Jev as the scripted client answers, except that every page is a bot check.
@@ -936,7 +1061,7 @@ async fn a_run_cancelled_while_its_browser_opens_keeps_what_the_fetched_read_spe
 fn an_empty_task_is_refused_before_provider_or_browser_setup() {
     for text in ["", " ", "\n\t"] {
         let (task, _) = task(|task, _| task.task = text.into());
-        let result = fastbrowse_run::check(&task);
+        let result = fastbrowse_run::check(&task, false);
         assert!(
             matches!(result, Err(RunError::Invalid(ref message)) if message == "task must not be empty"),
             "{result:?}"
@@ -1163,10 +1288,10 @@ impl LLMClient for SearchEntry {
                 LLMPurpose::Start => r#"{"url":null,"queries":["returns policy"]}"#,
                 LLMPurpose::KnownPages => r#"{"urls":[]}"#,
                 LLMPurpose::Dates => r#"{"dates":[]}"#,
-                _ => return Err(LLMError::Failed("stop after search entry".into())),
+                _ => return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "stop after search entry")),
             };
             Ok(Generation {
-                data: schema.validate_json(value).map_err(LLMError::Failed)?,
+                data: schema.validate_json(value).map_err(LLMError::schema)?,
                 cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)),
             })
         })
@@ -1184,7 +1309,7 @@ impl DecisionClient for SearchEntry {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         Box::pin(async move {
             if !questions.contains_key("entry") {
-                return Err(DecisionError::Failed("stop after search entry".into()));
+                return Err(DecisionError::failed("stop after search entry"));
             }
             Ok(Evaluation {
                 model: "jev".into(),

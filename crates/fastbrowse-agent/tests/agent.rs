@@ -112,7 +112,7 @@ impl Page for FakeSite {
             None => screens.as_str(),
         };
         let Some(screen) = screen else {
-            return ready(Err(BrowserError::Failed(format!("no page at {url}"))));
+            return ready(Err(BrowserError::failed("test/no-page", format!("no page at {url}"))));
         };
         let mut at = self.at.lock().unwrap();
         let left = std::mem::replace(&mut at.0, screen.to_string());
@@ -436,9 +436,9 @@ impl LLMClient for ReplayLLM {
             });
             let response = self.0.take(&key, request, |log| scripted_llm(&self.1, purpose.as_str(), &schema_name, log));
             if let Some(failure) = response["raise"].as_str() {
-                return Err(LLMError::Failed(failure.to_string()));
+                return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, failure.to_string()));
             }
-            let data = schema.validate_json(&dumps(&response["data"])).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&dumps(&response["data"])).map_err(LLMError::schema)?;
             let cost: CostLine = serde_json::from_value(response["cost"].clone()).expect("cost");
             Ok(Generation { data, cost })
         })
@@ -707,6 +707,50 @@ async fn a_surface_that_appears_in_a_document_already_seen_is_still_asked_about(
     assert_eq!(outcome["status"], "stuck", "{outcome}");
     assert_eq!(outcome["steps"].as_array().unwrap().len(), 1, "{outcome}");
     assert!(outcome["error"].as_str().unwrap().contains("'Remote browser view'"), "{outcome}");
+}
+
+/// Asked to open example.com, follow its link and report the heading the link leads to, a run that had read that
+/// heading had its DONE refused, the opening of example.com judged never carried out, and ended stuck (#1373): the
+/// done check was shown the click and the read, not the run's own opening of its first page. Shown that opening first,
+/// Jev judged every step carried out. It is shown whether the caller gave the page or the run worked it out from the
+/// task, with the page it landed on, and is no step: a run that only opened and read is still told it took none.
+#[tokio::test(start_paused = true)]
+async fn the_done_check_is_shown_the_runs_opening_of_its_first_page() {
+    for (name, opened, landed, stepped) in [
+        (
+            "an HTTP 404 page goes to Jev, and its DONE ends the run",
+            "https://shop.test/missing",
+            "https://shop.test/missing",
+            false,
+        ),
+        (
+            "a start page worked out from the task that opens nothing falls back to the front page",
+            "https://site.test/deep/path",
+            "https://site.test",
+            true,
+        ),
+    ] {
+        // Played with a log, a request no recording answers takes the answer recorded at its place.
+        let case = cases().into_iter().find(|case| case["name"] == name).unwrap();
+        let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+        play(&case, Some(log.clone())).await;
+        let log = log.lock().unwrap();
+        let state: Value = log
+            .iter()
+            .find(|call| call["jev"]["questions"].as_str().is_some_and(|q| q.contains("\"carried\":")))
+            .map(|call| serde_json::from_str(call["jev"]["state"].as_str().unwrap()).unwrap())
+            .expect("a done check");
+        assert_eq!(
+            state["recent_actions"][0],
+            serde_json::json!({
+                "operation": "navigate", "target": opened, "outcome": "executed", "page_changed": true,
+                "effect": format!("went to {landed}"), "read_progress": false,
+            }),
+            "{name}"
+        );
+        let untouched = state["page_facts"].to_string().contains("This run has taken no step on any page");
+        assert_eq!(untouched, !stepped, "{name}: {state}");
+    }
 }
 
 #[tokio::test(start_paused = true)]

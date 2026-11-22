@@ -50,10 +50,22 @@ pub(crate) enum OutputIntent {
     CarriedOut,
 }
 
+impl OutputIntent {
+    /// Whether the run attaches a screenshot of the page it ends on to its answer, as code does when the task asks
+    /// for one.
+    pub fn attaches_screenshot(self) -> bool {
+        matches!(self, Self::Image | Self::TextAndImage)
+    }
+}
+
 /// A run ends here, as what it is.
 #[derive(Debug, Clone)]
 pub(crate) struct Stop {
     pub status: Status,
+    /// The rule that ended the run, as `RunResult::failure_kind` names it: a fixed name and typed values only, since
+    /// the hosted worker logs it where it never logs `error`. Five runs ended `unavailable` after steps with no kind
+    /// at all, so none of them could be told apart in the logs (#1372).
+    pub rule: String,
     pub error: Option<String>,
     pub evidence: Vec<Evidence>,
     /// The wall this stop names when the page alone cannot say: a bot check reads like any other page.
@@ -61,8 +73,8 @@ pub(crate) struct Stop {
 }
 
 impl Stop {
-    pub fn new(status: Status, error: impl Into<String>) -> Stop {
-        Stop { status, error: Some(error.into()), evidence: Vec::new(), wall: None }
+    pub fn new(status: Status, rule: impl Into<String>, error: impl Into<String>) -> Stop {
+        Stop { status, rule: rule.into(), error: Some(error.into()), evidence: Vec::new(), wall: None }
     }
 }
 
@@ -238,7 +250,12 @@ impl SiteFailure {
             FailureCause::Http(_) => Status::Stuck,
             FailureCause::Navigation(_) | FailureCause::Reported => Status::Unavailable,
         };
-        Stop::new(status, format!("Could not complete the task after {}", self.message()))
+        let rule = match &self.cause {
+            FailureCause::Http(status) => format!("SiteFailure/http-{status}"),
+            FailureCause::Navigation(_) => "SiteFailure/navigation".into(),
+            FailureCause::Reported => "SiteFailure/reported".into(),
+        };
+        Stop::new(status, rule, format!("Could not complete the task after {}", self.message()))
     }
 }
 
@@ -297,6 +314,12 @@ pub(crate) struct RunState {
     /// What Jev was offered for the latest decision, for the next step recorded, which is the one that decision led to.
     pub choices: Vec<StepChoice>,
     pub history: Vec<HistoryEntry>,
+    /// The run's own opening of its first page, made before any step and kept out of `history`, which counts the
+    /// steps. Asked to open example.com, follow its link and report the heading there, a run that had read the heading
+    /// was judged never to have opened example.com, shown only the click and the read, and ended stuck (#1373). It
+    /// holds the addresses as they were, and is masked where a model is shown it: a value typed as a secret later in
+    /// the run can sit in either address, and masked at the opening it would not yet have been known.
+    pub opened: Option<HistoryEntry>,
     pub site_failure: Option<SiteFailure>,
     /// A failure on the address the run started at, kept after the run leaves it until that address loads. A run
     /// whose start page answered 404 searched the site, stalled on the results and ended `no_progress`, since leaving
@@ -315,6 +338,8 @@ pub(crate) struct RunState {
     /// its fields new.
     pub written: HashMap<String, Written>,
     pub recoveries: i64,
+    /// Rejected drafts sent back to the navigator. Unlike `recoveries`, no new page or read renews it.
+    pub rewrites: i64,
     pub blank_opening_checked: bool,
     /// Blank states waited out during this loading episode, cleared once a readable page appears.
     pub blank_waited: HashSet<(String, String)>,
@@ -476,6 +501,11 @@ pub(crate) struct RunState {
 pub type PartialComposition = (ComposedAnswer, Vec<(Fact, bool)>, usize);
 
 impl RunState {
+    /// What the run has done, as a model judging that is shown it: the opening of its first page, then its steps.
+    pub fn actions_taken(&self) -> impl Iterator<Item = &HistoryEntry> {
+        self.opened.iter().chain(&self.history)
+    }
+
     /// Jev's answer to whether the task needs an action inside a drawn surface, when it was asked in `page` and holds
     /// there still; `None` when the next step must ask it. A failed page is asked again.
     pub(super) fn surface_judgement(&self, page: &(String, String)) -> Option<f64> {
@@ -593,6 +623,15 @@ impl RunState {
             *read = true;
         }
         self.read_tries.remove(&page);
+    }
+
+    /// A step or read moved the run on, so the stall budget starts again and nothing done before is stalled. A read that
+    /// found new evidence reset the count but kept the stalled actions, so a route left out before it stayed hidden
+    /// after it, though the one stall rule renews the budget on new evidence.
+    pub fn renew_stall(&mut self) {
+        self.unchanged = 0;
+        self.hint = None;
+        self.idle.clear();
     }
 
     /// Count a read begun on this page, returning how many have begun since its last finished read.
@@ -809,6 +848,7 @@ impl RunState {
             steps: Vec::new(),
             choices: Vec::new(),
             history: Vec::new(),
+            opened: None,
             site_failure: None,
             start_failure: None,
             http_seen: HashSet::new(),
@@ -818,6 +858,7 @@ impl RunState {
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
+            rewrites: 0,
             blank_opening_checked: false,
             blank_waited: HashSet::new(),
             hung_page_reopened: false,

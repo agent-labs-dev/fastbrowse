@@ -101,8 +101,8 @@ The mapping preserves these public arm names:
 `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` remain diagnostic. Candidate schema 7,
 `GROUPS`, site groups, and all files under `docs/results` stay as recorded.
 
-The official benchmark workflow uses Parallax 2.0.0.dev26's `bu-bench` and
-`online-mind2web` sources. It clones the pinned upstream judge for each source,
+The official benchmark workflow uses the pinned Parallax's `bu-bench` and
+`online-mind2web` sources ([evals/PARALLAX.md](../../evals/PARALLAX.md)). It clones the pinned upstream judge for each source,
 installs its dependencies in that checkout's own virtual environment, and
 passes the official source's sanitized run directory to the normal publication
 mapping. Do not restore the deleted fastbrowse official runner or row adapter.

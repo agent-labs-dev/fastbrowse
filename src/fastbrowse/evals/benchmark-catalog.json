@@ -992,7 +992,7 @@
       "default": false
     },
     "cua-codex": {
-      "pin": "cua-driver==0.47.19; codex-cli==0.169.0",
+      "pin": "cua-driver==0.47.19; codex-cli==0.169.0 on openai/gpt-6-luna",
       "tier": "local",
       "default": false
     },
