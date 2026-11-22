@@ -132,8 +132,29 @@ just evals-local --suite local mock --repeat 3
 ```
 
 The `replay` check replays every cassette in `bench/cassettes` with no model key and fails on any request a
-cassette did not record. A PR that changes what the agent sends to Jev or the LLM refreshes the cassettes it reports
-with `uv run python -m fastbrowse.evals.bench fill --only TASK ...`, a paid run that a maintainer starts.
+cassette did not record. A cassette is the recorded questions and answers of one bench task, one per line in
+`bench/cassettes/<task>.jsonl`, so a change to what the agent asks shows in the diff of the cassette it refreshes.
+
+When your change alters what the agent sends to Jev or the LLM, the check fails and names the tasks that missed.
+On a pull request from a branch in this repository, a second workflow, `Cassette refill`, then does the rest:
+
+1. It fills only the missed tasks with `bench fill`, spending at most the repository variable
+   `CASSETTE_REFILL_BUDGET` (1 dollar by default).
+2. If every task replays with no miss, passes its grade and stays within the cap, it commits the new cassettes to
+   your branch (a signed commit) and CI runs again on it. Pull the branch before you push anything else.
+3. Either way it posts one comment on the pull request with each task, its cost and why it failed, if it did.
+
+It tries each head commit once, and never refills its own commit. If it rejects a fill, fix what the comment names
+and push; that starts a new attempt. A maintainer can rerun it for a pull request from the Actions tab (`Cassette
+refill`, with the pull request number). A pull request from a fork never gets the model key, so a maintainer refills
+for it, or you do with your own key:
+
+```sh
+OPENROUTER_API_KEY=... uv run python -m fastbrowse.evals.bench fill --only TASK ...
+```
+
+A fill never records an error the provider returned (a rate limit, say). It shows the error to the agent, keeps
+the cassette as it was, and the task fails, so run it again.
 
 A published comparison figure has its own rule: it may only come from committed rows (`--publish`) at the task
 versions they ran, with every physical attempt and its spend retained. See [docs/evals.md](docs/evals.md).

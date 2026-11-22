@@ -91,7 +91,9 @@ pub enum CdpError {
     Closed(Arc<str>),
     /// The browser answered with an error. Its message is kept out: it can quote page text or evaluated source, so
     /// the refusals whose text Chrome fixes are named by `failure` instead.
-    Protocol { code: i64, failure: Option<ProtocolFailure> },
+    /// `reason` is text the extension shim wrote for a browser-level call, such as Chrome refusing to open or attach a
+    /// tab, which quotes no page (#1314).
+    Protocol { code: i64, failure: Option<ProtocolFailure>, reason: Option<String> },
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, Deserialize)]
@@ -152,6 +154,8 @@ struct RemoteError {
     message: String,
     #[serde(default, rename = "fastbrowseFailure")]
     failure: Option<ProtocolFailure>,
+    #[serde(default, rename = "fastbrowseReason")]
+    reason: Option<String>,
 }
 
 type Reply = Result<Value, CdpError>;
@@ -582,20 +586,27 @@ pub fn browser_error(method: &str, error: &CdpError, lost_is_outage: bool) -> Br
             BrowserError::BrowserUnresponsive(format!("{method} failed ({why})"))
         }
         CdpError::Closed(why) => BrowserError::failed(format!("{method}/{why}"), format!("{method} failed ({why})")),
-        CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NavigationDenied) }
+        CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NavigationDenied), .. }
             if method == "Page.navigate" =>
         {
             BrowserError::failed("Page.navigate/denied", "Page.navigate was denied by the browser access policy")
         }
-        CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NotAttached) } => {
+        CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NotAttached), .. } => {
             BrowserError::ContextLost(format!("{method} failed (CDP {SERVER_ERROR}, not attached to an active page)"))
         }
-        CdpError::Protocol { code: SERVER_ERROR, .. } => {
-            BrowserError::ContextLost(format!("{method} failed (CDP {SERVER_ERROR})"))
+        CdpError::Protocol { code: SERVER_ERROR, reason, .. } => {
+            BrowserError::ContextLost(protocol_failed(method, SERVER_ERROR, reason.as_deref()))
         }
-        CdpError::Protocol { code, .. } => {
-            BrowserError::failed(format!("{method}/cdp-{code}"), format!("{method} failed (CDP {code})"))
+        CdpError::Protocol { code, reason, .. } => {
+            BrowserError::failed(format!("{method}/cdp-{code}"), protocol_failed(method, *code, reason.as_deref()))
         }
+    }
+}
+
+fn protocol_failed(method: &str, code: i64, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("{method} failed (CDP {code}): {reason}"),
+        None => format!("{method} failed (CDP {code})"),
     }
 }
 
@@ -607,7 +618,7 @@ impl Inner {
             let reply = match message.error {
                 Some(error) => {
                     let failure = error.failure.or_else(|| ProtocolFailure::of_chrome_message(&error.message));
-                    Err(CdpError::Protocol { code: error.code, failure })
+                    Err(CdpError::Protocol { code: error.code, failure, reason: error.reason })
                 }
                 None => Ok(message.result),
             };
@@ -702,6 +713,33 @@ mod tests {
             assert!(matches!(public, BrowserError::ContextLost(_)));
             let text = public.to_string();
             assert_eq!(text.contains("not attached to an active page"), named, "{text}");
+            assert!(!text.contains("private"), "{text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reason_the_extension_shim_wrote_is_reported_and_a_native_message_is_not() {
+        // #1314: Chrome's refusal to open or attach a tab reached the run only as "Target.createTarget failed (CDP
+        // -32000)", so twelve runs in a row failed with nothing saying why.
+        for (reason, reported) in [(Some("Cannot attach to this target"), true), (None, false)] {
+            let (tx, rx) = oneshot::channel();
+            let (out, _) = mpsc::unbounded_channel();
+            let inner = Inner {
+                state: Mutex::new(State { pending: HashMap::from([(7, tx)]), ..Default::default() }),
+                handlers: Default::default(),
+                out,
+                answered: false.into(),
+                deadlines: Default::default(),
+                pong: false.into(),
+            };
+            let mut response = serde_json::json!({"id": 7, "error": {"code": -32000, "message": "private page text"}});
+            if let Some(reason) = reason {
+                response["error"]["fastbrowseReason"] = reason.into();
+            }
+            inner.dispatch(serde_json::from_value(response).unwrap());
+            let text = browser_error("Target.createTarget", &rx.await.unwrap().unwrap_err(), true).to_string();
+            assert!(text.contains("Target.createTarget failed (CDP -32000)"), "{text}");
+            assert_eq!(text.contains("Cannot attach to this target"), reported, "{text}");
             assert!(!text.contains("private"), "{text}");
         }
     }

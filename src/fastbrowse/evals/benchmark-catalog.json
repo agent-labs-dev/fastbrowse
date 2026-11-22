@@ -1000,6 +1000,11 @@
       "pin": "browser-harness==0.1.13; codex-cli==0.169.0 on openai/gpt-6-luna; cli+skill",
       "tier": "A",
       "default": false
+    },
+    "agent-browser": {
+      "pin": "agent-browser==0.43.0; codex-cli==0.169.0 on openai/gpt-6-luna; cli+skill",
+      "tier": "A",
+      "default": false
     }
   },
   "retired": [

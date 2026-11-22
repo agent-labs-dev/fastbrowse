@@ -41,7 +41,7 @@ stage selects, for each task and repeat, the newest run that measured it in full
 
 The plugin registers `fastbrowse`, `fastbrowse-pool`, and `fastbrowse-hosted`.
 Parallax supplies `browser-use-cloud`, `browser-use-oss`, `browser-harness`
-(Codex), `browser-harness-claude-code`, and `cua-codex`. The publication mapping is:
+(Codex), `browser-harness-claude-code`, `agent-browser` (Codex), and `cua-codex`. The publication mapping is:
 
 | Parallax result | Public arm |
 | --- | --- |
@@ -50,6 +50,7 @@ Parallax supplies `browser-use-cloud`, `browser-use-oss`, `browser-harness`
 | `browser-use-cloud` with model `bu-ultrafast` | `browser-use-ultrafast` |
 | other `browser-use-cloud` results | `browser-use` |
 | `browser-harness` | `browser-harness` |
+| `agent-browser` on its pinned model | `agent-browser`, carried by no publication group yet |
 | `browser-use-oss` | `browser-use-oss` |
 | `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` | diagnostic only |
 

@@ -42,6 +42,8 @@ webpki-roots = "1.0.11"
 [target.'cfg(unix)'.dependencies]
 # kill(2), already linked by tokio.
 libc = "0.2"
+# A non-blocking connect(2) for probing a host's socket, already linked by tokio.
+socket2 = "0.6.5"
 
 [dev-dependencies]
 tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "test-util"] }
