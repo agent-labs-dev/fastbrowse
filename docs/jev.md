@@ -36,11 +36,10 @@ unknown cost, which a dollar limit treats as unaffordable. Its thresholds are Je
 it, and the run's trace says so with a `decision_unvalidated` event. A Jev release other than 1.13 or 1.14 keeps Jev's limits
 and price but is unvalidated too.
 
-On OpenRouter, a decision model other than Jev pinned with `FASTBROWSE_DECISION_MODEL` is fitted to the context,
-price and image input OpenRouter lists for it (`OPENROUTER_DECISION_MODELS`, read from
-`GET /api/v1/models?output_modalities=decisions` on 2026-11-22), not to Jev's 262k: a 32k model such as
-`microsoft/microsoft-decision-1.1` refused requests fitted to Jev's context with `question_context_limit`. A model
-that list does not hold gets the unknown model's limits above. Question keys go out as `[A-Za-z0-9_-]{1,64}`, the
+An OpenRouter pin in `FASTBROWSE_DECISION_MODEL` uses the context, price and image support from the
+[OpenRouter Models API](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties), including for aliases.
+If the catalog is unavailable, fastbrowse uses its checked-in profiles. A model missing from both gets the
+unknown profile described above. Question keys go out as `[A-Za-z0-9_-]{1,64}`, the
 form Google's and Parallel's decision models require, and the answers come back under the keys fastbrowse asked by.
 
 ### Other decision hosts
@@ -89,8 +88,14 @@ pictures also take room from the step's text before it is sent: Jev counts each 
 28-pixel tile it covers, rounded up on each side, plus 13, and again for each place the request refers to it
 (**ours**, measured on 2026-11-22 against Jev 1.14 through OpenRouter, where TypeSafe publishes no rate: 280x280
 added 213 tokens, 560x560 813, 1568x882 3,597). A request with eight cards once fitted its text and was refused
-with `max_tokens_exceeded` because nothing counted them ([#1303](https://github.com/agent-labs-dev/fastbrowse/issues/1303)). A
-control that fills the viewport has no card beside the screenshot, which would show it again; a question sent no
+with `max_tokens_exceeded` because nothing counted them ([#1303](https://github.com/agent-labs-dev/fastbrowse/issues/1303)).
+When pictures overflow the token budget, fastbrowse drops the screenshot first, then cards, before reducing
+text or controls. For non-Jev System One routes, the client counts the image items it sends using the published
+rules for Gemini Decisions, Liquid D1 and D1.2, Perplexity Decider and Cloudflare Clef where available. A model
+without a published image token rule still reports its image usage after the call. fastbrowse has no local
+image token estimate for that model.
+
+A control that fills the viewport has no card beside the screenshot, which would show it again; a question sent no
 screenshot, as the irreversible-action check is, still gets that card. The gateway and every backup
 are asked the rest of the state, without the image or its reference. The LLM's own screenshot path is separate; it is governed by the LLM route, not by
 this policy.
@@ -207,7 +212,9 @@ and where fastbrowse follows it:
 - **Narrow, explicit judgments, with true/false descriptions that match the instruction.** Every Noul
   question in `crates/fastbrowse-agent/src/verification/` and `crates/fastbrowse-core/src/safety.rs` carries both descriptions.
 - **Concrete option boundaries, plus an escape option when coverage is incomplete.** The read offers
-  `synthesis` for an answer composed from more than one fact and `absent` for no relevant evidence. Scalar field
+  `synthesis` for an answer composed from more than one fact and `absent` for no relevant evidence. A page the step
+  judged to show what the task needs is offered `steps` instead of `absent`: it holds a fact the steps need, such as a
+  link to follow, and nothing that answers. Scalar field
   extraction offers `none`. Repeated short values from the same page and frame share one option
   with every source context, so identical answers do not compete as separate choices.
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.

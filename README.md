@@ -26,7 +26,8 @@ credentials, irreversible actions and spending under the control of code.
   there are no selectors to maintain. Widget keyboard actions are chosen from the keys their ARIA roles define.
 - **Answers you can check.** Every claim in a complete answer cites a verbatim quote from the page, with a link
   that scrolls to it. Pass a schema and get validated data back.
-  Tasks over a whole list can follow its next-page links, checking each page and preserving its citations.
+  Tasks over a whole list can follow its next-page links, checking each page and preserving its citations; a total
+  the list states answers a count from the page that states it.
 - **Code holds the keys.** Submit, pay, delete and send stop until you allow them. A secret is typed only on the
   origin it was declared for, and models only see its name. Step, time and dollar limits are enforced in code.
 - **Your own Chrome.** The CLI runs in the Chrome you are signed in to, through the
@@ -71,6 +72,7 @@ which passes bot checks and prints a URL to watch the run live.
 `AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. With both keys,
 the automatically selected OpenRouter LLM moves to the gateway for the rest of the run if OpenRouter refuses its key.
 Jev can also run through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
+OpenRouter decision model pins use the catalog's context, price and image support, including for aliases.
 [Jev routing](docs/jev.md#provider-failover) covers the order and [other hosts](docs/jev.md#other-decision-hosts).
 
 Set `EXA_API_KEY` to let Jev choose web search without opening a browser. The LLM proposes queries,
@@ -93,7 +95,9 @@ uv run fastbrowse "What is the title of the top story right now?" --start https:
 
 Steps go to stderr; the status, cost, step count, why a run stopped short, and the answer go to stdout. `--json`
 prints the full result: every step, the quotes behind the answer, cost by component, and the build that ran it. The
-exit code is the status, and only `complete` exits 0.
+exit code is the status, and only `complete` exits 0. A run that ends short of `complete` keeps its trace (every model request
+and reply, with the pages it read) in a file only you can read, names it as `trace:`, and removes it after 14 days;
+`FASTBROWSE_TRACE=0` in the environment keeps none ([docs/cli.md](docs/cli.md#results)).
 
 The starting address stays with the task in subsequent model decisions and reads, so references such as "the whole
 site" retain their starting context after navigation. Tasks can still ask to visit other sites.
@@ -132,8 +136,10 @@ The extension has to match the fastbrowse you install: the Store's **0.1.0** wor
    ```
 
 A run that reaches the page confirms the connection. If it ends `unavailable` with no browser connected,
-[follow the setup checks](docs/troubleshooting.md#the-extension-is-not-connected). Chrome shows a debugging bar
-while fastbrowse works.
+[follow the setup checks](docs/troubleshooting.md#the-extension-is-not-connected). From inside an agent's sandbox,
+the run must be able to read the extension's host directory and connect to its sockets; when the sandbox refuses
+them, the run ends `unavailable` with `no browser's fastbrowse extension can be reached from this process` and names
+the refusal. Chrome shows a debugging bar while fastbrowse works.
 The [setup and usage guide](docs/cli.md#your-own-chrome) covers signed-in tasks, browser selection,
 permissions and stopping a run.
 
@@ -236,7 +242,7 @@ Naming the same file for both arguments saves the healed sequence after another 
 Recipes can contain personal information from ordinary fields; stored secrets are kept only by name.
 `fastbrowse.recipes.validate_recipe()` checks recipe JSON with the same Rust parser as the file loader;
 `recipe_schema()` exports its JSON Schema for client validation.
-`record=Path("run.mp4")` writes captioned and plain videos, and needs ffmpeg. The action cursor also needs ffprobe; if frame dimensions cannot be read, the cursor is omitted with a warning.
+`record=Path("run.mp4")` writes captioned and plain videos, and needs ffmpeg. Both show the agent's cursor, which the page draws.
 
 **A cloud browser that outlives a run.** `open_cloud_browser(browser_api_key=...)` starts a Browser Use Cloud
 browser no run owns and returns a `CloudBrowser` with its `id`, `cdp_url` and `live_url`. It takes `run_task`'s
@@ -508,8 +514,9 @@ timeout if it has one (`MCP_TOOL_TIMEOUT` in Claude Code).
 
 ## Safety model
 
-- **Irreversible actions.** Jev judges each click, key chord and dialog acceptance, including Enter presses. Without authorization, a
-  irreversible action stops at `needs_confirmation`. This is a
+- **Irreversible actions.** Jev judges each click, key chord, file attached to an input and dialog acceptance,
+  including Enter presses. Without authorization, an irreversible action stops at `needs_confirmation`. An action the
+  task says not to take ("do not click Upload") is refused, authorized or not. This is a
   classifier, not a guarantee: a page can word a harmful control to look harmless.
 - **Secrets.** Models see names only. A value is resolved at the moment it is typed, only on its declared origin,
   and redacted from everything the run returns. A password field is typed only from a stored secret.

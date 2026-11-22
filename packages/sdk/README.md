@@ -12,7 +12,8 @@ export OPENROUTER_API_KEY=...
 ```
 
 `OPENROUTER_API_KEY` is the recommended route for Jev and the LLM. Without it, the LLM uses `AI_GATEWAY_API_KEY`
-and Jev uses `TYPESAFE_API_KEY` when set.
+and Jev uses `TYPESAFE_API_KEY` when set. OpenRouter model pins in `FASTBROWSE_DECISION_MODEL` use the
+model's catalog limits and image support.
 
 With it npm installs the binary for your platform as an optional dependency: `@fastbrowse/darwin-arm64`,
 `darwin-x64`, `linux-arm64`, `linux-x64` or `win32-x64`. No install script runs and nothing is downloaded on
@@ -20,7 +21,9 @@ first use. It needs Node.js 20 or newer, and on Linux it needs glibc.
 
 The binary brings no browser. `local: true` drives your own Chrome through the
 [fastbrowse extension](../../docs/cli.md#your-own-chrome), signed in as you are; add `launch: true` to start a separate
-Chrome instead. Without either a run starts a Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
+Chrome instead. A process inside a sandbox reaches the extension only when the sandbox lets it read the host's
+directory and connect to its sockets; otherwise the run ends `unavailable` and
+[names the refusal](../../docs/troubleshooting.md#the-extension-is-not-connected). Without either a run starts a Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
 
 ## First run
 
@@ -47,6 +50,9 @@ stopped it in `result.wall`: `kind` is `password`, `one_time_code`, `sign_in` or
 cause in `result.failure_kind`, which holds no page text or secret: `Budget/seconds` for a time limit,
 `Callback/run/event/error/-32603` when your `onEvent` callback threw, or a model failure's provider, purpose and status
 such as `Llm.Rejected/openrouter/action/http-401`.
+
+The SDK keeps no trace of a run, unlike the `fastbrowse` CLI, which keeps one for a run that ends short of `complete`.
+To write one, set `FASTBROWSE_TRACE` to a file path in the environment the SDK starts fastbrowse with.
 
 ## Processes and errors
 

@@ -1292,6 +1292,30 @@ async fn test_an_element_with_only_a_script_click_listener_is_offered() {
     h.close().await;
 }
 
+/// A same-origin frame's elements belong to the frame's own script realm, and Chrome's `getEventListeners` reports
+/// only the listeners of the realm it was read in, so a span the frame's script listens on was never offered (#1312).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_element_with_only_a_script_click_listener_in_a_frame_is_offered() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/listened-frame.html").await;
+    let obs = h.observe().await;
+    let labels: Vec<&str> = obs.controls.iter().map(|c| c.label.as_str()).collect();
+    for label in ["Remove Combat", "Delegated row", "Dropped listener", "Shadow action"] {
+        assert!(labels.contains(&label), "{label:?} not offered in {labels:?}");
+    }
+    assert_eq!(act(&h.page, click(find(&obs, "Remove Combat")), &obs).await.outcome, StepOutcome::Executed);
+    let frame = "document.querySelector('iframe').contentWindow";
+    assert_eq!(
+        eval_active(&h, &format!("{frame}.document.getElementById('status').textContent")).await,
+        "Nothing chosen"
+    );
+    eval_active(&h, &format!("{frame}.dropListener()")).await;
+    let labels: Vec<String> = h.observe().await.controls.into_iter().map(|c| c.label).collect();
+    assert!(!labels.iter().any(|l| l == "Dropped listener"), "{labels:?}");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_table_cell_drawn_with_an_icon_is_not_read_as_blank() {
     let _turn = turn().await;
@@ -1845,6 +1869,50 @@ async fn test_reply_buttons_under_one_authors_comments_are_told_apart_by_their_t
     h.close().await;
 }
 
+/// A CurseForge comment links its author's name, so an author with two comments made that link a twin, and a twin's
+/// label was cut from every card's lines: both Reply buttons and the thread's Post were named by the comment's age,
+/// "29 days ago", and a reply went under another commenter's thread (#881).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reply_and_post_are_named_by_the_comment_author_a_link_names() {
+    let _turn = turn().await;
+    let comment = |user: &str, date: &str, text: &str, thread: &str| {
+        format!(
+            "<li><div class=\"comment\"><div class=\"comment-body\"><div class=\"user-meta\">\
+             <a class=\"user\" href=\"#{user}\">{user}</a><div class=\"date\">{date}</div></div>\
+             <p>{text}</p><button>Reply</button><button>Quote</button></div></div>{thread}</li>"
+        )
+    };
+    let reply = format!("<ul>{}</ul>", comment("cjber", "28 days ago", "Fixed in 1.2", ""));
+    let form = "<form><textarea aria-label=\"Comment text area\"></textarea><button>Post</button></form>";
+    let page = |thread_form: &str| {
+        format!(
+            "<ul>{}{}{}</ul>{form}",
+            comment("Syrberus", "30 days ago", "Is 75 enough?", &reply),
+            comment("Syrberus", "29 days ago", "Works on 100%", thread_form),
+            comment("Belth", "29 days ago", "Thanks", ""),
+        )
+    };
+    let contexts = |obs: &Observation, label: &str| -> Vec<String> {
+        obs.controls.iter().filter(|c| c.label == label).map(|c| c.context.clone().unwrap_or_default()).collect()
+    };
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(&h, &format!("document.body.innerHTML = {}", serde_json::to_string(&page("")).unwrap())).await;
+    let obs = observe_until(&h.page, "Reply").await;
+    let replies = contexts(&obs, "Reply");
+    assert_eq!(replies.len(), 4, "{replies:?}");
+    assert!(replies[0].contains("Syrberus") && replies[2].contains("Syrberus"), "{replies:?}");
+    assert_ne!(replies[0], replies[2], "{replies:?}");
+    assert!(replies[3].contains("Belth"), "{replies:?}");
+    // Reply opened the second comment's thread form: its Post belongs to Syrberus' thread, not to an age.
+    eval_active(&h, &format!("document.body.innerHTML = {}", serde_json::to_string(&page(form)).unwrap())).await;
+    let obs = observe_until(&h.page, "Post").await;
+    let posts = contexts(&obs, "Post");
+    assert_eq!(posts.len(), 2, "{posts:?}");
+    assert!(posts[0].contains("Syrberus"), "{posts:?}");
+    h.close().await;
+}
+
 /// Options that are direct children of one list share every ancestor, and an aria-label hides the text inside
 /// them, so two "Springfield" options read as "1 of 2" and "2 of 2" and the run picked one blind.
 #[tokio::test(flavor = "multi_thread")]
@@ -2359,6 +2427,26 @@ async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
     }
 }
 
+/// A CSV inside a ZIP was read as one block, so composing from it sent the whole file (#1311). It is read as a
+/// downloaded CSV is: one block per record under its header, named for the member it is.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_csv_inside_a_zip_download_is_read_row_by_row() {
+    read_pdfs();
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    h.goto("/report.zip").await;
+    let capture = h.page.capture().await.expect("capture");
+    let rows: Vec<_> = capture.blocks.iter().filter(|b| b.source_id.starts_with("download/")).collect();
+    let texts: Vec<_> = rows.iter().map(|block| capture.block_text(block)).collect();
+    assert_eq!(texts, ["name,total\nReport,139.79", "name,total\nKettle,34.50", "name,total\nLamp,12"]);
+    for block in &rows {
+        assert_eq!(block.kind, BlockKind::Table);
+        assert_eq!(block.heading_path, ["Downloaded file: report.zip/orders.csv"]);
+    }
+    h.close().await;
+}
+
 /// A try restarts the load, so a page whose parse waits on a script slower than one try's wait was never ready on any.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_page_slower_than_one_try_is_waited_for() {
@@ -2535,16 +2623,96 @@ async fn test_the_viewport_a_measurement_read_is_not_asked_for_again() {
     assert!(width > 0.0 && height > 0.0, "{wheel:?}");
     assert_eq!(viewport_reads(&sent), 0, "{:?}", sent.lock().unwrap().iter().map(|(m, _)| m).collect::<Vec<_>>());
 
-    // Pointer marks need the viewport too, and a recording run has them on: the same measurement answers.
-    let marks = Arc::new(Mutex::new(vec![]));
-    let marked = CdpPage::new(h.session.clone(), Config::default()).with_pointer_marks(marks.clone());
+    // A page that draws the cursor glides it to the click's point and presses there, measured once.
+    let marked = CdpPage::new(h.session.clone(), Config::default()).with_cursor();
     h.goto("/").await;
     let obs = marked.observe().await.expect("observe");
     sent.lock().unwrap().clear();
     let clicked = act(&marked, click(find(&obs, "Sign in")), &obs).await;
     assert_eq!(clicked.outcome, StepOutcome::Executed);
     assert_eq!(viewport_reads(&sent), 0, "a click re-read the viewport");
-    assert_eq!(marks.lock().unwrap().len(), 1, "the click left no pointer mark");
+    let drawn: Vec<String> = sent
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p)| m == "Runtime.evaluate" && p["contextId"].is_number())
+        .filter_map(|(_, p)| p["expression"].as_str().and_then(|e| e.rsplit(").").next()).map(str::to_owned))
+        .collect();
+    assert!(
+        drawn.iter().any(|m| m.starts_with("glide(")) && drawn.iter().any(|m| m.starts_with("press(")),
+        "{drawn:?}"
+    );
+    h.close().await;
+}
+
+/// The cursor's press is drawn for every press the run sends, a fill's click as well as a click's, at the point and the
+/// moment the press goes out, and not for an action that never presses. Only a click drew it once, so a fill in a
+/// recording showed no press.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_the_cursor_presses_where_each_press_is_sent_and_a_hover_does_not() {
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    let sent = Arc::new(Mutex::new(vec![]));
+    let Some(h) = proxied(connection, recording(sent.clone())).await else { return };
+    let drawn = CdpPage::new(h.session.clone(), Config::default()).with_cursor();
+    h.goto("").await;
+    eval_active(&h, "document.body.innerHTML = '<input aria-label=Search> <button>Go</button>'; true").await;
+    let calls = |sent: &Arc<Mutex<Vec<(String, Value)>>>| -> Vec<String> {
+        sent.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(m, p)| match m.as_str() {
+                "Runtime.evaluate" if p["contextId"].is_number() => {
+                    p["expression"].as_str().and_then(|e| e.rsplit(").").next()).map(str::to_owned)
+                }
+                "Input.dispatchMouseEvent" if p["type"] == "mousePressed" => {
+                    Some(format!("sent({}, {})", p["x"], p["y"]))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let obs = drawn.observe().await.expect("observe");
+    sent.lock().unwrap().clear();
+    assert_eq!(act(&drawn, fill(find(&obs, "Search"), "hyprland"), &obs).await.outcome, StepOutcome::Executed);
+    let filled = calls(&sent);
+    let pressed = filled.iter().position(|c| c.starts_with("press(")).unwrap_or_else(|| panic!("{filled:?}"));
+    let sent_at = filled.iter().position(|c| c.starts_with("sent(")).unwrap_or_else(|| panic!("{filled:?}"));
+    assert!(pressed < sent_at, "the press was drawn after it was sent: {filled:?}");
+    let point = |call: &str| -> Vec<f64> {
+        let inner = call.split_once('(').unwrap().1.trim_end_matches(')');
+        inner.split(',').map(|n| n.trim().parse().unwrap()).collect()
+    };
+    assert_eq!(point(&filled[pressed]), point(&filled[sent_at]), "{filled:?}");
+
+    let obs = drawn.observe().await.expect("observe");
+    sent.lock().unwrap().clear();
+    assert_eq!(act(&drawn, hover(find(&obs, "Go")), &obs).await.outcome, StepOutcome::Executed);
+    let hovered = calls(&sent);
+    assert!(hovered.iter().any(|c| c.starts_with("glide(")), "{hovered:?}");
+    assert!(!hovered.iter().any(|c| c.starts_with("press(")), "a hover drew a press: {hovered:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_the_cursor_is_drawn_in_the_page_but_not_in_the_models_screenshot() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    let drawn = CdpPage::new(h.session.clone(), Config::default()).with_cursor();
+    h.goto("/").await;
+    let before = drawn.observe().await.expect("observe");
+    let plain = h.page.screenshot().await.expect("screenshot");
+    let hovered = act(&drawn, hover(find(&before, "Sign in")), &before).await;
+    assert_eq!(hovered.outcome, StepOutcome::Executed);
+    // The other page draws no cursor of its own, so its capture is what a watcher of the tab sees.
+    let watched = h.page.screenshot().await.expect("screenshot");
+    assert_ne!(watched, plain, "the cursor was not drawn");
+    let for_model = drawn.screenshot().await.expect("screenshot");
+    assert_ne!(for_model, watched, "the model's screenshot showed the cursor");
+    assert_eq!(h.page.screenshot().await.expect("screenshot"), watched, "the cursor was not put back");
+    let after = drawn.observe().await.expect("observe");
+    let names = |obs: &Observation| obs.controls.iter().map(|c| c.label.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&after), names(&before), "the cursor reached the snapshot");
     h.close().await;
 }
 

@@ -64,6 +64,29 @@ impl TryFrom<FactFields> for Fact {
 }
 
 impl Fact {
+    /// A value read from the page's pixels: its quote is the screenshot's own text, marked as not literal page text,
+    /// and its digest names the image a citation points at. A page drawn as a picture answers only this way.
+    pub fn read_from_image(text: &str, url: &str, captured_at: DateTime, png: &[u8]) -> Fact {
+        let source = crate::policy::screenshot_reference(png);
+        let evidence = Evidence {
+            source_id: source.clone(),
+            url: url.into(),
+            frame_id: None,
+            captured_at,
+            capture_sha256: source,
+            start: 0,
+            end: text::len(text) as i64,
+            quote: format!("read from the screenshot: {text}"),
+            complete_source: false,
+            control_context: None,
+            rendered_text: false,
+            heading_path: Vec::new(),
+            capture_artifact: None,
+            links: Vec::new(),
+        };
+        Fact::read(text, evidence, FactReader::LlmImage).answering()
+    }
+
     /// A fact read from one span, kept as context until it is marked as answering.
     pub fn read(text: &str, evidence: Evidence, reader: FactReader) -> Fact {
         Fact { answers: false, text: text.into(), evidence: Some(evidence), basis: Vec::new(), reader }
@@ -307,6 +330,20 @@ impl Notes {
             notes.add(fact);
         }
         notes
+    }
+
+    /// Record one read: its capture, taken once `steps_taken` of the run's steps that could change the site were taken,
+    /// and the facts read from it. A trace's `read` events carry all three, so a run's notes rebuild from its trace.
+    pub fn record(&mut self, capture: &Capture, steps_taken: usize, facts: Vec<Fact>) {
+        let added = !facts.is_empty();
+        self.remember_capture(capture, steps_taken);
+        for fact in facts {
+            self.add(fact);
+        }
+        // An absent read must not mistake a stored quote from a revisited capture for fresh evidence.
+        if added {
+            self.supersede(&capture.url, &capture.sha256, &capture.text);
+        }
     }
 
     /// Remember a capture read once `steps_taken` of the run's steps that could change the site were taken.
@@ -564,35 +601,6 @@ impl Notes {
         }
         self.facts.insert(key, fact);
         true
-    }
-
-    /// A value read from the page's pixels: its quote is the screenshot's own text, marked as not literal page text,
-    /// and its digest names the image a citation points at. A page drawn as a picture answers only this way.
-    pub fn add_image_read(&mut self, text: &str, url: &str, captured_at: DateTime, png: &[u8]) -> bool {
-        let source = crate::policy::screenshot_reference(png);
-        let evidence = Evidence {
-            source_id: source.clone(),
-            url: url.into(),
-            frame_id: None,
-            captured_at,
-            capture_sha256: source,
-            start: 0,
-            end: text::len(text) as i64,
-            quote: format!("read from the screenshot: {text}"),
-            complete_source: false,
-            control_context: None,
-            rendered_text: false,
-            heading_path: Vec::new(),
-            capture_artifact: None,
-            links: Vec::new(),
-        };
-        self.add(Fact {
-            answers: true,
-            text: text.into(),
-            evidence: Some(evidence),
-            basis: Vec::new(),
-            reader: FactReader::LlmImage,
-        })
     }
 
     /// Whether every word and number of `text` is already in a current text note read from `url`.
@@ -952,7 +960,7 @@ mod tests {
         // literal page text; a citation built from it links the page instead of a text fragment.
         let mut notes = Notes::default();
         let at = DateTime::new(2026, 1, 1, 0, 0, 0).utc();
-        assert!(notes.add_image_read("premium 3.459", "https://example.test/map", at, b"a-png"));
+        assert!(notes.add(Fact::read_from_image("premium 3.459", "https://example.test/map", at, b"a-png")));
         assert!(notes.answered());
         let fact = notes.facts()[0];
         assert_eq!(serde_json::to_value(fact.reader).unwrap(), "llm_image");

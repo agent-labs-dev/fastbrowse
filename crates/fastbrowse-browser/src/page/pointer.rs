@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use serde_json::json;
 
 use super::CdpPage;
-use super::scripts::DEEP_HIT_JS;
+use super::scripts::{DEEP_HIT_JS, TOP_RECT_JS};
 use crate::error::BrowserError;
 
 impl CdpPage {
@@ -66,6 +66,22 @@ impl CdpPage {
         Ok(self.regions(&[id.to_string()], "nodes").await?.swap_remove(id))
     }
 
+    /// Scroll control `id` into view, by the rule the hit test scrolls by, unless it is already in full view. A
+    /// control gone from the page stays where it is: the action on it finds it stale.
+    pub async fn reveal(&self, id: &str) -> Result<(), BrowserError> {
+        let Some(target) = self.last().and_then(|last| last.controls.get(id).cloned()) else { return Ok(()) };
+        let script = format!(
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected) return; \
+             for (let node = e; node; node = node.ownerDocument.defaultView.frameElement) {{ \
+             const w = node.ownerDocument.defaultView, v = node.getBoundingClientRect(); \
+             if (v.top >= 0 && v.left >= 0 && v.bottom <= w.innerHeight && v.right <= w.innerWidth) continue; \
+             e.scrollIntoView({{block: 'center', inline: 'nearest', behavior: 'instant'}}); break; }} }})()",
+            target.2
+        );
+        self.evaluate(&target.0, &script).await?;
+        Ok(())
+    }
+
     /// The element `registry` holds for each of `ids` in the map named `map`, measured against the visual viewport.
     async fn regions(&self, ids: &[String], map: &str) -> Result<IndexMap<String, Edges>, BrowserError> {
         let session_id = self.session.active_session_id()?;
@@ -80,7 +96,7 @@ impl CdpPage {
         let script = format!(
             "((pairs, map) => {{ const v = window.visualViewport, out = {{}}; \
              for (const [id, node] of pairs) {{ const e = window.__fastbrowse?.[map]?.get(node); \
-             if (!e?.isConnected || e.ownerDocument !== document) continue; const r = e.getBoundingClientRect(); \
+             if (!e?.isConnected) continue; const r = ({TOP_RECT_JS})(e); if (!r) continue; \
              const f = (a, o, n) => Math.min(1, Math.max(0, (a - o) / n)); \
              const box = {{left: f(r.left, v.offsetLeft, v.width), right: f(r.right, v.offsetLeft, v.width), \
              top: f(r.top, v.offsetTop, v.height), bottom: f(r.bottom, v.offsetTop, v.height)}}; \

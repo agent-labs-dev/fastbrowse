@@ -22,28 +22,28 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--extension-browser LABEL` | with the extension connected in more than one browser, use the one its popup labels `LABEL` |
 | `--cloud` | run in a Browser Use Cloud browser instead, which needs `BROWSER_USE_API_KEY` |
 | `--cloud-profile ID` | with `--cloud`, run on a signed-in Browser Use Cloud profile |
-| `--fetch` | read pages over HTTP with no browser, for a task that only reads |
-| `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); repeat it for each app to start in one run; see [Desktop apps](#desktop-apps) |
+| `--fetch` | read pages over HTTP with no browser, for a task that only reads; without `--start`, a first page it cannot read, such as one scripts build, is replaced by another page proposed knowing why, and the run ends `blocked` only when no readable page is known |
+| `--desktop APP` | start a Linux desktop app that exposes an accessibility tree and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); repeat it for each app to start in one run; see [Desktop apps](#desktop-apps) |
 | `--browser` | start a cloud browser from the first step, rather than reading over HTTP until the task needs one; extension runs already start in Chrome |
 | `--viewport WIDTHxHEIGHT` | with `--cloud`, the screen size requested from the cloud Chrome; does not emulate mobile, touch, device scale or user agent. Refused without `--cloud` |
 | `--attach` | with the extension, drive the window you have open instead of a tab of its own |
 | `--target-match TEXT` | with the extension, attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
 | `--foreground` | bring the run's tab to the front instead of working behind the current one |
 | `--proxy-country CC` | with `--cloud`, browse from that country (`uk`, `de`, ...; default `us`); starts the cloud browser before reading |
-| `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation`. It does not override a task that says to change nothing or not to download |
+| `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation`. It does not override a task that says to change nothing, not to download, or not to take an action |
 | `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on `ORIGIN` (`https://*.site.com` covers its hosts), or on the `--start` origin; models see `NAME` only |
 | `--bitwarden ITEM` | use a vault login on the origin its saved URIs match, including its one-time code |
 | `--max-steps N`, `--max-dollars N` | bound steps and model and web-search spend; unlimited by default |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
-| `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
+| `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages. Without either, a run that ends short of `complete` keeps its trace anyway (see [Results](#results)) |
 | `--record FILE` | save a captioned MP4 of the run, and the same video without captions beside it with `.plain` before the extension (`run.mp4` and `run.plain.mp4`); needs `ffmpeg`. It shows what the pages showed, so watch it before sharing. A `--desktop` run is filmed from its window; `--fetch` starts no browser, so it cannot be combined with `--record` |
 | `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
 | `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`, and say on stderr when it was not saved; naming the `--recipe` file repairs it after steps the agent had to decide |
-| `--no-cursor` | don't draw the agent's cursor. By default it is drawn over a Chrome window that shows the run (`--foreground`, or an attached front tab) with fastbrowse's focus marker through [Cua Driver](https://github.com/trycua/cua) 0.45.4 or later on X11, or with [deskpilot](https://github.com/cjber/deskpilot) on Hyprland, and skipped anywhere else |
-| `--cursor` | also bring the window to the front, including with `--extension`, so the live cursor can be drawn |
+| `--no-cursor` | don't draw the agent's cursor. By default fastbrowse draws its focus marker inside the page wherever the page can be seen: your own Chrome, a headed or attached browser, a cloud browser's live view, or a `--record` video. It glides to each action point, closes its brackets as it lands and pulses on each press, and is never in what the model reads |
+| `--cursor` | draw the cursor in every run, including a headless one nobody watches |
 
 Some flags are refused together, with exit status 1 before the run starts. `--fetch` starts no browser and its pages
 can only follow links, so it refuses every browser flag (`--browser`, `--cloud`, `--local`, `--extension`,
@@ -61,15 +61,6 @@ known page ordinals and unread pages; `authorization_gate` records the authoriza
 branch outcome; `run_finished` records the final status after spend and screenshot checks. Page ordinals
 start where the run entered a list. These events describe internal state, not which facts a model saw;
 use the recorded model request for that. They add no page text, URLs or secret values.
-
-On X11, fastbrowse installs its own versioned Cua theme on first use and keeps the live marker visible between
-steps. To keep it upright and still at rest, run these with Cua Driver's daemon running. They apply to every Cua
-cursor:
-
-```sh
-cua-driver config set cursor.rotate off
-cua-driver config set cursor.float off
-```
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -103,7 +94,10 @@ The extension has to match the fastbrowse you install: the Store's **0.1.0** wor
    ```
 
 2. Run `fastbrowse extension install`. It registers the installed program with the Chromium browsers it finds
-   for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows.
+   for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows. Every fastbrowse
+   that runs `install`, such as an app's bundled copy and your own, stays registered: the extension starts the
+   newest one still present, judged by the version each reports now, and `fastbrowse extension status` lists them in that
+   order.
 3. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
    Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
 4. Run a task that reads a public page:
@@ -150,7 +144,8 @@ sends, naming the commands: update the extension from the Chrome Web Store. With
 `--extension-browser LABEL`. `fastbrowse extension install --policy` (Linux) prints a Chrome policy for you to write
 as root, which installs the extension for every profile with no debugging bar and marks Chrome as managed by your
 organization;
-`fastbrowse extension uninstall` removes what `install` wrote; remove the extension separately in Chrome.
+`fastbrowse extension uninstall` unregisters the fastbrowse it runs from, and removes what `install` wrote once no
+other fastbrowse is registered; remove the extension separately in Chrome.
 
 For extension development, `fastbrowse extension path` writes an unpacked copy. Open `chrome://extensions`,
 turn on Developer mode, choose **Load unpacked** and select that folder. Use the store version for ordinary runs.
@@ -173,7 +168,8 @@ called focus stealing prevention.
 
 **Other extensions can take the run's tab away.** Chrome lets no extension debug a tab while the page holds a frame
 from another extension, and some extensions add one to every page: screen recorders, password managers and writing
-assistants are common ones. When that happens the run ends `unavailable` and names the extension. Open
+assistants are common ones. When that happens the run ends `unavailable` and names the address of the frame, which is the
+extension's id unless that extension loads its frames from a per-session address. Open
 `chrome://extensions`, choose **Details** on that extension, and set **Site access** to **On click**: it then adds
 its frame only where you click it, and runs work again. See
 [Another extension's frame takes the tab away](troubleshooting.md#another-extensions-frame-takes-the-tab-away).
@@ -237,7 +233,10 @@ its own, so the window opens on that agent's hidden workspace. When the run ends
 deskpilot to stop its agent, which closes every app the run launched. A window that is already open is not driven: deskpilot sends input in the background only to an app its agent launched. It needs a
 deskpilot with `launch` ([cjber/deskpilot#86](https://github.com/cjber/deskpilot/pull/86)); with an older one the run
 ends `unavailable`. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types in the
-background, so the pointer and keyboard focus stay where you left them:
+background, so the pointer and keyboard focus stay where you left them. An app that exposes no accessibility tree,
+such as a terminal or an app that draws its own interface, cannot be driven: the run ends `error` before its first
+step, naming the app and quoting deskpilot, whose message says when a variable such as Chromium's makes the app
+expose one:
 
 ```sh
 fastbrowse --desktop gnome-text-editor "Write 'hello' in a new document."
@@ -263,7 +262,11 @@ instance when it has one.
 
 A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window of
 that app class. `--authorize` and the step and spend ceilings work as for a browser. An open combo box's list and a
-popup menu's entries are controls like any other, and the run clicks the item it wants. Choosing a combo box's option
+popup menu's entries are controls like any other, and the run clicks the item it wants. The items of a list, tree,
+table, grid or icon view can also be double-clicked to open them, right-clicked for their context menu, such as a
+file's Rename or Compress, and dragged onto another control; a text field can be right-clicked for its edit menu.
+deskpilot refuses a drag and drop out of view, so dragging a file between folders needs
+`FASTBROWSE_DESKTOP_SHOWN=1`. Choosing a combo box's option
 by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. Recipes,
 `--start` and every browser option are refused, `--cursor` among them: a desktop run never brings its window to the
 front, so it draws its cursor in the recording, or on screen with `FASTBROWSE_DESKTOP_SHOWN=1`, described below. Two
@@ -339,6 +342,13 @@ The JSON result says why a run stopped where a caller can act on it:
   (`Budget/seconds`), a callback that threw its method and the internal error code
   (`Callback/run/event/error/-32603`, the same from every SDK and transport), and a stop the rule that made it
   (`SiteFailure/http-503`, `Wall/sign-in`, `Done/unanswered`, `Recovery/exhausted`). A `complete` run has none.
+- `trace` is the file holding the run's trace, when it ended short of `complete` and neither `--trace` nor
+  `FASTBROWSE_TRACE` chose where traces go. The plain output names it on stderr as `trace:`. Every CLI and MCP run
+  writes its trace to a file of its own under `$XDG_STATE_HOME/fastbrowse/traces` (`~/.local/state` without it;
+  `~/Library/Application Support` on macOS, `%LOCALAPPDATA%` on Windows) as it goes, readable only by you, and
+  deletes it when the run completes, so a failure can be read afterwards without having run it traced. A kept trace
+  holds the pages the run read, like any trace, and is removed by the first CLI or MCP run started 14 days after it. `FASTBROWSE_TRACE=0` keeps none.
+  `serve`, the SDKs and the Python package keep no trace unless asked.
 - `browser` says which browser the run drove: `via` is `cloud`, `launched`, `attached` or `extension`, with the
   `profile` and the `browser` product and version where known. A run that read every page over HTTP has none.
 - `wall` describes a `needs_login` or `blocked` page: its `kind` (`password`, `one_time_code`, `sign_in` or

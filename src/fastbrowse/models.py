@@ -83,6 +83,8 @@ class RunCancelled(asyncio.CancelledError):
 
 class Operation(StrEnum):
     CLICK = "click"
+    RIGHT_CLICK = "right_click"
+    DOUBLE_CLICK = "double_click"
     HOVER = "hover"
     DRAG = "drag"
     FILL = "fill"
@@ -447,6 +449,8 @@ class CliResult(RunResult):
     """The run's known cost in dollars, the sum of `cost`'s priced lines."""
     cost_complete: bool
     """False when a call reported no cost, so `dollars` is a lower bound."""
+    trace: Path | None = None
+    """The file holding the run's trace, kept when it ended short of `complete` and no destination was chosen."""
     build: Build
 
 

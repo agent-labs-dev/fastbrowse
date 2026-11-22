@@ -450,15 +450,21 @@ impl Agent {
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first
         // address worked out from the task.
         let open = async {
+            let mut chosen = false;
             if opening.is_none() {
                 opening = match start {
                     Some(start) => Some(start.to_string()),
-                    None if options.choose_start => self.first_page(task, ledger).await?,
+                    None if options.choose_start => {
+                        chosen = true;
+                        self.first_page(task, ledger).await?
+                    }
                     None => None,
                 };
             }
-            if let Some(opening) = &opening {
-                self.trace.phase("open", self.page.navigate(opening, None)).await?;
+            // Left holding the address the run began with when none opens, so a run that moves to a browser opens it
+            // instead of choosing its start page again.
+            if let Some(first) = opening.as_mut() {
+                self.open_start(first, chosen, task, ledger).await?;
             }
             if let (None, Some(opening)) = (start, &opening) {
                 // The caller gave a goal and no page, so this address was worked out from the task.
@@ -544,9 +550,7 @@ impl Agent {
                 effect: Some(format!("went to {landed}")),
                 ..HistoryEntry::new(Some(Operation::Navigate), Some(&opening), StepOutcome::Executed, true)
             });
-            if start.is_some() {
-                state.start_landing_url = Some(landed);
-            }
+            state.start_landing_url = Some(landed);
         }
         Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }
@@ -1106,6 +1110,14 @@ impl Agent {
             plan_ahead: self.config.plan_ahead,
             list_read: crate::policy::ListRead::None,
         })
+    }
+
+    /// How the run reached the page `observation` shows, as the action and the page it was taken on; None for a page it
+    /// did not navigate to.
+    fn reached_by(&self, state: &RunState, observation: &Observation) -> Option<String> {
+        let (destination, source) = state.navigation_from.as_ref()?;
+        let action = state.navigated_by.as_deref().filter(|_| *destination == state::read_key(observation))?;
+        Some(self.mask(&format!("{action} on {}", source.url)))
     }
 
     /// A wall on the route just opened does not describe the alternatives observed before it.

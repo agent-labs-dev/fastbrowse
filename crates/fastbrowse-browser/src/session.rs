@@ -69,7 +69,7 @@ impl SnapshotScript {
         Self {
             install: format!(
                 "((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= \
-                 (snapshot => {{ const own = {{ unread: {unread} }}; return (mode, base) => snapshot(mode, {origins}, own, base); }})({SNAPSHOT_JS}))"
+                 (snapshot => {{ const own = {{ unread: {unread}, key: {key} }}; return (mode, base) => snapshot(mode, {origins}, own, base); }})({SNAPSHOT_JS}))"
             ),
             function: format!(
                 "(globalThis.__fastbrowseScripts?.[{key}] ?? (() => {{ throw new Error({}); }})())",
@@ -319,12 +319,20 @@ pub(crate) struct State {
     pub(crate) request_bytes_due: HashMap<(String, String), i64>,
     /// (session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating.
     pub(crate) status_contexts: HashMap<(String, i64), String>,
+    /// Session -> context id -> unique id, for each page world of a document that session shows: its own and every
+    /// same-process frame's, each of which reads its own listeners (snapshot.js `reader`).
+    pub(crate) main_worlds: HashMap<String, HashMap<i64, String>>,
     pub(crate) active_target_id: String,
     /// Set while the page may show a secret: frames are still acked, so the cast keeps pace, but not delivered.
     pub(crate) frames_withheld: bool,
     /// Set once a secret has been typed, and never cleared: a page can echo it as pixels no reading of its text
     /// shows, and between one reading and the next frames arrive that nothing has checked.
     pub(crate) frames_sealed: bool,
+    /// Set while the agent cursor is out of the page for a model screenshot: the video and live view hold their last
+    /// frame rather than show the page without it.
+    pub(crate) cursor_hidden: bool,
+    /// The cursor world in each tab the run drew in, for tabs that outlive the session.
+    pub(crate) cursor_contexts: HashMap<String, i64>,
     pub(crate) screencast_session_id: Option<String>,
     pub(crate) pending_frame: Option<Frame>,
     pub(crate) frame_scheduled: bool,
@@ -629,6 +637,15 @@ impl BrowserSession {
                 state.owned.intersection(&state.handed_over).cloned().collect(),
             )
         };
+        let cursor_contexts = std::mem::take(&mut self.0.state.lock().unwrap().cursor_contexts);
+        futures_util::future::join_all(cursor_contexts.iter().map(|(session_id, context)| async move {
+            let params = json!({
+                "contextId": context,
+                "expression": "globalThis.__fastbrowseCursor?.dispose()",
+            });
+            let _ = timeout(secs(FRAME_RELEASE_SECONDS), self.send("Runtime.evaluate", params, Some(session_id))).await;
+        }))
+        .await;
         // Removing a scope gate before closing an owned tab could let its pending navigation escape the grant.
         for target_id in owned {
             // Best-effort teardown; the browser may already be gone.
@@ -679,7 +696,15 @@ impl BrowserSession {
     /// Always true in a scoped run, which delivers and records no frames at all.
     pub fn frames_withheld(&self) -> bool {
         let state = self.0.state.lock().unwrap();
-        state.frames_withheld || state.frames_sealed || self.0.grant.is_some()
+        state.frames_withheld || state.frames_sealed || state.cursor_hidden || self.0.grant.is_some()
+    }
+
+    pub(crate) fn track_cursor(&self, session_id: &str, context: i64) {
+        self.0.state.lock().unwrap().cursor_contexts.insert(session_id.to_owned(), context);
+    }
+
+    pub(crate) fn set_cursor_hidden(&self, hidden: bool) {
+        self.0.state.lock().unwrap().cursor_hidden = hidden;
     }
 
     pub fn set_frames_withheld(&self, withheld: bool) {
@@ -1045,6 +1070,18 @@ impl BrowserSession {
     /// The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it.
     pub fn status_context(&self, session_id: &str, context_id: i64) -> Option<String> {
         self.0.state.lock().unwrap().status_contexts.remove(&(session_id.to_owned(), context_id))
+    }
+
+    /// The unique ids of the page worlds Chrome reported on `session_id` and has not destroyed since.
+    pub fn main_worlds(&self, session_id: &str) -> Vec<String> {
+        self.0
+            .state
+            .lock()
+            .unwrap()
+            .main_worlds
+            .get(session_id)
+            .map(|w| w.values().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn popups(&self) -> Vec<String> {
@@ -1623,6 +1660,25 @@ impl Shared {
                     let unique = str_of(&context["uniqueId"]);
                     self.state.lock().unwrap().status_contexts.insert((session.to_owned(), id), unique);
                 }
+                if let Some(session) = session
+                    && context["auxData"]["isDefault"] == true
+                {
+                    let id = context["id"].as_i64().unwrap_or_default();
+                    let unique = str_of(&context["uniqueId"]);
+                    self.state.lock().unwrap().main_worlds.entry(session.to_owned()).or_default().insert(id, unique);
+                }
+            }
+            "Runtime.executionContextDestroyed" => {
+                if let Some(session) = session
+                    && let Some(worlds) = self.state.lock().unwrap().main_worlds.get_mut(session)
+                {
+                    worlds.remove(&params["executionContextId"].as_i64().unwrap_or_default());
+                }
+            }
+            "Runtime.executionContextsCleared" => {
+                if let Some(session) = session {
+                    self.state.lock().unwrap().main_worlds.remove(session);
+                }
             }
             "Page.windowOpen" => self.state.lock().unwrap().window_opens += 1,
             "Page.frameAttached" => {
@@ -1767,6 +1823,7 @@ impl Shared {
                 state.requests_open.retain(|(sid, _), _| *sid != child);
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
                 state.documents.remove(&child);
+                state.main_worlds.remove(&child);
                 state.error_pages.remove(&child);
                 state.navigating.retain(|(sid, _), _| *sid != child);
                 state.frames_loading.retain(|(sid, _), _| *sid != child);
@@ -2252,16 +2309,28 @@ impl Drop for AdoptionSettled<'_> {
     }
 }
 
-async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, session_id: Option<&str>) {
-    let Some(client) = shared.client.lock().unwrap().clone() else { return };
+/// How a screencast command ended. A timeout is not a refusal: Chrome may still have run it.
+#[derive(PartialEq)]
+enum CastReply {
+    Accepted,
+    /// Chrome (or a closed transport) definitely did not start the cast.
+    Refused,
+    /// No answer in time; the command may have taken effect.
+    Unanswered,
+}
+
+async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, session_id: Option<&str>) -> CastReply {
+    let Some(client) = shared.client.lock().unwrap().clone() else { return CastReply::Refused };
     match timeout(secs(SCREENCAST_COMMAND_SECONDS), client.send(method, params, session_id)).await {
-        Ok(Ok(_)) => {}
+        Ok(Ok(_)) => CastReply::Accepted,
         Ok(Err(error)) => {
             if let Some(operation) = screencast_operation(method) {
+                // The error text is built from the method and a typed reason, never Chrome's own message.
                 browser_warning(shared, operation, browser_warning_failure(error.kind()), || {
-                    warn(&format!("{method} failed ({})", error.kind()))
+                    warn(&format!("{method} failed ({error})"))
                 });
             }
+            CastReply::Refused
         }
         Err(_) => {
             if let Some(operation) = screencast_operation(method) {
@@ -2269,6 +2338,7 @@ async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, s
                     warn(&format!("{method} failed (TimeoutError)"))
                 });
             }
+            CastReply::Unanswered
         }
     }
 }
@@ -2325,14 +2395,22 @@ async fn update_screencast(shared: &Arc<Shared>) {
         shared.state.lock().unwrap().screencast_session_id = None;
     }
     let active = {
-        let mut state = shared.state.lock().unwrap();
-        let active = state.active_session_id().ok().filter(|_| !state.closing);
-        state.screencast_session_id.clone_from(&active);
-        active
+        let state = shared.state.lock().unwrap();
+        state.active_session_id().ok().filter(|_| !state.closing)
     };
     if let Some(active) = active {
         let params = json!({"format": "jpeg", "quality": 60, "maxWidth": 1280, "maxHeight": 800});
-        screencast_command(shared, "Page.startScreencast", params, Some(&active)).await;
+        // Recorded before the send, so a start Chrome runs but answers late, or that is cancelled mid-await, is still
+        // stopped by the next switch or close. Cleared only when Chrome definitely refused it: a refused start left
+        // marked as running would make every later switch to this tab think the cast was going, and no frame would
+        // ever arrive.
+        shared.state.lock().unwrap().screencast_session_id = Some(active.clone());
+        if screencast_command(shared, "Page.startScreencast", params, Some(&active)).await == CastReply::Refused {
+            let mut state = shared.state.lock().unwrap();
+            if state.screencast_session_id.as_deref() == Some(active.as_str()) {
+                state.screencast_session_id = None;
+            }
+        }
     }
 }
 
@@ -2345,7 +2423,8 @@ pub(crate) async fn deliver_frames(shared: &Arc<Shared>) {
             }
             let Some(frame) = state.pending_frame.take() else { break };
             let active = state.active_session_id().ok();
-            let withheld = state.frames_withheld || state.frames_sealed || shared.grant.is_some();
+            let withheld =
+                state.frames_withheld || state.frames_sealed || state.cursor_hidden || shared.grant.is_some();
             let deliver = shared.on_frame.is_some() && !withheld && active.is_some() && frame.session_id == active;
             (frame, deliver)
         };
@@ -2440,17 +2519,20 @@ async fn capture_download(
     }
     let kind = response_mime(mime);
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
-    let readable = readable_text(mime, &name, &raw, shared.max_download_bytes).await;
+    let readable = readable_texts(mime, &name, &raw, shared.max_download_bytes).await;
     let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, &raw).await?;
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
     state.downloads_captured += 1;
     state.download_keys.push(Some((url.to_owned(), crate::page::sha256_bytes(&raw))));
     match readable {
-        Ok(Some(text)) => {
-            state.download_texts.push(DownloadText { mime: kind, name, url: url.to_owned(), text, complete })
-        }
-        Ok(None) => {}
+        Ok(texts) => state.download_texts.extend(texts.into_iter().map(|(name, text)| DownloadText {
+            mime: kind.clone(),
+            name,
+            url: url.to_owned(),
+            text,
+            complete,
+        })),
         Err(reason) => state.download_unread.push(DownloadUnread { name, url: url.to_owned(), reason }),
     }
     Ok(())
@@ -2631,14 +2713,18 @@ fn is_download(mime: &str, disposition: &str) -> bool {
     DOWNLOAD_MIME_TYPES.contains(&response_mime(mime).as_str())
 }
 
-/// The response's text when it is a text file or a PDF the run should be able to read, None for any other file, and
-/// why a PDF went unread.
-async fn readable_text(
+/// The texts a run can read in the response, each with the name it is shown under, and why a document went unread.
+/// A text file, PDF or office document is one text under the file's name. A ZIP is one text per member, named
+/// `archive.zip/member`, so a CSV member is read row by row as a downloaded CSV is. Any other file has none.
+async fn readable_texts(
     mime: &str,
     name: &str,
     raw: &[u8],
     max_bytes: usize,
-) -> Result<Option<String>, crate::PdfUnread> {
+) -> Result<Vec<(String, String)>, crate::PdfUnread> {
+    let whole = |text: Option<String>| -> Vec<(String, String)> {
+        text.map(|text| (name.to_owned(), text)).into_iter().collect()
+    };
     let kind = response_mime(mime);
     let declared = match kind.as_str() {
         "" | "application/octet-stream" | "binary/octet-stream" => {
@@ -2653,21 +2739,23 @@ async fn readable_text(
         _ => &kind,
     };
     let request = match declared {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some(crate::helper::XLSX_TEXT),
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some(crate::helper::DOCX_TEXT),
-        "application/zip" => Some(crate::helper::ZIP_TEXT),
-        _ => None,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => crate::helper::XLSX_TEXT,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => crate::helper::DOCX_TEXT,
+        "application/zip" => {
+            let members = crate::pdf::archive_members(raw.to_vec(), max_bytes).await?;
+            return Ok(members
+                .into_iter()
+                .filter(|(_, text)| !text.trim().is_empty())
+                .map(|(member, text)| (format!("{name}/{member}"), text))
+                .collect());
+        }
+        "application/pdf" => return crate::pdf::text(raw.to_vec()).await.map(whole),
+        _ if kind.starts_with("text/") || kind == "application/csv" || kind == "application/json" => {
+            return Ok(whole(Some(String::from_utf8_lossy(raw).into_owned())));
+        }
+        _ => return Ok(Vec::new()),
     };
-    if let Some(request) = request {
-        return crate::pdf::document_text(&format!("{request}:{max_bytes}"), raw.to_vec()).await;
-    }
-    if declared == "application/pdf" {
-        return crate::pdf::text(raw.to_vec()).await;
-    }
-    if !(kind.starts_with("text/") || kind == "application/csv" || kind == "application/json") {
-        return Ok(None);
-    }
-    Ok(Some(String::from_utf8_lossy(raw).into_owned()))
+    crate::pdf::document_text(&format!("{request}:{max_bytes}"), raw.to_vec()).await.map(whole)
 }
 
 pub fn str_of(value: &Value) -> String {
@@ -2874,22 +2962,40 @@ mod tests {
     async fn generic_mime_downloads_use_their_declared_filename() {
         for mime in ["", "application/octet-stream"] {
             for name in ["report.xlsx", "report.DOCX", "report.zip"] {
-                assert!(readable_text(mime, name, b"invalid document", 1024).await.is_err(), "{mime}: {name}");
+                assert!(readable_texts(mime, name, b"invalid document", 1024).await.is_err(), "{mime}: {name}");
             }
         }
-        assert!(readable_text("application/octet-stream", "data.bin", b"binary", 1024).await.unwrap().is_none());
+        assert!(readable_texts("application/octet-stream", "data.bin", b"binary", 1024).await.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn text_and_pdf_downloads_are_read_whole() {
         crate::helper::register(crate::testing::test_binary_helper("pdf::tests::helper_child"));
         let raw = vec![b'a'; 100_000];
-        assert_eq!(readable_text("text/csv", "data.csv", &raw, usize::MAX).await.unwrap().unwrap().len(), raw.len());
-        assert!(readable_text("application/zip", "data.zip", b"PK", usize::MAX).await.is_err());
+        assert_eq!(readable_texts("text/csv", "data.csv", &raw, usize::MAX).await.unwrap()[0].1.len(), raw.len());
+        assert!(readable_texts("application/zip", "data.zip", b"PK", usize::MAX).await.is_err());
         let pdf =
-            readable_text("application/pdf", "wind.pdf", include_bytes!("../tests/fixtures/wind.pdf"), usize::MAX)
+            readable_texts("application/pdf", "wind.pdf", include_bytes!("../tests/fixtures/wind.pdf"), usize::MAX)
                 .await;
-        assert_eq!(pdf, Ok(Some("Fairbanks Wind".to_owned())));
+        assert_eq!(pdf, Ok(vec![("wind.pdf".to_owned(), "Fairbanks Wind".to_owned())]));
+    }
+
+    /// A CSV inside a ZIP was joined to the archive's other members as one text, so its rows were read as one block
+    /// and the whole file reached composition (#1311). Each member is its own text, named for the CSV it is.
+    #[tokio::test]
+    async fn each_zip_member_is_its_own_text_under_its_name() {
+        use std::io::Write;
+        crate::helper::register(crate::testing::test_binary_helper("pdf::tests::helper_child"));
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, body) in [("report.csv", "Item,Amount\nKettle,34.50\nToaster,20\nLamp,12"), ("empty.txt", "")] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        let raw = zip.finish().unwrap().into_inner();
+        assert_eq!(
+            readable_texts("application/zip", "data.zip", &raw, usize::MAX).await,
+            Ok(vec![("data.zip/report.csv".to_owned(), "Item,Amount\nKettle,34.50\nToaster,20\nLamp,12".to_owned())])
+        );
     }
 
     #[test]

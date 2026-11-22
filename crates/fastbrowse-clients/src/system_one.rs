@@ -5,7 +5,7 @@
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, JEV_REQUEST_BYTES, NO_IMAGES, Question,
-    image_tokens, questions_without_images, referenced, without_images,
+    image_tokens, png_size, questions_without_images, referenced, without_images,
 };
 use fastbrowse_core::models::CostLine;
 use fastbrowse_core::py::base64;
@@ -46,6 +46,7 @@ pub struct SystemOneClient {
     http: Http,
     base_url: String,
     model: String,
+    image_accounting: ImageAccounting,
     profile: DecisionProfile,
     path: &'static str,
     headers: Vec<(&'static str, &'static str)>,
@@ -58,6 +59,7 @@ impl SystemOneClient {
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
+            image_accounting: ImageAccounting::for_model(model),
             profile: DecisionProfile::for_model(model),
             path: SYSTEM_ONE_PATH,
             headers: Vec::new(),
@@ -73,6 +75,12 @@ impl SystemOneClient {
     /// OpenRouter, which serves each decision model at the context and price it lists for that model.
     pub fn openrouter(mut self) -> SystemOneClient {
         self.profile = DecisionProfile::on_openrouter(&self.model);
+        self
+    }
+
+    pub(crate) fn openrouter_with_model(mut self, profile: DecisionProfile, model: &str) -> Self {
+        self.profile = profile;
+        self.image_accounting = ImageAccounting::for_model(model);
         self
     }
 
@@ -127,12 +135,12 @@ impl SystemOneClient {
         // option is told by its text.
         // TypeSafe refuses an image nothing in the request refers to, and a batch of a split request asks only some of
         // the questions that refer to them.
-        let (state, stripped, images) = if images.is_empty() || reads_references_in_place(&self.model) {
+        let (state, stripped, images) = if images.is_empty() || self.image_accounting == ImageAccounting::Jev {
             (state.clone(), None, referenced(images, state, questions))
         } else {
             let state = media_as_items(state, images);
             let questions = questions_without_images(questions, images);
-            let images = referenced(images, &state, &questions);
+            let images = state_images(&state, images).map(|(key, png)| (key.clone(), png.clone())).collect();
             (state, Some(questions), images)
         };
         let images = &images;
@@ -251,42 +259,122 @@ impl DecisionClient for SystemOneClient {
         self.profile.clone()
     }
 
-    /// What `request` sends: Jev every reference in place, another model only the top-level pictures it is given as
-    /// items, with each option's picture left out.
+    /// Reserve context for the pictures each route sends, using its own documented tokenization where available.
     fn image_tokens(&self, state: &Value, questions: &IndexMap<String, Question>, images: &Images) -> i64 {
         if !self.profile.images || images.is_empty() {
             return 0;
         }
-        if reads_references_in_place(&self.model) {
+        if self.image_accounting == ImageAccounting::Jev {
             return image_tokens(images, state, questions);
         }
-        let (state, questions) = (media_as_items(state, images), questions_without_images(questions, images));
-        image_tokens(&referenced(images, &state, &questions), &state, &questions)
+        let state = media_as_items(state, images);
+        state_images(&state, images)
+            .map(|(_, png)| png)
+            .filter_map(|png| png_size(png))
+            .map(|(width, height)| self.image_accounting.tokens(width, height, questions.len()))
+            .sum()
     }
 }
 
-/// Jev reads an image reference wherever it sits in the state. Every other model behind a System One endpoint is given an
-/// image only as a top-level item of the state, and OpenRouter refuses a reference nested in an object with a 400.
-fn reads_references_in_place(model: &str) -> bool {
-    model.rsplit('/').next().unwrap_or(model).starts_with("jev")
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImageAccounting {
+    Jev,
+    GeminiDecision,
+    LiquidPerQuestion,
+    LiquidPerRequest,
+    PerplexityDecider,
+    Clef,
+    Undocumented,
 }
 
-/// The state with each top-level image reference moved out into an item of its own after it, its key left naming that
-/// image by position, so a model given images only as items still knows what each one shows.
-fn media_as_items(state: &Value, images: &Images) -> Value {
-    let Value::Object(object) = state else { return state.clone() };
-    let mut object = object.clone();
-    let mut items = Vec::new();
-    for value in object.values_mut() {
-        if let Value::String(reference) = value
-            && images.contains_key(reference.as_str())
-        {
-            let pointer = format!("image item {} after this object", items.len() + 1);
-            items.push(Value::String(std::mem::replace(reference, pointer)));
+impl ImageAccounting {
+    fn for_model(model: &str) -> Self {
+        let (vendor, model) = model.trim_start_matches('~').split_once('/').unwrap_or(("", model));
+        match (vendor, model) {
+            ("" | "typesafe" | "typesafe-ai", _) if model.starts_with("jev-") => Self::Jev,
+            ("google", "gemini-decision-1") => Self::GeminiDecision,
+            ("liquid", "d1" | "d1-ultra") => Self::LiquidPerQuestion,
+            ("liquid", "d1.2" | "d1.2-ultra") => Self::LiquidPerRequest,
+            (
+                "" | "perplexity",
+                "pplx-decider-latest"
+                | "pplx-decider-flash-latest"
+                | "pplx-decider-v1-27b"
+                | "pplx-decider-v1.1-27b"
+                | "pplx-decider-v1.2"
+                | "pplx-decider-flash-v1.2"
+                | "pplx-decider-v1.3"
+                | "pplx-decider-flash-v1.3"
+                | "pplx-decider-v1.3:free"
+                | "pplx-decider-flash-v1.3:free",
+            ) => Self::PerplexityDecider,
+            ("cloudflare", "clef" | "clef-flash" | "clef-omni") => Self::Clef,
+            _ => Self::Undocumented,
         }
     }
-    if items.is_empty() {
-        return state.clone();
+
+    fn tokens(self, width: u64, height: u64, questions: usize) -> i64 {
+        match self {
+            // Google's Decisions API links to the default media resolution budget of 1,120 image tokens.
+            // https://aistudio.google.com/docs/media-resolution#token-counts
+            Self::GeminiDecision => 1120,
+            // Liquid bills 1.5 tokens per 32-pixel patch, rounded up. OpenRouter documents that the original
+            // d1 and d1-ultra count them per question. The d1.2 models count them once per request.
+            // https://openrouter.ai/docs/guides/community/multimodal-decisions#limits
+            // https://docs.liquid.ai/lfm/models/d1#image-token-usage
+            Self::LiquidPerQuestion | Self::LiquidPerRequest => {
+                let patches = width.div_ceil(32) * height.div_ceil(32);
+                let tokens = (3 * patches).div_ceil(2) as i64;
+                if self == Self::LiquidPerQuestion { tokens * questions as i64 } else { tokens }
+            }
+            // Perplexity documents about 1,000 tokens per megapixel.
+            // https://docs.perplexity.ai/docs/decisions/decisions
+            Self::PerplexityDecider => (width * height).div_ceil(1000) as i64,
+            // Cloudflare scales to an area between 256 squared and about 1 megapixel, rounds both sides to
+            // multiples of 32, and adds 3 markers to its patch count, capped at 1,024.
+            // https://developers.cloudflare.com/workers-ai/models/clef-flash/
+            Self::Clef => {
+                let area = (width * height) as f64;
+                let scale = (area.clamp(65_536.0, 1_048_576.0) / area).sqrt();
+                let patches = |side: u64| (side as f64 * scale / 32.0).round().max(1.0) as i64;
+                (patches(width) * patches(height) + 3).min(1024)
+            }
+            // Jev counts references before this point. For other models without a published calculation,
+            // no local estimate is available. The response's reported usage still includes the pictures.
+            Self::Jev | Self::Undocumented => 0,
+        }
     }
-    std::iter::once(Value::Object(object)).chain(items).collect()
+}
+
+/// Move an object's top-level images into separate state items. Strip nested references because OpenRouter refuses
+/// them for these routes. The key beside each moved image still names what it shows.
+fn media_as_items(state: &Value, images: &Images) -> Value {
+    let Value::Object(object) = state else {
+        return match state {
+            Value::Array(items) => items.iter().map(|item| without_images(item, images)).collect(),
+            _ => state.clone(),
+        };
+    };
+    let mut items = Vec::new();
+    let mut text = Map::new();
+    for (key, value) in object {
+        let value = if value.as_str().is_some_and(|reference| images.contains_key(reference)) {
+            let pointer = format!("image item {} after this object", items.len() + 1);
+            items.push(value.clone());
+            Value::String(pointer)
+        } else {
+            without_images(value, images)
+        };
+        text.insert(key.clone(), value);
+    }
+    if items.is_empty() {
+        return Value::Object(text);
+    }
+    std::iter::once(Value::Object(text)).chain(items).collect()
+}
+
+/// The exact top-level references the non-Jev wire resolves to pictures. A repeated item counts at each occurrence.
+fn state_images<'a, 'b>(state: &'a Value, images: &'b Images) -> impl Iterator<Item = (&'b String, &'b Vec<u8>)> {
+    let items = state.as_array().map_or_else(|| std::slice::from_ref(state), Vec::as_slice);
+    items.iter().filter_map(|item| images.get_key_value(item.as_str()?))
 }

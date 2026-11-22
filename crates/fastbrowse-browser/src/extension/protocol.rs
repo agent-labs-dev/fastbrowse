@@ -58,9 +58,6 @@ pub struct HostRecord {
     pub version: String,
     pub protocol: u32,
     pub pid: u32,
-    /// Chrome starts the native host directly; its parent identifies the window for live cursor feedback.
-    #[serde(default)]
-    pub browser_pid: Option<u32>,
     pub socket: PathBuf,
 }
 
@@ -145,50 +142,113 @@ pub fn frames_for_extension(message: &str, chunk_id: u64) -> Vec<String> {
         .collect()
 }
 
+/// The browsers a run can reach, read from the host records in a directory.
+#[derive(Debug, Default)]
+struct HostScan {
+    /// Every browser whose extension is connected to a running host, by label.
+    connected: Vec<(PathBuf, HostRecord)>,
+    /// Why the directory, a record, or a record's host could not be read or reached from this process, other than
+    /// its host being gone. A record's entry keeps it, so a run that names that browser is told why it cannot use it.
+    unreachable: Vec<(Option<HostRecord>, String)>,
+}
+
 /// Every browser whose extension is connected to a running host, read from the records in `dir`.
-pub fn connected_hosts(dir: &Path) -> Vec<(PathBuf, HostRecord)> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
-    let mut hosts: Vec<(PathBuf, HostRecord)> = entries
+fn connected_hosts(dir: &Path) -> HostScan {
+    let mut scan = HostScan::default();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return scan,
+        Err(error) => {
+            scan.unreachable.push((None, format!("cannot read {}: {error}", dir.display())));
+            return scan;
+        }
+    };
+    let paths = entries
         .flatten()
         .map(|entry| entry.path())
         // A record being written is a dot file until it is renamed into place.
         .filter(|path| {
             path.extension().is_some_and(|x| x == "json")
                 && !path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.'))
-        })
-        .filter_map(|path| {
-            let record: HostRecord = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
-            host_alive(&record).then_some((path, record))
-        })
-        .collect();
-    hosts.sort_by(|a, b| a.1.label.cmp(&b.1.label));
-    hosts
+        });
+    for path in paths {
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            // The host removed its record between the listing and this read: it has gone.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            // A record this process may not read can be a connected browser's, so dropping it told the run to
+            // install an extension that was already connected.
+            Err(error) => {
+                scan.unreachable.push((None, format!("cannot read {}: {error}", path.display())));
+                continue;
+            }
+        };
+        let Ok(record) = serde_json::from_slice::<HostRecord>(&bytes) else { continue };
+        match host_listening(&record) {
+            Ok(true) => scan.connected.push((path, record)),
+            Ok(false) => {}
+            Err(error) => {
+                let why = format!("cannot connect to {}: {error}", record.socket.display());
+                scan.unreachable.push((Some(record), why));
+            }
+        }
+    }
+    scan.connected.sort_by(|a, b| a.1.label.cmp(&b.1.label));
+    scan
 }
 
-/// Whether the host that wrote a record still runs. A host that was killed leaves its record behind.
+/// Whether the host that wrote a record still listens. A host that was killed leaves its record and socket file
+/// behind, and that socket refuses. The record's pid is no proof either way: an agent's sandbox, such as Codex's
+/// bwrap, runs this process in its own PID namespace where the host's pid does not exist, so every connected browser
+/// looked gone (#1344). Connecting asks the question the run needs answered; the host serves the probe as a run
+/// that sends nothing, and its release names no tab.
 #[cfg(unix)]
-fn host_alive(record: &HostRecord) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(record.pid) else { return false };
-    // SAFETY: signal 0 only asks whether the process exists, and a pid under 1 is refused before it names a group.
-    pid > 0
-        && (unsafe { libc::kill(pid, 0) } == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+fn host_listening(record: &HostRecord) -> std::io::Result<bool> {
+    let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+    // A host that stopped accepting, such as one in a paused browser, fills its accept queue, and a blocking connect
+    // waits until it accepts again: a run that named another browser hung on it. Non-blocking, it answers at once.
+    socket.set_nonblocking(true)?;
+    match socket.connect(&socket2::SockAddr::unix(&record.socket)?) {
+        Ok(()) => Ok(true),
+        // Linux answers a full accept queue with EAGAIN: the host is there and listening, only not accepting yet.
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) if matches!(error.kind(), std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound) => {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// A dead host's pipe is gone with it. Listing the pipes, rather than opening this one, leaves the host's waiting
 /// instance free for the run that dials it.
 #[cfg(windows)]
-fn host_alive(record: &HostRecord) -> bool {
-    let Some(name) = record.socket.file_name() else { return false };
-    std::fs::read_dir(r"\\.\pipe\").is_ok_and(|pipes| pipes.flatten().any(|pipe| pipe.file_name() == name))
+fn host_listening(record: &HostRecord) -> std::io::Result<bool> {
+    let Some(name) = record.socket.file_name() else { return Ok(false) };
+    Ok(std::fs::read_dir(r"\\.\pipe\")?.flatten().any(|pipe| pipe.file_name() == name))
 }
 
 /// The connected browser a run uses: the one named `wanted` (its label, browser id or product, any case), or the
 /// only one connected. Nothing connected is an outage, so the run ends `unavailable` before any spend.
 pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecord), BrowserError> {
-    let mut hosts = connected_hosts(dir);
+    let HostScan { connected: mut hosts, unreachable } = connected_hosts(dir);
     let names = |hosts: &[(PathBuf, HostRecord)]| {
         hosts.iter().map(|(_, r)| format!("{} ({} {})", r.label, r.browser, r.version)).collect::<Vec<_>>().join(", ")
     };
+    let matches = |r: &HostRecord, wanted: &str| {
+        [&r.label, &r.browser_id, &r.browser].iter().any(|name| name.eq_ignore_ascii_case(wanted))
+    };
+    // A sandbox that hides the directory or refuses the socket is not fixed by reinstalling the extension.
+    let refused = |reasons: Vec<&str>| {
+        BrowserError::Unavailable(format!(
+            "no browser's fastbrowse extension can be reached from this process ({}). A sandbox around this \
+             process must let it read {} and connect to the sockets in it, or the run needs that sandbox off",
+            reasons.join("; "),
+            dir.display()
+        ))
+    };
+    if hosts.is_empty() && !unreachable.is_empty() {
+        return Err(refused(unreachable.iter().map(|(_, why)| why.as_str()).collect()));
+    }
     if hosts.is_empty() {
         // Naming the directory shows a run and a host that disagree on it, which a reinstall does not fix.
         return Err(BrowserError::Unavailable(format!(
@@ -199,12 +259,17 @@ pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecor
     }
     match wanted {
         Some(wanted) => {
-            let matches = |r: &HostRecord| {
-                [&r.label, &r.browser_id, &r.browser].iter().any(|name| name.eq_ignore_ascii_case(wanted))
-            };
-            let mut found: Vec<_> = hosts.iter().filter(|(_, r)| matches(r)).cloned().collect();
+            let mut found: Vec<_> = hosts.iter().filter(|(_, r)| matches(r, wanted)).cloned().collect();
+            let blocked: Vec<&str> = unreachable
+                .iter()
+                // A record this process could not read may be the named browser's.
+                .filter(|(record, _)| record.as_ref().is_none_or(|r| matches(r, wanted)))
+                .map(|(_, why)| why.as_str())
+                .collect();
             match found.len() {
                 1 => Ok(found.remove(0)),
+                // The named browser is connected but this process may not reach it, while another browser it can.
+                0 if !blocked.is_empty() => Err(refused(blocked)),
                 0 => Err(BrowserError::failed(
                     "extension/unnamed",
                     format!("no connected browser is named {wanted:?}; connected: {}", names(&hosts)),
@@ -310,18 +375,9 @@ mod tests {
         assert_eq!(host_dir_from(var(None), &run_user), Path::new("/home/someone/.cache/fastbrowse/hosts"));
     }
 
-    #[test]
-    fn older_host_records_have_no_browser_pid() {
-        let old = serde_json::json!({"browserId":"b", "label":"Chrome", "browser":"Chrome",
-            "version":"150", "protocol":PROTOCOL, "pid":42, "socket":"b.sock"});
-        let record: HostRecord = serde_json::from_value(old).unwrap();
-        assert_eq!(record.browser_pid, None);
-        let record = HostRecord { browser_pid: Some(7), ..record };
-        let roundtrip: HostRecord = serde_json::from_slice(&serde_json::to_vec(&record).unwrap()).unwrap();
-        assert_eq!(roundtrip.browser_pid, Some(7));
-    }
-
-    fn write_record(dir: &Path, label: &str, pid: u32) {
+    /// A host record in `dir`; `listening` binds its socket, as a running host does.
+    #[cfg(unix)]
+    fn write_record(dir: &Path, label: &str, pid: u32, listening: bool) -> Option<std::os::unix::net::UnixListener> {
         let record = HostRecord {
             browser_id: format!("id{label}"),
             label: label.into(),
@@ -329,12 +385,15 @@ mod tests {
             version: "150".into(),
             protocol: PROTOCOL,
             pid,
-            browser_pid: None,
             socket: dir.join(format!("id{label}.sock")),
         };
         std::fs::write(dir.join(format!("id{label}.json")), serde_json::to_vec(&record).unwrap()).unwrap();
+        // A killed host leaves its socket file, which refuses.
+        let listener = std::os::unix::net::UnixListener::bind(&record.socket).unwrap();
+        listening.then_some(listener)
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_run_picks_the_only_browser_or_the_one_it_names() {
         let dir = std::env::temp_dir().join(format!("fbx-pick-{}", std::process::id()));
@@ -342,16 +401,121 @@ mod tests {
         let unavailable = pick_host(&dir, None).unwrap_err();
         assert!(unavailable.is_unavailable(), "{unavailable}");
         assert!(unavailable.to_string().contains(&format!("looked in {}", dir.display())), "{unavailable}");
-        write_record(&dir, "Work", std::process::id());
-        // A record whose host is gone is not a connected browser.
-        write_record(&dir, "Gone", u32::MAX - 1);
+        let _work = write_record(&dir, "Work", std::process::id(), true);
+        // A record whose host is gone is not a connected browser, even when its pid now names another process.
+        write_record(&dir, "Gone", std::process::id(), false);
         std::fs::write(dir.join(".idWork.json.1"), "{").unwrap();
         assert_eq!(pick_host(&dir, None).unwrap().1.label, "Work");
-        write_record(&dir, "Home", std::process::id());
+        let _home = write_record(&dir, "Home", std::process::id(), true);
         let several = pick_host(&dir, None).unwrap_err().to_string();
         assert!(several.contains("Home (Chrome 150), Work (Chrome 150)"), "{several}");
         assert_eq!(pick_host(&dir, Some("home")).unwrap().1.label, "Home");
         assert!(pick_host(&dir, Some("Gone")).unwrap_err().to_string().contains("no connected browser"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Codex's sandbox runs the CLI in its own PID namespace, where the host's pid names no process: the host still
+    /// listens, so the browser is connected (#1344).
+    #[cfg(unix)]
+    #[test]
+    fn a_host_whose_pid_this_process_cannot_see_is_connected_while_it_listens() {
+        let dir = std::env::temp_dir().join(format!("fbx-pidns-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _chromium = write_record(&dir, "Chromium", u32::MAX - 1, true);
+        assert_eq!(pick_host(&dir, Some("Chromium")).unwrap().1.label, "Chromium");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A named browser whose socket this process may not open is reported as refused, even while another browser
+    /// is reachable: a socket without write permission refuses the connection as a sandbox does.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_browser_this_process_cannot_reach_is_reported_as_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("fbx-refused-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _home = write_record(&dir, "Home", std::process::id(), true);
+        let _work = write_record(&dir, "Work", std::process::id(), true);
+        let socket = dir.join("idWork.sock");
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let error = pick_host(&dir, Some("Work")).unwrap_err();
+        assert_eq!(pick_host(&dir, None).unwrap().1.label, "Home");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(error.is_unavailable(), "{error}");
+        let error = error.to_string();
+        assert!(error.contains(&format!("cannot connect to {}", socket.display())), "{error}");
+    }
+
+    /// A browser whose host stopped accepting, as a paused one does, fills its accept queue. Probing it must not
+    /// block a run that names another browser, and a host that is there but busy is still connected.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_stalled_host_does_not_block_a_run_that_names_another_browser() {
+        let dir = std::env::temp_dir().join(format!("fbx-stalled-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _home = write_record(&dir, "Home", std::process::id(), true);
+        let work = write_record(&dir, "Work", std::process::id(), true).unwrap();
+        // A backlog of none, then connections nobody accepts, fills Work's queue as a host that stopped would.
+        socket2::SockRef::from(&work).listen(0).unwrap();
+        let mut queued = vec![];
+        loop {
+            let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None).unwrap();
+            socket.set_nonblocking(true).unwrap();
+            match socket.connect(&socket2::SockAddr::unix(dir.join("idWork.sock")).unwrap()) {
+                Ok(()) => queued.push(socket),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("{error}"),
+            }
+        }
+        let (send, picked) = std::sync::mpsc::channel();
+        let scanned = dir.clone();
+        std::thread::spawn(move || {
+            let home = pick_host(&scanned, Some("Home")).map(|(_, r)| r.label);
+            let work = pick_host(&scanned, Some("Work")).map(|(_, r)| r.label);
+            send.send((home, work)).unwrap();
+        });
+        let picked = picked.recv_timeout(std::time::Duration::from_secs(10));
+        std::fs::remove_dir_all(&dir).unwrap();
+        let (home, work) = picked.expect("probing a stalled host blocked the run");
+        assert_eq!(home.unwrap(), "Home");
+        assert_eq!(work.unwrap(), "Work");
+    }
+
+    /// A record this process may not read can be a connected browser's: the run says it cannot reach it, not that
+    /// no extension is installed.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_this_process_cannot_read_is_reported_as_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("fbx-unreadable-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _work = write_record(&dir, "Work", std::process::id(), true);
+        let record = dir.join("idWork.json");
+        std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let alone = pick_host(&dir, None).unwrap_err();
+        let _home = write_record(&dir, "Home", std::process::id(), true);
+        let named = pick_host(&dir, Some("Work")).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        for error in [alone, named] {
+            assert!(error.is_unavailable(), "{error}");
+            let error = error.to_string();
+            assert!(error.contains(&format!("cannot read {}", record.display())), "{error}");
+        }
+    }
+
+    /// A directory this process may not read is named with why, not reported as a browser with no extension.
+    #[cfg(unix)]
+    #[test]
+    fn a_host_directory_this_process_cannot_read_names_the_sandbox() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("fbx-hidden-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let error = pick_host(&dir, None).unwrap_err();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(error.is_unavailable(), "{error}");
+        let error = error.to_string();
+        assert!(error.contains(&format!("cannot read {}", dir.display())) && error.contains("sandbox"), "{error}");
     }
 }

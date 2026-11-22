@@ -97,7 +97,7 @@ export interface RunOptions extends PerRun<BrowserOptions> {
   recipe?: string;
   /** Save completed steps to a recipe file. */
   saveRecipe?: string;
-  /** The agent's cursor over visible local Chrome on Linux X11 with Cua Driver: unset draws it wherever it can be placed, true also brings the window to the front for it, false turns it off. */
+  /** The agent's cursor, drawn inside the page so a watcher or recording sees each action land: unset draws it wherever the page can be seen, true in every run, false never. The model never sees it. */
   cursor?: boolean;
   /**
    * The only `http(s)://host[:port]` origins whose documents the run may open, read and control, each exact. A

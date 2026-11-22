@@ -34,7 +34,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use fastbrowse_core::decision::{DecisionClient, JEV_MODEL};
+use fastbrowse_core::decision::{DecisionClient, JEV_MODEL, OpenRouterDecisionCatalog};
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{LLMPurpose, LocalChrome};
 use fastbrowse_core::py::lax::bool_of;
@@ -517,7 +517,37 @@ impl Settings {
     }
 
     pub fn decision(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
-        let jev = self.jev(http)?;
+        self.decision_from_catalog(http, None)
+    }
+
+    /// Resolve an explicit OpenRouter model pin before the caller fits a request. The pinned default and proxy
+    /// endpoints use the checked-in profiles, as does configuration preflight.
+    pub async fn resolve_decision(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        let is_openrouter = self.decision_route().0 == DecisionSource::OpenRouter;
+        let has_pin = self.decision_model.as_ref().is_some_and(|model| !model.is_empty());
+        let public_route = self
+            .decision_base_url
+            .as_deref()
+            .is_none_or(|url| url.is_empty() || url.trim_end_matches('/') == OPENROUTER_URL);
+        let catalog = if is_openrouter && has_pin && public_route && set(&self.openrouter_api_key) {
+            let url = format!("{OPENROUTER_URL}/v1/models?output_modalities=decisions");
+            http.get(&url, &[], 2.0)
+                .await
+                .ok()
+                .filter(|response| response.is_success())
+                .and_then(|response| serde_json::from_slice::<OpenRouterDecisionCatalog>(&response.body).ok())
+        } else {
+            None
+        };
+        self.decision_from_catalog(http, catalog.as_ref())
+    }
+
+    fn decision_from_catalog(
+        &self,
+        http: &Http,
+        catalog: Option<&OpenRouterDecisionCatalog>,
+    ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        let jev = self.jev(http, catalog)?;
         match self.action_picker {
             ActionPickerSource::Jev => Ok(jev),
             ActionPickerSource::Llm => {
@@ -527,19 +557,28 @@ impl Settings {
         }
     }
 
-    fn jev(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+    fn jev(
+        &self,
+        http: &Http,
+        catalog: Option<&OpenRouterDecisionCatalog>,
+    ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
         let (source, backup_source) = self.decision_route();
-        let primary = self.decision_client(source, http)?;
+        let primary = self.decision_client(source, http, catalog)?;
         let Some(backup_source) = backup_source else { return Ok(primary) };
-        Ok(Box::new(FailoverDecisionClient::new(primary, self.decision_client(backup_source, http)?, http.clone())))
+        Ok(Box::new(FailoverDecisionClient::new(
+            primary,
+            self.decision_client(backup_source, http, None)?,
+            http.clone(),
+        )))
     }
 
     fn decision_client(
         &self,
         source: DecisionSource,
         http: &Http,
+        catalog: Option<&OpenRouterDecisionCatalog>,
     ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
-        let client = self.source_client(source, http)?;
+        let client = self.source_client(source, http, catalog)?;
         Ok(Box::new(Sourced { client, source: source.as_str() }))
     }
 
@@ -547,6 +586,7 @@ impl Settings {
         &self,
         source: DecisionSource,
         http: &Http,
+        catalog: Option<&OpenRouterDecisionCatalog>,
     ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
         let base_url = |default: &'static str| match &self.decision_base_url {
             Some(url) if !url.is_empty() => url.clone(),
@@ -561,15 +601,21 @@ impl Settings {
             _ => Err(ConfigurationError(message.to_string())),
         };
         Ok(match source {
-            DecisionSource::OpenRouter => Box::new(
-                SystemOneClient::new(
+            DecisionSource::OpenRouter => {
+                let model = model(OPENROUTER_MODEL);
+                let client = SystemOneClient::new(
                     key(&self.openrouter_api_key, "set OPENROUTER_API_KEY for Jev via OpenRouter")?,
                     http.clone(),
                     &base_url(OPENROUTER_URL),
-                    &model(OPENROUTER_MODEL),
-                )
-                .openrouter(),
-            ),
+                    &model,
+                );
+                // Our pinned default uses OpenRouter's legacy unqualified Jev ID.
+                let listed = if model == OPENROUTER_MODEL { "typesafe/jev-1.14" } else { &model };
+                Box::new(match catalog.and_then(|catalog| catalog.resolve(listed)) {
+                    Some((concrete, profile)) => client.openrouter_with_model(profile, concrete),
+                    None => client.openrouter(),
+                })
+            }
             DecisionSource::TypeSafe => Box::new(
                 SystemOneClient::new(
                     key(&self.typesafe_api_key, "set TYPESAFE_API_KEY for Jev via the direct API")?,

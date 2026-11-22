@@ -31,6 +31,8 @@ const CHOICE: &str = "task";
 const ABSENT: &str = "absent";
 /// What Jev answers when no one candidate states the answer.
 const SYNTHESIS: &str = "synthesis";
+/// What Jev answers when the page holds a fact the task's steps need and nothing that answers it.
+const STEPS: &str = "steps";
 
 fn focus_rules() -> String {
     format!(
@@ -147,6 +149,7 @@ fn read_request(
     candidates: &[Candidate],
     blocks: Option<&[&Block]>,
     shows: bool,
+    reached_by: Option<&str>,
 ) -> (Value, IndexMap<String, Question>) {
     let groups = read_groups(candidates);
     let mut criteria: IndexMap<String, Value> = IndexMap::new();
@@ -190,7 +193,17 @@ fn read_request(
             .push_str(" The passages that fit are shown, most relevant first; other passages have been omitted.");
     }
     let mut offered = criteria;
-    if !shows {
+    // The step judged that this page shows a fact the task needs, to report or to finish its work. Without a way to
+    // say the fact is for the work, a read made to pick took the start page's link "Learn more" as the title of the
+    // page it opens (#1174).
+    if shows {
+        instructions.push_str(" Select steps when the page holds a fact the task needs only to carry out its work, such as a link to follow or a code to enter, and nothing on it states what the task asks to be told.");
+        offered.insert(
+            STEPS.into(),
+            "This page holds a fact the task's steps need and nothing that answers the task; keep it for the steps."
+                .into(),
+        );
+    } else {
         offered.insert(ABSENT.into(), "This page contains no evidence for the task; skip reading it.".into());
     }
     offered.insert(
@@ -212,7 +225,11 @@ fn read_request(
         shown.insert("focused".into(), true.into());
     }
     shown.insert("inaccessible_frames".into(), capture.inaccessible_frames.into());
-    (json!({"date": date, "page": Value::Object(shown)}), questions)
+    let mut state = json!({"date": date, "page": Value::Object(shown)});
+    if let Some(reached_by) = reached_by {
+        state["page_reached_by"] = reached_by.into();
+    }
+    (state, questions)
 }
 
 /// The text of `blocks` joined by `separator`, each block led by the headings it sits under where the text before it
@@ -246,6 +263,7 @@ pub(super) fn read_fits(state: &Value, questions: &IndexMap<String, Question>, t
 /// `_focus`: the passages Jev should choose from, best scored first and as many as a choice can hold, or none when a
 /// window went unjudged or no candidate fits, and whether any passage went unjudged: a batch that failed, or a
 /// question too large to send.
+#[allow(clippy::too_many_arguments)]
 async fn focus<'a>(
     jev: &dyn DecisionClient,
     page: &Page<'a>,
@@ -254,6 +272,8 @@ async fn focus<'a>(
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
     trace: &Trace,
+    shows: bool,
+    reached_by: Option<&str>,
 ) -> Result<(Vec<&'a Block>, Vec<Candidate>, Vec<CostLine>, bool)> {
     let capture = page.capture;
     // Cutting a page of megabytes into questions is long work, kept off the runtime's other tasks (#1284).
@@ -292,12 +312,16 @@ async fn focus<'a>(
         }
         (windows, questions)
     });
-    let state = json!({
+    let mut state = json!({
         "rules": focus_rules(),
         "task": task,
         "date": date,
         "page": {"url": capture.url, "title": capture.title},
     });
+    // A passage dropped here never reaches the read, so the passages are judged knowing what the read is told.
+    if let Some(reached_by) = reached_by {
+        state["page_reached_by"] = reached_by.into();
+    }
     let answered = evaluate_batches(JevPurpose::Read, jev, &state, &questions, tokens, ledger, true).await?;
     let lost = answered.as_ref().is_none_or(|answered| answered.answers.len() < questions.len());
     let (answers, cost) = match answered {
@@ -332,7 +356,7 @@ async fn focus<'a>(
                 return false;
             }
             let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
-            let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false);
+            let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), shows, reached_by);
             candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
         };
         let (mut shown, mut high) = (0, ranked.len());
@@ -369,17 +393,19 @@ pub(crate) struct PageRead {
     /// Jev answered the read with an offered option. A read whose requests failed, whose reply held no usable answer,
     /// or whose Absent rests on passages left unjudged, took nothing from the page without saying it holds nothing.
     pub finished: bool,
+    /// The page holds a fact the task's steps need, such as a code to enter, and nothing that answers the task.
+    pub for_steps: bool,
 }
 
 impl PageRead {
     /// A read that took nothing because it did not finish.
     fn unfinished() -> PageRead {
-        PageRead { facts: Vec::new(), compose: false, finished: false }
+        PageRead { facts: Vec::new(), compose: false, finished: false, for_steps: false }
     }
 
     /// A finished read that found nothing on the page for the task.
     fn absent() -> PageRead {
-        PageRead { facts: Vec::new(), compose: false, finished: true }
+        PageRead { facts: Vec::new(), compose: false, finished: true, for_steps: false }
     }
 }
 
@@ -408,6 +434,15 @@ pub(crate) fn whole_page_facts(capture: &Capture) -> Vec<Fact> {
 /// Jev is told the capture date and the dates the task names, worked out from it, as a step is: asked whether "30/01/2027"
 /// answers "the last Saturday of the month after next" without them, it could not tell, and a run that had set that
 /// date read the page as holding nothing for the task.
+///
+/// `reached_by` is the action that led the run to this page and the page it was taken on. Asked for the title of the
+/// page "Learn more" leads to, Jev read the help page it reached as a list of reserved domains and picked a heading in
+/// it, at most 0.37 to the document title, in four of four replays; told the page was reached by clicking "Learn
+/// more" on the start page, it picked the title in every replay (#1174).
+///
+/// `shows` is the step's judgment that the page shows a fact the task needs. Such a read may not skip the page, but it
+/// may say the fact is one the steps need and nothing on the page answers the task: the page is then kept as notes
+/// that answer nothing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn read_page(
     jev: &dyn DecisionClient,
@@ -418,6 +453,7 @@ pub(crate) async fn read_page(
     ledger: Option<&Ledger>,
     trace: &Trace,
     shows: bool,
+    reached_by: Option<&str>,
 ) -> Result<PageRead> {
     let page = Page::new(capture);
     let blocks: Vec<&Block> = capture.blocks.iter().collect();
@@ -425,14 +461,15 @@ pub(crate) async fn read_page(
     // Reading every candidate off a page of megabytes is long work, kept off the runtime's other tasks (#1284).
     let (mut candidates, mut state, mut asked, fits) = compute(|| {
         let candidates = page_read_candidates(&page, &blocks, jev.profile().max_choice_options);
-        let (state, asked) = read_request(&page, task, &date, &candidates, None, shows);
+        let (state, asked) = read_request(&page, task, &date, &candidates, None, shows, reached_by);
         let fits = read_fits(&state, &asked, tokens);
         (candidates, state, asked, fits)
     });
     // Passages Jev never judged are missing from those it chooses among, so an absent from them is not the page's.
     let mut lost = false;
     if candidates.is_empty() || !fits {
-        let (kept, narrowed, _, unjudged) = focus(jev, &page, task, &date, tokens, ledger, trace).await?;
+        let (kept, narrowed, _, unjudged) =
+            focus(jev, &page, task, &date, tokens, ledger, trace, shows, reached_by).await?;
         if narrowed.is_empty() {
             // Too many value options can hide a passage that still fits as an absent-or-synthesis question.
             if !fits {
@@ -442,7 +479,7 @@ pub(crate) async fn read_page(
         } else {
             lost = unjudged;
             candidates = narrowed;
-            (state, asked) = compute(|| read_request(&page, task, &date, &candidates, Some(&kept), shows));
+            (state, asked) = compute(|| read_request(&page, task, &date, &candidates, Some(&kept), shows, reached_by));
         }
     }
     if let Some(ledger) = ledger {
@@ -463,8 +500,19 @@ pub(crate) async fn read_page(
     } else {
         answer.choice.as_str()
     };
+    trace.event("read_choice", || {
+        let outcome = if [ABSENT, SYNTHESIS, STEPS].contains(&choice) { choice } else { "candidate" };
+        Map::from_iter([
+            ("choice".to_string(), json!(outcome)),
+            ("confidence".to_string(), json!(round(answer.confidence, 3))),
+        ])
+    });
     if choice == SYNTHESIS {
-        return Ok(PageRead { facts: whole_page_facts(capture), compose: true, finished: true });
+        return Ok(PageRead { facts: whole_page_facts(capture), compose: true, finished: true, for_steps: false });
+    }
+    // The page is kept as notes the steps see, none of them an answer: a code shown here is typed on a later page.
+    if choice == STEPS && shows {
+        return Ok(PageRead { facts: whole_page_facts(capture), compose: false, finished: true, for_steps: true });
     }
     // Absent is offered only when the read may skip the page; outside that, like any pick outside the offered set, it is
     // no answer about the page.
@@ -491,7 +539,6 @@ pub(crate) async fn read_page(
     let basis = unique(context.iter().chain(&headings).map(fact_id));
     let mut facts: Vec<Fact> = context.clone();
     facts.extend(headings);
-    trace.event("read_choice", || Map::from_iter([("confidence".to_string(), json!(round(answer.confidence, 3)))]));
     // The candidate's evidence was cut from this capture by code, so it is kept as selected, not re-found. The text is
     // the value alone: the answer states a fact's text.
     facts.push(Fact {
@@ -501,7 +548,7 @@ pub(crate) async fn read_page(
         basis,
         reader: FactReader::JevChoice,
     });
-    Ok(PageRead { facts, compose: false, finished: true })
+    Ok(PageRead { facts, compose: false, finished: true, for_steps: false })
 }
 
 /// `_block_context`: the whole block a narrowed quote was cut from, kept beside it as context.
@@ -571,7 +618,7 @@ mod tests {
         assert!(title.context.starts_with("(document title)"));
         assert!(!title.evidence.rendered_text);
         let (_, questions) =
-            read_request(&Page::new(&captured), "Tell me the heading", "2026-11-17", &candidates, None, false);
+            read_request(&Page::new(&captured), "Tell me the heading", "2026-11-17", &candidates, None, false, None);
         let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
         assert_eq!(question.criteria[&title.id]["source_kind"], "document_title");
         assert!(question.instructions.contains("A request for a heading needs a heading"));
@@ -627,7 +674,8 @@ mod tests {
     fn focused(captured: &Capture, tokens: &TokenBudget) -> Vec<String> {
         let page = Page::new(captured);
         let (kept, _, _, _) =
-            block_on(focus(&Scorer, &page, "Find the version", "", tokens, None, &Trace::disabled())).unwrap();
+            block_on(focus(&Scorer, &page, "Find the version", "", tokens, None, &Trace::disabled(), false, None))
+                .unwrap();
         kept.iter().map(|block| block.source_id.clone()).collect()
     }
 
@@ -671,13 +719,76 @@ mod tests {
         }
     }
 
+    /// Records the state each request sends, and finds no passage relevant.
+    #[derive(Default)]
+    struct States(std::sync::Mutex<Vec<Value>>);
+
+    impl DecisionClient for States {
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile::jev()
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            self.0.lock().unwrap().push(state.clone());
+            let answers = questions
+                .keys()
+                .map(|key| (key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.1 })))
+                .collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+    }
+
+    /// A passage judged without knowing how the run reached the page is dropped before the read that is told it.
+    #[test]
+    fn focus_is_told_how_the_run_reached_the_page() {
+        let captured = capture(&[(BlockKind::Paragraph, "Example Domains")]);
+        let jev = States::default();
+        let reached_by = Some("click 'Learn more' on https://example.com/");
+        let trace = Trace::disabled();
+        block_on(focus(
+            &jev,
+            &Page::new(&captured),
+            "Find",
+            "",
+            &TokenBudget::default(),
+            None,
+            &trace,
+            false,
+            reached_by,
+        ))
+        .unwrap();
+        assert_eq!(jev.0.into_inner().unwrap()[0]["page_reached_by"], "click 'Learn more' on https://example.com/");
+    }
+
     #[test]
     fn a_block_longer_than_a_window_is_asked_about_in_pieces_of_a_window_of_characters() {
         let block = "é".repeat(FOCUS_WINDOW_CHARS as usize * 2 + 7);
         let captured = capture(&[(BlockKind::Paragraph, block.as_str())]);
         let jev = Recorder::default();
-        block_on(focus(&jev, &Page::new(&captured), "Find", "", &TokenBudget::default(), None, &Trace::disabled()))
-            .unwrap();
+        block_on(focus(
+            &jev,
+            &Page::new(&captured),
+            "Find",
+            "",
+            &TokenBudget::default(),
+            None,
+            &Trace::disabled(),
+            false,
+            None,
+        ))
+        .unwrap();
         let mut asked = jev.0.into_inner().unwrap();
         asked.sort_by_key(|piece| std::cmp::Reverse(piece.chars().count()));
         let lengths: Vec<usize> = asked.iter().map(|piece| piece.chars().count()).collect();
@@ -700,6 +811,8 @@ mod tests {
             &TokenBudget::default(),
             None,
             &Trace::disabled(),
+            false,
+            None,
         ))
         .unwrap();
         assert!(kept.is_empty() && candidates.is_empty() && !lost);
@@ -774,6 +887,7 @@ mod tests {
                 None,
                 &Trace::disabled(),
                 false,
+                None,
             ))
             .unwrap();
             assert_eq!(read.compose, choice == SYNTHESIS);
@@ -841,6 +955,7 @@ mod tests {
             None,
             &Trace::disabled(),
             false,
+            None,
         ))
         .unwrap()
     }
@@ -876,9 +991,42 @@ mod tests {
             None,
             &Trace::disabled(),
             true,
+            None,
         ))
         .unwrap();
         assert!(!read.finished, "a read that must take something cannot end on an option it was not offered");
+    }
+
+    /// A page the step judged to show a fact the task needs may hold it for the steps alone, such as a code to type
+    /// later: the read takes the page as notes that answer nothing. Absent stays a read that may skip the page.
+    #[test]
+    fn a_page_holding_a_fact_for_the_steps_is_kept_without_an_answer() {
+        let captured = capture(&[(BlockKind::Paragraph, "Your code is 4417"), (BlockKind::Paragraph, "Continue")]);
+        let page = Page::new(&captured);
+        let candidates = read_candidates(&captured, None);
+        for shows in [true, false] {
+            let (_, questions) = read_request(&page, "Sign in", "", &candidates, None, shows, None);
+            let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
+            assert_eq!(question.criteria.contains_key(STEPS), shows);
+            assert_eq!(question.criteria.contains_key(ABSENT), !shows);
+        }
+        let jev = Judge { focus: Some(0.9), choice: STEPS };
+        let read = block_on(read_page(
+            &jev,
+            &captured,
+            "Sign in",
+            &[],
+            &TokenBudget::default(),
+            None,
+            &Trace::disabled(),
+            true,
+            None,
+        ))
+        .unwrap();
+        assert!(read.finished);
+        assert!(!read.compose);
+        assert!(read.facts.iter().all(|fact| !fact.answers));
+        assert_eq!(read.facts.len(), 2);
     }
 
     #[test]
@@ -930,7 +1078,7 @@ mod tests {
             })
             .collect();
         let (state, questions) =
-            read_request(&page, "Find the second avatar name", "2026-09-26 (Saturday)", &candidates, None, false);
+            read_request(&page, "Find the second avatar name", "2026-09-26 (Saturday)", &candidates, None, false, None);
         assert_eq!(state["date"], "2026-09-26 (Saturday)", "a read is told the dates a step is");
         let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
         let expected: Vec<Value> = ["1 of 2", "2 of 2"]
