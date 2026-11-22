@@ -132,6 +132,13 @@ const CHECKABLE: &[&str] = &[
     "menu item radio",
 ];
 
+/// Whether an element's checked or pressed state is a value it holds. A toggle button that opens a menu or popover, as
+/// GTK's menu buttons do, is pressed while its popup is open, which is whether it is expanded: read as a checked value,
+/// a click on GNOME Text Editor's Main Menu was refused as a setting the task did not ask to change (#1393).
+fn holds_checked(element: &Element) -> bool {
+    CHECKABLE.contains(&element.role.as_str()) && !element.has("has popup") && !element.has("expandable")
+}
+
 fn operations(element: &Element) -> Vec<Operation> {
     // Editable is a state the app sets, on entries, spin buttons, password fields and editable combo boxes alike.
     if element.has("editable") {
@@ -257,7 +264,7 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     control.options = options(element).iter().map(|item| item.name.clone()).collect();
     control.context = context.map(str::to_string);
     control.focused = Some(element.has("focused"));
-    if CHECKABLE.contains(&element.role.as_str()) {
+    if holds_checked(element) {
         control.checked = Some(element.has("checked") || element.has("pressed"));
     }
     if element.has("selectable") {
@@ -265,6 +272,8 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     }
     if element.has("expandable") {
         control.expanded = Some(element.has("expanded"));
+    } else if element.has("has popup") {
+        control.expanded = Some(element.has("pressed"));
     }
     if element.has("required") {
         control.required = Some(true);
@@ -628,6 +637,37 @@ mod tests {
         assert!(controls.iter().all(|c| c.operations.contains(&Operation::Click)));
         // What the window says names them too, so a quote of a file name is found in it.
         assert!(capture(&window, &root).text.contains("IMG_4471.txt. File"));
+    }
+
+    #[test]
+    fn a_toggle_button_that_opens_a_menu_holds_no_checked_value() {
+        // GNOME Text Editor's Main Menu is a toggle button with a popup; read as checked, a click on it was refused as a
+        // setting change under a task that asks for some edits and rules out the rest (#1393).
+        let root = node(
+            "e1",
+            "window",
+            "Text Editor",
+            &SHOWN,
+            None,
+            vec![
+                node(
+                    "e2",
+                    "toggle button",
+                    "Main Menu",
+                    &shown(&["focusable", "has popup", "checkable"]),
+                    None,
+                    vec![],
+                ),
+                node("e3", "toggle button", "Bold", &shown(&["focusable", "checkable", "pressed"]), None, vec![]),
+            ],
+        );
+        let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "x".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let state: Vec<_> = controls.iter().map(|c| (c.label.as_str(), c.checked, c.expanded)).collect();
+        assert_eq!(state, [("Main Menu", None, Some(false)), ("Bold", Some(true), None)]);
+        let edits: Vec<bool> =
+            controls.iter().map(|c| fastbrowse_core::safety::changes_a_value(Operation::Click, c)).collect();
+        assert_eq!(edits, [false, true], "opening the menu changes no value; pressing Bold does");
     }
 
     #[test]
