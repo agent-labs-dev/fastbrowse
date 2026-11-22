@@ -274,6 +274,19 @@
         }
       ],
       "default": null
+    },
+    "trace": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The file holding the call's trace, kept when the call ended short of complete.",
+      "title": "Trace"
     }
   },
   "required": [
