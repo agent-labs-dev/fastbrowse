@@ -45,8 +45,13 @@ impl Element {
 
     /// Whether the app says this element is on screen now. `visible` alone means only that it would be were its
     /// parent shown: the items of a closed menu are visible and not showing.
+    ///
+    /// Qt leaves the items of a closed combo box showing, moved to x=-10000, and they were offered as options to pick
+    /// (#1408): a box that ends before the window's left or top edge lies outside the window, whatever the state says.
+    /// A box with no size says nothing of where it is, as GTK 4's list cells have none until the window is first drawn.
     fn showing(&self) -> bool {
-        self.has("showing")
+        let outside = self.width > 0 && self.height > 0 && (self.x + self.width <= 0 || self.y + self.height <= 0);
+        self.has("showing") && !outside
     }
 
     /// Whether the app accepts input on this element. GTK 3 and Qt set both `enabled` and `sensitive` on a usable
@@ -88,9 +93,12 @@ impl Window {
     }
 }
 
-/// Roles whose element does something when clicked, by AT-SPI's role names. at-spi2-core renamed `push button` to
-/// `button`; an app on an older one still says the first.
-const CLICKABLE: [&str; 17] = [
+/// Roles whose element does something when clicked, by the role names the app reports over AT-SPI. at-spi2-core
+/// renamed `push button` to `button`; an app on an older one still says the first. A toolkit can name a role its own
+/// way: GTK 4 says `tab`, `switch`, `grid cell` and `menu item checkbox` where at-spi2-core says `page tab` or
+/// `check menu item`, and Qt 5 says `spin box`. A role missing here is never offered, so GNOME Text Editor's tabs,
+/// its line numbers switch and GNOME Files' file icons could not be picked (#1397).
+const CLICKABLE: &[&str] = &[
     "button",
     "push button",
     "toggle button",
@@ -108,10 +116,67 @@ const CLICKABLE: [&str; 17] = [
     "table cell",
     "icon",
     "push button menu",
+    "tab",
+    "switch",
+    "grid cell",
+    "menu item checkbox",
+    "menu item radio",
+    "spin button",
+    "spin box",
 ];
 
 /// Roles whose checked state is a value of their own, so an unchecked one says so rather than saying nothing.
-const CHECKABLE: [&str; 5] = ["check box", "radio button", "toggle button", "check menu item", "radio menu item"];
+const CHECKABLE: &[&str] = &[
+    "check box",
+    "radio button",
+    "toggle button",
+    "check menu item",
+    "radio menu item",
+    "switch",
+    "menu item checkbox",
+    "menu item radio",
+];
+
+/// Whether an element's checked or pressed state is a value it holds. A toggle button that opens a menu or popover, as
+/// GTK's menu buttons do, is pressed while its popup is open, which is whether it is expanded: read as a checked value,
+/// a click on GNOME Text Editor's Main Menu was refused as a setting the task did not ask to change (#1393).
+///
+/// An element of another role holds one when the app marks it checkable, as Qt does a table cell that ticks its row
+/// (#1408).
+fn holds_checked(element: &Element) -> bool {
+    (CHECKABLE.contains(&element.role.as_str()) || element.has("checkable"))
+        && !element.has("has popup")
+        && !element.has("expandable")
+}
+
+/// The role a control is offered as: its own in ARIA's words, or a checkbox for an element of another role that holds a
+/// checked value, since that is what clicking it changes.
+fn offered_role(element: &Element) -> &str {
+    if holds_checked(element) && !CHECKABLE.contains(&element.role.as_str()) {
+        return "checkbox";
+    }
+    aria_role(&element.role)
+}
+
+/// What names a control with no name of its own, from the element before it among `siblings`, at `at` in reading
+/// order. A label read just before an unnamed field names it, as a sighted reader pairs them: Qt's Add Entry dialog
+/// lays out "Name:" beside an unnamed text field, and each field was offered as `textbox`, so the run typed the value
+/// into the name field (#1408). A table cell is named by the first named cell of its row, the cells beside it at its
+/// height, since the tree holds no row element: a checkbox cell offered as `cell` did not say which option it sets.
+fn sibling_label(siblings: &[Element], at: usize) -> Option<&str> {
+    let element = &siblings[at];
+    const CELLS: [&str; 2] = ["table cell", "grid cell"];
+    if CELLS.contains(&element.role.as_str()) {
+        return siblings[..at]
+            .iter()
+            .filter(|sibling| CELLS.contains(&sibling.role.as_str()) && sibling.y == element.y)
+            .find_map(|sibling| Some(sibling.name.as_str()).filter(|name| !name.trim().is_empty()));
+    }
+    let before = siblings[..at].last().filter(|before| before.role == "label")?;
+    Some(before.name.as_str())
+        .filter(|name| !name.trim().is_empty())
+        .or(before.text.as_deref().filter(|text| !text.trim().is_empty()))
+}
 
 fn operations(element: &Element) -> Vec<Operation> {
     // Editable is a state the app sets, on entries, spin buttons, password fields and editable combo boxes alike.
@@ -140,13 +205,14 @@ fn aria_role(role: &str) -> &str {
         "radio button" => "radio",
         "combo box" => "combobox",
         "menu item" => "menuitem",
-        "check menu item" => "menuitemcheckbox",
-        "radio menu item" => "menuitemradio",
+        "check menu item" | "menu item checkbox" => "menuitemcheckbox",
+        "radio menu item" | "menu item radio" => "menuitemradio",
         "page tab" => "tab",
+        "grid cell" => "gridcell",
         "list item" => "listitem",
         "tree item" => "treeitem",
         "table cell" => "cell",
-        "spin button" => "spinbutton",
+        "spin button" | "spin box" => "spinbutton",
         other => other,
     }
 }
@@ -204,7 +270,7 @@ pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
     element.children.iter().find_map(|child| find(child, id))
 }
 
-fn control(element: &Element, context: Option<&str>) -> Option<Control> {
+fn control(element: &Element, context: Option<&str>, beside: Option<&str>) -> Option<Control> {
     if !element.showing() || !element.operable() {
         return None;
     }
@@ -212,14 +278,15 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     if operations.is_empty() {
         return None;
     }
-    let role = aria_role(&element.role);
-    // A control with no name is offered under its words, or its role, as a page offers one. An editable's text is
-    // its value, not its label: GNOME Text Editor's unnamed text view, labelled by what it held, was offered as a
-    // field named "charger" holding "charger", and labelled '' when empty, Jev copied the task's answer into it.
+    let role = offered_role(element);
+    // A control with no name is offered under its words, the label beside it, or its role, as a page offers one. An
+    // editable's text is its value, not its label: GNOME Text Editor's unnamed text view, labelled by what it held, was
+    // offered as a field named "charger" holding "charger", and labelled '' when empty, Jev copied the task's answer
+    // into it.
     let label = match element.text.as_deref() {
         _ if !element.name.is_empty() => element.name.clone(),
         Some(text) if !text.trim().is_empty() && !element.has("editable") => text.to_string(),
-        _ => role.to_string(),
+        _ => beside.unwrap_or(role).to_string(),
     };
     let mut control = Control::new(&element.id, role, &label, operations);
     let sensitive = element.role == "password text";
@@ -237,7 +304,7 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     control.options = options(element).iter().map(|item| item.name.clone()).collect();
     control.context = context.map(str::to_string);
     control.focused = Some(element.has("focused"));
-    if CHECKABLE.contains(&element.role.as_str()) {
+    if holds_checked(element) {
         control.checked = Some(element.has("checked") || element.has("pressed"));
     }
     if element.has("selectable") {
@@ -245,6 +312,8 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     }
     if element.has("expandable") {
         control.expanded = Some(element.has("expanded"));
+    } else if element.has("has popup") {
+        control.expanded = Some(element.has("pressed"));
     }
     if element.has("required") {
         control.required = Some(true);
@@ -255,25 +324,55 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     Some(control)
 }
 
+/// Roles of an element that asks the person something, by the names AT-SPI, Qt and GTK 4 report: a Qt message box is an
+/// `alert message`, GTK 4's an `alert dialog`.
+const DIALOGS: [&str; 4] = ["alert", "alert message", "alert dialog", "dialog"];
+
+/// What a dialog asks, as the context of the buttons that answer it: its title and the text it shows. A Yes button
+/// judged by its name alone could not be told to answer "Are you sure you want to delete the cache?", so a run asked
+/// to delete the cache ended `needs_confirmation` with the task judged not to ask for that click (#1404). None for an
+/// element that is no dialog, or one that says nothing.
+fn question(element: &Element) -> Option<String> {
+    if !DIALOGS.contains(&element.role.as_str()) {
+        return None;
+    }
+    let (shown, _) = texts(element);
+    let shown = shown.replace('\n', " ");
+    match (element.name.trim(), shown.as_str()) {
+        ("", "") => None,
+        (title, "") => Some(title.to_string()),
+        ("", said) => Some(said.to_string()),
+        (title, said) => Some(format!("{title}: {said}")),
+    }
+}
+
 /// Every control the window shows, in reading order. Its id is deskpilot's element number, which stays the same while
 /// the tree before it keeps its shape, as a DOM node's id does while the node lives; `act` binds it to the snapshot of
 /// the observation it was chosen from. A control's context is the name of the nearest named
-/// element holding it below the window itself, as a group box or a page tab names what it holds.
+/// element holding it below the window itself, as a group box or a page tab names what it holds, or what the dialog
+/// holding it asks.
 pub fn controls(root: &Element) -> Vec<Control> {
-    fn walk(element: &Element, context: Option<&str>, out: &mut Vec<Control>) {
-        let made = control(element, context);
+    fn walk(element: &Element, context: Option<&str>, beside: Option<&str>, out: &mut Vec<Control>) {
+        let made = control(element, context, beside);
         // A control's own name is its label, not the context of what it holds.
-        let inner = if element.name.is_empty() || made.is_some() { context } else { Some(element.name.as_str()) };
+        let asked = question(element);
+        let inner = match asked.as_deref() {
+            Some(asked) => Some(asked),
+            None if element.name.is_empty() || made.is_some() => context,
+            None => Some(element.name.as_str()),
+        };
         out.extend(made);
-        for child in &element.children {
-            walk(child, inner, out);
+        for (at, child) in element.children.iter().enumerate() {
+            walk(child, inner, sibling_label(&element.children, at), out);
         }
     }
-    // The window's own name is its title, which every control shares, so it tells none apart.
+    // The window's own name is its title, which every control shares, so it tells none apart; a dialog's is part of
+    // what it asks.
     let mut out = Vec::new();
-    out.extend(control(root, None));
-    for child in &root.children {
-        walk(child, None, &mut out);
+    out.extend(control(root, None, None));
+    let asked = question(root);
+    for (at, child) in root.children.iter().enumerate() {
+        walk(child, asked.as_deref(), sibling_label(&root.children, at), &mut out);
     }
     out
 }
@@ -561,6 +660,194 @@ mod tests {
         assert_eq!(password.input_type.as_deref(), Some("password"));
         assert_eq!(observation.viewport_text, "Not submitted");
         assert_eq!(observation.offscreen_text, "Scrolled away");
+    }
+
+    #[test]
+    fn tabs_switches_grid_cells_and_spin_boxes_are_offered_in_aria_words() {
+        // As deskpilot read GNOME Text Editor's tab bar and Preferences, GNOME Files' icon view and a Qt 5 spin box
+        // (#1396, #1397): the tab was never offered, only its Close Tab button, so the run closed the tab it meant.
+        let gtk4 = |extra: &[&'static str]| -> Vec<&'static str> {
+            shown(&["focusable"]).into_iter().chain(extra.iter().copied()).collect()
+        };
+        let root = node(
+            "e1",
+            "window",
+            "contacts.txt - Text Editor",
+            &SHOWN,
+            None,
+            vec![
+                node("e2", "tab", "contacts.txt", &gtk4(&["selectable", "selected"]), None, vec![]),
+                node("e3", "button", "Close Tab", &gtk4(&[]), None, vec![]),
+                node("e4", "tab", "form.txt", &gtk4(&["selectable"]), None, vec![]),
+                node("e5", "button", "Close Tab", &gtk4(&[]), None, vec![]),
+                node("e6", "switch", "Display Line Numbers", &gtk4(&["checkable"]), None, vec![]),
+                node("e7", "grid cell", "IMG_4471.txt. File", &gtk4(&["selectable"]), None, vec![]),
+                node("e8", "spin box", "Double click interval", &gtk4(&[]), None, vec![]),
+                node("e9", "menu item radio", "Light", &gtk4(&["checkable", "checked"]), None, vec![]),
+            ],
+        );
+        let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "x".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let summary: Vec<(&str, &str, Option<bool>)> =
+            controls.iter().map(|c| (c.role.as_str(), c.label.as_str(), c.checked)).collect();
+        assert_eq!(
+            summary,
+            [
+                ("tab", "contacts.txt", None),
+                ("button", "Close Tab", None),
+                ("tab", "form.txt", None),
+                ("button", "Close Tab", None),
+                ("switch", "Display Line Numbers", Some(false)),
+                ("gridcell", "IMG_4471.txt. File", None),
+                ("spinbutton", "Double click interval", None),
+                ("menuitemradio", "Light", Some(true)),
+            ]
+        );
+        assert_eq!(controls[0].selected, Some(true));
+        assert!(controls.iter().all(|c| c.operations.contains(&Operation::Click)));
+        // What the window says names them too, so a quote of a file name is found in it.
+        assert!(capture(&window, &root).text.contains("IMG_4471.txt. File"));
+    }
+
+    #[test]
+    fn a_toggle_button_that_opens_a_menu_holds_no_checked_value() {
+        // GNOME Text Editor's Main Menu is a toggle button with a popup; read as checked, a click on it was refused as a
+        // setting change under a task that asks for some edits and rules out the rest (#1393).
+        let root = node(
+            "e1",
+            "window",
+            "Text Editor",
+            &SHOWN,
+            None,
+            vec![
+                node(
+                    "e2",
+                    "toggle button",
+                    "Main Menu",
+                    &shown(&["focusable", "has popup", "checkable"]),
+                    None,
+                    vec![],
+                ),
+                node("e3", "toggle button", "Bold", &shown(&["focusable", "checkable", "pressed"]), None, vec![]),
+            ],
+        );
+        let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "x".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let state: Vec<_> = controls.iter().map(|c| (c.label.as_str(), c.checked, c.expanded)).collect();
+        assert_eq!(state, [("Main Menu", None, Some(false)), ("Bold", Some(true), None)]);
+        let edits: Vec<bool> =
+            controls.iter().map(|c| fastbrowse_core::safety::changes_a_value(Operation::Click, c)).collect();
+        assert_eq!(edits, [false, true], "opening the menu changes no value; pressing Bold does");
+    }
+
+    #[test]
+    fn a_qt_form_names_fields_by_their_labels_and_ticks_cells_and_drops_closed_combo_items() {
+        // As deskpilot read CMake GUI's Add Entry dialog and cache table (#1408).
+        let at = |element: Element, x, y| Element { x, y, width: 100, height: 20, ..element };
+        let editable = shown(&["editable", "focusable"]);
+        let closed = node(
+            "e20",
+            "list",
+            "",
+            &SHOWN,
+            None,
+            vec![
+                at(node("e21", "list item", "BOOL", &shown(&["selectable", "selected"]), None, vec![]), -10000, -10000),
+                at(node("e22", "list item", "STRING", &shown(&["selectable"]), None, vec![]), -10000, -9980),
+            ],
+        );
+        let dialog = node(
+            "e2",
+            "panel",
+            "",
+            &SHOWN,
+            None,
+            vec![
+                at(node("e3", "label", "Name:", &SHOWN, Some("Name:"), vec![]), 0, 0),
+                at(node("e4", "text", "", &editable, Some(""), vec![]), 100, 0),
+                at(node("e5", "label", "Type:", &SHOWN, Some("Type:"), vec![]), 0, 30),
+                at(node("e6", "combo box", "", &shown(&["focusable"]), None, vec![closed]), 100, 30),
+                at(node("e7", "label", "Value:", &SHOWN, Some("Value:"), vec![]), 0, 60),
+                at(node("e8", "text", "", &editable, Some(""), vec![]), 100, 60),
+            ],
+        );
+        let table = node(
+            "e9",
+            "table",
+            "",
+            &SHOWN,
+            None,
+            vec![
+                at(node("e10", "table cell", "ENABLE_LOGS", &shown(&["selectable"]), None, vec![]), 0, 100),
+                at(node("e11", "table cell", "", &shown(&["selectable", "checkable"]), None, vec![]), 100, 100),
+                at(node("e12", "table cell", "GREETING", &shown(&["selectable"]), None, vec![]), 0, 120),
+                at(
+                    node("e13", "table cell", "", &shown(&["selectable", "checkable", "checked"]), None, vec![]),
+                    100,
+                    120,
+                ),
+            ],
+        );
+        let root = Element {
+            width: 800,
+            height: 600,
+            ..node("e1", "dialog", "Add Cache Entry", &SHOWN, None, vec![dialog, table])
+        };
+        let window = Window { address: "0xabc".into(), class: "cmake-gui".into(), title: "CMake".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let summary: Vec<_> =
+            controls.iter().map(|c| (c.id.as_str(), c.role.as_str(), c.label.as_str(), c.checked)).collect();
+        assert_eq!(
+            summary,
+            [
+                ("e4", "textbox", "Name:", None),
+                ("e6", "combobox", "Type:", None),
+                ("e8", "textbox", "Value:", None),
+                ("e10", "cell", "ENABLE_LOGS", None),
+                ("e11", "checkbox", "ENABLE_LOGS", Some(false)),
+                ("e12", "cell", "GREETING", None),
+                ("e13", "checkbox", "GREETING", Some(true)),
+            ]
+        );
+        // The closed combo box's list is off the window, so it is not open, though Qt says its items are showing.
+        let combo = find(&root, "e6").unwrap();
+        assert!(!list_open(combo));
+        assert_eq!(chosen(combo), Some("BOOL"));
+    }
+
+    #[test]
+    fn a_dialogs_buttons_carry_its_question() {
+        // As deskpilot read CMake GUI's Delete Cache message box (#1404): the gate judged 'Yes' by its name alone.
+        let root = node(
+            "e1",
+            "alert message",
+            "Delete Cache",
+            &SHOWN,
+            None,
+            vec![
+                node(
+                    "e2",
+                    "label",
+                    "Are you sure you want to delete the cache?",
+                    &SHOWN,
+                    Some("Are you sure you want to delete the cache?"),
+                    vec![],
+                ),
+                node("e3", "push button", "Yes", &SHOWN, None, vec![]),
+                node("e4", "push button", "No", &SHOWN, None, vec![]),
+            ],
+        );
+        let window = Window { address: "0xabc".into(), class: "cmake-gui".into(), title: "Delete Cache".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let asked = "Delete Cache: Are you sure you want to delete the cache?";
+        let contexts: Vec<_> = controls.iter().map(|c| (c.label.as_str(), c.context.as_deref())).collect();
+        assert_eq!(contexts, [("Yes", Some(asked)), ("No", Some(asked))]);
+        // The authorization gate's questions say what the button answers.
+        let action = fastbrowse_core::safety::control_action(Operation::Click, &controls[0], None, &controls);
+        assert!(action.contains(asked), "{action}");
+        // A main window's text is no control's context: only a dialog asks something its buttons answer.
+        let (_, form) = form();
+        assert!(super::controls(&form).iter().all(|c| c.context.as_deref().is_none_or(|c| c == "Delivery")));
     }
 
     #[test]

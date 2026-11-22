@@ -1749,9 +1749,10 @@ async fn test_a_task_that_rules_out_only_other_changes_makes_the_requested_one()
     }
 }
 
-/// Records the instructions of every `requested` question, and answers the edits question `requested_only`.
+/// Records the key and instructions of every `requested` and `changes_value` question, and answers the edits question
+/// `requested_only`.
 #[derive(Default)]
-struct RequestedRecorder(std::sync::Mutex<Vec<String>>);
+struct RequestedRecorder(std::sync::Mutex<Vec<(String, String)>>);
 
 impl fastbrowse_core::decision::DecisionClient for RequestedRecorder {
     fn evaluate<'a>(
@@ -1763,8 +1764,8 @@ impl fastbrowse_core::decision::DecisionClient for RequestedRecorder {
         let answers = questions
             .iter()
             .map(|(key, question)| {
-                if let ("requested", Question::Noul(q)) = (key.as_str(), question) {
-                    self.0.lock().unwrap().push(q.instructions.clone());
+                if let ("requested" | "changes_value", Question::Noul(q)) = (key.as_str(), question) {
+                    self.0.lock().unwrap().push((key.clone(), q.instructions.clone()));
                 }
                 let answer = if key == "edits" {
                     Answer::Choice(ChoiceAnswer {
@@ -1808,9 +1809,28 @@ async fn test_a_requested_press_is_asked_about_its_chord() {
     let decision = code_decision(Operation::Press, Some(tab.clone()));
     let gated = agent.gate_key_edit(&mut state, &page, &decision, &tab, "ArrowRight").await;
     assert!(gated.is_ok(), "{gated:?}");
-    let asked = jev.0.lock().unwrap();
+    let asked: Vec<_> = jev.0.lock().unwrap().iter().filter(|(key, _)| key == "requested").cloned().collect();
     assert_eq!(asked.len(), 1);
-    assert!(asked[0].contains("The exact key chord to press is 'ArrowRight'."), "{}", asked[0]);
+    assert!(asked[0].1.contains("The exact key chord to press is 'ArrowRight'."), "{}", asked[0].1);
+}
+
+/// A save chord in a text editor was asked whether it changed "something the site keeps", and refused as an edit the
+/// task did not ask for under a task that asked to save (#1393). Whether a press changes a value is asked of the
+/// field's value alone, and a commit is left to the irreversible gate.
+#[tokio::test]
+async fn test_a_press_is_asked_whether_it_changes_a_value_not_whether_it_commits() {
+    let editor = Control::new("t", "textbox", "textbox", [Operation::Press]);
+    let page = observation(std::slice::from_ref(&editor));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Add the result under \"Settle up:\" and save it with Ctrl+S.".into();
+    let decision = code_decision(Operation::Press, Some(editor.clone()));
+    let _ = agent.gate_key_edit(&mut state, &page, &decision, &editor, "Control+s").await;
+    let asked = jev.0.lock().unwrap();
+    let (_, question) = asked.iter().find(|(key, _)| key == "changes_value").expect("changes_value is asked");
+    assert!(question.contains("change what a field holds or a selected setting?"), "{question}");
+    assert!(question.contains("neither does committing what the fields already hold"), "{question}");
 }
 
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
