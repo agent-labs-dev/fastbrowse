@@ -377,3 +377,15 @@ def test_what_bench_writes_beside_its_report_is_not_in_the_artifact_that_is_comm
     assert refill.fill() == 0
     assert [path.name for path in refill.validate_cassettes(refill.OUT, ["mock-basket"])] == ["mock-basket.jsonl"]
     assert json.loads((refill.OUT / "result.json").read_text())["report"]["tasks"][0]["task"] == "mock-basket"
+
+
+def test_cassettes_over_one_request_are_committed_in_order_across_several(tmp_path: Path) -> None:
+    files = []
+    for name, size in [("a", 300), ("b", 300), ("c", 300)]:
+        path = tmp_path / f"{name}.jsonl"
+        path.write_bytes(b"x" * size)
+        files.append(path)
+    assert refill.commit_batches(files, limit=800) == [files[:2], files[2:]]
+    assert refill.commit_batches(files, limit=1200) == [files]
+    with pytest.raises(ValueError, match=r"a\.jsonl"):
+        refill.commit_batches(files, limit=100)
