@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A desktop recording no longer stretches a window of another size to the size of the first frame, as when a second window opens and the first is tiled to half its width ([#1395](https://github.com/agent-labs-dev/fastbrowse/issues/1395)). Each window is shrunk to fit and centred on a black frame of the first window's size, so its text keeps its shape.
+
 - A desktop run whose click closes the app's last window, such as confirming a quit dialog, records that click as a step that changed the app, then tells Jev every window is closed and which action closed the last one ([#1405](https://github.com/agent-labs-dev/fastbrowse/issues/1405)). The step used to fail on a missing window and leave a closed app behind a run that reported nothing about it. A recording's end card now draws the outcome in green only for a complete run, and in red for any other status.
 
 - `--desktop` says that it drives an app through its accessibility tree, in `--help`, in the docs and in the error a run ends on when its app exposes none ([#1400](https://github.com/agent-labs-dev/fastbrowse/issues/1400)). A terminal such as kitty ended at step 0 on deskpilot's message about Chromium flags, which read as if a variable would fix it. The error now names the app and says a desktop run cannot drive it as it runs now, then quotes deskpilot.

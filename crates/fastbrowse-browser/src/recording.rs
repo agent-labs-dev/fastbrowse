@@ -89,7 +89,7 @@ pub struct FrameFeed {
 }
 
 impl FrameFeed {
-    /// Show `frame`, a PNG or JPEG, from now until the next one. The caller holds back a frame that may show a secret.
+    /// Show `frame`, a PNG or JPEG, from now until the next one. A recording fed PNGs keeps its first frame's size. The caller holds back a frame that may show a secret.
     pub fn show(&self, frame: Vec<u8>) {
         let mut frames = self.frames.lock().unwrap();
         frames.frame_at = Some(Instant::now());
@@ -100,6 +100,70 @@ impl FrameFeed {
     pub fn mark(&self, mark: PointerMark) {
         self.marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(mark);
     }
+}
+
+/// The lossless ffmpeg pass every frame is written to. A fed recording starts it at its first frame and fits each
+/// later frame inside that frame's size: a desktop run films windows of different sizes, and ffmpeg stretches every
+/// frame of a pipe to the size of its first.
+struct Pass {
+    ffmpeg_path: PathBuf,
+    output: PathBuf,
+    /// A fed recording that has not yet had a frame, so ffmpeg is not started.
+    waiting: bool,
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+}
+
+impl Pass {
+    /// Start ffmpeg, fitting each frame inside `size` when one is given.
+    fn launch(&mut self, size: Option<(u32, u32)>) -> std::io::Result<()> {
+        let mut command = Command::new(&self.ffmpeg_path);
+        command.args(["-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", &FPS.to_string(), "-i", "-"]);
+        if let Some((width, height)) = size {
+            // Shrunk to fit and never enlarged, so a smaller window keeps its own pixels, centred on a black frame.
+            command.args([
+                "-vf",
+                &format!(
+                    "scale=w='min(iw,{width})':h='min(ih,{height})':force_original_aspect_ratio=decrease,\
+                     pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+                ),
+            ]);
+        }
+        let mut child = command
+            // Lossless, so the captioning pass is the only lossy encode; 4:4:4 also takes the odd sizes a tab has.
+            .args(["-c:v", "libx264", "-qp", "0", "-preset", "ultrafast", "-pix_fmt", "yuv444p"])
+            .arg(&self.output)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+        self.stdin = child.stdin.take();
+        self.child = Some(child);
+        Ok(())
+    }
+
+    /// Write one frame, starting a fed recording's ffmpeg at its first; false once ffmpeg cannot take it.
+    async fn write(&mut self, frame: &[u8]) -> bool {
+        if std::mem::take(&mut self.waiting)
+            && let Err(error) = self.launch(png_size(frame))
+        {
+            warn(&format!("could not start ffmpeg: {}", error.kind()));
+            return false;
+        }
+        let Some(stdin) = self.stdin.as_mut() else { return false };
+        stdin.write_all(frame).await.is_ok() && stdin.flush().await.is_ok()
+    }
+}
+
+/// The width and height in a PNG's header, or None for any other image, which ffmpeg then encodes at its own size.
+fn png_size(image: &[u8]) -> Option<(u32, u32)> {
+    let header = image.get(..24)?;
+    if header[..8] != *b"\x89PNG\r\n\x1a\n" || header[12..16] != *b"IHDR" {
+        return None;
+    }
+    let number = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
+    Some((number(16), number(20)))
 }
 
 /// What the closing card of a fed recording shows, drawn over its last frame when it is encoded: there is no tab to
@@ -117,8 +181,7 @@ pub struct Recording {
     path: PathBuf,
     ffmpeg_path: PathBuf,
     scratch: PathBuf,
-    ffmpeg: Option<Child>,
-    stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>,
+    pass: Arc<tokio::sync::Mutex<Pass>>,
     frames: Arc<Mutex<Frames>>,
     ticker: Option<JoinHandle<()>>,
     started: Instant,
@@ -192,32 +255,29 @@ impl Recording {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let uncaptioned = scratch.join("uncaptioned.mkv");
-        let mut ffmpeg = Command::new(&ffmpeg_path)
-            .args(["-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", &FPS.to_string(), "-i", "-"])
-            // Lossless, so the captioning pass is the only lossy encode; 4:4:4 also takes the odd sizes a tab has.
-            .args(["-c:v", "libx264", "-qp", "0", "-preset", "ultrafast", "-pix_fmt", "yuv444p"])
-            .arg(&uncaptioned)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
+        let mut pass = Pass {
+            ffmpeg_path: ffmpeg_path.clone(),
+            output: scratch.join("uncaptioned.mkv"),
+            waiting: session.is_none(),
+            child: None,
+            stdin: None,
+        };
+        if session.is_some() {
+            pass.launch(None).map_err(|e| {
                 let _ = std::fs::remove_dir_all(&scratch);
                 RecordingError(format!("could not start ffmpeg: {}", e.kind()))
             })?;
-        let stdin = Arc::new(tokio::sync::Mutex::new(ffmpeg.stdin.take()));
+        }
+        let pass = Arc::new(tokio::sync::Mutex::new(pass));
         let frames = Arc::new(Mutex::new(Frames::default()));
         let started = Instant::now();
-        let ticker = tokio::spawn(tick(session.clone(), frames.clone(), stdin.clone()));
+        let ticker = tokio::spawn(tick(session.clone(), frames.clone(), pass.clone()));
         Ok(Self {
             session,
             path: path.to_owned(),
             ffmpeg_path,
             scratch,
-            ffmpeg: Some(ffmpeg),
-            stdin,
+            pass,
             frames,
             ticker: Some(ticker),
             started,
@@ -322,8 +382,7 @@ impl Recording {
     }
 
     async fn close(&mut self) {
-        let Some(mut ffmpeg) = self.ffmpeg.take() else { return };
-        let Some(mut stdin) = self.stdin.lock().await.take() else { return };
+        let mut pass = self.pass.lock().await;
         // Chrome can acknowledge a cast and then send nothing, and a short run, an attached one with no result card,
         // ends before the cast is restarted: the video is then one still of the tab rather than nothing at all.
         let (first, held) = {
@@ -337,18 +396,23 @@ impl Recording {
                 None => self.still().await,
             };
             if let Some(frame) = frame
-                && stdin.write_all(&frame).await.is_ok()
+                && pass.write(&frame).await
             {
                 first = Some(Instant::now());
             }
         }
+        let (child, stdin) = (pass.child.take(), pass.stdin.take());
+        drop(pass);
         let Some(first) = first else {
-            let _ = ffmpeg.start_kill();
-            let _ = ffmpeg.wait().await;
+            if let Some(mut ffmpeg) = child {
+                let _ = ffmpeg.start_kill();
+                let _ = ffmpeg.wait().await;
+            }
             let source = if self.session.is_some() { "the browser sent" } else { "the run took" };
             warn(&format!("{source} no frames, so nothing was recorded to {}", self.path.display()));
             return;
         };
+        let Some(ffmpeg) = child else { return };
         drop(stdin);
         match ffmpeg.wait_with_output().await {
             Ok(done) if done.status.success() => {}
@@ -571,7 +635,7 @@ fn encode_args(filter: &str, output: &str) -> Vec<String> {
 async fn tick(
     session: Option<BrowserSession>,
     frames: Arc<Mutex<Frames>>,
-    stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>,
+    pass: Arc<tokio::sync::Mutex<Pass>>,
 ) {
     let mut written: u32 = 0;
     loop {
@@ -590,9 +654,7 @@ async fn tick(
         }
         let frame = frames.lock().unwrap().frame.clone();
         if let Some(frame) = frame {
-            let mut stdin = stdin.lock().await;
-            let Some(pipe) = stdin.as_mut() else { return };
-            if pipe.write_all(&frame).await.is_err() || pipe.flush().await.is_err() {
+            if !pass.lock().await.write(&frame).await {
                 return;
             }
             let mut frames = frames.lock().unwrap();
