@@ -195,7 +195,15 @@ pub struct HistoryEntry {
     /// The form or field group the step's target belongs to, as the page reports it: a commit sends the fields of its
     /// own form, and no others.
     #[serde(skip)]
-    pub form: Option<String>,
+    pub form: Option<Form>,
+}
+
+/// The scope of a form or field group. A local form id can be reused in other frames or documents.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Form {
+    pub(crate) document: String,
+    pub(crate) frame: Option<String>,
+    pub(crate) id: String,
 }
 
 /// A commit a step sent, and whether the run saw the page take it.
@@ -670,11 +678,11 @@ pub async fn decide(
             drop_a_picture(context.to_mut());
             continue;
         }
-        if fits(&request, config) {
+        if step_room(&request, config) >= 0 {
             // Jev counts every picture's tokens, for each place it is used, on top of the text: a step whose text fits
             // but whose pictures do not was sent anyway and refused with `max_tokens_exceeded` (#1303). The oldest
             // card goes first, as for the body limit, until the first request sent fits.
-            if !pictures_fit(&request, config) {
+            if shows_pictures(&context) && !pictures_fit(&request, config) {
                 drop_a_picture(context.to_mut());
                 continue;
             }
@@ -753,8 +761,7 @@ impl Fitting<'_> {
     /// How many characters the request's state runs over Jev's limit; zero or less when it fits.
     fn excess(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> i64 {
         let request = build_request(observation, controls, context, self.config, self.options);
-        let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-        text::len(&dumps(&request.state)) as i64 - self.config.tokens.input_chars(&written)
+        -step_room(&request, self.config)
     }
 
     fn fits(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> bool {
@@ -1378,21 +1385,34 @@ const LONG_CONTEXT_BYTES: usize = 32_000;
 
 /// Whether the request's text fits Jev's input limit; its pictures are counted by `pictures_fit`.
 pub fn fits(request: &Request, config: &Config) -> bool {
-    room(&request.state, &request.questions, config) >= 0
+    room(text::len(&dumps(&request.state)) as i64, &request.questions, config) >= 0
+}
+
+/// Room in the tightest text request, including the target choices Jev may ask after choosing a group.
+fn step_room(request: &Request, config: &Config) -> i64 {
+    let state_chars = text::len(&dumps(&request.state)) as i64;
+    let initial = room(state_chars, &request.questions, config);
+    request.groups.iter().fold(initial, |room_left, (&operation, groups)| {
+        groups.iter().fold(room_left, |room_left, group| {
+            room_left.min(room(state_chars, &group_target_question(request, operation, group), config))
+        })
+    })
 }
 
 /// Whether the request, and each target question asked after a group is chosen, fits Jev's input limit with the tokens
 /// of every picture it refers to, once for each use. A group's question shows its members' cards, which the first
 /// request does not.
 fn pictures_fit(request: &Request, config: &Config) -> bool {
+    let state = request.state.to_string();
+    let state_chars = text::len(&dumps(&request.state)) as i64;
     let asked = |questions: &IndexMap<String, Question>| {
-        let written = format!("{}{}", request.state, serde_json::to_string(questions).unwrap_or_default());
+        let written = format!("{state}{}", serde_json::to_string(questions).unwrap_or_default());
         let tokens: i64 = request
             .images
             .iter()
             .map(|(key, png)| written.matches(key.as_str()).count() as i64 * jev_image_tokens(png))
             .sum();
-        room(&request.state, questions, config) >= config.tokens.decision_chars_of(tokens)
+        room(state_chars, questions, config) >= config.tokens.decision_chars_of(tokens)
     };
     asked(&request.questions)
         && request.groups.iter().all(|(&operation, groups)| {
@@ -1401,9 +1421,9 @@ fn pictures_fit(request: &Request, config: &Config) -> bool {
 }
 
 /// The characters of Jev's input limit `state` leaves unused beside `questions`.
-fn room(state: &Value, questions: &IndexMap<String, Question>, config: &Config) -> i64 {
+fn room(state_chars: i64, questions: &IndexMap<String, Question>, config: &Config) -> i64 {
     let written: Vec<String> = questions.values().map(Dump::dump_json).collect();
-    config.tokens.input_chars(&written) - text::len(&dumps(state)) as i64
+    config.tokens.input_chars(&written) - state_chars
 }
 
 /// The question that picks a target from `group` once Jev has chosen it for `operation`.

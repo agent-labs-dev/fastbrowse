@@ -9759,14 +9759,15 @@ fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
 /// reports, is not one it sent, and stays among the changed fields.
 #[test]
 fn test_a_run_that_ends_unfinished_names_its_commits_apart_from_unsent_fields() {
+    let scoped = |id: &str| crate::policy::Form { document: "comments".into(), frame: None, id: id.into() };
     let filled = |target: &str, text: &str, form: Option<&str>| HistoryEntry {
         text: Some(text.into()),
-        form: form.map(str::to_string),
+        form: form.map(scoped),
         ..HistoryEntry::new(Some(Operation::Fill), Some(target), StepOutcome::Executed, true)
     };
     let posted = |form: &str| HistoryEntry {
         commit: Some(crate::policy::Commit::Taken),
-        form: Some(form.into()),
+        form: Some(scoped(form)),
         ..HistoryEntry::new(Some(Operation::Click), Some("Post"), StepOutcome::Executed, true)
     };
     let history = vec![

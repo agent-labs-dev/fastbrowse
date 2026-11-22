@@ -26,7 +26,7 @@ use super::state::{
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Commit, Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
+use crate::policy::{Commit, Decision, Form, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -288,6 +288,9 @@ impl Agent {
                 && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed);
             if taken {
                 state.commits += 1;
+            }
+            if observation.dialog.is_none() {
+                state.dialog_form = None;
             }
             if committed
                 && let Some(entry) = state.history.last_mut().filter(|entry| entry.commit == Some(Commit::Sent))
@@ -1259,6 +1262,21 @@ impl Agent {
             }
             act = result;
         }
+        let sent = state.committing && act.outcome == StepOutcome::Executed;
+        let form = if decision.operation == Operation::Dialog && act.outcome == StepOutcome::Executed {
+            state.dialog_form.take().filter(|_| sent)
+        } else {
+            decision.target.as_ref().and_then(|target| {
+                Some(Form {
+                    document: observation.document_key.clone(),
+                    frame: target.frame_id.clone(),
+                    id: target.form_id.clone()?,
+                })
+            })
+        };
+        if act.outcome == StepOutcome::Executed && observation.dialog.is_none() {
+            state.dialog_form.clone_from(&form);
+        }
         state.history.push(HistoryEntry {
             text: typed,
             effect: effect_now,
@@ -1266,8 +1284,8 @@ impl Agent {
             setting: setting.then_some(true),
             set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
-            commit: (state.committing && act.outcome == StepOutcome::Executed).then_some(Commit::Sent),
-            form: decision.target.as_ref().and_then(|target| target.form_id.clone()),
+            commit: sent.then_some(Commit::Sent),
+            form,
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {

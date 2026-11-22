@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes, address, fact_id};
-use crate::policy::{Decision, HistoryEntry, Look};
+use crate::policy::{Decision, Form, HistoryEntry, Look};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
 use crate::start::KnownPages;
@@ -458,6 +458,8 @@ pub(crate) struct RunState {
     pub fetched: HashSet<String>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
     pub committing: bool,
+    /// A dialog has no target control, so its acceptance needs the form of the action that opened it.
+    pub dialog_form: Option<Form>,
     /// Commits this run has carried out, each counted once the page after it did not fail. A later commit is checked
     /// against the page and the run's own steps, so one the task asks for once is not sent again (#882).
     pub commits: usize,
@@ -808,6 +810,7 @@ impl RunState {
             changed_page: None,
             unchanged: 0,
             committing: false,
+            dialog_form: None,
             commits: 0,
             redecided: false,
             last_page: None,
@@ -905,6 +908,7 @@ impl RunState {
             pager_followed: HashSet::new(),
             fetched: HashSet::new(),
             committing: false,
+            dialog_form: None,
             commits: 0,
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),

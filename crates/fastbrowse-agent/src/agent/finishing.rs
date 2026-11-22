@@ -607,13 +607,14 @@ pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports w
 /// form, or one no form is reported for, stays among the changed fields. None when no step changed a field or committed.
 pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
     // Each field's latest value, with the form it is in and the step that left it.
-    let mut changed: IndexMap<&str, (Option<&str>, usize, String)> = IndexMap::new();
+    let mut changed = IndexMap::new();
     let mut committed = Vec::new();
     for (index, entry) in history.iter().enumerate().filter(|(_, entry)| entry.outcome == StepOutcome::Executed) {
-        let form = entry.form.as_deref();
+        let form = entry.form.as_ref();
         let mut put = |field, left| {
-            changed.shift_remove(field);
-            changed.insert(field, (form, index, left));
+            let key = (form, field);
+            changed.shift_remove(&key);
+            changed.insert(key, (index, left));
         };
         match (entry.operation, &entry.text, entry.target.as_deref()) {
             (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => put(target, text::repr(text)),
@@ -626,7 +627,7 @@ pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<
             (None, _) => "a step".to_string(),
         };
         let mut entered = Vec::new();
-        changed.retain(|field, (from, by, left)| {
+        changed.retain(|(from, field), (by, left)| {
             let sent = *by == index || form.is_some() && *from == form;
             if sent {
                 entered.push(format!("{field}: {left}"));
@@ -644,7 +645,7 @@ pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<
     }
     let committed = (!committed.is_empty()).then(|| format!("{COMMITTED}\n{}", committed.join("\n")));
     let changed = (!changed.is_empty()).then(|| {
-        let lines: Vec<String> = changed.iter().map(|(field, (_, _, left))| format!("- {field}: {left}")).collect();
+        let lines: Vec<String> = changed.iter().map(|((_, field), (_, left))| format!("- {field}: {left}")).collect();
         format!("{CHANGED}\n{}", lines.join("\n"))
     });
     match (committed, changed) {

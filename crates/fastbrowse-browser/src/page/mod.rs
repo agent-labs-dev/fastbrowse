@@ -482,12 +482,13 @@ fn add_control(
         None => frame.frame_id.clone(),
     };
     control_state.insert(control_id.clone(), (frame.session_id.clone(), frame_key.to_owned(), c.id, guard));
-    control_from_raw(control_id, fid, c, retarget)
+    control_from_raw(control_id, fid, &frame.raw.document_key, c, retarget)
 }
 
 fn control_from_raw(
     control_id: String,
     frame_id: Option<String>,
+    document_key: &str,
     c: &SnapshotControl,
     retarget: Option<String>,
 ) -> Control {
@@ -495,7 +496,8 @@ fn control_from_raw(
         id: control_id,
         frame_id,
         frame_origin: c.frame_origin.clone(),
-        form_id: c.form_id.clone(),
+        // An iframe can navigate and reuse its local form ids while the top-level document stays put.
+        form_id: c.form_id.as_ref().map(|id| format!("{document_key}:{id}")),
         retarget_key: retarget,
         role: c.role.clone(),
         label: c.label.clone(),
