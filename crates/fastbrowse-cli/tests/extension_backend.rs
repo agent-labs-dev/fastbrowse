@@ -85,11 +85,20 @@ impl Browser {
         let hosts = std::env::temp_dir().join(format!("fbx-{}", std::process::id()));
         let manifests = profile.join("NativeMessagingHosts");
         std::fs::create_dir_all(&manifests).expect("profile");
+        // The host serves only when registered, so the registry lists the binary under test.
+        let registry = root.join("registry");
+        std::fs::create_dir_all(&registry).expect("registry");
+        std::fs::write(
+            registry.join("installs.json"),
+            json!([{"path": env!("CARGO_BIN_EXE_fastbrowse"), "version": env!("CARGO_PKG_VERSION")}]).to_string(),
+        )
+        .expect("registry file");
         let launcher = root.join("host.sh");
         std::fs::write(
             &launcher,
             format!(
-                "#!/bin/sh\nFASTBROWSE_EXTENSION_DIR='{}' exec '{}' native-host \"$@\" 2>>'{}'\n",
+                "#!/bin/sh\nFASTBROWSE_HOST_DIR='{}' FASTBROWSE_EXTENSION_DIR='{}' exec '{}' native-host \"$@\" 2>>'{}'\n",
+                registry.display(),
                 hosts.display(),
                 env!("CARGO_BIN_EXE_fastbrowse"),
                 root.join("host.err").display()
