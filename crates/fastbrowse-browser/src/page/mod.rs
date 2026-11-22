@@ -23,8 +23,8 @@ use fastbrowse_core::models::{Artifact, ArtifactKind, Held, Link, Operation, Sou
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::json as json_document;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, Media, Observation,
-    Page, PageResult,
+    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, FillReceiver, Media,
+    Observation, Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
@@ -416,7 +416,7 @@ pub(crate) struct PageState {
     pub(crate) held_link: Option<String>,
     /// For the fill just made: the editable that held focus as its text was inserted, named as the observation names
     /// a control. Taken by `act` once the fill is done.
-    pub(crate) fill_receiver: Option<String>,
+    pub(crate) fill_receiver: Option<FillReceiver>,
 }
 
 pub struct CdpPage {
@@ -1198,8 +1198,6 @@ impl CdpPage {
         let mut coverage: Vec<(String, usize)> = vec![];
         let main = frames.iter().find(|(k, _)| k == MAIN).map(|(_, f)| f);
         let title = main.map(|m| m.raw.title.clone()).unwrap_or_default();
-        // An observation names its document by the main frame's key, so a control's document is that one.
-        let document_key = main.map(|m| m.raw.document_key.clone());
         let url = match main {
             Some(main) => main.raw.url.clone(),
             None => self.origin_once().await?,
@@ -1279,7 +1277,7 @@ impl CdpPage {
                             document: None,
                             held: Vec::new(),
                         });
-                        control.document = document_key.clone();
+                        control.document = Some(frame.raw.document_key.clone());
                         control.held = block.held.iter().filter_map(|index| held.get(*index).cloned()).collect();
                         Some(control)
                     },

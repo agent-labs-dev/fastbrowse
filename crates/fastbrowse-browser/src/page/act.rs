@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use data_encoding::BASE64;
 use fastbrowse_core::keys;
 use fastbrowse_core::models::{Attachment, Operation, StepFailure, StepOutcome};
-use fastbrowse_core::page::{ActResult, Action, NATIVE_DATE_INPUT_TYPES, Observation};
+use fastbrowse_core::page::{ActResult, Action, FillReceiver, NATIVE_DATE_INPUT_TYPES, Observation};
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
@@ -1289,16 +1289,17 @@ impl CdpPage {
     /// goes to, which a page that hands focus to another editor makes a different one from the field asked for. It
     /// is looked for through shadow roots and same-origin frames, whose elements the capture numbers in this
     /// document's registry. None when focus is in no such editable, or the page cannot be asked.
-    async fn focused_editable(&self, target: &Target) -> Option<String> {
+    async fn focused_editable(&self, target: &Target) -> Option<FillReceiver> {
         let script = "(() => { let e = document.activeElement; \
              for (let inner = null; (inner = e?.shadowRoot?.activeElement ?? \
                  (['IFRAME', 'FRAME'].includes(e?.tagName) ? e.contentDocument?.activeElement : null)); ) e = inner; \
              const registry = window.__fastbrowse; \
              if (!registry || !e || !(e.isContentEditable || ['INPUT', 'TEXTAREA'].includes(e.tagName))) return null; \
              if (!registry.ids.has(e)) registry.ids.set(e, registry.next++); \
-             return registry.ids.get(e); })()";
-        let id = self.evaluate(&target.0, script).await.ok()?.as_i64()?;
-        Some(format!("{}:{id}", target.1))
+             return [registry.ids.get(e), String(performance.timeOrigin)]; })()";
+        let result = self.evaluate(&target.0, script).await.ok()?;
+        let [id, document] = result.as_array()?.as_slice() else { return None };
+        Some(FillReceiver { element: format!("{}:{}", target.1, id.as_i64()?), document: document.as_str()?.into() })
     }
 
     /// Commit an ISO value to a native date/time input the way its own picker would.
@@ -1315,15 +1316,16 @@ impl CdpPage {
              setter.call(e, value); \
              e.dispatchEvent(new Event('input', {{bubbles: true}})); \
              e.dispatchEvent(new Event('change', {{bubbles: true}})); \
-             return e.value === value; }})({local_id}, {})",
+             return e.value === value ? String(performance.timeOrigin) : false; }})({local_id}, {})",
             py_json(&json!(value))
         );
         let result = self.session.input_window(session_id, self.evaluate(session_id, &script)).await?;
         Ok(match result {
             Value::Null => (StepOutcome::Stale, Some("target disconnected".into()), Some(StepFailure::TargetGone)),
-            Value::Bool(true) => {
+            Value::String(document) => {
                 // The value was set on this field directly, so it is the one that took it.
-                self.state.lock().unwrap().fill_receiver = Some(format!("{}:{local_id}", target.1));
+                self.state.lock().unwrap().fill_receiver =
+                    Some(FillReceiver { element: format!("{}:{local_id}", target.1), document });
                 (StepOutcome::Executed, None, None)
             }
             _ => (

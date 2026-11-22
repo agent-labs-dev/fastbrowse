@@ -615,7 +615,13 @@ pub struct ActResult {
     /// to another editor. None when the browser reported no such control, so nothing is claimed about where it went.
     /// The run's own bookkeeping, held in process: never part of the protocol, so never written or read.
     #[serde(skip)]
-    pub landed: Option<String>,
+    pub landed: Option<FillReceiver>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FillReceiver {
+    pub element: String,
+    pub document: String,
 }
 
 pub type PageResult<T> = Result<T, BrowserError>;

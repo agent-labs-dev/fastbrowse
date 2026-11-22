@@ -1482,7 +1482,7 @@ async fn a_fill_reports_the_field_the_capture_names() {
         ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
     };
     let result = h.page.act(&act, &observed).await.expect("fill");
-    assert_eq!(result.landed.as_deref(), Some(notes.id.as_str()));
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(notes.id.as_str()));
     let capture = h.page.capture().await.expect("capture");
     let block =
         capture.blocks.iter().find(|b| capture.block_text(b) == "Notes: typed words").expect("typed field block");
@@ -1529,7 +1529,7 @@ async fn a_fill_reports_the_field_that_took_the_text_not_the_one_focus_moved_to(
         ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
     };
     let result = h.page.act(&act, &observed).await.expect("fill");
-    assert_eq!(result.landed.as_deref(), Some(notes.id.as_str()));
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(notes.id.as_str()));
     h.close().await;
 }
 
@@ -1564,7 +1564,7 @@ async fn a_fill_in_a_same_origin_frame_reports_the_field_inside_it() {
         ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
     };
     let result = h.page.act(&act, &observed).await.expect("fill");
-    assert_eq!(result.landed.as_deref(), Some(notes.id.as_str()));
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(notes.id.as_str()));
     h.close().await;
 }
 
@@ -1584,12 +1584,12 @@ async fn a_fill_into_a_contenteditable_reports_the_host_the_capture_names() {
         ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
     };
     let result = h.page.act(&act, &observed).await.expect("fill");
-    assert_eq!(result.landed.as_deref(), Some(report.id.as_str()));
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(report.id.as_str()));
     let capture = h.page.capture().await.expect("capture");
     let block = capture.blocks.iter().find(|b| capture.block_text(b) == "typed words").expect("host block");
     let control = block.control_context.as_ref().expect("control");
     assert_eq!(control.held.len(), 1);
-    assert_eq!(Some(&control.held[0].element), result.landed.as_ref());
+    assert_eq!(Some(&control.held[0].element), result.landed.as_ref().map(|receiver| &receiver.element));
     assert_eq!(control.document.as_deref(), Some(observed.document_key.as_str()));
     assert_eq!(&*control.held[0].value, "typed words");
     h.close().await;
@@ -1670,6 +1670,6 @@ async fn a_native_date_fill_reports_the_field() {
         ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
     };
     let result = h.page.act(&act, &observed).await.expect("fill");
-    assert_eq!(result.landed.as_deref(), Some(day.id.as_str()));
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(day.id.as_str()));
     h.close().await;
 }

@@ -5965,7 +5965,7 @@ fn test_a_synthesis_read_reports_the_source_material_it_kept() {
 /// reports that the blur changed nothing, as this page does.
 struct LeavingPage {
     /// The control a fill reports its text landed in.
-    landed: Option<String>,
+    landed: Option<fastbrowse_core::page::FillReceiver>,
     expected: Operation,
     now: std::sync::Mutex<Observation>,
     left: Observation,
@@ -10725,9 +10725,10 @@ async fn a_text_task_concluded_with_no_answer_is_not_complete() {
 /// the typing ended, or None when it reported none.
 async fn typed_run(landed: Option<&str>) -> RunState {
     let page = LeavingPage {
-        landed: landed.map(str::to_string),
+        landed: landed
+            .map(|element| fastbrowse_core::page::FillReceiver { element: element.into(), document: "doc-1".into() }),
         expected: Operation::Fill,
-        now: std::sync::Mutex::new(Observation { document_key: "doc-1".into(), ..observation(&[field("Date")]) }),
+        now: std::sync::Mutex::new(Observation { document_key: "parent-doc".into(), ..observation(&[field("Date")]) }),
         left: observation(&[Control { value: Some("2026-11-04".into()), ..field("Date") }]),
     };
     let agent = Agent::new(Arc::new(page), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
