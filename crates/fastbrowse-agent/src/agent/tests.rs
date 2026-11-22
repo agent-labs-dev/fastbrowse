@@ -15,7 +15,8 @@ use fastbrowse_core::models::{
     Event, EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
-    ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Media, Observation, Page, PageResult,
+    ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Failure, Media, Observation, Page,
+    PageResult, Unread,
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -536,7 +537,11 @@ fn test_a_run_carried_on_keeps_what_it_learned_and_no_action_in_flight() {
     state.unchanged = 2;
     state.landing = Some(None);
     let browser = Arc::new(Ledger::new(Limits::default()));
+    // A run resumed on the page it had reached has not opened its first page again, so the opening stays as it was.
+    let opening = HistoryEntry::new(Some(Operation::Navigate), Some("https://a.test/"), StepOutcome::Executed, true);
+    state.opened = Some(opening.clone());
     let carried = state.carried_on(browser.clone());
+    assert_eq!(carried.opened, Some(opening));
     assert!(carried.compose && carried.history.len() == 1);
     assert!(carried.unchanged == 0 && carried.landing.is_none());
     assert!(Arc::ptr_eq(&carried.ledger, &browser));
@@ -959,9 +964,10 @@ async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason()
 #[tokio::test]
 async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
     for max_jev_calls in [None, Some(0)] {
-        for failure in
-            [BrowserError::NavigationTimeout("timed out".into()), BrowserError::SiteUnreachable("offline".into())]
-        {
+        for failure in [
+            BrowserError::NavigationTimeout(Failure::new("Page.navigate/TimeoutError", "timed out")),
+            BrowserError::SiteUnreachable(Failure::new("Page.navigate/net::ERR_CONNECTION_REFUSED", "offline")),
+        ] {
             let agent = Agent::new(
                 Arc::new(Unfetchable { failure: Some(failure.clone()), ..Default::default() }),
                 Arc::new(ScriptedJev::new(Vec::new())),
@@ -979,8 +985,8 @@ async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
             assert_eq!(
                 result.failure_kind.as_deref(),
                 Some(match failure {
-                    BrowserError::NavigationTimeout(_) => "NavigationTimeout",
-                    BrowserError::SiteUnreachable(_) => "SiteUnreachable",
+                    BrowserError::NavigationTimeout(_) => "NavigationTimeout/Page.navigate/TimeoutError",
+                    BrowserError::SiteUnreachable(_) => "SiteUnreachable/Page.navigate/net::ERR_CONNECTION_REFUSED",
                     _ => unreachable!(),
                 })
             );
@@ -1047,7 +1053,7 @@ fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
     code.autocomplete = Some("one-time-code".into());
     let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
     password.input_type = Some("password".into());
-    let stop = |status: Status, wall: Option<WallKind>| Stop { wall, ..Stop::new(status, "stopped") };
+    let stop = |status: Status, wall: Option<WallKind>| Stop { wall, ..Stop::new(status, "test/stopped", "stopped") };
     for (controls, status, hint, expected) in [
         (vec![code.clone()], Status::NeedsLogin, None, Some(WallKind::OneTimeCode)),
         (vec![code.clone(), password.clone()], Status::NeedsLogin, None, Some(WallKind::Password)),
@@ -1260,7 +1266,8 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
 
 // -- The one rule for an action that may commit ------------------------------------------------------------------
 
-/// A Jev that answers `irreversible` and `requested` as given, finds no condition in the task, and counts its calls.
+/// A Jev that answers `irreversible` and `requested` as given, finds no condition in the task, judges a drafted answer
+/// to cover the task as asked, and counts its calls.
 struct Gatekeeper {
     irreversible: f64,
     requested: f64,
@@ -1287,6 +1294,7 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
                     "requested" => self.requested,
                     "lasting" => self.lasting,
                     "conditional" => 0.0,
+                    "coverage" | "exact" => 1.0,
                     "edits" => {
                         self.edits_asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         let answer = ChoiceAnswer {
@@ -1896,7 +1904,8 @@ impl Page for FinishPage {
     }
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
-        unreachable!("the finish-path test does not capture")
+        // A schema run's extraction captures the page it ends on: the one `composition_repair_state` read, unchanged.
+        Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Record B: 34")])) })
     }
 
     fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
@@ -1908,7 +1917,7 @@ impl Page for FinishPage {
     }
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
-        unreachable!("the finish-path test does not take a screenshot")
+        Box::pin(async { Ok(png(8, 8)) })
     }
 
     fn withhold_frames(&self, _: bool) {}
@@ -2053,7 +2062,7 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     }
     // #937: what was read is still the answer, but it does not stand as the task done.
     let ledger = state.ledger.clone();
-    let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger).await;
+    let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger, None).await;
     let answer = stopped.answer.expect("what was read is answered");
     assert!(
         answer.contains("Sign in, enter the code the Phone page shows, then tell me your account email.")
@@ -2128,6 +2137,137 @@ async fn test_a_done_after_a_step_that_was_not_carried_out_checks_the_task_steps
     );
 }
 
+/// The opening of the first page is recorded before any secret is typed, so a value typed as a secret later, such as a
+/// reset token the start address carries, was not yet known to be one when it was recorded. The done check masks it.
+#[tokio::test]
+async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opened_address() {
+    const TOKEN: &str = "s3cr3t-reset-token";
+    let start = format!("https://example.test/reset?token={TOKEN}");
+    let mut state = run_state();
+    state.task = "Open the reset link and set a new password.".into();
+    state.opened = Some(HistoryEntry {
+        effect: Some(format!("went to {start}")),
+        ..HistoryEntry::new(Some(Operation::Navigate), Some(&start), StepOutcome::Executed, true)
+    });
+    state.history.push(HistoryEntry::new(Some(Operation::Click), Some("Save"), StepOutcome::Executed, true));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("reset_token", TOKEN, Some("https://example.test"));
+
+    agent.actions_done(&mut state, &observation(&[])).await.expect("the done check answers");
+    let sent = jev.3.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert!(!sent[0].to_string().contains(TOKEN), "{}", sent[0]);
+    let opened = &sent[0]["recent_actions"][0];
+    assert_eq!(opened["operation"], "navigate");
+    assert!(opened["target"].as_str().is_some_and(|target| target.starts_with("https://example.test/reset?token=")));
+}
+
+/// Answers the opening at `landed` whatever address it was sent to, as a server that redirects does, and shows a page
+/// with nothing on it to act on, so a run's first decision is DONE.
+struct Redirecting {
+    landed: &'static str,
+    navigated: Mutex<Vec<String>>,
+}
+
+impl Page for Redirecting {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let observation = Observation { url: self.landed.into(), ..observation(&[]) };
+        Box::pin(async move { Ok(observation) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, url: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.navigated.lock().unwrap().push(url.to_string());
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        let page = capture(&[(BlockKind::Paragraph, "Welcome")]);
+        Box::pin(async move { Ok(page) })
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("the page offers nothing to act on")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::NeedsBrowser("no pixels".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        let landed = self.landed.to_string();
+        Box::pin(async move { Ok(landed) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+/// The opening the done check is shown is the address the run opened and the one the browser landed on, which a
+/// redirect makes two. A run fetched over HTTP that needed a browser is resumed with no page open, and opens its
+/// first page again in the browser: that opening is the one shown, not one the run held from before.
+#[tokio::test]
+async fn test_the_done_check_is_shown_where_the_opening_landed_and_the_browser_reopening_after_a_fetch() {
+    const START: &str = "https://example.test/old";
+    const LANDED: &str = "https://example.test/new";
+    let fetch =
+        Agent::new(Arc::new(Unfetchable::default()), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let options = super::RunOptions { start: Some(START.into()), ..Default::default() };
+    let _ = fetch.run("Open the page and tell me what it says", options).await;
+    let Some(super::Resume { state: mut fetched, url: None }) = fetch.resume() else {
+        panic!("a fetch that needs a browser hands the run on with no page open")
+    };
+    assert_eq!(fetched.opened, None, "nothing opened over HTTP");
+    // Held from before, an opening would be stale once the browser opens the page itself.
+    fetched.opened = Some(HistoryEntry::new(Some(Operation::Navigate), Some("stale"), StepOutcome::Executed, true));
+    // Judged by the fetch's scripted Jev; judged again here, the task reads as the run opened with a redirect does.
+    fetched.output_intent = super::state::OutputIntent::Unknown;
+    fetched.output_answers = None;
+    for (case, resume) in [
+        ("a run opened with a redirect", None),
+        ("a run resumed in the browser after a fetch", Some(super::Resume { state: fetched, url: None })),
+    ] {
+        let page = Arc::new(Redirecting { landed: LANDED, navigated: Mutex::default() });
+        // No to every other yes-or-no question, such as whether the page is a bot check.
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 0.0, "done"));
+        let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
+        let start = resume.is_none().then(|| START.to_string());
+        let options = super::RunOptions { start, resume, ..Default::default() };
+        let _ = agent.run("Open the page and tell me what it says", options).await;
+        assert_eq!(page.navigated.lock().unwrap().first().map(String::as_str), Some(START), "{case}");
+        let sent = jev.3.lock().unwrap();
+        let opened = sent
+            .iter()
+            .find_map(|state| state["recent_actions"].get(0).filter(|entry| entry["operation"] == "navigate"))
+            .unwrap_or_else(|| panic!("{case}: no done check was shown the opening: {sent:?}"));
+        assert_eq!(opened["target"], START, "{case}");
+        assert_eq!(opened["effect"], format!("went to {LANDED}"), "{case}");
+    }
+}
+
 /// Asked to add a variant the page showed out of stock, the done check rightly found the step undone, and every DONE
 /// was turned back until recovery ran out, so a correct answer ended `stuck` (#779). A step the site refuses ends the
 /// run with its answer, unverified.
@@ -2148,6 +2288,7 @@ async fn test_a_done_whose_remaining_step_the_site_refuses_ends_unverified_with_
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await.expect("finish").expect("a result");
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/refused"));
     assert!(result.answer.is_some());
     assert!(result.error.as_deref().is_some_and(|error| error.contains("does not allow")), "{:?}", result.error);
     assert_eq!(state.recoveries, 0);
@@ -2172,6 +2313,49 @@ async fn test_the_done_check_asks_no_choice() {
             assert!(jev.4.lock().unwrap().is_empty());
         }
     }
+}
+
+/// A screenshot the task asks for is code's to attach, so the done check is told so whenever code attaches one: not
+/// told, Jev held "Include a screenshot of the release page." a step never carried out, and the run ended stuck.
+#[tokio::test]
+async fn test_the_done_check_is_told_the_run_attaches_its_screenshot() {
+    let page = observation(&[]);
+    for (intent, told) in [
+        (super::state::OutputIntent::TextAndImage, true),
+        (super::state::OutputIntent::Image, true),
+        (super::state::OutputIntent::Text, false),
+        (super::state::OutputIntent::CarriedOut, false),
+    ] {
+        let mut state = run_state();
+        state.task =
+            "Open the latest release and tell me its version. Include a screenshot of the release page.".into();
+        state.output_intent = intent;
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+        agent.actions_done(&mut state, &page).await.unwrap();
+        let asked = jev.5.lock().unwrap();
+        let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
+        assert_eq!(
+            carried.contains(&format!("been carried out? {}", crate::retrieval::SCREENSHOT_PICTURED)),
+            told,
+            "{intent:?}: {carried}"
+        );
+    }
+}
+
+/// A run over HTTP has no rendered page to picture, so its done check is not told a screenshot comes with the answer.
+#[tokio::test]
+async fn test_the_done_check_over_http_is_not_told_of_a_screenshot() {
+    let page = observation(&[]);
+    let mut state = run_state();
+    state.task = "Open the latest release and tell me its version. Include a screenshot of the release page.".into();
+    state.output_intent = super::state::OutputIntent::Image;
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(Unfetchable::default()), jev.clone(), Arc::new(ScriptedLLM));
+    agent.actions_done(&mut state, &page).await.unwrap();
+    let asked = jev.5.lock().unwrap();
+    let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
+    assert!(!carried.contains(crate::retrieval::SCREENSHOT_PICTURED), "{carried}");
 }
 
 /// The caller's start address is where the run began, before any step, so the done check judges the task without it:
@@ -2436,8 +2620,8 @@ async fn test_a_stopped_task_carried_out_answers_only_with_what_it_read_after_it
         let jev = Arc::new(IntentJev::new(intent));
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let ledger = state.ledger.clone();
-        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
-        let result = agent.stopped(stop, Some(&mut state), &ledger).await;
+        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
+        let result = agent.stopped(stop, Some(&mut state), &ledger, None).await;
         assert_eq!(result.status, Status::Stuck);
         assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the task's output is asked once");
         answers.push(result.answer);
@@ -3286,7 +3470,7 @@ impl Page for Screenshots {
                 std::future::pending::<()>().await;
             }
             if storage.fail {
-                return Err(BrowserError::Failed("private-token /private/path".into()));
+                return Err(BrowserError::failed("test/private", "private-token /private/path"));
             }
             Ok(Some(Artifact {
                 kind: ArtifactKind::Screenshot,
@@ -3461,7 +3645,7 @@ impl LLMClient for ImageLLM {
                 LLMPurpose::ImageRead => json!({"text": "premium 3.459 per gallon"}),
                 _ => json!(null),
             };
-            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
             let cost = CostLine {
                 purpose: Some(purpose),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
@@ -3493,7 +3677,7 @@ impl LLMClient for CoverageComposer {
                 }),
                 _ => json!(null),
             };
-            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -3548,7 +3732,9 @@ impl LLMClient for EmptyImageLLM {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         if purpose == LLMPurpose::RecoveryPages {
-            return Box::pin(async { Err(LLMError::Failed("no route provider".into())) });
+            return Box::pin(async {
+                Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "no route provider"))
+            });
         }
         assert_eq!(serde_json::to_value(purpose).unwrap(), json!("image_read"));
         assert_eq!(schema.name(), "ImageReading");
@@ -3556,9 +3742,9 @@ impl LLMClient for EmptyImageLLM {
         let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             if self.1 && call == 0 {
-                return Err(LLMError::Failed("temporary image read failure".into()));
+                return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "temporary image read failure"));
             }
-            let data = schema.validate_json("{\"text\":null}").map_err(LLMError::Failed)?;
+            let data = schema.validate_json("{\"text\":null}").map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -3580,6 +3766,7 @@ async fn test_a_screenshot_read_checks_coverage_before_complete() {
     *evidence_id.lock().unwrap() = Some(crate::memory::fact_id(state.notes.facts()[0]));
     let result = agent.conclude(&mut state, &page, None).await.expect("conclusion");
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/answer-problem"));
     assert_eq!(result.error.as_deref(), Some("The answer does not establish every requested fact or value."));
 }
 
@@ -3596,7 +3783,7 @@ impl LLMClient for ListingImageLLM {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             assert_eq!(serde_json::to_value(purpose).unwrap(), json!("image_read"));
-            let data = schema.validate_json(&json!({"text": self.0}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"text": self.0}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -3911,7 +4098,7 @@ impl LLMClient for PopulationWriter {
             _ => json!(null),
         };
         Box::pin(async move {
-            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -4001,7 +4188,7 @@ impl DecisionClient for OversizedStartup {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         self.calls.lock().unwrap().push(questions.keys().cloned().collect());
         if questions.contains_key("dates") && questions.len() > 1 {
-            return Box::pin(async { Err(DecisionError::InputTooLarge("provider input limit".into())) });
+            return Box::pin(async { Err(DecisionError::input_too_large("provider input limit")) });
         }
         Box::pin(async move {
             let mut result = self.fallback.evaluate(state, questions).await?;
@@ -4027,7 +4214,7 @@ impl LLMClient for Tomorrow {
         Box::pin(async move {
             let reply = json!({"dates": [{"text": "tomorrow", "year": null, "month": null, "day": null,
                 "weekday": null, "nth": null, "days_from_today": 1, "months_from_now": null}]});
-            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -4113,7 +4300,7 @@ async fn test_text_and_image_cannot_finish_without_text_evidence() {
     state.recoveries = agent.config.stall.max_recoveries;
     let result = agent.finish(&mut state, &observation(&[]), None, None).await;
     assert!(
-        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("Nothing read so far answers")))
+        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Unverified && stop.error.as_deref().is_some_and(|error| error.contains("Nothing read so far answers")))
     );
 }
 
@@ -4163,6 +4350,7 @@ async fn test_required_screenshot_withheld_for_a_fresh_secret_is_unverified() {
     assert_eq!(result.status, Status::Unverified);
     assert!(result.final_frame.is_none());
     assert_eq!(result.error.as_deref(), Some("The requested final screenshot could not be captured."));
+    assert_eq!(result.failure_kind.as_deref(), Some("FinalFrame/uncaptured"));
     let trace = Trace::collecting();
     let agent = agent.with_trace(trace.clone());
     let result = agent.with_changes(result, None);
@@ -4214,7 +4402,7 @@ impl LLMClient for DateWriter {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
-            let data = schema.validate_json(r#"{"value":"2026-11-04"}"#).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(r#"{"value":"2026-11-04"}"#).map_err(LLMError::schema)?;
             let cost = CostLine {
                 purpose: Some(purpose),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
@@ -4439,12 +4627,52 @@ fn test_the_stop_with_several_drawn_surfaces_in_view_names_none() {
 fn test_a_drawn_surface_in_view_is_stated_as_a_fact() {
     let state = run_state();
     let view = Control { drawn: Some(true), ..button("Remote browser view") };
-    let facts = Agent::page_facts(&state, &observation(std::slice::from_ref(&view)));
+    let facts = Agent::page_facts(&state, &observation(std::slice::from_ref(&view)), None);
     assert!(facts.iter().any(|fact| fact.starts_with("An element marked `drawn` is a drawn surface")), "{facts:?}");
     let hidden = Control { offscreen: true, ..view };
-    let facts = Agent::page_facts(&state, &observation(&[hidden, button("Next")]));
+    let facts = Agent::page_facts(&state, &observation(&[hidden, button("Next")]), None);
     assert!(facts.iter().all(|fact| !fact.contains("drawn surface")), "{facts:?}");
     assert_eq!(crate::policy::element(&button("Next")).get("drawn"), None);
+}
+
+/// A page with no controls leads nowhere only when nothing could add one: scripts that never ran, or frames that were
+/// not read, can (#1380). Told the page led nowhere, Jev picked done on a task to follow its link; told the scripts
+/// did not run and a step opens a browser, it picked a wait. A run that cannot open one is told so.
+#[test]
+fn test_a_page_with_unrun_scripts_and_no_controls_is_not_said_to_lead_nowhere() {
+    let state = run_state();
+    let nowhere = "This page offers no links or controls: nothing on it leads anywhere else.";
+    let fact = |unread: Option<Unread>, controls: &[Control]| {
+        let facts = Agent::page_facts(&state, &observation(controls), unread);
+        facts.into_iter().filter(|fact| fact.contains("links or controls")).collect::<Vec<_>>()
+    };
+    let unread = |scripts, frames, browser| Some(Unread { scripts, frames, browser });
+    assert_eq!(
+        fact(unread(true, 0, true), &[]),
+        [
+            "This page was read over HTTP: its markup holds no links or controls, but its scripts did not run. A read takes in only this markup; a wait, scroll or other step on this page opens it in a browser, which runs them."
+        ]
+    );
+    assert_eq!(
+        fact(unread(true, 0, false), &[]),
+        [
+            "This page was read over HTTP: its markup holds no links or controls, but its scripts did not run. This run cannot open a browser, so no step on this page runs them: a read takes in only this markup."
+        ]
+    );
+    assert_eq!(
+        fact(unread(false, 2, true), &[]),
+        [
+            "This page was read over HTTP: its markup holds no links or controls, but 2 frames in it were not read. A read takes in only this markup; a wait, scroll or other step on this page opens it in a browser, which reads them."
+        ]
+    );
+    assert_eq!(
+        fact(unread(true, 1, false), &[]),
+        [
+            "This page was read over HTTP: its markup holds no links or controls, but its scripts did not run and 1 frame in it was not read. This run cannot open a browser, so no step on this page runs its scripts or reads its frames: a read takes in only this markup."
+        ]
+    );
+    assert_eq!(fact(None, &[]), [nowhere]);
+    assert!(fact(unread(true, 1, true), &[button("Next")]).is_empty());
 }
 
 #[tokio::test]
@@ -5331,7 +5559,7 @@ impl LLMClient for WritesRecord {
             }
             let data = schema
                 .validate_json(&json!({"claims": [{"text": [{"prose": self.0}], "evidence_ids": ["e0"]}]}).to_string())
-                .map_err(LLMError::Failed)?;
+                .map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -5351,10 +5579,12 @@ async fn test_rejected_composed_claims_cannot_end_complete() {
     assert!(result.citations.is_empty());
     assert!(result.error.unwrap().contains("unsupported"));
     let ledger = state.ledger.clone();
-    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
-    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
+    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
+    let stopped = agent.stopped(stop, Some(&mut state), &ledger, None).await;
     assert_eq!(stopped.status, Status::Stuck);
     assert_eq!(stopped.error.as_deref(), Some("no_progress (3)"));
+    // The stop's rule is the result's kind, so a stuck run says which rule ended it (#1372).
+    assert_eq!(stopped.failure_kind.as_deref(), Some("Recovery/exhausted"));
     assert!(!stopped.answer.unwrap_or_default().contains("Record A: 99"));
     assert!(!stopped.evidence.is_empty());
 }
@@ -5403,8 +5633,8 @@ async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
         let page = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
         state.notes.add(Fact::read("Record B: 34", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
         let ledger = state.ledger.clone();
-        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
-        agent.stopped(stop, Some(&mut state), &ledger).await
+        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
+        agent.stopped(stop, Some(&mut state), &ledger, None).await
     };
     let text = super::state::OutputIntent::Text;
     let told = stopped(text, None, None).await;
@@ -5433,7 +5663,7 @@ impl LLMClient for Writes {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             let draft = json!({"claims": [{"text": [{"prose": self.0}], "evidence_ids": ["e0"]}]});
-            let data = schema.validate_json(&draft.to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&draft.to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -5486,7 +5716,7 @@ async fn test_a_route_left_and_returned_to_in_one_document_stays_read() {
     state.changed_page = Some(super::state::read_key(&results));
     state.acted_from = Some(results.clone());
     agent().note_effect(&mut state, &results);
-    assert!(Agent::page_facts(&state, &results).iter().any(|fact| fact.starts_with("This page changed after")));
+    assert!(Agent::page_facts(&state, &results, None).iter().any(|fact| fact.starts_with("This page changed after")));
 }
 
 #[tokio::test]
@@ -5529,21 +5759,43 @@ fn test_a_field_the_task_gives_no_value_for_is_not_called_empty() {
 
 #[test]
 fn a_failure_kind_names_the_error_and_none_of_its_text() {
-    use super::failure_kind;
+    use fastbrowse_core::llm::{Fault, FaultClass, LLMError};
+    use fastbrowse_core::models::{BudgetResource, FailureKind, LLMPurpose};
+
     use crate::AgentError;
     let invalid = AgentError::Invalid("the page said secret".into());
-    assert_eq!(failure_kind(&invalid), "Invalid");
-    let llm = fastbrowse_core::llm::LLMError::Rejected("the page said secret".into());
-    assert_eq!(failure_kind(&AgentError::Llm(llm)), "Llm.Rejected");
-    let outage = fastbrowse_core::llm::LLMError::RetriesExhausted("provider offline".into());
-    assert_eq!(failure_kind(&AgentError::Llm(outage)), "Llm.RetriesExhausted");
-    let navigation =
-        BrowserError::Failed("Page.navigate failed (net::ERR_ABORTED) for https://a.test/?q=secret".into());
-    assert_eq!(super::browser_failure_kind(&navigation), "Failed/Page.navigate/net::ERR_ABORTED");
-    let hung = BrowserError::Failed("Runtime.evaluate exceeded its command deadline; the page did not answer".into());
-    assert_eq!(super::browser_failure_kind(&hung), "Failed/Runtime.evaluate/exceeded");
-    let script = BrowserError::Failed("page script returned an unexpected tuple".into());
-    assert_eq!(super::browser_failure_kind(&script), "Failed");
+    assert_eq!(invalid.failure_kind(), "Invalid");
+    // A model failure names its provider, the purpose of the call and the status or class it met (#1372).
+    let rejected = LLMError::Rejected(Fault::new(FaultClass::Http(401), "the page said secret"))
+        .from_call("openrouter", LLMPurpose::Action);
+    assert_eq!(AgentError::Llm(rejected).failure_kind(), "Llm.Rejected/openrouter/action/http-401");
+    let outage = LLMError::RetriesExhausted(Fault::new(FaultClass::Transport, "provider offline"));
+    assert_eq!(AgentError::Llm(outage).failure_kind(), "Llm.RetriesExhausted/unknown/unknown/transport");
+    let invalid_answer = LLMError::schema("sk-secret did not match").from_call("anthropic", LLMPurpose::Compose);
+    assert_eq!(AgentError::Llm(invalid_answer).failure_kind(), "Llm.Failed/anthropic/compose/schema");
+    // The maker's provider and purpose win over the client that relayed the error.
+    let relayed =
+        LLMError::schema("x").from_call("gateway", LLMPurpose::Compose).from_call("openrouter", LLMPurpose::Action);
+    assert_eq!(relayed.failure_kind(), "Failed/gateway/compose/schema");
+    let budget = AgentError::Budget(fastbrowse_core::telemetry::BudgetExceeded {
+        reason: "spent".into(),
+        budget: fastbrowse_core::models::BudgetStop { resource: BudgetResource::Dollars, limit: 1.0 },
+    });
+    assert_eq!(budget.failure_kind(), "Budget/dollars");
+    let jev = AgentError::Jev(fastbrowse_core::decision::DecisionError::transport_failed("the page said secret"));
+    assert_eq!(jev.failure_kind(), "Jev.TransportFailed");
+    // A browser failure names the reason its maker set, never the address its message carries.
+    let navigation = BrowserError::failed(
+        "Page.navigate/net::ERR_ABORTED",
+        "Page.navigate failed (net::ERR_ABORTED) for https://a.test/?q=secret",
+    );
+    assert_eq!(navigation.failure_kind(), "Failed/Page.navigate/net::ERR_ABORTED");
+    let hung = BrowserError::PageUnresponsive(Failure::new("Runtime.evaluate/deadline", "secret"));
+    assert_eq!(hung.failure_kind(), "PageUnresponsive/Runtime.evaluate/deadline");
+    let unreachable =
+        BrowserError::SiteUnreachable(Failure::new("Page.navigate/net::ERR_CONNECTION_REFUSED", "secret"));
+    assert_eq!(unreachable.failure_kind(), "SiteUnreachable/Page.navigate/net::ERR_CONNECTION_REFUSED");
+    assert_eq!(BrowserError::ContextLost("secret".into()).failure_kind(), "ContextLost");
 }
 
 /// A run 100 seconds long whose clock has run for `elapsed`.
@@ -5570,7 +5822,7 @@ async fn test_a_run_the_clock_stopped_answers_from_what_it_read() {
     state.notes.add(oak);
     let ledger = state.ledger.clone();
     let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
-    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::BudgetExceeded);
     let answer = result.answer.as_deref().unwrap_or_default();
     assert!(answer.contains("Pine capacity 10"), "{answer}");
@@ -5589,7 +5841,7 @@ async fn test_a_stopped_run_with_only_context_notes_has_no_answer() {
     state.notes.add(oak);
     let ledger = state.ledger.clone();
     let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
-    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::BudgetExceeded);
     assert_eq!(result.answer, None);
     assert!(result.citations.is_empty());
@@ -5612,7 +5864,7 @@ async fn test_a_failed_or_unavailable_run_answers_partially_from_answering_notes
             state.notes.add(pine.answering());
             state.notes.add(oak);
             let ledger = state.ledger.clone();
-            let result = agent().stopped(flow(), Some(&mut state), &ledger).await;
+            let result = agent().stopped(flow(), Some(&mut state), &ledger, None).await;
             assert!(matches!(result.status, Status::Unavailable | Status::Error), "{:?}", result.status);
             let answer = result.answer.unwrap_or_default();
             assert!(answer.starts_with("Partial evidence only."), "compose {compose}: {answer}");
@@ -5622,7 +5874,7 @@ async fn test_a_failed_or_unavailable_run_answers_partially_from_answering_notes
             let (pine, oak) = capacities();
             state.notes.add(pine);
             state.notes.add(oak);
-            let result = agent().stopped(flow(), Some(&mut state), &ledger).await;
+            let result = agent().stopped(flow(), Some(&mut state), &ledger, None).await;
             assert_eq!(result.answer, None);
             assert!(result.citations.is_empty());
         }
@@ -5640,7 +5892,7 @@ async fn test_a_step_limited_composing_run_reports_what_it_read() {
     state.notes.add(Fact::read("Record A: 99", block_evidence(&page, "s0"), FactReader::JevChoice));
     let ledger = state.ledger.clone();
     let error = ledger.check(0.0).unwrap_err();
-    let result = agent.stopped(Flow::Agent(error.into()), Some(&mut state), &ledger).await;
+    let result = agent.stopped(Flow::Agent(error.into()), Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::BudgetExceeded);
     assert_eq!(result.budget.unwrap().resource, fastbrowse_core::models::BudgetResource::Steps);
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record A: 99")));
@@ -5688,6 +5940,7 @@ async fn test_partial_composition_obeys_the_run_deadline() {
     assert_eq!(ledger.state().llm_calls, 1);
     assert_eq!(result.status, Status::BudgetExceeded);
     assert_eq!(result.budget.unwrap().resource, fastbrowse_core::models::BudgetResource::Seconds);
+    assert_eq!(result.failure_kind.as_deref(), Some("Budget/seconds"));
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record A: 99")));
     assert!(!result.evidence.is_empty());
 }
@@ -5840,6 +6093,79 @@ fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
     assert_eq!(offered.controls[0].focused, Some(true));
     assert!(offered.controls[0].operations.contains(&Operation::Fill));
     assert!(context.problem.as_deref().unwrap().contains("not offered this time"));
+}
+
+const ENTRY: &str = "https://shop.test/entry";
+const SIGN_IN: &str = "Sign in at /login as grace@example.com, or at /entry?mode=login";
+
+/// The addresses an ask on `page` offers to navigate to, with the problem it states, after the stalled actions are left
+/// out the way the ask does.
+fn navigate_targets(state: &RunState, page: &Observation) -> (Vec<String>, Option<String>) {
+    let mut offered = page.clone();
+    let mut context = crate::policy::StepContext::new(&state.task);
+    context.start_url = Some(ENTRY.into());
+    context.reload = Some(ENTRY.into());
+    context.problem = Some("no_progress (3)".into());
+    super::recovery::leave_out_idle(state, &mut offered, &mut context);
+    let request = crate::policy::build_request(&offered, &offered.controls, &context, &Default::default(), 64);
+    let urls = match request.questions.get("navigate_target") {
+        Some(Question::Choice(targets)) => {
+            targets.criteria.values().map(|url| url.as_str().unwrap().to_string()).collect()
+        }
+        _ => Vec::new(),
+    };
+    (urls, context.problem)
+}
+
+/// A run on the blank /entry page that reloaded it, and the reload landed on the page state it left.
+async fn reloaded_entry(agent: &Agent) -> (RunState, Observation) {
+    let mut state = run_state();
+    state.task = SIGN_IN.into();
+    let page = at(ENTRY, &[]);
+    agent.settle(&mut state, &page).await.expect("settled");
+    let reload = Decision { url: Some(ENTRY.into()), ..code_decision(Operation::Navigate, None) };
+    state.landing = Some(super::recovery::withheld(&reload));
+    agent.settle(&mut state, &page).await.expect("settled");
+    assert_eq!(state.unchanged, 1);
+    (state, page)
+}
+
+/// A navigation that moved nothing is left out of the next ask like a click is. A blank start page judged a site failure
+/// was reloaded six times while the task's own /login stood beside it on offer, because the stall rule only removed
+/// controls and the reload address is not one, and the run ended `unavailable` (#1365). Only that address is left out:
+/// another route on the same path stays on offer.
+#[tokio::test]
+async fn test_a_navigation_that_moved_nothing_is_not_offered_again() {
+    let agent = agent();
+    let mut state = run_state();
+    state.task = SIGN_IN.into();
+    let (before, _) = navigate_targets(&state, &at(ENTRY, &[]));
+    assert!(before.iter().any(|url| url == ENTRY), "{before:?}");
+
+    let (state, page) = reloaded_entry(&agent).await;
+    let (after, problem) = navigate_targets(&state, &page);
+    assert!(!after.iter().any(|url| url == ENTRY), "{after:?}");
+    for route in ["https://shop.test/login", "https://shop.test/entry?mode=login"] {
+        assert!(after.iter().any(|url| url == route), "{route} left out: {after:?}");
+    }
+    assert!(
+        problem.as_deref().unwrap().contains(&format!("navigate '{ENTRY}' did not move the task on")),
+        "{problem:?}"
+    );
+}
+
+/// New evidence renews the stall budget, so an address left out before it is offered again: a read that found new
+/// evidence reset the count but kept the reload withheld, and a route that once moved nothing stayed hidden after it.
+#[tokio::test]
+async fn test_new_evidence_offers_a_withheld_navigation_again() {
+    let field = "Sign-in is open again.";
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));
+    let (mut state, page) = reloaded_entry(&agent).await;
+    assert!(
+        agent.read(&mut state, capture(&[(BlockKind::Paragraph, field)]), &page, true).await.expect("new evidence")
+    );
+    let (urls, _) = navigate_targets(&state, &page);
+    assert!(urls.iter().any(|url| url == ENTRY), "{urls:?}");
 }
 
 fn card(revealed: bool) -> Observation {
@@ -6703,6 +7029,16 @@ async fn test_the_llm_image_reader_withholds_a_screenshot_while_a_secret_shows()
 }
 
 #[tokio::test]
+async fn test_no_step_frame_is_taken_after_a_secret_is_typed_whatever_a_reading_shows() {
+    let jev =
+        Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None, zoomed: None });
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(EmptyImageLLM::default()));
+    assert!(agent.frame().await.expect("frame").is_some());
+    agent.seen().secret_typed = true;
+    assert!(agent.frame().await.expect("frame").is_none());
+}
+
+#[tokio::test]
 async fn test_the_llm_image_reader_checks_for_a_secret_with_a_fresh_glance() {
     let llm = Arc::new(EmptyImageLLM::default());
     let jev =
@@ -7167,7 +7503,7 @@ impl LLMClient for RepairComposer {
                 .validate_json(
                     &json!({"claims": [{"text": [{"prose": text}], "evidence_ids": evidence_ids}]}).to_string(),
                 )
-                .map_err(LLMError::Failed)?;
+                .map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -7199,7 +7535,7 @@ impl LLMClient for GrowingComposer {
             if second {
                 claims.push(json!({"text": [{"prose": "Record C: 57"}], "evidence_ids": ["e1"]}));
             }
-            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -7220,7 +7556,7 @@ async fn test_recovery_retains_the_latest_checked_partial_revision() {
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("missing D exhausts recovery");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unverified);
     let answer = result.answer.unwrap();
     assert!(answer.contains("Record B: 34"));
@@ -7240,7 +7576,7 @@ impl LLMClient for TwoClaimComposer {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             let claims = json!([{"text": [{"prose": "Record B: 34"}], "evidence_ids": ["e0"]}, {"text": [{"prose": "Record A: 99"}], "evidence_ids": ["e0"]}]);
-            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -7371,6 +7707,30 @@ async fn test_a_draft_rejected_again_unchanged_ends_the_run() {
     assert_eq!(ended, Status::Unverified);
 }
 
+/// A run whose reader failed to copy a winner field went back to read for it, and every new page it reached renewed
+/// the recovery budget, so each rewrite got a fresh one: one trial sent three different rejected drafts back over 53
+/// steps and 455 Jev calls, $0.39 for a task that costs $0.03. Progress between drafts still renews the stall budget,
+/// so a run may improve its draft as evidence arrives, but only three rejected drafts go back to gather.
+#[tokio::test]
+async fn test_progress_does_not_renew_the_rewrites_a_rejected_draft_may_spend() {
+    let page = observation(&[]);
+    let jev = repair_jev(vec![(0.0, 1.0); 4]);
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev, Arc::new(WrongRecord));
+    let mut state = composition_repair_state();
+    for _ in 0..3 {
+        assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+        // New pages read since, and a different draft next time: nothing here is the same draft rejected again.
+        state.recoveries = 0;
+        state.composition_feedback = None;
+    }
+    let ended = match agent.finish(&mut state, &page, None, None).await {
+        Ok(Some(result)) => result.status,
+        Err(Flow::Stop(stop)) => stop.status,
+        other => panic!("a fourth rejected draft was sent back to gather again: {:?}", other.map(|r| r.is_some())),
+    };
+    assert_eq!(ended, Status::Unverified);
+}
+
 #[tokio::test]
 async fn test_uncertain_composition_support_or_coverage_is_repaired_like_a_rejection() {
     // Einstein: a correct count whose support Jev judged at exactly 0.5 ended the run with no answer and no second
@@ -7430,6 +7790,167 @@ async fn test_rejected_composition_exhausts_the_existing_recovery_budget() {
     assert_eq!(state.recoveries, agent.config.stall.max_recoveries + 1);
 }
 
+/// Drafts "Record A: 99" until told a draft was rejected, then "Record B: 34", both citing the one note.
+struct CorrectsOnFeedback(std::sync::Mutex<Vec<Vec<Message>>>);
+
+impl LLMClient for CorrectsOnFeedback {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        let told = messages.iter().any(|message| message.content.contains("# Previous composition feedback"));
+        self.0.lock().unwrap().push(messages.to_vec());
+        Box::pin(async move {
+            let text = if told { "Record B: 34" } else { "Record A: 99" };
+            let claims = json!([{"text": [{"prose": text}], "evidence_ids": ["e0"]}]);
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::schema)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// A run spent its one recovery on a stall, then its first draft was rejected: the recovery that would have sent it
+/// back for a rewrite ran out, and the answer written as the run stopped was the first request again, byte for byte,
+/// without the rejection. It returned the same draft and the run ended unverified (#1377). The answer written as a run
+/// stops is told what was rejected.
+#[tokio::test]
+async fn test_the_answer_written_as_a_run_stops_is_told_the_rejected_draft() {
+    let page = observation(&[]);
+    let llm = Arc::new(CorrectsOnFeedback(Default::default()));
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(RejectsRecordA(ScriptedJev::new(Vec::new()))),
+        llm.clone(),
+    );
+    let mut state = composition_repair_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let flow = agent.finish(&mut state, &page, None, None).await.expect_err("the rejection finds recovery spent");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
+    let calls = llm.0.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(
+        calls[1]
+            .iter()
+            .any(|m| m.content.contains("# Previous composition feedback") && m.content.contains("Record A: 99"))
+    );
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    let answer = result.answer.unwrap();
+    assert!(answer.contains("Record B: 34") && !answer.contains("Record A: 99"), "{answer}");
+}
+
+/// A run asking only for a screenshot, stopped stuck or unverified with an answer that then held, ended complete without
+/// the screenshot: only a task asking for text and a screenshot requested the ending frame there.
+#[tokio::test]
+async fn test_an_image_run_answered_as_it_stops_returns_its_ending_frame() {
+    let page = observation(&[]);
+    for status in [Status::Unverified, Status::Stuck] {
+        let agent = Agent::new(
+            Arc::new(FinishPage(page.clone())),
+            Arc::new(RejectsRecordA(ScriptedJev::new(Vec::new()))),
+            Arc::new(GrowingComposer(Default::default())),
+        );
+        let mut state = composition_repair_state();
+        state.output_intent = super::state::OutputIntent::Image;
+        let ledger = state.ledger.clone();
+        let stop = Flow::Stop(super::state::Stop::new(status, "test/stopped", "stopped"));
+        let result = agent.stopped(stop, Some(&mut state), &ledger, None).await;
+        assert_eq!(result.status, Status::Complete, "{status:?}: {:?}", result.error);
+        assert!(result.final_frame.is_some(), "{status:?}");
+    }
+}
+
+/// A run over HTTP has no rendered page to picture: one stopped on a screenshot task was told as its answer was written
+/// that a screenshot came with it, when none could.
+#[tokio::test]
+async fn test_the_answer_written_as_a_run_stops_is_told_of_a_screenshot_only_with_a_browser_page() {
+    for (over_http, told) in [(false, true), (true, false)] {
+        let llm = Arc::new(CorrectsOnFeedback(Default::default()));
+        let jev = Arc::new(ScriptedJev::new(Vec::new()));
+        let agent = if over_http {
+            Agent::new(Arc::new(Unfetchable::default()), jev, llm.clone())
+        } else {
+            Agent::new(Arc::new(FinishPage(observation(&[]))), jev, llm.clone())
+        };
+        let mut state = composition_repair_state();
+        state.output_intent = super::state::OutputIntent::TextAndImage;
+        let ledger = state.ledger.clone();
+        let stop = Flow::Stop(super::state::Stop::new(Status::Unverified, "test/stopped", "stopped"));
+        agent.stopped(stop, Some(&mut state), &ledger, None).await;
+        let calls = llm.0.lock().unwrap();
+        let screenshot = format!("# Screenshot\n{}", crate::retrieval::SCREENSHOT_ATTACHED);
+        assert_eq!(
+            calls[0].iter().any(|message| message.content.contains(&screenshot)),
+            told,
+            "over HTTP: {over_http}"
+        );
+    }
+}
+
+/// Rejects Record A's claims as `RejectsRecordA` does, and fills a schema field only with a candidate the answer it is
+/// given states.
+struct FillsFromTheAnswer(RejectsRecordA);
+
+impl DecisionClient for FillsFromTheAnswer {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let Some((name, Question::Choice(field))) = questions.first().filter(|_| state.get("page").is_some()) else {
+            return self.0.evaluate(state, questions);
+        };
+        let claims: Vec<&str> =
+            state["answer"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
+        let choice = field
+            .criteria
+            .iter()
+            .find(|(key, source)| *key != "none" && claims.iter().any(|claim| source.to_string().contains(claim)))
+            .map_or("none", |(key, _)| key.as_str());
+        let answer = Answer::Choice(ChoiceAnswer {
+            kind: Default::default(),
+            choice: choice.into(),
+            probabilities: Default::default(),
+            confidence: 1.0,
+        });
+        let answers = IndexMap::from([(name.clone(), answer)]);
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// The rewrite written as a run stops completed a schema run, but its data came from the extraction kept for the
+/// rejected draft, which named none of the rewrite's values: the prose said "Record B: 34" and `data` was null. A
+/// complete result's data is drawn from the answer it returns.
+#[tokio::test]
+async fn test_a_schema_run_completed_by_the_answer_written_as_it_stops_draws_its_data_from_that_answer() {
+    let page = observation(&[]);
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(FillsFromTheAnswer(RejectsRecordA(ScriptedJev::new(Vec::new())))),
+        Arc::new(CorrectsOnFeedback(Default::default())),
+    );
+    let model = fastbrowse_core::output_schema::output_model(&json!({
+        "type": "object", "properties": {"Record B": {"type": "integer"}}, "required": ["Record B"],
+    }))
+    .unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+    let mut state = composition_repair_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let flow = agent.finish(&mut state, &page, Some(&schema), None).await.expect_err("recovery spent");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger, Some(&schema)).await;
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    assert_eq!(result.data, json!({"Record B": 34}));
+}
+
 #[tokio::test]
 async fn test_recovery_exhaustion_reuses_partial_only_while_its_sources_are_unchanged() {
     for changed in [false, true] {
@@ -7450,7 +7971,7 @@ async fn test_recovery_exhaustion_reuses_partial_only_while_its_sources_are_unch
                 .add(Fact::read("Record C: 57", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
         }
         let ledger = state.ledger.clone();
-        let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+        let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
         // The kept partial stays unverified; new notes are composed afresh, and that answer passes its checks.
         assert_eq!(result.status, if changed { Status::Complete } else { Status::Unverified });
         assert!(result.answer.unwrap().contains("Record B: 34"));
@@ -7470,7 +7991,7 @@ async fn a_composition_that_passes_every_check_after_recovery_ran_out_completes_
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("a second rejection exhausts recovery");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Complete);
     assert_eq!(result.error, None);
     let answer = result.answer.unwrap();
@@ -7512,7 +8033,7 @@ async fn test_a_refused_step_keeps_a_passing_composition_after_recovery_unverifi
     let flow = agent.finish(&mut state, &page, None, None).await.expect_err("a second rejection exhausts recovery");
     assert!(state.refused, "the done check found the step refused");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unverified);
     assert!(result.answer.unwrap().contains("Record B: 34"));
 }
@@ -7541,7 +8062,7 @@ async fn test_rejected_composition_preserves_the_callers_schema_result() {
     assert_eq!(state.recoveries, 1);
     let flow = agent.finish(&mut state, &observation(&[]), Some(&schema), None).await.expect_err("recovery spent");
     let ledger = state.ledger.clone();
-    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unverified);
     assert_eq!(result.data, json!({}));
 }
@@ -7561,7 +8082,7 @@ async fn test_composition_recovery_preserves_partial_answer_with_a_missing_field
         }
         let flow = agent.finish(&mut state, &page, None, None).await.expect_err("recovery is exhausted");
         let ledger = state.ledger.clone();
-        let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+        let result = agent.stopped(flow, Some(&mut state), &ledger, None).await;
         assert_eq!(result.status, if unavailable { Status::Unavailable } else { Status::NeedsInput });
         assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record B: 34")), "{result:?}");
         assert_eq!(llm.0.lock().unwrap().len(), 2);
@@ -7582,9 +8103,12 @@ async fn test_a_failed_repair_or_hard_deadline_keeps_the_verified_partial() {
         let result = if provider_failed {
             agent
                 .stopped(
-                    Flow::Agent(LLMError::Failed("repair provider failed".into()).into()),
+                    Flow::Agent(
+                        LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "repair provider failed").into(),
+                    ),
                     Some(&mut state),
                     &ledger,
+                    None,
                 )
                 .await
         } else {
@@ -7650,7 +8174,7 @@ async fn test_a_later_empty_or_uncertain_repair_cannot_erase_a_checked_partial()
                     "an empty repair erased checked claims"
                 );
                 let ledger = state.ledger.clone();
-                agent.stopped(flow, Some(&mut state), &ledger).await
+                agent.stopped(flow, Some(&mut state), &ledger, None).await
             }
             other => panic!("expected terminal repair: {other:?}"),
         };
@@ -7678,9 +8202,9 @@ async fn test_checked_partial_preserves_non_composition_stop_statuses_and_wall_m
             code.autocomplete = Some("one-time-code".into());
             agent.seen().raw = Some(at("https://shop.test/login", &[code]));
         }
-        let stop = super::state::Stop::new(status, "stopped");
+        let stop = super::state::Stop::new(status, "test/stopped", "stopped");
         let ledger = state.ledger.clone();
-        let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+        let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger, None).await;
         assert_eq!(result.status, status);
         assert!(
             result
@@ -7786,7 +8310,7 @@ fn a_link_to_a_page_already_read_is_marked_on_the_link_so_links_sharing_its_labe
     assert_eq!(marks, [Some(true), None]);
     assert_eq!(crate::policy::element(&page.controls[0])["already_read"], json!(true));
     assert!(crate::policy::element(&page.controls[1]).get("already_read").is_none());
-    assert!(Agent::page_facts(&state, &page).iter().all(|fact| !fact.contains("already read")));
+    assert!(Agent::page_facts(&state, &page, None).iter().all(|fact| !fact.contains("already read")));
 }
 
 /// A known page is read under the address the run built for it, while the site links to it by an address that
@@ -7859,7 +8383,7 @@ impl Page for HungPage {
         let hang = self.hangs.try_update(SeqCst, SeqCst, |left| left.checked_sub(1)).is_ok();
         Box::pin(async move {
             if hang {
-                Err(BrowserError::PageUnresponsive("the renderer stopped answering".into()))
+                Err(BrowserError::PageUnresponsive(Failure::new("test/hung", "the renderer stopped answering")))
             } else {
                 Ok(ActResult {
                     outcome: StepOutcome::Executed,
@@ -7945,7 +8469,7 @@ async fn test_a_second_hung_page_ends_unavailable() {
         panic!("the second hang was recovered or converted to another flow");
     };
     let ledger = state.ledger.clone();
-    let result = agent.stopped(error, Some(&mut state), &ledger).await;
+    let result = agent.stopped(error, Some(&mut state), &ledger, None).await;
     assert_eq!(result.status, Status::Unavailable);
 }
 
@@ -7956,12 +8480,12 @@ async fn test_a_browser_lost_after_a_step_that_changed_the_site_is_not_unavailab
     let mut state = run_state();
     state.history.push(executed(Some(Operation::Scroll), None, true));
     let ledger = state.ledger.clone();
-    let read_only = agent.stopped(lost(), Some(&mut state), &ledger).await;
+    let read_only = agent.stopped(lost(), Some(&mut state), &ledger, None).await;
     assert_eq!(read_only.status, Status::Unavailable);
 
     state.history.push(executed(Some(Operation::Fill), Some("Comment"), true));
     state.history.push(executed(Some(Operation::Click), Some("Post"), true));
-    let wrote = agent.stopped(lost(), Some(&mut state), &ledger).await;
+    let wrote = agent.stopped(lost(), Some(&mut state), &ledger, None).await;
     assert_eq!(wrote.status, Status::Error);
     assert_eq!(
         wrote.error.as_deref(),
@@ -8030,6 +8554,29 @@ fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
     assert_eq!(unavailable.status, Status::Unavailable);
     assert_eq!(unavailable.wall, None);
     assert!(unavailable.error.unwrap().contains(recorded));
+}
+
+/// Five runs ended `unavailable` after steps with no `failure_kind`, so their logs could not tell a 503 from a page that
+/// reported its own failure (#1372). A site-failure stop names its cause by status or kind, never by address.
+#[test]
+fn a_site_failure_stop_names_its_rule_and_not_its_address() {
+    let url = "https://shop.test/cart?token=abc";
+    let cases = [
+        (SiteFailure::http(url, 503, 0), "SiteFailure/http-503"),
+        (SiteFailure::http(url, 404, 0), "SiteFailure/http-404"),
+        (
+            SiteFailure {
+                url: url.into(),
+                cause: FailureCause::Navigation("net::ERR_ABORTED at shop.test".into()),
+                since: 0,
+            },
+            "SiteFailure/navigation",
+        ),
+        (SiteFailure { url: url.into(), cause: FailureCause::Reported, since: 0 }, "SiteFailure/reported"),
+    ];
+    for (failure, rule) in cases {
+        assert_eq!(failure.stop().rule, rule);
+    }
 }
 
 /// A CurseForge project page awaiting moderation answers 404, and three runs on it ended `stuck` with "the cause is
@@ -8131,7 +8678,9 @@ fn read_one(state: &mut RunState, page: &Observation, extent: Extent) {
     state.output_intent = super::state::OutputIntent::Text;
     state.extent = extent;
     let captured = Capture { url: page.url.clone(), ..capture(&[(BlockKind::Paragraph, "A quote by the author.")]) };
-    state.notes.add(Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice));
+    state
+        .notes
+        .add(Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
     state.mark_read(page);
 }
 
@@ -8259,7 +8808,7 @@ impl LLMClient for ProposesRoute {
         assert!(messages[1].content.contains("# Walled addresses\nhttps://pypi.org/search/?q=httpx"));
         self.1.lock().unwrap().push(messages[1].content.clone());
         Box::pin(async move {
-            let data = schema.validate_json(&json!({"url": self.0}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"url": self.0}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -8335,6 +8884,7 @@ async fn test_a_whole_list_answer_with_a_next_page_still_unread_is_not_complete(
 
     let result = agent.conclude(&mut state, &first, None).await.expect("a conclusion");
     assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/list-unread"));
     let error = result.error.expect("the unread page is named");
     assert!(error.contains("https://list.test/page/2/"), "{error}");
 }
@@ -8635,9 +9185,11 @@ impl LLMClient for PageRangeLLM {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             assert_eq!(purpose, LLMPurpose::Pages);
-            let Some(last) = self.0 else { return Err(LLMError::Failed("no reply".into())) };
+            let Some(last) = self.0 else {
+                return Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "no reply"));
+            };
             let data =
-                schema.validate_json(&json!({"first": null, "last": last}).to_string()).map_err(LLMError::Failed)?;
+                schema.validate_json(&json!({"first": null, "last": last}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -8720,7 +9272,7 @@ impl LLMClient for AlreadyExists {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
             let claims = json!([{"text": [{"prose": "The project already exists, so no new project was created."}], "evidence_ids": ["e0"]}]);
-            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
@@ -8743,8 +9295,8 @@ async fn test_a_stopped_run_never_answers_against_its_own_step() {
         ..executed(Some(Operation::Click), Some("Create project"), true)
     });
     let ledger = state.ledger.clone();
-    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
-    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
+    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "Recovery/exhausted", "no_progress (3)"));
+    let stopped = agent.stopped(stop, Some(&mut state), &ledger, None).await;
     assert_eq!(stopped.status, Status::Stuck);
     assert!(!stopped.answer.unwrap_or_default().contains("already exists"));
 }
@@ -9245,6 +9797,23 @@ impl DecisionClient for Noul {
     }
 }
 
+/// A run that finished `complete` and was then found over its spend limit became `budget_exceeded` with no kind, so a
+/// caller could not tell the limit from any other cause.
+#[test]
+fn test_a_run_found_over_its_spend_limit_after_it_finished_names_the_limit() {
+    let ledger = Ledger::new(Limits { max_dollars: Some(0.001), ..Limits::default() });
+    let _ = ledger.record([CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.01))]);
+    let mut result: fastbrowse_core::models::RunResult = serde_json::from_value(json!({
+        "status": "complete", "answer": "42", "data": null, "evidence": [], "steps": [], "cost": {"lines": []},
+        "artifacts": [],
+    }))
+    .unwrap();
+    assert!(super::over_spend(&mut result, &ledger));
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert_eq!(result.failure_kind.as_deref(), Some("Budget/dollars"));
+    assert_eq!(result.error.as_deref(), Some("spend limit $0.001 reached"));
+}
+
 /// The scripted Jev, refusing the step decision the way the real client does when its estimate breaks the run's spend
 /// limit: a `DecisionError::Budget` from the run's own ledger.
 struct OverSpend(ScriptedJev, Arc<Ledger>);
@@ -9285,6 +9854,7 @@ async fn test_a_jev_spend_stop_ends_budget_exceeded_naming_the_limit_as_set() {
     assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
     assert_eq!(result.budget, Some(BudgetStop { resource: BudgetResource::Dollars, limit: 0.001 }));
     assert_eq!(result.error.as_deref(), Some("spend limit $0.001 reached"));
+    assert_eq!(result.failure_kind.as_deref(), Some("Budget/dollars"));
 }
 
 /// The scripted Jev, answering the question of what the task asks to be told with `intent`, and counting the reads
@@ -9666,7 +10236,7 @@ async fn test_recovery_does_not_reopen_an_address_reached_through_a_link() {
             Box::pin(async move {
                 assert_eq!(purpose, LLMPurpose::RecoveryPages);
                 let data =
-                    schema.validate_json(r#"{"urls":["HTTPS://PREVIOUS.TEST:443"]}"#).map_err(LLMError::Failed)?;
+                    schema.validate_json(r#"{"urls":["HTTPS://PREVIOUS.TEST:443"]}"#).map_err(LLMError::schema)?;
                 Ok(Generation { data, cost: free() })
             })
         }
@@ -9822,6 +10392,7 @@ async fn test_image_storage_obeys_public_run_deadline() {
         assert_eq!(storage.writes.lock().unwrap().len(), attempt, "{result:?}");
         assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
         assert_eq!(result.budget.unwrap().resource, BudgetResource::Seconds);
+        assert_eq!(result.failure_kind.as_deref(), Some("Budget/seconds"));
         assert!(result.artifacts.is_empty());
     }
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -10007,7 +10578,7 @@ impl DecisionClient for Counted {
             self.0.fetch_add(1, Ordering::SeqCst);
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             self.1.fetch_add(1, Ordering::SeqCst);
-            Err(DecisionError::Failed("a counted request has no answer".into()))
+            Err(DecisionError::failed("a counted request has no answer"))
         })
     }
 
@@ -10052,4 +10623,67 @@ async fn test_a_decision_the_page_redrew_under_sends_no_new_request() {
     // The refused request is an expected discard, not a failure: nothing reaches the host's events or the trace.
     assert!(events.lock().unwrap().is_empty());
     assert_eq!(trace.events(), Vec::<serde_json::Value>::new());
+}
+
+/// #1343: a read that joins the same words read twice into one answering fact gives that fact no quote of its own, and
+/// a task carried out answered with nothing once that fact was dropped from what it read after its last step.
+#[test]
+fn a_carried_out_task_answers_with_a_fact_drawn_from_quotes_read_after_its_last_step() {
+    let mut state = run_state();
+    state.history.push(executed(Some(Operation::Fill), Some("textbox"), true));
+    let mut page = capture(&[(BlockKind::Paragraph, "hello"), (BlockKind::Paragraph, "hello")]);
+    page.url = "desktop://org.gnome.texteditor/".into();
+    let read = |id: &str| Fact::read("hello", block_evidence(&page, id), FactReader::JevChoice);
+    let (first, second) = (read("s0"), read("s1"));
+    let basis = vec![crate::memory::fact_id(&first), crate::memory::fact_id(&second)];
+    let joined = Fact { answers: true, text: "hello".into(), evidence: None, basis, reader: FactReader::JevChoice };
+    state.record_read(&page, vec![first, second, joined], false);
+    assert!(state.notes.answered());
+    let outcome = super::finishing::outcome_notes(&state);
+    let answer = crate::retrieval::draft_answer(&outcome).expect("the joined fact answers the task");
+    assert_eq!(answer.answer.trim(), "hello");
+    // Read before the step, the same fact is what the step changed, not its outcome.
+    state.history.push(executed(Some(Operation::Enter), Some("textbox"), true));
+    assert!(crate::retrieval::draft_answer(&super::finishing::outcome_notes(&state)).is_none());
+}
+
+/// #1343: a DONE with nothing read, turned back until recovery ran out, ends `unverified` with the unanswered error,
+/// as the documented status says, not `stuck`.
+#[tokio::test]
+async fn a_text_task_done_on_nothing_read_ends_unverified_once_recovery_runs_out() {
+    let page = Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false, false);
+    let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await;
+    assert!(
+        matches!(&result, Err(Flow::Stop(stop))
+            if stop.status == Status::Unverified && stop.error.as_deref() == Some(super::finishing::UNANSWERED)),
+        "{result:?}"
+    );
+}
+
+/// A run whose requested fields the page cannot fill is unverified, and its kind names the extraction, not the answer.
+#[tokio::test]
+async fn a_conclusion_whose_schema_fields_the_page_lacks_names_the_extraction() {
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let model = fastbrowse_core::output_schema::output_model(&json!({
+        "type": "object", "properties": {"seats": {"type": "integer"}}, "required": ["seats"],
+    }))
+    .unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+    let result = agent.conclude(&mut run_state(), &observation(&[]), Some(&schema)).await.unwrap();
+    assert_eq!(result.status, Status::Unverified, "{:?} {:?}", result.error, result.data);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/extraction-problem"));
+}
+
+/// #1343: a task that wants to be told something and ends with nothing answering it is not `complete`.
+#[tokio::test]
+async fn a_text_task_concluded_with_no_answer_is_not_complete() {
+    let agent = Agent::new(Arc::new(Screenshots::default()), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let result = agent.conclude(&mut run_state(), &observation(&[]), None).await.unwrap();
+    assert_eq!(result.answer, None);
+    assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.failure_kind.as_deref(), Some("Done/unanswered"));
+    assert_eq!(result.error.as_deref(), Some(super::finishing::UNANSWERED));
 }

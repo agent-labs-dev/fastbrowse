@@ -15,7 +15,9 @@ use fastbrowse_cli::mcp::{
 };
 use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_clients::environment::{DecisionSource, Settings};
-use fastbrowse_core::models::{BudgetResource, BudgetStop, CostBreakdown, Limits, RunResult, Status};
+use fastbrowse_core::models::{
+    BrowserUsed, BrowserVia, BudgetResource, BudgetStop, CostBreakdown, Limits, RunResult, Status,
+};
 use fastbrowse_core::protocol::CancellationReceipt;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -175,6 +177,22 @@ async fn test_a_run_returns_structured_output_with_citations_and_reports_each_st
     assert!(notices.join(" ").contains("Add to cart"));
     assert!(notices.contains(&"1.0/unlimited click Add to cart -> executed".to_string()), "{notices:?}");
     assert!(notices.iter().any(|notice| notice.contains("watch live")));
+}
+
+#[tokio::test]
+async fn test_the_result_names_the_browser_that_ran() {
+    // `--json` named it and the MCP result did not, so a caller could not check which browser or profile ran (#1342).
+    let browser = BrowserUsed { via: BrowserVia::Cloud, profile: Some("signed-in".into()), browser: None };
+    let recorder = Recorder::new(RunResult { browser: Some(browser), ..answered(Status::Complete) });
+    let (result, _) = call(ServerConfig::default(), &recorder, json!({"task": "t", "start": START})).await;
+    assert_eq!(
+        result["structuredContent"]["browser"],
+        json!({"via": "cloud", "profile": "signed-in", "browser": null})
+    );
+    let (fetched, _) =
+        call(ServerConfig::default(), &Recorder::new(answered(Status::Complete)), json!({"task": "t", "start": START}))
+            .await;
+    assert!(fetched["structuredContent"]["browser"].is_null());
 }
 
 #[tokio::test]

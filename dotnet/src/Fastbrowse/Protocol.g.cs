@@ -764,6 +764,9 @@ public sealed record RunParams
 
     [JsonPropertyName("desktop")]
     public string? Desktop { get; init; }
+
+    [JsonPropertyName("desktop_apps")]
+    public IReadOnlyList<string>? DesktopApps { get; init; }
 }
 
 public sealed record RunResult
@@ -799,7 +802,7 @@ public sealed record RunResult
     public string? Error { get; init; }
 
     /// <summary>
-    /// The error's provider or browser variant path, never message text; present for failures, absent otherwise.
+    /// What ended the run short of <c>complete</c>: an error's type and cause, or a stop's rule, never content.
     /// </summary>
     [JsonPropertyName("failure_kind")]
     public string? FailureKind { get; init; }

@@ -505,6 +505,7 @@ export interface RunParams {
   extension?: boolean;
   extension_browser?: string | null;
   desktop?: string | null;
+  desktop_apps?: string[];
 }
 export interface SecretRef {
   name: string;
@@ -525,7 +526,7 @@ export interface RunResult {
   citations: Citation[];
   error: string | null;
   /**
-   * The error's provider or browser variant path, never message text; present for failures, absent otherwise.
+   * What ended the run short of `complete`: an error's type and cause, or a stop's rule, never content.
    */
   failure_kind: string | null;
   /**

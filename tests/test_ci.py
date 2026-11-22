@@ -283,3 +283,78 @@ def test_campaign_checks_raw_payload_concurrency_before_defaulting(value: Any, p
         capture_output=True,
     )
     assert (result.returncode == 0) is passes
+
+
+@pytest.mark.parametrize("workflow", ["benchmark-campaign", "official-benchmarks", "paper-campaign"])
+@pytest.mark.parametrize(
+    ("models", "passes"),
+    [
+        ("deepseek/deepseek-v4.1-flash-1017", True),
+        ("openai/gpt-6.1-terra,deepseek/deepseek-v4.1-flash-1017", True),
+        ("anthropic/claude-opus-5.5", False),
+        ("deepseek/deepseek-v4.1-flash-1017,anthropic/claude-opus-5.5", False),
+        ("deepseek/deepseek-v4.1-flash-1017, anthropic/claude-opus-5.5", False),
+        ("deepseek/deepseek-v4.1-flash-1017 , openai/gpt-6.1-terra", True),
+    ],
+)
+def test_a_campaign_refuses_claude_opus_as_a_judge(workflow: str, models: str, passes: bool) -> None:
+    text = Path(f".github/workflows/{workflow}.yml").read_text()
+    start = text.index('case ",${PARALLAX_JUDGE_MODELS//[[:space:]]/}," in')
+    check = text[start : text.index("esac\n", start) + 5]
+    env = {**os.environ, "PARALLAX_JUDGE_MODELS": models}
+    assert (subprocess.run(["bash", "-c", check], env=env, capture_output=True).returncode == 0) is passes
+
+
+@pytest.mark.parametrize("workflow", ["official-benchmarks", "paper-campaign"])
+def test_the_online_judge_identity_is_the_first_model_without_spaces(workflow: str) -> None:
+    text = Path(f".github/workflows/{workflow}.yml").read_text()
+    start = text.index('judges="')
+    export = text[start : text.index("\n", text.index("export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL", start))]
+    env = {**os.environ, "PARALLAX_JUDGE_MODELS": "deepseek/deepseek-v4.1-flash-1017 , openai/gpt-6.1-terra"}
+    out = subprocess.run(
+        ["bash", "-c", export + '; printf "%s" "$PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL"'],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert out.stdout == "deepseek/deepseek-v4.1-flash-1017"
+
+
+def test_the_official_online_judge_is_the_panels_first_model_not_a_second_setting() -> None:
+    """The upstream judge reads its own variable, so a repository setting could name Opus past the panel check."""
+    text = Path(".github/workflows/official-benchmarks.yml").read_text()
+    assert "vars.PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL" not in text
+    assert 'export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL="${judges%%,*}"' in text
+
+
+@pytest.mark.parametrize("status", [0, 1])
+def test_a_run_whose_upload_verified_keeps_its_receipt_and_its_own_exit_status(tmp_path: Path, status: int) -> None:
+    """Parallax proves the upload before it judges quality, so a quality failure must not hide the receipt."""
+    workflow = Path(".github/workflows/benchmark-campaign.yml").read_text()
+    start = workflow.index("# Parallax writes this receipt")
+    end = workflow.index('test "$status" -eq 0 || exit "$status"', start)
+    block = workflow[start : end + len('test "$status" -eq 0 || exit "$status"')]
+    run_out, mirror = tmp_path / "run", tmp_path / "mirror"
+    mirror.mkdir()
+    receipt = tmp_path / "run.verified.json"
+    receipt.write_text(json.dumps({"verified": True, "run_id": "r1"}))
+    result = subprocess.run(
+        ["bash", "-c", f"set -e; status={status}; run_out={run_out}; mirror={mirror}; OUT={tmp_path}\n{block}"],
+        capture_output=True,
+    )
+    assert result.returncode == status
+    assert json.loads((mirror / "parallax-verify.json").read_text()) == {"verified": True, "run_id": "r1"}
+
+
+def test_a_run_without_a_verified_upload_leaves_no_receipt(tmp_path: Path) -> None:
+    workflow = Path(".github/workflows/benchmark-campaign.yml").read_text()
+    start = workflow.index("# Parallax writes this receipt")
+    end = workflow.index('test "$status" -eq 0 || exit "$status"', start)
+    block = workflow[start : end + len('test "$status" -eq 0 || exit "$status"')]
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    subprocess.run(
+        ["bash", "-c", f"set -e; status=0; run_out={tmp_path / 'run'}; mirror={mirror}; OUT={tmp_path}\n{block}"],
+        check=True,
+    )
+    assert not (mirror / "parallax-verify.json").exists()

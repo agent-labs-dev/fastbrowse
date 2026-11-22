@@ -104,7 +104,9 @@ def main(argv: list[str]) -> int:
     recorded = rows(args.rows)
     measured = rates(recorded)
     if not measured:
-        print(f"no eval rows: {args.rows} is empty, so the runner executed no task")
+        # Only the emptiness is known here: a runner that crashed before its first row leaves the same file, and
+        # its own log names the cause (#1307).
+        print(f"no eval rows: {args.rows} is empty; the runner's log says why")
         return 1
     width = max(len(task) for _, task, _, _ in measured)
     below = [entry for entry in measured if entry[2] < entry[3]]

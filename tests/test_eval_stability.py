@@ -92,10 +92,15 @@ def test_a_missing_row_file_says_the_runner_recorded_nothing(
     assert "no eval rows" in capsys.readouterr().out
 
 
-def test_an_empty_row_file_says_the_runner_executed_no_task(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_an_empty_row_file_states_only_what_the_script_can_see(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The script sees an empty file, not why: a runner that crashed before its first row looks the same (#1307).
     path = written(tmp_path / "nightly.jsonl", [])
     assert eval_stability.main([str(path)]) == 1
-    assert "no eval rows" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "no eval rows" in out
+    assert "executed no task" not in out
 
 
 def test_a_complete_passing_run_clears_the_stability_gate(tmp_path: Path) -> None:

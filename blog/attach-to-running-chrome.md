@@ -3,9 +3,9 @@ title: Connect an agent to a running Chrome over CDP
 description: "Drive signed-in Chrome through the fastbrowse extension, or connect an SDK to an Electron app over its DevTools port."
 topic: Browsers and logins
 published: 2026-11-01
-updated: 2026-11-18
+updated: 2026-11-20
 verifiedAgainst: v0.11.0
-verifiedOn: 2026-11-18
+verifiedOn: 2026-11-20
 ---
 
 fastbrowse can drive a browser you already have open, signed in with your profile. From the command line that is your own Chrome, through the extension. Any other Chromium app, including an Electron app, needs its DevTools port and an SDK.
@@ -58,10 +58,11 @@ Without `attach=True`, each run opens a background tab in that browser and close
 
 ## Focus while a run works
 
-A run in a visible window works in a tab behind the current one and does not raise the window. Three things still bring it forward:
+A run in a visible window works in a tab behind the current one and does not raise the window. A link the run follows to a new tab opens behind the current one too. Four things still bring it forward:
 
 - Chrome raises its window when it starts headed.
 - A popup opens a new window at the front.
+- Chrome activates its window for a tab the page opens itself: by script, from a `javascript:` link or a link whose own handler opens it, or by submitting a form into a new tab. On Hyprland with `misc:focus_on_activate = true`, that also takes your keyboard focus; set it to `false` and Hyprland marks the window urgent instead.
 - With `--attach` or `attach=True`, clicking a tab in that window makes the run follow your click.
 
 To keep a run out of sight, run it headed in a separate session.

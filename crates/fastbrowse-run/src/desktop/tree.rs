@@ -28,6 +28,10 @@ pub struct Element {
     #[serde(default)]
     pub y: i64,
     #[serde(default)]
+    pub width: i64,
+    #[serde(default)]
+    pub height: i64,
+    #[serde(default)]
     pub children: Vec<Element>,
     /// On the root only: the snapshot its ids belong to. A peek, which binds nothing, has none.
     #[serde(default)]
@@ -73,11 +77,14 @@ pub struct Window {
 const CLASS_KEPT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'.').remove(b'-').remove(b'_');
 
 impl Window {
-    /// `desktop://<app class>/`: the app is the origin, so a secret, an allowed origin and the irreversible-action
-    /// gate are scoped to one app as a website's are to one site. The title is the page's title, not its address:
-    /// it changes as the app's state does.
+    /// `desktop://<app class>/<window address>`: the app is the origin, so a secret, an allowed origin and the
+    /// irreversible-action gate are scoped to one app as a website's are to one site. The window is the path, so what
+    /// was read in one window is not retired by a read of another: with one address for every window of an app, a
+    /// read of a dialog marked the main window's facts superseded (#1343). The title is the page's title, not its
+    /// address: it changes as the app's state does.
     pub fn url(&self) -> String {
-        format!("desktop://{}/", utf8_percent_encode(&self.class.to_lowercase(), CLASS_KEPT))
+        let class = utf8_percent_encode(&self.class.to_lowercase(), CLASS_KEPT).to_string();
+        format!("desktop://{class}/{}", utf8_percent_encode(&self.address, CLASS_KEPT))
     }
 }
 
@@ -178,6 +185,18 @@ pub fn list_open(element: &Element) -> bool {
 }
 
 /// The element with `id`, anywhere in the tree.
+/// Where an action on element `id` lands, as the centre deskpilot aims at, with the size of the window `root` is:
+/// window pixels, for a recording to draw its cursor there. None for an element with no size, which deskpilot cannot
+/// place, or a root that does not say how big the window is.
+pub fn aim(root: &Element, id: &str) -> Option<(f64, f64, f64, f64)> {
+    let element = find(root, id)?;
+    if element.width <= 0 || element.height <= 0 || root.width <= 0 || root.height <= 0 {
+        return None;
+    }
+    let centre = |at: i64, size: i64| at as f64 + size as f64 / 2.0;
+    Some((centre(element.x, element.width), centre(element.y, element.height), root.width as f64, root.height as f64))
+}
+
 pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
     if element.id == id {
         return Some(element);
@@ -284,8 +303,10 @@ pub fn texts(root: &Element) -> (String, String) {
 }
 
 /// The window as an observation. `page_key` is the snapshot, which deskpilot refuses ids from once a newer one
-/// replaces it; a peek's observation has no snapshot and so can never be acted on.
-pub fn observation(window: &Window, root: &Element) -> Observation {
+/// replaces it; a peek's observation has no snapshot and so can never be acted on. Every window of the run is a tab,
+/// as a browser's tabs are, with this one active, so the model moves between apps and dialogs as it moves between
+/// tabs.
+pub fn observation(window: &Window, root: &Element, windows: &[Window]) -> Observation {
     let snapshot = root.snapshot.clone().unwrap_or_default();
     let url = window.url();
     let (viewport_text, offscreen_text) = texts(root);
@@ -309,12 +330,33 @@ pub fn observation(window: &Window, root: &Element) -> Observation {
         visual_content: false,
         modal: None,
         media: Vec::new(),
-        tabs: vec![Tab { id: window.address.clone(), url, title: window.title.clone(), active: true, opener_id: None }],
+        tabs: tabs(window, windows),
         dialog: None,
         inaccessible_frames: 0,
         can_go_back: false,
         history_entry: None,
     }
+}
+
+/// `windows` as tabs, with `active` among them however the list was read.
+pub fn tabs(active: &Window, windows: &[Window]) -> Vec<Tab> {
+    let listed = windows.iter().any(|window| window.address == active.address);
+    let windows = if listed { windows.to_vec() } else { [windows, std::slice::from_ref(active)].concat() };
+    windows
+        .iter()
+        .map(|window| {
+            let current = window.address == active.address;
+            // The active window as just read, so its tab's title is the observation's.
+            let window = if current { active } else { window };
+            Tab {
+                id: window.address.clone(),
+                url: window.url(),
+                title: window.title.clone(),
+                active: current,
+                opener_id: None,
+            }
+        })
+        .collect()
 }
 
 fn kind(role: &str) -> BlockKind {
@@ -404,6 +446,8 @@ mod tests {
             text: text.map(str::to_string),
             x: 0,
             y: 0,
+            width: 0,
+            height: 0,
             children,
             snapshot: None,
         }
@@ -455,10 +499,29 @@ mod tests {
     }
 
     #[test]
+    fn every_window_of_the_run_is_a_tab_with_the_one_read_active() {
+        let (window, root) = form();
+        let dialog = Window { address: "0xdef".into(), class: "dptest-Order".into(), title: "Confirm".into() };
+        let stale = Window { title: "Order form (old title)".into(), ..window.clone() };
+        let observation = observation(&window, &root, &[stale, dialog]);
+        let tabs: Vec<_> =
+            observation.tabs.iter().map(|tab| (tab.id.as_str(), tab.title.as_str(), tab.active)).collect();
+        assert_eq!(tabs, [("0xabc", "Order form", true), ("0xdef", "Confirm", false)]);
+        assert_eq!(observation.tabs[1].url, "desktop://dptest-order/0xdef");
+        // A window list read before the window opened still has it.
+        let alone = observation_tabs(&window, &[]);
+        assert_eq!(alone, [("0xabc".to_string(), true)]);
+    }
+
+    fn observation_tabs(window: &Window, windows: &[Window]) -> Vec<(String, bool)> {
+        tabs(window, windows).into_iter().map(|tab| (tab.id, tab.active)).collect()
+    }
+
+    #[test]
     fn a_window_reads_as_its_shown_enabled_controls_with_the_apps_own_states() {
         let (window, root) = form();
-        let observation = observation(&window, &root);
-        assert_eq!(observation.url, "desktop://dptest-order/");
+        let observation = observation(&window, &root, &[]);
+        assert_eq!(observation.url, "desktop://dptest-order/0xabc");
         assert_eq!(observation.page_key, "abc-1");
         // The combo box's value is the item its selection reports, not its name, which is its label.
         let country = observation.controls.iter().find(|c| c.role == "combobox").unwrap();
@@ -521,7 +584,7 @@ mod tests {
         );
         let window =
             Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "Text Editor".into() };
-        let ids: Vec<String> = observation(&window, &root).controls.into_iter().map(|c| c.id).collect();
+        let ids: Vec<String> = observation(&window, &root, &[]).controls.into_iter().map(|c| c.id).collect();
         assert_eq!(ids, ["e2", "e3"]);
     }
 
@@ -545,7 +608,7 @@ mod tests {
         );
         let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "x".into() };
         let controls: Vec<(String, String, Option<String>)> =
-            observation(&window, &root).controls.into_iter().map(|c| (c.role, c.label, c.value)).collect();
+            observation(&window, &root, &[]).controls.into_iter().map(|c| (c.role, c.label, c.value)).collect();
         let row = |role: &str, label: &str, value: Option<&str>| (role.into(), label.into(), value.map(Into::into));
         assert_eq!(
             controls,
@@ -562,7 +625,7 @@ mod tests {
     fn a_peek_binds_no_snapshot_and_a_capture_never_holds_a_password() {
         let (window, mut root) = form();
         root.snapshot = None;
-        let peeked = observation(&window, &root);
+        let peeked = observation(&window, &root, &[]);
         assert_eq!(peeked.page_key, "");
         let capture = capture(&window, &root);
         assert!(capture.text.contains("Scrolled away") && capture.text.contains("Place order"));
@@ -599,5 +662,16 @@ mod tests {
         });
         let root: Element = serde_json::from_value(sent).unwrap();
         assert_eq!(root.snapshot.as_deref(), Some("s-1"));
+    }
+
+    #[test]
+    fn an_action_aims_at_its_element_centre_in_the_window() {
+        let button =
+            Element { x: 100, y: 40, width: 80, height: 20, ..node("e2", "push button", "Save", &[], None, vec![]) };
+        let empty = node("e3", "label", "", &[], None, vec![]);
+        let root = Element { width: 800, height: 600, ..node("e1", "frame", "", &[], None, vec![button, empty]) };
+        assert_eq!(aim(&root, "e2"), Some((140.0, 50.0, 800.0, 600.0)));
+        assert_eq!(aim(&root, "e3"), None);
+        assert_eq!(aim(&root, "e9"), None);
     }
 }

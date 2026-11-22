@@ -134,6 +134,7 @@ async def run_task(
     extension: bool = False,
     extension_browser: str | None = None,
     desktop: str | None = None,
+    desktop_apps: Sequence[str] = (),
     open_browser: Callable[[], Awaitable[str]] | None = None,
     page_ready: Callable[[], Awaitable[None]] | None = None,
     settings: Mapping[str, str] | None = None,
@@ -171,6 +172,12 @@ async def run_task(
     rather than losing its browser. The other cloud options mean nothing for the other two browsers. `jev` and
     `llm` default to clients the Rust core builds from the environment, then `.env`, so an embedder that
     resolves its own credentials, or serves Jev from somewhere else, passes them instead.
+    `http` is an `httpx.AsyncClient` the run's requests go through instead of the core's own; give the runs one of
+    their own. Runs on it keep no more of their requests in flight than its `max_connections`, HTTP/2 included, and a
+    request dropped while it waits for one was never sent and costs nothing. One dropped once the client has it, when
+    the run is cancelled or a batch beside it fails, stops unread at the next chunk of its answer: cancelling it inside
+    httpx's pool can leave a connection stuck, and then every later request on the client raises `PoolTimeout`.
+    Requests other code sends on the same client are not counted, and can still queue the run's inside httpx.
 
     `allowed_origins` limits the documents the run may inspect and control to those exact `http(s)://host[:port]`
     origins (no wildcards, paths or userinfo; an empty list is an error, and `None` is unscoped). A navigation,
@@ -190,7 +197,8 @@ async def run_task(
     raises a `BrowserError`; either error names only the exception's type, and its text is not kept.
 
     Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
-    an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
+    an MP4 of the tab, or of a `desktop` run's window, ending on the answer; it needs ffmpeg, and shows whatever the
+    pages showed.
     `recipe` reuses saved values when Jev selects a matching action on the same page, through the same
     authorization and secret gates. The task must match the recorded task. `save_recipe`
     writes the run's steps as a recipe when it ends `complete`; it may name the `recipe` file, to repair it.
@@ -241,7 +249,10 @@ async def run_task(
     split as a POSIX shell splits words. The run starts the app on deskpilot's hidden workspace with `launch`, drives it
     without moving the user's pointer or keyboard focus, and closes it when the run ends; a window that is already open
     is not driven. It opens no browser, so it cannot be combined with a start address or any browser option, and it
-    records and replays no recipe.
+    records and replays no recipe. `record` films the window from deskpilot's shots, one when the app opens and one
+    after each action, with the cursor drawn where each action landed. `desktop_apps` starts more apps in the same
+    run, each a command line as `desktop` is. Every window the apps open, dialogs included, is one of the run's tabs,
+    and the run moves between them as it moves between a browser's tabs.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. Jev sees it as `background`.

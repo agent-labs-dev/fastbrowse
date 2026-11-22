@@ -202,7 +202,6 @@ def test_browser_harness_is_public_only_on_its_pinned_model_or_none() -> None:
 
 
 def test_agent_browser_is_a_one_model_arm_beside_browser_harness() -> None:
-    from fastbrowse_evals.arms import invocations
     from fastbrowse_evals.arms import public_arm as arm_for
     from fastbrowse_evals.catalog import ARMS
 
@@ -210,6 +209,17 @@ def test_agent_browser_is_a_one_model_arm_beside_browser_harness() -> None:
     assert arm_for("agent-browser", "anthropic/claude-haiku-5.5") is None
     assert not ARMS["agent-browser"].default
     assert [(b.harness, b.model) for b in invocations(["agent-browser"])] == [("agent-browser", "openai/gpt-6-luna")]
+
+
+def test_cua_codex_runs_its_pinned_model() -> None:
+    from fastbrowse_evals.arms import public_arm as arm_for
+    from fastbrowse_evals.catalog import ARMS
+
+    assert [(b.harness, b.model) for b in invocations(["cua-codex"])] == [("cua-codex", "openai/gpt-6-luna")]
+    assert arm_for("cua-codex", "openai/gpt-6-luna") == "cua-codex"
+    assert arm_for("cua-codex", None) == "cua-codex"
+    assert arm_for("cua-codex", "anthropic/claude-haiku-5.5") is None
+    assert "openai/gpt-6-luna" in ARMS["cua-codex"].pin
 
 
 def test_public_arm_maps_parallax_competitor_identity() -> None:
@@ -557,7 +567,7 @@ def test_a_changed_task_drops_only_its_own_earlier_rows(tmp_path: Path) -> None:
 
     earlier = fastbrowse_run("earlier", 14, [task.id for task in tasks], stale=changed)
     # The changed task's earlier rows no longer count, so the run alone leaves its slots unmeasured.
-    with pytest.raises(ValueError, match="every scheduled slot"):
+    with pytest.raises(ValueError, match=r"slots with no row \(first: "):
         candidate_from_runs([earlier], campaign_id="changed-task")
 
     rerun = fastbrowse_run("rerun", 16, [changed])

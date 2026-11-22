@@ -5,7 +5,9 @@
 //! extraction and `answers` the answer built from what Jev read.
 
 mod answers;
-pub(crate) use answers::{Draft, compose_reviewed, draft_reviewed, noticed};
+#[cfg(test)]
+pub(crate) use answers::SCREENSHOT_ATTACHED;
+pub(crate) use answers::{Draft, SCREENSHOT_PICTURED, Screenshot, compose_reviewed, draft_reviewed, noticed};
 mod choices;
 mod chunks;
 mod fields;

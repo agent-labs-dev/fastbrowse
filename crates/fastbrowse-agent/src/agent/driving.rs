@@ -315,10 +315,9 @@ impl Agent {
                     );
                     let evidence = self.wall_quotes(&raw).await;
                     return Err(Stop {
-                        status: Status::Blocked,
-                        error: Some(error),
                         evidence,
                         wall: Some(WallKind::BotCheck),
+                        ..Stop::new(Status::Blocked, "Wall/bot-check", error)
                     }
                     .into());
                 }
@@ -690,9 +689,12 @@ impl Agent {
         let proposal = propose_start(&*self.llm, task, Some(ledger)).await?;
         ledger.record([proposal.cost])?;
         let Some(opening) = accept_start(proposal.data.url.as_deref()) else {
-            return Err(
-                Stop::new(Status::NeedsInput, "the task names no page to start from, and none was given").into()
-            );
+            return Err(Stop::new(
+                Status::NeedsInput,
+                "Start/no-page",
+                "the task names no page to start from, and none was given",
+            )
+            .into());
         };
         self.event("start_page", || Map::from_iter([("url".into(), opening.clone().into())]));
         Ok(Some(opening))
@@ -1017,6 +1019,7 @@ impl Agent {
             if action.secret {
                 // Held from the keystrokes on: a page may mirror the value, and only the next reading shows it.
                 self.page.withhold_frames(true);
+                self.seen().secret_typed = true;
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
             // Judged once per document, on its first step, for every click on its surface after it: a map's second pin
@@ -1310,9 +1313,7 @@ impl Agent {
         gives_up_as: Status,
     ) -> Step {
         if progressed {
-            state.unchanged = 0;
-            state.hint = None;
-            state.idle.clear();
+            state.renew_stall();
             return Ok(());
         }
         state.unchanged += 1;
@@ -1827,11 +1828,15 @@ impl Agent {
         self.record_step(state, step, true, None).await
     }
 
-    /// A PNG of the page as it is now, or None while a resolved secret is showing on it.
+    /// A PNG of the page as it is now, or None once a secret has been typed or while one is showing on it.
     ///
     /// The check is made against a fresh reading of the page rather than the last observation, which was taken before
     /// the action ran, and the action may be the one that put the secret there.
     pub(super) async fn frame(&self) -> Step<Option<Vec<u8>>> {
+        // A reading cannot show what a frame will: the page may echo the secret as pixels after it.
+        if self.seen().secret_typed {
+            return Ok(None);
+        }
         let now = self.trace.phase("frame", self.page.glance()).await?;
         if self.reveals(&now) {
             return Ok(None);
@@ -1894,6 +1899,7 @@ pub(super) fn drawn_surface_stop(url: &str, surfaces: &[&Control]) -> Stop {
     };
     Stop::new(
         Status::Stuck,
+        "DrawnSurface",
         format!(
             "Could not complete the task: it needs an action inside {inside}: fastbrowse acts on page elements and cannot act inside a streamed or canvas view."
         ),
@@ -1902,9 +1908,7 @@ pub(super) fn drawn_surface_stop(url: &str, surfaces: &[&Control]) -> Stop {
 
 pub(super) fn require(target: Option<&Control>) -> Step<&Control> {
     target.ok_or_else(|| {
-        Flow::from(fastbrowse_core::decision::DecisionError::Failed(
-            "operation needs a target and Jev offered none".into(),
-        ))
+        Flow::from(fastbrowse_core::decision::DecisionError::failed("operation needs a target and Jev offered none"))
     })
 }
 
