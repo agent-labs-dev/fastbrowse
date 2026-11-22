@@ -898,12 +898,35 @@ mod tests {
         assert_eq!(kept, "keep");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn status_skips_a_registered_install_that_lost_its_execute_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("status-runnable");
+        let (old, new) = (dir.join("old/fastbrowse"), dir.join("new/fastbrowse"));
+        script(&old, "echo old");
+        script(&new, "echo new");
+        record_install(&dir, at(&old, "1.0.0"), &|_: &Path| None, &mut String::new(), |_: &Path, _: &str| Ok(vec![]))
+            .unwrap();
+        record_install(&dir, at(&new, "2.0.0"), &|_: &Path| None, &mut String::new(), |_: &Path, _: &str| Ok(vec![]))
+            .unwrap();
+        std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let present = present_installs(&dir, &|_: &Path| None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(present.iter().map(|install| install.path.clone()).collect::<Vec<_>>(), vec![old]);
+    }
+
     #[test]
     fn installs_at_once_each_keep_their_entry() {
         let dir = scratch("concurrent");
         let programs: Vec<PathBuf> = (0..8).map(|n| dir.join(format!("fastbrowse{n}"))).collect();
         for program in &programs {
             std::fs::write(program, "x").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
         }
         std::thread::scope(|scope| {
             for program in &programs {
