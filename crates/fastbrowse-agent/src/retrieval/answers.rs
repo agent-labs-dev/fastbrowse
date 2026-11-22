@@ -5745,6 +5745,17 @@ mod tests {
         assert!(messages[0].content.contains("do not infer a value from a merely related detail"));
     }
 
+    /// A list of titles came back as one bare quote per item, and the support check, judging each quote alone, read
+    /// it as more than the title it was. The composer is told each claim names its value's record and field.
+    #[test]
+    fn composition_says_each_quoted_value_is_named_by_its_record_and_field() {
+        let messages = compose_messages("List the titles", &[]);
+        assert!(messages[0].content.contains("A claim is never a bare quote: prose beside each quoted value says what that value is, which record it belongs to and which field of it the task asks about"));
+        assert!(messages[0].content.contains(
+            "A list of values is one such claim per item, each saying what the item is without its place in the list."
+        ));
+    }
+
     /// A list number is a claim's place among the others, which no claim's quotes show: written into each row by the
     /// composer, it failed the support check of a gallery row whose quotes held every value (#929). Code numbers the
     /// claims after they are judged, so each is judged without its number and the answer still reads as a numbered list.
