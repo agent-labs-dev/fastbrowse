@@ -10244,7 +10244,7 @@ async fn test_a_read_only_task_can_press_a_navigation_key_but_not_change_a_value
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|q| q.contains("exact key chord") && q.contains("change a field's value"))
+                .any(|q| q.contains("exact key chord") && q.contains("change what a field holds"))
         );
     }
 }
