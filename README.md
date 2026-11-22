@@ -26,7 +26,8 @@ credentials, irreversible actions and spending under the control of code.
   there are no selectors to maintain. Widget keyboard actions are chosen from the keys their ARIA roles define.
 - **Answers you can check.** Every claim in a complete answer cites a verbatim quote from the page, with a link
   that scrolls to it. Pass a schema and get validated data back.
-  Tasks over a whole list can follow its next-page links, checking each page and preserving its citations.
+  Tasks over a whole list can follow its next-page links, checking each page and preserving its citations; a total
+  the list states answers a count from the page that states it.
 - **Code holds the keys.** Submit, pay, delete and send stop until you allow them. A secret is typed only on the
   origin it was declared for, and models only see its name. Step, time and dollar limits are enforced in code.
 - **Your own Chrome.** The CLI runs in the Chrome you are signed in to, through the

@@ -4,7 +4,7 @@ description: Install the fastbrowse skill so Claude Code or Codex can browse a s
 topic: Coding agents and MCP
 published: 2026-11-01
 updated: 2026-11-22
-verifiedAgainst: v0.10.0
+verifiedAgainst: v0.12.0
 verifiedOn: 2026-11-22
 ---
 
