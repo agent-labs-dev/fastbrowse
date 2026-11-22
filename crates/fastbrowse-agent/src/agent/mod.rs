@@ -33,9 +33,10 @@ use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     Artifact, Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler,
-    Evidence, Limits, MaybeUnavailable, RunResult, SecretResolver, Status, StepFact, UntilCheck, Wall, WallKind,
+    Evidence, FailureKind, Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact,
+    StepOutcome, UntilCheck, Wall, WallKind,
 };
-use fastbrowse_core::page::{BrowserError, Observation, Page};
+use fastbrowse_core::page::{BrowserError, Observation, Page, Unread};
 use fastbrowse_core::safety::{
     CredentialField, Redactor, asks_for_credentials, credential_field, origin_of, secret_allowed, wall_kind,
 };
@@ -50,7 +51,9 @@ use state::{Flow, RunState, Stop};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::policy::{HistoryEntry, StepContext};
-use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, noticed, partial_answer};
+use crate::retrieval::{
+    ComposedAnswer, cited_quote, compose_reviewed, draft_answer, marked_partial, noticed, partial_answer,
+};
 use crate::verification::RecordSchema;
 
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
@@ -291,7 +294,11 @@ impl Agent {
                     Err(Flow::Browser(BrowserError::NeedsBrowser(message))) => {
                         (blocked_without_browser(message), false, true)
                     }
-                    Err(flow) => (self.stopped(flow, slot.as_mut(), &ledger).await, false, false),
+                    Err(flow) => (
+                        self.stopped(flow, slot.as_mut(), &ledger, options.output_schema.as_deref()).await,
+                        false,
+                        false,
+                    ),
                 }
             });
             // Reporting can await providers too, so the same deadline must cover the stop path.
@@ -304,7 +311,7 @@ impl Agent {
                 None => {
                     let limit = ledger.stated().max_seconds.unwrap_or_default();
                     let notes = slot.as_ref().map(|state| state.notes.clone()).unwrap_or_default();
-                    let result = self.partial_result(
+                    let mut result = self.partial_result(
                         &notes,
                         slot.as_ref(),
                         &ledger,
@@ -312,6 +319,7 @@ impl Agent {
                         Some(time_limit(limit)),
                         Some(BudgetStop { resource: BudgetResource::Seconds, limit }),
                     );
+                    result.failure_kind = Some(BROWSING_TIME.into());
                     (result, false, false)
                 }
             };
@@ -322,9 +330,7 @@ impl Agent {
             {
                 state.known_pages_unused().await;
             }
-            requested_frame = slot.as_ref().is_some_and(|state| {
-                matches!(state.output_intent, state::OutputIntent::Image | state::OutputIntent::TextAndImage)
-            });
+            requested_frame = slot.as_ref().is_some_and(|state| state.output_intent.attaches_screenshot());
             if let (Some(sink), Some(state)) = (&options.recipe_sink, &slot) {
                 self.store_recipe(state, sink);
             }
@@ -347,16 +353,7 @@ impl Agent {
             result
         } else {
             self.keep_captures(&mut result).await;
-            // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a
-            // spend limit instead of naming the key.
-            if let Err(error) = ledger.check_spend(0.0) {
-                if result.status != Status::Error
-                    && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
-                {
-                    result.status = Status::BudgetExceeded;
-                    result.error = Some(error.to_string());
-                    result.budget = Some(error.budget);
-                }
+            if over_spend(&mut result, &ledger) {
                 loop_returned = false;
             }
             if result.status.waits_on_person() {
@@ -547,16 +544,39 @@ impl Agent {
         }
         let state = slot.insert(*prepared?);
         self.tell_page_ready().await;
-        if start.is_some() {
-            state.start_landing_url = Some(self.page.address().await?);
+        if let Some(opening) = state.started_url.clone() {
+            let landed = self.page.address().await?;
+            state.opened = Some(HistoryEntry {
+                effect: Some(format!("went to {landed}")),
+                ..HistoryEntry::new(Some(Operation::Navigate), Some(&opening), StepOutcome::Executed, true)
+            });
+            if start.is_some() {
+                state.start_landing_url = Some(landed);
+            }
         }
         Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }
 
     /// The result of a run a step stopped: the error the loop raised, as the status it means.
-    async fn stopped(&self, flow: Flow, mut state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped(
+        &self,
+        flow: Flow,
+        mut state: Option<&mut RunState>,
+        ledger: &Ledger,
+        output_schema: Option<&RecordSchema>,
+    ) -> RunResult {
         let schema = state.as_deref_mut().and_then(|state| state.schema_partial.take());
-        let mut result = self.stopped_result(flow, state, ledger).await;
+        // Browser and other agent errors name their kind where `failed` reports them; a stop names its rule.
+        let kind = match &flow {
+            Flow::Stop(stop) => Some(stop.rule.clone()),
+            Flow::Agent(error) => Some(error.failure_kind()),
+            Flow::Browser(_) | Flow::Unsure(_) => None,
+        };
+        let mut result = self.stopped_result(flow, state, ledger, output_schema).await;
+        // A stop whose evidence answers the task after all ends complete, and a complete run names no failure.
+        if result.status != Status::Complete && result.failure_kind.is_none() {
+            result.failure_kind = kind;
+        }
         // The schema was filled before the draft was sent back; a rewrite that fails too does not unfill it.
         if let Some(extraction) = schema
             && result.data.is_null()
@@ -567,11 +587,18 @@ impl Agent {
         result
     }
 
-    async fn stopped_result(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped_result(
+        &self,
+        flow: Flow,
+        state: Option<&mut RunState>,
+        ledger: &Ledger,
+        output_schema: Option<&RecordSchema>,
+    ) -> RunResult {
         let (flow, exhausted) = match flow {
-            Flow::Agent(AgentError::Budget(error)) => {
-                (Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.to_string())), Some(error.budget))
-            }
+            Flow::Agent(AgentError::Budget(error)) => (
+                Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.failure_kind(), error.to_string())),
+                Some(error.budget),
+            ),
             flow => (flow, None),
         };
         if let Flow::Stop(stop) = &flow
@@ -604,9 +631,24 @@ impl Agent {
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
                 let reporting = ledger.for_answer();
                 let steps = state.executed_steps();
+                // A draft rejected as the run stopped is a rewrite's to correct: written without the rejection, after a
+                // stall had spent the recovery that would have sent it back, this was the first request byte for byte,
+                // and it returned the rejected draft again (#1377).
+                let (task, feedback) = (self.model_task(state), state.composition_feedback.clone());
                 if state.compose
-                    && let Ok(composed) =
-                        compose(&*self.jev, &*self.llm, &self.model_task(state), &notes, Some(&reporting), &steps).await
+                    && let Ok(composed) = compose_reviewed(
+                        &*self.jev,
+                        &*self.llm,
+                        &task,
+                        &notes,
+                        Some(&reporting),
+                        feedback.as_deref(),
+                        true,
+                        self.screenshot(state.output_intent),
+                        &steps,
+                    )
+                    .await
+                    .map(|reviewed| reviewed.answer)
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
@@ -639,11 +681,29 @@ impl Agent {
                             None => false,
                         };
                     }
-                    if answers {
-                        let result =
+                    // A schema run's data is drawn from this answer, as at done: the extraction kept from the draft it
+                    // replaces holds only that draft's passed claims, so a value the rewrite corrected was in the prose
+                    // and missing from the data of a complete result. Data that cannot be drawn keeps the stop's status.
+                    let extraction = match output_schema {
+                        _ if !answers => None,
+                        None => Some(None),
+                        Some(_) => match self.schema_fields(state, output_schema, Some(&composed)).await {
+                            Ok(Some(extraction)) if extraction.problem.is_none() => Some(Some(extraction)),
+                            _ => None,
+                        },
+                    };
+                    if let Some(extraction) = extraction {
+                        let mut result =
                             self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
-                        let requested = state.output_intent == state::OutputIntent::TextAndImage;
-                        return self.ending_frame(result, requested).await;
+                        if let Some(extraction) = extraction {
+                            result.data = extraction.data.unwrap_or(Value::Null);
+                            for item in extraction.evidence {
+                                if !result.evidence.iter().any(|e| e.url == item.url && e.quote == item.quote) {
+                                    result.evidence.push(item);
+                                }
+                            }
+                        }
+                        return self.ending_frame(result, state.output_intent.attaches_screenshot()).await;
                     }
                     // A draft that does not answer keeps the stop's own status.
                     let partial = marked_partial(composed);
@@ -689,12 +749,12 @@ impl Agent {
                     || matches!(error, BrowserError::PageUnresponsive(_))
                     || (state.is_none()
                         && matches!(error, BrowserError::NavigationTimeout(_) | BrowserError::SiteUnreachable(_)));
-                let kind = browser_failure_kind(&error);
+                let kind = error.failure_kind();
                 self.failed(kind, error.to_string(), unavailable, state, ledger)
             }
             Flow::Agent(error) => {
                 let unavailable = error.is_unavailable();
-                self.failed(failure_kind(&error), error.to_string(), unavailable, state, ledger)
+                self.failed(error.failure_kind(), error.to_string(), unavailable, state, ledger)
             }
             Flow::Unsure(unsure) => self.failed("Unsure".into(), unsure.reason, false, state, ledger),
         }
@@ -746,8 +806,11 @@ impl Agent {
                 _ => None,
             };
         if requested && result.final_frame.is_none() && result.status == Status::Complete {
-            result.status = Status::Unverified;
-            result.error = Some("The requested final screenshot could not be captured.".into());
+            result.end_as(
+                Status::Unverified,
+                "FinalFrame/uncaptured".into(),
+                "The requested final screenshot could not be captured.".into(),
+            );
         }
         result
     }
@@ -977,7 +1040,7 @@ impl Agent {
         check_login: bool,
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
-        let mut page_facts = Self::page_facts(state, observation);
+        let mut page_facts = Self::page_facts(state, observation, self.page.unread());
         let page_origin = origin_of(&observation.url);
         let credential_origins: BTreeSet<_> = observation
             .controls
@@ -1137,7 +1200,8 @@ impl Agent {
     }
 
     /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
-    fn page_facts(state: &RunState, observation: &Observation) -> Vec<String> {
+    /// `unread` is what a browser would show that the page did not take in, as a document fetched over HTTP leaves out.
+    fn page_facts(state: &RunState, observation: &Observation, unread: Option<Unread>) -> Vec<String> {
         let mut facts = Vec::new();
         if let Some(status) = observation.response_status.filter(|status| *status >= 400) {
             facts.push(format!("This page answered HTTP {status}."));
@@ -1146,8 +1210,16 @@ impl Agent {
             facts
                 .push("This page was read and has not changed since: the notes hold what a read takes from it.".into());
         }
-        if observation.controls.is_empty() {
-            facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into());
+        // A link a script adds, or one an unread frame holds, is missing from markup read without a browser, so a page
+        // whose markup has none is not known to lead nowhere: example.com's served page builds its one link with a
+        // script, and a run told the page led nowhere ended complete without following it (#1380). Told that the
+        // scripts did not run and that a step opens a browser, Jev picked a wait over done on the same request; told
+        // that no browser can open, done and read led again. The cost is a browser opened for a page whose scripts
+        // add nothing: on a task its markup answers, done stayed Jev's pick either way.
+        match unread {
+            _ if !observation.controls.is_empty() => {}
+            None => facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into()),
+            Some(unread) => facts.push(unread_fact(unread)),
         }
         if !crate::policy::drawn_surfaces(&observation.controls).is_empty() {
             facts.push("An element marked `drawn` is a drawn surface, such as a streamed remote browser or a canvas: what it shows is pixels, with no elements inside it for this run to fill or press. A click on it lands on the surface as one element, not on a field or button drawn inside it.".into());
@@ -1204,6 +1276,34 @@ struct Outcome {
     wall: Option<Wall>,
 }
 
+/// The fact a page read without a browser states when its markup has no links or controls: what it left out, and
+/// whether a step on it opens a browser that shows the rest.
+fn unread_fact(unread: Unread) -> String {
+    let frames = match unread.frames {
+        0 => String::new(),
+        1 => "1 frame in it was not read".into(),
+        n => format!("{n} frames in it were not read"),
+    };
+    let missing = match (unread.scripts, frames.is_empty()) {
+        (true, true) => "its scripts did not run".to_string(),
+        (true, false) => format!("its scripts did not run and {frames}"),
+        (false, _) => frames,
+    };
+    let (shown, unshown) = match (unread.scripts, unread.frames > 0) {
+        (true, true) => ("runs its scripts and reads its frames", "runs its scripts or reads its frames"),
+        (true, false) => ("runs them", "runs them"),
+        _ => ("reads them", "reads them"),
+    };
+    let step = if unread.browser {
+        format!(
+            "A read takes in only this markup; a wait, scroll or other step on this page opens it in a browser, which {shown}."
+        )
+    } else {
+        format!("This run cannot open a browser, so no step on this page {unshown}: a read takes in only this markup.")
+    };
+    format!("This page was read over HTTP: its markup holds no links or controls, but {missing}. {step}")
+}
+
 /// The time a run that composes its answer keeps back from its limit to write it: composing waits on one LLM call.
 fn compose_reserve(limit: f64) -> f64 {
     (limit * 0.1).min(60.0)
@@ -1225,7 +1325,25 @@ pub(super) fn out_of_browsing_time(state: &RunState) -> Option<Stop> {
     }
     let deadline = browsing_deadline(&state.ledger, true)?;
     let stated = state.ledger.stated().max_seconds.or(state.ledger.limits.max_seconds)?;
-    (deadline <= tokio::time::Instant::now()).then(|| Stop::new(Status::BudgetExceeded, time_limit(stated)))
+    (deadline <= tokio::time::Instant::now())
+        .then(|| Stop::new(Status::BudgetExceeded, BROWSING_TIME, time_limit(stated)))
+}
+
+/// The kind of a stop the run's clock made, named as a ledger's `BudgetExceeded` on seconds names its own.
+const BROWSING_TIME: &str = "Budget/seconds";
+
+/// Whether the run's ledger is over a spend limit once the run is over, ending `result` on that limit if so.
+fn over_spend(result: &mut RunResult, ledger: &Ledger) -> bool {
+    let Err(error) = ledger.check_spend(0.0) else { return false };
+    // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a spend
+    // limit instead of naming the key.
+    if result.status != Status::Error
+        && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
+    {
+        result.end_as(Status::BudgetExceeded, error.failure_kind(), error.to_string());
+        result.budget = Some(error.budget);
+    }
+    true
 }
 
 fn time_limit(limit: f64) -> String {
@@ -1239,35 +1357,6 @@ pub fn breakdown(lines: Vec<CostLine>) -> CostBreakdown {
 
 /// A run whose page has no browser behind it reached a step only a browser can take. The document was never the
 /// problem and a second attempt cannot help, so it ends `blocked` with the reason, carrying nothing it read.
-/// The variant names of an error and no text it carries, so a public log can say what failed without quoting a page.
-pub fn failure_kind(error: &impl std::fmt::Debug) -> String {
-    let debug = format!("{error:?}");
-    let names: String = debug.chars().take_while(|c| c.is_alphanumeric() || *c == '(').collect();
-    names.trim_end_matches('(').replace('(', ".")
-}
-
-/// `failure_kind`, then the CDP call a browser message opens with and the code in `failed (code)`. The rest of such a
-/// message can be an address, so nothing else of it is kept.
-fn browser_failure_kind(error: &BrowserError) -> String {
-    let kind = failure_kind(error);
-    let message = error.to_string();
-    let method = message.split_whitespace().next().unwrap_or_default();
-    let is_call = method.split_once('.').is_some_and(|(domain, name)| {
-        domain.chars().next().is_some_and(char::is_uppercase)
-            && !name.is_empty()
-            && name.chars().all(char::is_alphanumeric)
-    });
-    if !is_call {
-        return kind;
-    }
-    let (_, rest) = message.split_once(method).unwrap_or_default();
-    let code: String = match rest.split_once(" failed (") {
-        Some((_, code)) => code.chars().take_while(|c| c.is_alphanumeric() || matches!(c, ':' | '_' | '-')).collect(),
-        None => rest.split_whitespace().next().unwrap_or_default().into(),
-    };
-    format!("{kind}/{method}/{code}")
-}
-
 fn blocked_without_browser(message: String) -> RunResult {
     RunResult {
         browser: None,
@@ -1281,7 +1370,7 @@ fn blocked_without_browser(message: String) -> RunResult {
         artifacts: Vec::new(),
         citations: Vec::new(),
         error: Some(message),
-        failure_kind: None,
+        failure_kind: Some("NeedsBrowser".into()),
         final_url: None,
         final_frame: None,
         recordings: Vec::new(),

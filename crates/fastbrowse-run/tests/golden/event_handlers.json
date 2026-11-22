@@ -1,0 +1,534 @@
+{
+ "sources": {
+  "specs": "@webref/idl 3.87.1: each spec's GlobalEventHandlers and WindowEventHandlers mixin members, and the fullscreen standard's Element handlers",
+  "chrome": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/157.0.0.0 Safari/537.36",
+  "probe": "for (const k in element) if (k.startsWith('on')) names.push(k), on a <p>, an SVG <circle> and a MathML <mi> (element) and on <body> and <frameset> less those (window)"
+ },
+ "element": {
+  "specs": {
+   "onabort": [
+    "html"
+   ],
+   "onanimationcancel": [
+    "css-animations"
+   ],
+   "onanimationend": [
+    "css-animations"
+   ],
+   "onanimationiteration": [
+    "css-animations"
+   ],
+   "onanimationstart": [
+    "css-animations"
+   ],
+   "onauxclick": [
+    "html"
+   ],
+   "onbeforeinput": [
+    "html"
+   ],
+   "onbeforematch": [
+    "html"
+   ],
+   "onbeforetoggle": [
+    "html"
+   ],
+   "onbeforexrselect": [
+    "webxr-dom-overlays"
+   ],
+   "onblur": [
+    "html"
+   ],
+   "oncancel": [
+    "html"
+   ],
+   "oncanplay": [
+    "html"
+   ],
+   "oncanplaythrough": [
+    "html"
+   ],
+   "onchange": [
+    "html"
+   ],
+   "onclick": [
+    "html"
+   ],
+   "onclose": [
+    "html"
+   ],
+   "oncommand": [
+    "html"
+   ],
+   "oncontextlost": [
+    "html"
+   ],
+   "oncontextmenu": [
+    "html"
+   ],
+   "oncontextrestored": [
+    "html"
+   ],
+   "oncopy": [
+    "html"
+   ],
+   "oncuechange": [
+    "html"
+   ],
+   "oncut": [
+    "html"
+   ],
+   "ondblclick": [
+    "html"
+   ],
+   "ondrag": [
+    "html"
+   ],
+   "ondragend": [
+    "html"
+   ],
+   "ondragenter": [
+    "html"
+   ],
+   "ondragleave": [
+    "html"
+   ],
+   "ondragover": [
+    "html"
+   ],
+   "ondragstart": [
+    "html"
+   ],
+   "ondrop": [
+    "html"
+   ],
+   "ondurationchange": [
+    "html"
+   ],
+   "onemptied": [
+    "html"
+   ],
+   "onended": [
+    "html"
+   ],
+   "onerror": [
+    "html"
+   ],
+   "onfencedtreeclick": [
+    "fenced-frame"
+   ],
+   "onfocus": [
+    "html"
+   ],
+   "onformdata": [
+    "html"
+   ],
+   "onfullscreenchange": [
+    "fullscreen"
+   ],
+   "onfullscreenerror": [
+    "fullscreen"
+   ],
+   "ongotpointercapture": [
+    "pointerevents"
+   ],
+   "oninput": [
+    "html"
+   ],
+   "oninstallresult": [
+    "install-element"
+   ],
+   "oninvalid": [
+    "html"
+   ],
+   "onkeydown": [
+    "html"
+   ],
+   "onkeypress": [
+    "html"
+   ],
+   "onkeyup": [
+    "html"
+   ],
+   "onload": [
+    "html"
+   ],
+   "onloadeddata": [
+    "html"
+   ],
+   "onloadedmetadata": [
+    "html"
+   ],
+   "onloadstart": [
+    "html"
+   ],
+   "onlostpointercapture": [
+    "pointerevents"
+   ],
+   "onmousedown": [
+    "html"
+   ],
+   "onmouseenter": [
+    "html"
+   ],
+   "onmouseleave": [
+    "html"
+   ],
+   "onmousemove": [
+    "html"
+   ],
+   "onmouseout": [
+    "html"
+   ],
+   "onmouseover": [
+    "html"
+   ],
+   "onmouseup": [
+    "html"
+   ],
+   "onpaste": [
+    "html"
+   ],
+   "onpause": [
+    "html"
+   ],
+   "onplay": [
+    "html"
+   ],
+   "onplaying": [
+    "html"
+   ],
+   "onpointercancel": [
+    "pointerevents"
+   ],
+   "onpointerdown": [
+    "pointerevents"
+   ],
+   "onpointerenter": [
+    "pointerevents"
+   ],
+   "onpointerleave": [
+    "pointerevents"
+   ],
+   "onpointermove": [
+    "pointerevents"
+   ],
+   "onpointerout": [
+    "pointerevents"
+   ],
+   "onpointerover": [
+    "pointerevents"
+   ],
+   "onpointerrawupdate": [
+    "pointerevents"
+   ],
+   "onpointerup": [
+    "pointerevents"
+   ],
+   "onprogress": [
+    "html"
+   ],
+   "onratechange": [
+    "html"
+   ],
+   "onreset": [
+    "html"
+   ],
+   "onresize": [
+    "html"
+   ],
+   "onscroll": [
+    "html"
+   ],
+   "onscrollend": [
+    "html"
+   ],
+   "onsecuritypolicyviolation": [
+    "html"
+   ],
+   "onseeked": [
+    "html"
+   ],
+   "onseeking": [
+    "html"
+   ],
+   "onselect": [
+    "html"
+   ],
+   "onselectionchange": [
+    "selection-api"
+   ],
+   "onselectstart": [
+    "selection-api"
+   ],
+   "onslotchange": [
+    "html"
+   ],
+   "onsnapchanged": [
+    "css-scroll-snap-2"
+   ],
+   "onsnapchanging": [
+    "css-scroll-snap-2"
+   ],
+   "onstalled": [
+    "html"
+   ],
+   "onsubmit": [
+    "html"
+   ],
+   "onsuspend": [
+    "html"
+   ],
+   "ontimeupdate": [
+    "html"
+   ],
+   "ontoggle": [
+    "html"
+   ],
+   "ontouchcancel": [
+    "touch-events"
+   ],
+   "ontouchend": [
+    "touch-events"
+   ],
+   "ontouchmove": [
+    "touch-events"
+   ],
+   "ontouchstart": [
+    "touch-events"
+   ],
+   "ontransitioncancel": [
+    "css-transitions"
+   ],
+   "ontransitionend": [
+    "css-transitions"
+   ],
+   "ontransitionrun": [
+    "css-transitions"
+   ],
+   "ontransitionstart": [
+    "css-transitions"
+   ],
+   "onvolumechange": [
+    "html"
+   ],
+   "onwaiting": [
+    "html"
+   ],
+   "onwebkitanimationend": [
+    "html"
+   ],
+   "onwebkitanimationiteration": [
+    "html"
+   ],
+   "onwebkitanimationstart": [
+    "html"
+   ],
+   "onwebkittransitionend": [
+    "html"
+   ],
+   "onwheel": [
+    "html"
+   ]
+  },
+  "chrome": [
+   "onabort",
+   "onanimationcancel",
+   "onanimationend",
+   "onanimationiteration",
+   "onanimationstart",
+   "onauxclick",
+   "onbeforecopy",
+   "onbeforecut",
+   "onbeforeinput",
+   "onbeforematch",
+   "onbeforepaste",
+   "onbeforetoggle",
+   "onbeforexrselect",
+   "onblur",
+   "oncancel",
+   "oncanplay",
+   "oncanplaythrough",
+   "onchange",
+   "onclick",
+   "onclose",
+   "oncommand",
+   "oncontentvisibilityautostatechange",
+   "oncontextlost",
+   "oncontextmenu",
+   "oncontextrestored",
+   "oncopy",
+   "oncuechange",
+   "oncut",
+   "ondblclick",
+   "ondrag",
+   "ondragend",
+   "ondragenter",
+   "ondragleave",
+   "ondragover",
+   "ondragstart",
+   "ondrop",
+   "ondurationchange",
+   "onemptied",
+   "onended",
+   "onerror",
+   "onfocus",
+   "onformdata",
+   "onfullscreenchange",
+   "onfullscreenerror",
+   "ongotpointercapture",
+   "oninput",
+   "oninvalid",
+   "onkeydown",
+   "onkeypress",
+   "onkeyup",
+   "onload",
+   "onloadeddata",
+   "onloadedmetadata",
+   "onloadstart",
+   "onlostpointercapture",
+   "onmousedown",
+   "onmouseenter",
+   "onmouseleave",
+   "onmousemove",
+   "onmouseout",
+   "onmouseover",
+   "onmouseup",
+   "onmousewheel",
+   "onpaste",
+   "onpause",
+   "onplay",
+   "onplaying",
+   "onpointercancel",
+   "onpointerdown",
+   "onpointerenter",
+   "onpointerleave",
+   "onpointermove",
+   "onpointerout",
+   "onpointerover",
+   "onpointerrawupdate",
+   "onpointerup",
+   "onprogress",
+   "onratechange",
+   "onreset",
+   "onresize",
+   "onscroll",
+   "onscrollend",
+   "onscrollsnapchange",
+   "onscrollsnapchanging",
+   "onsearch",
+   "onsecuritypolicyviolation",
+   "onseeked",
+   "onseeking",
+   "onselect",
+   "onselectionchange",
+   "onselectstart",
+   "onslotchange",
+   "onstalled",
+   "onsubmit",
+   "onsuspend",
+   "ontimeupdate",
+   "ontoggle",
+   "ontransitioncancel",
+   "ontransitionend",
+   "ontransitionrun",
+   "ontransitionstart",
+   "onvolumechange",
+   "onwaiting",
+   "onwebkitanimationend",
+   "onwebkitanimationiteration",
+   "onwebkitanimationstart",
+   "onwebkitfullscreenchange",
+   "onwebkitfullscreenerror",
+   "onwebkittransitionend",
+   "onwheel"
+  ]
+ },
+ "window": {
+  "specs": {
+   "onafterprint": [
+    "html"
+   ],
+   "onbeforeprint": [
+    "html"
+   ],
+   "onbeforeunload": [
+    "html"
+   ],
+   "ongamepadconnected": [
+    "gamepad"
+   ],
+   "ongamepaddisconnected": [
+    "gamepad"
+   ],
+   "onhashchange": [
+    "html"
+   ],
+   "onlanguagechange": [
+    "html"
+   ],
+   "onmessage": [
+    "html"
+   ],
+   "onmessageerror": [
+    "html"
+   ],
+   "onoffline": [
+    "html"
+   ],
+   "ononline": [
+    "html"
+   ],
+   "onpagehide": [
+    "html"
+   ],
+   "onpagereveal": [
+    "html"
+   ],
+   "onpageshow": [
+    "html"
+   ],
+   "onpageswap": [
+    "html"
+   ],
+   "onpopstate": [
+    "html"
+   ],
+   "onportalactivate": [
+    "portals"
+   ],
+   "onrejectionhandled": [
+    "html"
+   ],
+   "onstorage": [
+    "html"
+   ],
+   "onunhandledrejection": [
+    "html"
+   ],
+   "onunload": [
+    "html"
+   ]
+  },
+  "chrome": [
+   "onafterprint",
+   "onbeforeprint",
+   "onbeforeunload",
+   "ongamepadconnected",
+   "ongamepaddisconnected",
+   "onhashchange",
+   "onlanguagechange",
+   "onmessage",
+   "onmessageerror",
+   "onoffline",
+   "ononline",
+   "onpagehide",
+   "onpageshow",
+   "onpopstate",
+   "onrejectionhandled",
+   "onstorage",
+   "onunhandledrejection",
+   "onunload"
+  ]
+ }
+}

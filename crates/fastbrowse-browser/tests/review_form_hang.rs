@@ -24,7 +24,7 @@ async fn a_fill_preserves_an_unresponsive_renderer_error() {
                 "guards": {"1": "guard"}, "retarget_keys": {}
             }}}),
             json!({"result": {"value": {
-                "url": "https://example.test/", "document_key": "document", "response_status": 200
+                "url": "https://example.test/", "entry": "https://example.test/", "status": 200, "document_key": "document"
             }}}),
         ],
     );

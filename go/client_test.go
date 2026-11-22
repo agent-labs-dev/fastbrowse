@@ -188,7 +188,8 @@ func TestAnEventCallbackThatFailsEndsTheRunWithStatusError(t *testing.T) {
 	client := scripted(t, "three_events", Options{})
 	calls := 0
 	result := run(t, client, "t", RunOptions{OnEvent: func(Event) error { calls++; return errors.New("full disk") }})
-	if result.Status != StatusError || *result.Error != "run/event: full disk" || calls != 1 {
+	if result.Status != StatusError || *result.Error != "run/event: full disk" || calls != 1 ||
+		result.FailureKind == nil || *result.FailureKind != "Callback/run/event/error/-32603" {
 		t.Fatalf("got %s %v after %d calls", result.Status, result.Error, calls)
 	}
 }
@@ -308,7 +309,8 @@ func TestARunAFailedCallbackStoppedKeepsWhatItDidAndSpent(t *testing.T) {
 		Inputs:  map[string]string{"closed": filepath.Join(t.TempDir(), "closed")},
 		OnEvent: func(Event) error { return errors.New("full disk") },
 	})
-	if result.Status != StatusError || *result.Error != "run/event: full disk" {
+	if result.Status != StatusError || *result.Error != "run/event: full disk" ||
+		result.FailureKind == nil || *result.FailureKind != "Callback/run/event/error/-32603" {
 		t.Fatalf("got %s %v", result.Status, result.Error)
 	}
 	if len(result.Steps) != 1 || len(result.Cost.Lines) != 2 || result.Cost.Lines[1].Dollars != nil {

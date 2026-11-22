@@ -25,7 +25,7 @@ async fn a_secret_fill_withholds_every_later_frame_whatever_a_reading_says() {
                 "guards": {"1": "guard"}, "retarget_keys": {}
             }}}),
             json!({"result": {"value": {
-                "url": "https://example.test/", "document_key": "document", "response_status": 200
+                "url": "https://example.test/", "entry": "https://example.test/", "status": 200, "document_key": "document"
             }}}),
         ],
     );
@@ -71,7 +71,7 @@ async fn a_secret_fill_refused_before_typing_keeps_the_frames() {
                 "guards": {"1": "guard"}, "retarget_keys": {}
             }}}),
             json!({"result": {"value": {
-                "url": "https://example.test/", "document_key": "document", "response_status": 200
+                "url": "https://example.test/", "entry": "https://example.test/", "status": 200, "document_key": "document"
             }}}),
         ],
     );

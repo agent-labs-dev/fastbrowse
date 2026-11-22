@@ -5,6 +5,7 @@ use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::text;
 
 use super::text::Page;
+use crate::support::compute;
 
 /// `_evidence`: the span `start..end` of `block`, as code cut it from the capture.
 pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> Evidence {
@@ -39,17 +40,20 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
 
 /// The page's rendered text, quoted block by block, for a page the run stops on without reading.
 pub fn page_quotes(capture: &Capture) -> Vec<Evidence> {
-    let page = Page::new(capture);
-    capture
-        .blocks
-        .iter()
-        // A typed observation is a description code wrote, not words the page showed, and a download the session
-        // kept is an earlier file appended after the page, not the page itself.
-        .filter(|block| {
-            !matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
-                && block.source_url.is_none()
-                && !text::strip(page.slice(block.start, block.end)).is_empty()
-        })
-        .map(|block| evidence(&page, block, block.start, block.end))
-        .collect()
+    // Each block's evidence looks at every other block, so a page of many blocks is long work (#1284).
+    compute(|| {
+        let page = Page::new(capture);
+        capture
+            .blocks
+            .iter()
+            // A typed observation is a description code wrote, not words the page showed, and a download the session
+            // kept is an earlier file appended after the page, not the page itself.
+            .filter(|block| {
+                !matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
+                    && block.source_url.is_none()
+                    && !text::strip(page.slice(block.start, block.end)).is_empty()
+            })
+            .map(|block| evidence(&page, block, block.start, block.end))
+            .collect()
+    })
 }

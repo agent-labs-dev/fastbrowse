@@ -135,7 +135,7 @@ impl Agent {
             // read since: a hover after a read was judged a return after new evidence, and so progress.
             state.reached.insert(state_key(observation), state.evidence_reads);
             state.shown.insert(tab_key(observation), state.evidence_reads);
-            state.unchanged = 0;
+            state.renew_stall();
             state.recoveries = 0;
         }
         progressed

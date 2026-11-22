@@ -223,7 +223,7 @@ mod tests {
         ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
             Box::pin(async {
                 record_jev_spend([CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.001))]);
-                Err(DecisionError::TransportFailed("timed out".into()))
+                Err(DecisionError::transport_failed("timed out"))
             })
         }
     }
