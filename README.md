@@ -116,7 +116,7 @@ Run fastbrowse in the Chrome you already use, where you are already signed in. Y
 [uv](https://docs.astral.sh/uv/), Chrome and an [OpenRouter](https://openrouter.ai/) API key. Model calls are
 billed by your provider; this mode needs no Browser Use Cloud key.
 
-Install extension **0.1.2 or later** for the full command set. Extension **0.1.1** can still run tasks, with a warning when a command it lacks is used. A run that finds an extension missing a required command stops before it spends anything and names the version to install. If the Store does not list the version you need yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
+Install extension **0.1.2 or later** for the full command set. Extension **0.1.1** can still run tasks. It releases request interception when the run closes. A run that finds an extension missing a required command stops before it spends anything and names the version to install. If the Store does not list the version you need yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
 
 1. Install the CLI and register it with your browser:
 
