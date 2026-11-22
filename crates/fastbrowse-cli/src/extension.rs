@@ -3,8 +3,8 @@
 //! `install` registers this fastbrowse as the extension's native-messaging host for every Chromium browser it finds:
 //! a host manifest per browser, at user level, pointing at a small launcher that runs `<a fastbrowse> native-host`.
 //! Chrome starts that launcher when the extension connects. Every fastbrowse that ran `install` stays registered, and
-//! the host runs the newest one still present, by the version each binary reports now. `path` writes the extension's own files out for extension
-//! development; ordinary installs use the Chrome Web Store.
+//! the host runs the newest one still present, by the version each binary reports now. `path` writes the extension's
+//! own files out for extension development; ordinary installs use the Chrome Web Store.
 
 use std::path::{Path, PathBuf};
 
@@ -213,8 +213,12 @@ fn refreshed(installs: Vec<Install>, query: &dyn Fn(&Path) -> Option<String>) ->
         .into_iter()
         .map(|install| Install { version: query(&install.path).unwrap_or(install.version), path: install.path })
         .collect();
-    installs.sort_by_key(|install| std::cmp::Reverse(precedence(&install.version)));
+    newest_first(&mut installs);
     installs
+}
+
+fn newest_first(installs: &mut [Install]) {
+    installs.sort_by_key(|install| std::cmp::Reverse(precedence(&install.version)));
 }
 
 /// The registered installs whose program is still there, newest first by the version each reports now.
@@ -261,7 +265,7 @@ fn with_install(installs: Vec<Install>, this: Install) -> Vec<Install> {
     let mut installs: Vec<Install> =
         installs.into_iter().filter(|install| install.path != this.path && install.path.is_file()).collect();
     installs.push(this);
-    installs.sort_by_key(|install| std::cmp::Reverse(precedence(&install.version)));
+    newest_first(&mut installs);
     installs
 }
 
@@ -373,7 +377,7 @@ fn handover_candidates(installs: &[Install], probed: Vec<Install>, own: &Path, o
         .filter(|probe| installs.iter().any(|install| canonical(&install.path) == canonical(&probe.path)))
         .filter(|probe| !registered || precedence(&probe.version) > precedence(own_version))
         .collect();
-    newer.sort_by_key(|install| std::cmp::Reverse(precedence(&install.version)));
+    newest_first(&mut newer);
     newer
 }
 
