@@ -352,25 +352,39 @@ fn write_launcher(dir: &Path, commands: &[PathBuf]) -> std::io::Result<PathBuf> 
     Ok(launcher)
 }
 
-/// The registered installs this host should hand over to, newest first, by what each reports now: the newer ones when
-/// this host is registered, every other one when it is not (a stray copy serving through the launcher). An install that
-/// does not answer `--version` cannot be started, so it is not a candidate: a broken copy must not shadow a working one.
+/// Every other install in `installs` with the version it reports now. An install that does not answer `--version`
+/// cannot be started, so it is left out: a broken copy must not shadow a working one.
+fn probe_others(installs: &[Install], own: &Path, query: &dyn Fn(&Path) -> Option<String>) -> Vec<Install> {
+    let own = canonical(own);
+    installs
+        .iter()
+        .filter(|install| canonical(&install.path) != own)
+        .filter_map(|install| Some(Install { version: query(&install.path)?, path: install.path.clone() }))
+        .collect()
+}
+
+/// The probed installs still in `installs` this host should hand over to, newest first: the newer ones when this host
+/// is registered, every other one when it is not (a stray copy serving through the launcher).
+fn handover_candidates(installs: &[Install], probed: Vec<Install>, own: &Path, own_version: &str) -> Vec<Install> {
+    let own = canonical(own);
+    let registered = is_registered(installs, &own);
+    let mut newer: Vec<Install> = probed
+        .into_iter()
+        .filter(|probe| installs.iter().any(|install| canonical(&install.path) == canonical(&probe.path)))
+        .filter(|probe| !registered || precedence(&probe.version) > precedence(own_version))
+        .collect();
+    newer.sort_by_key(|install| std::cmp::Reverse(precedence(&install.version)));
+    newer
+}
+
+#[cfg(test)]
 fn newer_installs(
     installs: &[Install],
     own: &Path,
     own_version: &str,
     query: &dyn Fn(&Path) -> Option<String>,
 ) -> Vec<Install> {
-    let own = canonical(own);
-    let registered = is_registered(installs, &own);
-    let mut newer: Vec<Install> = installs
-        .iter()
-        .filter(|install| canonical(&install.path) != own)
-        .filter_map(|install| Some(Install { version: query(&install.path)?, path: install.path.clone() }))
-        .filter(|install| !registered || precedence(&install.version) > precedence(own_version))
-        .collect();
-    newer.sort_by_key(|install| std::cmp::Reverse(precedence(&install.version)));
-    newer
+    handover_candidates(installs, probe_others(installs, own, query), own, own_version)
 }
 
 fn is_registered(installs: &[Install], own: &Path) -> bool {
@@ -407,14 +421,11 @@ fn plan(
     }
     let installs = read_installs(dir)?;
     // A host another one handed over to serves only if it is registered itself, and hands over no further: it probes nothing.
-    let candidates = if delegated { Vec::new() } else { newer_installs(&installs, own, own_version, query) };
-    // Probing took time: an uninstall may have landed meanwhile, so what serves or is handed over to is decided from the
-    // registry as it is now.
+    let probed = if delegated { Vec::new() } else { probe_others(&installs, own, query) };
+    // Probing took time: an uninstall may have landed meanwhile, so whether this host is registered and who it hands
+    // over to are both decided from the registry as it is now, with the probe results already taken.
     let installs = read_installs(dir)?;
-    let candidates: Vec<Install> = candidates
-        .into_iter()
-        .filter(|candidate| installs.iter().any(|install| canonical(&install.path) == canonical(&candidate.path)))
-        .collect();
+    let candidates = handover_candidates(&installs, probed, own, own_version);
     Ok(Some((is_registered(&installs, own), candidates)))
 }
 
@@ -1047,18 +1058,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_host_unregistered_while_it_probed_hands_over_to_the_older_install() {
+        let dir = scratch("unregistered-meanwhile");
+        let (own, older) = (dir.join("own/fastbrowse"), dir.join("older/fastbrowse"));
+        script(&own, "echo fastbrowse 0.16.0");
+        script(&older, "echo fastbrowse 0.15.0");
+        write_host(&dir, &[at(&own, "0.16.0"), at(&older, "0.15.0")]).unwrap();
+        let uninstall_own_meanwhile = |_: &Path| {
+            write_host(&dir, &[at(&older, "0.15.0")]).unwrap();
+            Some("0.15.0".to_string())
+        };
+        let planned = plan(&dir, &own, "0.16.0", false, &uninstall_own_meanwhile);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(planned, Ok(Some((false, vec![at(&older, "0.15.0")]))));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn the_last_uninstall_fails_when_the_registry_cannot_be_deleted() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = scratch("undeletable");
         let program = dir.join("bin/fastbrowse");
         script(&program, "echo fastbrowse 1.0.0");
         write_host(&dir, &[at(&program, "1.0.0")]).unwrap();
-        // A directory in its place cannot be removed as a file.
-        std::fs::remove_file(dir.join(INSTALLS)).unwrap();
-        std::fs::create_dir(dir.join(INSTALLS)).unwrap();
-        std::fs::write(dir.join(INSTALLS).join("x"), "").unwrap();
-        let result = unregister(&dir, &canonical(&program), &|_: &Path| None, || vec![]);
+        locked(&dir, || Ok(())).unwrap();
+        // The registry stays readable; a read-only folder only stops it being deleted.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let writable = std::fs::File::create(dir.join("probe")).is_ok();
+        let result = (!writable).then(|| unregister(&dir, &canonical(&program), &|_: &Path| None, Vec::new));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(result.is_err());
+        // Running as root, a read-only folder does not stop the delete: nothing to assert.
+        if let Some(result) = result {
+            assert!(result.unwrap_err().contains("cannot remove"));
+        }
     }
 
     #[cfg(unix)]
