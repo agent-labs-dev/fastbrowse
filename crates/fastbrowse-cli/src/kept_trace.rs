@@ -27,15 +27,21 @@ pub struct KeptTrace {
 impl KeptTrace {
     /// A new trace file in `directory`, or None when it cannot be made: a run is never refused for its trace.
     pub fn start(directory: &Path) -> Option<KeptTrace> {
+        // Made on every run rather than once: a long-lived MCP server outlives a directory someone removed.
+        private_directory(directory).ok()?;
         remove_old(directory);
         let seed = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_nanos());
         // Runs in one MCP process can start in the same instant, so a name already taken is tried again.
-        let (file, path) = (0..100u32).find_map(|attempt| {
+        for attempt in 0..100u32 {
             let tag = &py::sha256_hex(format!("{seed}-{}-{attempt}", std::process::id()).as_bytes())[..8];
             let path = directory.join(format!("{}-{tag}.jsonl", seed / 1_000_000_000));
-            private_file(&path).ok().map(|file| (file, path))
-        })?;
-        Some(KeptTrace { trace: Trace::writing_to(file), path })
+            match private_file(&path) {
+                Ok(file) => return Some(KeptTrace { trace: Trace::writing_to(file), path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => return None,
+            }
+        }
+        None
     }
 
     /// What the run writes through: hand it to the run's HTTP client, whose trace every part of the run shares.
@@ -43,20 +49,19 @@ impl KeptTrace {
         self.trace.clone()
     }
 
-    /// The file's path when the run ended short of `complete` (or with no result at all), else None, the file gone.
+    /// The file's path when the run ended short of `complete` (or with no result at all), else None, the file gone. A
+    /// complete run's file that cannot be removed is named too, rather than left on disk unmentioned.
     pub fn finish(self, status: Option<Status>) -> Option<PathBuf> {
-        if status == Some(Status::Complete) {
-            // Windows refuses to delete a file still open, and this is the run's last handle on it.
-            drop(self.trace);
-            let _ = std::fs::remove_file(&self.path);
-            return None;
+        if status != Some(Status::Complete) {
+            return Some(self.path);
         }
-        Some(self.path)
+        self.trace.close();
+        std::fs::remove_file(&self.path).err().map(|_| self.path)
     }
 }
 
-/// Where kept traces go: the per-user state directory under `fastbrowse/traces`, made private, or None when the caller
-/// already chose where the trace goes (`--trace`, or `FASTBROWSE_TRACE`, whose `0` keeps none) or it cannot be made.
+/// Where kept traces go: the per-user state directory under `fastbrowse/traces`, or None when the caller already chose
+/// where the trace goes (`--trace`, or `FASTBROWSE_TRACE`, whose `0` keeps none) or no home directory is known.
 pub fn directory(flag: Option<&str>, environ: &HashMap<String, String>) -> Option<PathBuf> {
     if flag.or(environ.get(TRACE_ENV).map(String::as_str)).is_some_and(|destination| !destination.is_empty()) {
         return None;
@@ -71,14 +76,18 @@ pub fn directory(flag: Option<&str>, environ: &HashMap<String, String>) -> Optio
     } else {
         named("XDG_STATE_HOME").unwrap_or_else(|| home.join(".local/state"))
     };
-    let directory = base.join("fastbrowse/traces");
-    std::fs::create_dir_all(&directory).ok()?;
+    Some(base.join("fastbrowse/traces"))
+}
+
+/// `directory`, made if missing, that only its owner can enter: the traces in it hold the pages signed-in runs read.
+fn private_directory(directory: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).ok()?;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
     }
-    Some(directory)
+    Ok(())
 }
 
 /// A new file only its owner can read: a trace holds the pages a signed-in run read.
@@ -93,18 +102,52 @@ fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
     options.open(path)
 }
 
-/// Remove kept traces older than [`KEPT_FOR`]. Only `.jsonl` files this module names are touched.
+/// Remove kept traces older than [`KEPT_FOR`]. Only regular files named as [`KeptTrace::start`] names them are touched,
+/// so a file someone else put in the directory is left alone.
 fn remove_old(directory: &Path) {
     let Ok(entries) = std::fs::read_dir(directory) else { return };
     let now = SystemTime::now();
     for entry in entries.flatten() {
-        let path = entry.path();
-        let old = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age > KEPT_FOR));
-        if old && path.extension().is_some_and(|extension| extension == "jsonl") {
-            let _ = std::fs::remove_file(path);
+        let Ok(metadata) = entry.metadata() else { continue };
+        let old =
+            metadata.modified().is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age > KEPT_FOR));
+        if old && metadata.is_file() && entry.file_name().to_str().is_some_and(named_here) {
+            let _ = std::fs::remove_file(entry.path());
         }
+    }
+}
+
+/// Whether `name` is one [`KeptTrace::start`] makes: `<seconds>-<eight hex digits>.jsonl`.
+fn named_here(name: &str) -> bool {
+    let Some((seconds, tag)) = name.strip_suffix(".jsonl").and_then(|stem| stem.split_once('-')) else { return false };
+    !seconds.is_empty()
+        && seconds.bytes().all(|byte| byte.is_ascii_digit())
+        && tag.len() == 8
+        && tag.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_old_traces_this_module_named_are_removed_and_a_removed_directory_is_made_again() {
+        let directory = std::env::temp_dir().join(format!("fastbrowse-kept-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let kept = KeptTrace::start(&directory).expect("the directory is made");
+        let ours = kept.finish(None).unwrap();
+        let theirs = directory.join("notes.jsonl");
+        std::fs::write(&theirs, "").unwrap();
+        let long_ago = SystemTime::now() - KEPT_FOR - Duration::from_secs(60);
+        for path in [&ours, &theirs] {
+            std::fs::File::options().write(true).open(path).unwrap().set_modified(long_ago).unwrap();
+        }
+        remove_old(&directory);
+        assert!(!ours.exists() && theirs.exists());
+        std::fs::remove_dir_all(&directory).unwrap();
+        // A long-lived MCP server keeps its traces after someone removed the directory.
+        let again = KeptTrace::start(&directory).expect("made again");
+        assert_eq!(again.finish(Some(Status::Complete)), None);
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }

@@ -270,7 +270,7 @@ pub fn monotonic() -> f64 {
 /// appended to.
 pub const TRACE_ENV: &str = "FASTBROWSE_TRACE";
 
-type Sink<W = Box<dyn std::io::Write + Send>> = Mutex<W>;
+type Sink = Mutex<Box<dyn std::io::Write + Send>>;
 
 /// The process's trace destination once [`trace_to`] set one.
 static SINK: OnceLock<Sink> = OnceLock::new();
@@ -300,12 +300,11 @@ pub fn trace_to(destination: Option<&str>) -> std::io::Result<()> {
 }
 
 /// One event as a JSON line: when it was made, then the event.
-fn write_line<W: std::io::Write>(sink: &Sink<W>, record: &Map<String, Value>) {
+fn write_line(stream: &mut dyn std::io::Write, record: &Map<String, Value>) {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |at| at.as_secs_f64());
     let mut line = Map::new();
     line.insert("at".into(), crate::py::round(now, 3).into());
     line.extend(record.iter().map(|(key, value)| (key.clone(), value.clone())));
-    let mut stream = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     // A trace that cannot be written is the trace's loss, never the run's.
     let _ = writeln!(stream, "{}", crate::py::json::dumps(&Value::Object(line))).and_then(|()| stream.flush());
 }
@@ -318,8 +317,9 @@ fn write_line<W: std::io::Write>(sink: &Sink<W>, record: &Map<String, Value>) {
 #[derive(Debug, Clone, Default)]
 pub struct Trace {
     events: Option<Arc<Mutex<Vec<Value>>>>,
-    /// This run's own file, written as events are made, beside the process's destination if it has one.
-    file: Option<Arc<Sink<std::fs::File>>>,
+    /// This run's own file, written as events are made, beside the process's destination if it has one. Every clone
+    /// shares the one handle, so [`Trace::close`] shuts it for all of them.
+    file: Option<Arc<Mutex<Option<std::fs::File>>>>,
     /// The run's secrets. Every clone of a run's trace shares them, so an event made anywhere in the run, by the loop,
     /// a reader or a check, is redacted as it is written rather than wherever its fields were built.
     redactor: Option<Arc<Mutex<Redactor>>>,
@@ -339,7 +339,16 @@ impl Trace {
     /// A trace that writes every record made through it or a clone of it to `file` as a JSON line when it is made, so a
     /// run that dies part way still leaves what it had done.
     pub fn writing_to(file: std::fs::File) -> Trace {
-        Trace { events: None, file: Some(Arc::new(Mutex::new(file))), redactor: None }
+        Trace { events: None, file: Some(Arc::new(Mutex::new(Some(file)))), redactor: None }
+    }
+
+    /// Close this trace's file for every clone of it; events made afterwards are not written. Parts of a run, such as
+    /// the extension relay's reader, can outlive the run with a clone in hand, and Windows refuses to delete a file
+    /// still open, so a run's file is closed before it is removed.
+    pub fn close(&self) {
+        if let Some(file) = &self.file {
+            file.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+        }
     }
 
     /// This trace, redacting with `redactor` from now on.
@@ -370,9 +379,11 @@ impl Trace {
             record.values_mut().for_each(|value| redactor.redact_value(value));
         }
         if let Some(sink) = sink {
-            write_line(sink, &record);
+            write_line(&mut **sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), &record);
         }
-        if let Some(file) = &self.file {
+        if let Some(file) = &self.file
+            && let Some(file) = file.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut()
+        {
             write_line(file, &record);
         }
         if let Some(events) = &self.events {
@@ -540,6 +551,11 @@ mod tests {
         assert!(trace.enabled());
         trace.clone().event("first", || Map::from_iter([("n".into(), json!(1))]));
         let written = std::fs::read_to_string(&path).unwrap();
+        // Closing one handle closes the file for a clone that outlives the run, which then writes nothing.
+        let late = trace.clone();
+        trace.close();
+        late.event("late", Map::new);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), written);
         std::fs::remove_file(&path).unwrap();
         let line: Value = serde_json::from_str(written.lines().next().unwrap()).unwrap();
         assert_eq!(

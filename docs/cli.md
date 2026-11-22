@@ -344,7 +344,7 @@ The JSON result says why a run stopped where a caller can act on it:
   writes its trace to a file of its own under `$XDG_STATE_HOME/fastbrowse/traces` (`~/.local/state` without it;
   `~/Library/Application Support` on macOS, `%LOCALAPPDATA%` on Windows) as it goes, readable only by you, and
   deletes it when the run completes, so a failure can be read afterwards without having run it traced. A kept trace
-  holds the pages the run read, like any trace, and is deleted after 14 days. `FASTBROWSE_TRACE=0` keeps none.
+  holds the pages the run read, like any trace, and is removed by the first CLI or MCP run started 14 days after it. `FASTBROWSE_TRACE=0` keeps none.
   `serve`, the SDKs and the Python package keep no trace unless asked.
 - `browser` says which browser the run drove: `via` is `cloud`, `launched`, `attached` or `extension`, with the
   `profile` and the `browser` product and version where known. A run that read every page over HTTP has none.

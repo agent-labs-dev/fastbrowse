@@ -507,8 +507,16 @@ fn test_self_update_names_a_release_binary_and_its_upgrade_without_starting_a_ru
 async fn test_a_run_that_ends_short_of_complete_keeps_its_trace_and_names_it() {
     let state = std::env::temp_dir().join(format!("fastbrowse-kept-trace-{}", std::process::id()));
     let state_text = state.display().to_string();
-    let environ = [("HOME", "/nonexistent"), ("XDG_STATE_HOME", state_text.as_str())];
-    let traces = state.join("fastbrowse/traces");
+    // Each platform's own per-user state directory, pointed at a scratch one.
+    let (variable, traces) = if cfg!(target_os = "macos") {
+        ("HOME", state.join("Library/Application Support/fastbrowse/traces"))
+    } else if cfg!(windows) {
+        ("LOCALAPPDATA", state.join("fastbrowse/traces"))
+    } else {
+        ("XDG_STATE_HOME", state.join("fastbrowse/traces"))
+    };
+    let home = if variable == "HOME" { state_text.as_str() } else { "/nonexistent" };
+    let environ = [("HOME", home), (variable, state_text.as_str())];
     let listed = || std::fs::read_dir(&traces).map(|entries| entries.count()).unwrap_or(0);
 
     let stuck = cli_with(&["t", "--json"], model_settings(), &environ, result(Status::Stuck)).await;
@@ -537,7 +545,7 @@ async fn test_a_run_that_ends_short_of_complete_keeps_its_trace_and_names_it() {
     assert_eq!((failed.code, listed()), (1, 2));
 
     // A destination the caller chose replaces the kept one; `0` keeps none at all.
-    let chosen = [("HOME", "/nonexistent"), ("XDG_STATE_HOME", state_text.as_str()), ("FASTBROWSE_TRACE", "0")];
+    let chosen = [("HOME", home), (variable, state_text.as_str()), ("FASTBROWSE_TRACE", "0")];
     let opted_out = cli_with(&["t", "--json"], model_settings(), &chosen, result(Status::Stuck)).await;
     assert_eq!(opted_out.json().get("trace"), None);
     assert_eq!(listed(), 2);
