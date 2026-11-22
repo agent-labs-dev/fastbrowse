@@ -1939,6 +1939,26 @@ async fn test_a_control_in_a_section_of_records_but_outside_each_is_named_as_out
     h.close().await;
 }
 
+/// A list whose items each hold one button and nothing else is a toolbar, not a list of records: an editor's Bold and
+/// Italic in list items named its Save "outside every item listed".
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_toolbar_of_list_items_lists_no_records() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<section><h2>Description</h2><ul><li><button>Bold</button></li>\
+         <li><button>Italic</button></li></ul><textarea aria-label=\"Description\"></textarea>\
+         <button>Save</button></section>'",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Save").await;
+    let save = obs.controls.iter().find(|c| c.label == "Save").expect("Save");
+    assert_eq!(save.context.as_deref(), Some("Description"));
+    h.close().await;
+}
+
 /// A label kept in a twin's card because some other cards lack it, as a commenter's name is, still does not name the
 /// card alone: an "Edit" link in one product card, and in the page's header, would have named that card's Add
 /// button "Edit" with nothing of the product it adds.

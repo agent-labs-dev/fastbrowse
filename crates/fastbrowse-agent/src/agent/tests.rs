@@ -1892,6 +1892,24 @@ async fn test_a_requested_fill_is_asked_about_its_text() {
     assert!(!asked[0].contains("hunter2"), "{}", asked[0]);
 }
 
+/// A sensitive field's value is never put in Jev's question, though the question shows what a fill replaces.
+#[tokio::test]
+async fn test_a_requested_fill_of_a_sensitive_field_keeps_its_value_out() {
+    let mut field = Control::new("k", "textbox", "API key", [Operation::Fill]);
+    field.value = Some("sk-live-1234".into());
+    field.sensitive = true;
+    let page = observation(std::slice::from_ref(&field));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Put new-key in the API key field. Change nothing else.".into();
+    let decision = code_decision(Operation::Fill, Some(field.clone()));
+    let gated = agent.gate_edit(&mut state, &page, &decision, &field, Some("new-key")).await;
+    assert!(gated.is_ok(), "{gated:?}");
+    let asked = jev.0.lock().unwrap();
+    assert!(!asked[0].contains("sk-live-1234") && !asked[0].contains("The field holds"), "{}", asked[0]);
+}
+
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
 /// of checkboxes would otherwise end the run stuck.
 #[test]

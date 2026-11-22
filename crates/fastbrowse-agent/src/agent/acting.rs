@@ -489,7 +489,17 @@ impl Agent {
                     let reason = format!("{} can only be filled in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
-                let text = self.text(state, observation, decision, target).await?;
+                // Working out the text can stop the run, for a required value or a password the task lacks; an edit
+                // the task never asked for is refused first, or the run stopped asking for input it did not need.
+                let text = match self.text(state, observation, decision, target).await {
+                    Ok(text) => text,
+                    Err(stop) => {
+                        if requested_only {
+                            self.gate_edit(state, observation, decision, target, None).await?;
+                        }
+                        return Err(stop);
+                    }
+                };
                 if requested_only {
                     self.gate_edit(state, observation, decision, target, Some(&text)).await?;
                 }
@@ -707,7 +717,11 @@ impl Agent {
                 // Shown only the text a fill would leave, Jev put removing the line a task named from a long
                 // description at 0.10 to 0.13, unable to tell what the fill took out; told what the field holds now
                 // too, 0.74 to 0.82, while a fill that wiped the field stayed refused (#1432).
-                if let Some(current) = control.value.as_deref().filter(|current| !current.is_empty()) {
+                // The observation masks a long value; the raw capture holds what a fill would replace, and a sensitive
+                // field's value is never shown.
+                let raw = self.raw_target(control);
+                if let Some(current) = raw.value.as_deref().filter(|current| !current.is_empty() && !control.sensitive)
+                {
                     action.push_str(&format!("The field holds {} now.\n", text::repr(&self.redact(current))));
                 }
                 // A secret is named, never shown: the redactor puts its name where its value would be.
@@ -1275,6 +1289,7 @@ impl Agent {
             state.ledger.record([written.cost])?;
             // Changes apply to the text the writer was shown, which is none for a field whose value it never saw.
             let shown = holds.unwrap_or_default();
+            let changed = !written.data.changes.is_empty();
             return match written.data.text(shown).filter(|value| !value.trim().is_empty()) {
                 Some(value) => {
                     // Words the task gives as they were typed are the task's value, however Jev got to them, so a
@@ -1284,6 +1299,16 @@ impl Agent {
                     }
                     Ok(value)
                 }
+                // Changes the writer named that do not each match one passage of the field are not a value the task
+                // left out: marked missing, a description edit whose passage was quoted inexactly ended needs_input.
+                None if changed => Err(Unsure {
+                    reason: format!(
+                        "the changes written for {} do not each match one passage of what it holds",
+                        text::repr(&label)
+                    ),
+                    gives_up_as: Status::Stuck,
+                }
+                .into()),
                 None => Err(self.missing(state, observation, target)),
             };
         }

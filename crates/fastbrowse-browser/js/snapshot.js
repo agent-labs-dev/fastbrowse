@@ -1390,6 +1390,8 @@
     if (disabled) {
       base.disabled = true;
       base.operations = [];
+      // Not a page to follow either: a disabled Next on the last page was still offered as the way on.
+      delete base.next_page;
     }
     controls.push(base);
   }
@@ -1657,7 +1659,12 @@
   // "BSD-3-Clause") was offered as a hover target on every repository card, and the run hovered one instead of
   // opening the repository. Only the outermost such card is offered.
   const holding = new Set();
-  for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
+  // A disabled control is shown, not handled, so a card holding only one is still a card whose controls hover reveals.
+  const inert = new Set(controls.filter(c => c.disabled).map(c => registry.nodes.get(c.id)));
+  for (const e of offered) {
+    if (inert.has(e)) continue;
+    for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
+  }
   for (const doc of docs) {
     let host = null;
     for (const e of indexedElements(doc.body)) {
@@ -1874,15 +1881,29 @@
   // only the section's heading, the same context every comment's own Reply has, so a task to reply to one comment
   // filled the page's new-comment box (#1476). The DOM states whether a control is in a record: a record is what
   // `scopeOf` already stops at (an article or list item), and a section lists records when at least two hold a control.
+  // A record also holds text of its own beside its controls: an editor's toolbar is a list whose items each hold one
+  // button and nothing else, and counted as records it named the editor's Save "outside every item listed".
   const RECORD = 'article,li,[role="listitem"]';
+  const controlNodes = new Set(controls.map(c => registry.nodes.get(c.id)));
   const recordsHoldingControls = new Set();
-  for (const c of controls) {
-    for (let e = registry.nodes.get(c.id)?.parentElement; e; e = e.parentElement) if (e.matches(RECORD)) recordsHoldingControls.add(e);
+  for (const e of controlNodes) {
+    for (let r = e; r; r = r.parentElement) if (r.matches(RECORD)) recordsHoldingControls.add(r);
   }
-  const recordCount = memo(section => [...descendants(section, RECORD)].filter(r => recordsHoldingControls.has(r)).length);
+  const holdsOwnText = record => {
+    const texts = record.ownerDocument.createTreeWalker(record, NodeFilter.SHOW_TEXT);
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      if (!node.data.trim()) continue;
+      let inControl = false;
+      for (let e = node.parentElement; e && !inControl; e = e === record ? null : e.parentElement) inControl = controlNodes.has(e);
+      if (!inControl) return true;
+    }
+    return false;
+  };
+  const recordCount = memo(section =>
+    [...descendants(section, RECORD)].filter(r => recordsHoldingControls.has(r) && holdsOwnText(r)).length);
   const listsRecordsOutside = (section, element) => {
     if (recordCount(section) < 2) return false;
-    for (let e = element.parentElement; e && e !== section; e = e.parentElement) if (e.matches(RECORD)) return false;
+    for (let e = element; e && e !== section; e = e.parentElement) if (e.matches(RECORD)) return false;
     return true;
   };
   const nearestHeading = (element, label) => {

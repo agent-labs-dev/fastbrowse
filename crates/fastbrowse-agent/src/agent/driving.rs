@@ -968,7 +968,6 @@ impl Agent {
         let label = decision_label(decision);
         let mut typed: Option<String> = None;
         let mut effect_now: Option<String> = None;
-        let mut put_now: Option<(String, Vec<String>)> = None;
         let mut setting = false;
         let mut set: Vec<(String, String)> = Vec::new();
         let frames = self.on_event.is_some() && self.config.step_frames;
@@ -1246,7 +1245,6 @@ impl Agent {
                 if set.is_empty() && done.set_something && stayed {
                     set.push((describe(target), UNREPORTED.to_string()));
                 }
-                put_now = (!done.put.is_empty()).then(|| (landed.url.clone(), done.put));
                 effect_now = Some(done.summary);
             }
             progressed = judged;
@@ -1260,7 +1258,7 @@ impl Agent {
         state.history.push(HistoryEntry {
             text: typed,
             effect: effect_now,
-            put: put_now,
+            put: None,
             look: state.look.take(),
             setting: setting.then_some(true),
             set,
@@ -1552,10 +1550,12 @@ impl Agent {
             // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
-            let put = fastbrowse_core::effects::added_text(&before, observation);
-            state.replied = (state.committing || keeping || last.look.is_some()) && !put.is_empty();
-            last.put = (!put.is_empty()).then(|| (observation.url.clone(), put));
-            fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
+            // Only text added to the page the step stayed on: another document or address is all new, and recorded
+            // as this step's, the whole destination page was quoted as a commit's reply.
+            let done = fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited);
+            state.replied = (state.committing || keeping || last.look.is_some()) && !done.put.is_empty();
+            last.put = (!done.put.is_empty()).then(|| (observation.url.clone(), done.put.clone()));
+            done
         } else {
             effect(&before, observation, None, waited)
         };
@@ -1584,15 +1584,6 @@ impl Agent {
                 *read = true;
             }
             state.read_tries.remove(&page);
-        }
-        // The commit's branch above already recorded what it added; another step's effect names the text it put.
-        if !done.put.is_empty() {
-            let (_, put) = last.put.get_or_insert_with(|| (observation.url.clone(), Vec::new()));
-            for piece in &done.put {
-                if !put.contains(piece) {
-                    put.push(piece.clone());
-                }
-            }
         }
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),
