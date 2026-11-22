@@ -87,7 +87,9 @@ pub fn operation_label(operation: Operation) -> &'static str {
             "Open another HTTP(S) address: one the caller supplied for this task, or a page a site the task names is known to serve for an item the task names."
         }
         Operation::Click => "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
-        Operation::RightClick => "Right-click an element to open its context menu of commands, such as rename or compress.",
+        Operation::RightClick => {
+            "Right-click an element to open its context menu of commands, such as rename or compress."
+        }
         Operation::DoubleClick => "Double-click an element to open it, such as a file, folder or list item.",
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
         Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",

@@ -509,7 +509,17 @@ async fn test_a_fed_recording_fits_a_window_of_another_size_inside_its_first_fra
             let last = tokio::process::Command::new("ffmpeg")
                 .args(["-loglevel", "error", "-sseof", "-0.2", "-i"])
                 .arg(&plain)
-                .args(["-frames:v", "1", "-vf", &format!("crop=2:2:{x}:{y}"), "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    &format!("crop=2:2:{x}:{y}"),
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "gray",
+                    "-",
+                ])
                 .output()
                 .await
                 .unwrap();

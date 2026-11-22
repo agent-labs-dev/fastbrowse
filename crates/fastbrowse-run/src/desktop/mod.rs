@@ -250,8 +250,10 @@ impl DeskpilotPage {
     /// this point.
     fn point(&self, operation: Operation, (x, y, width, height): (f64, f64, f64, f64)) {
         if let Some(film) = &self.film {
-            let pressed =
-                matches!(operation, Operation::Click | Operation::RightClick | Operation::DoubleClick | Operation::Drag);
+            let pressed = matches!(
+                operation,
+                Operation::Click | Operation::RightClick | Operation::DoubleClick | Operation::Drag
+            );
             film.point(PointerMark { at: Instant::now(), x, y, operation, pressed, width, height });
         }
     }
@@ -540,8 +542,7 @@ impl DeskpilotPage {
                 | Operation::Fill
                 | Operation::Hover
                 | Operation::Select
-        )
-            && !action.secret
+        ) && !action.secret
             && let Some(id) = action.target_id.as_deref()
             && let Some(aim) = self.observed.lock().unwrap().as_ref().and_then(|root| tree::aim(root, id))
         {

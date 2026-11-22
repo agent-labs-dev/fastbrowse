@@ -632,11 +632,7 @@ fn encode_args(filter: &str, output: &str) -> Vec<String> {
     .to_vec()
 }
 
-async fn tick(
-    session: Option<BrowserSession>,
-    frames: Arc<Mutex<Frames>>,
-    pass: Arc<tokio::sync::Mutex<Pass>>,
-) {
+async fn tick(session: Option<BrowserSession>, frames: Arc<Mutex<Frames>>, pass: Arc<tokio::sync::Mutex<Pass>>) {
     let mut written: u32 = 0;
     loop {
         // A fed recording has no cast to keep alive: its caller sends each frame.

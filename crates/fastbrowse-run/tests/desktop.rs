@@ -428,10 +428,7 @@ async fn a_drag_presses_on_one_element_and_lets_go_on_the_other_in_a_fresh_shots
     let result = page.act(&drag, &before).await.unwrap();
     assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
     let sent: Vec<Value> = calls(&fake, "drag").iter().map(|call| call["params"]["arguments"].clone()).collect();
-    assert_eq!(
-        sent,
-        [json!({"window": "0xabc", "shot": "placed", "x1": 112.0, "y1": 40.0, "x2": 272.0, "y2": 168.0})]
-    );
+    assert_eq!(sent, [json!({"window": "0xabc", "shot": "placed", "x1": 112.0, "y1": 40.0, "x2": 272.0, "y2": 168.0})]);
     // The shot only placed the points: its PNG does not pile up in deskpilot's cache.
     assert!(!fake.dir().join("placed.png").exists());
 }
