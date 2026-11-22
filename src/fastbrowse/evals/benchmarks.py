@@ -6,7 +6,8 @@ import json
 import re
 import subprocess
 import tempfile
-from collections.abc import Collection
+from collections import Counter
+from collections.abc import Collection, Iterable
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, Self
 
@@ -406,12 +407,45 @@ class Group(PublicModel):
             tasks = {task for task, _ in slots}
             excluded = {task for excluded_arm, task in pairs if excluded_arm == arm}
             expected = {(task, repeat) for task in set(self.task_ids) - excluded for repeat in range(self.repeats)}
-            if len(slots) != len(set(slots)) or set(slots) != expected or not excluded <= set(self.task_ids):
-                raise ValueError("every scheduled slot must have exactly one measured row")
+            if not excluded <= set(self.task_ids):
+                raise ValueError(f"{self.id}/{arm} excludes tasks outside the task set")
+            if problems := _slot_problems(slots, expected):
+                raise ValueError(f"{self.id}/{arm}: " + "; ".join(problems))
             if tasks & excluded:
                 raise ValueError(f"{self.id}/{arm} has rows for a task it is excluded from")
             if len({r.dollars is None for r in rows}) > 1:
                 raise ValueError(f"{self.id}/{arm} reports its cost on every row or on none")
+
+
+SLOT_SAMPLE = 3
+"""How many slot names a mismatch shows of each kind: enough to find the gap, short enough to read in a log line."""
+
+
+def _slot_problems(slots: list[tuple[str, int]], expected: set[tuple[str, int]]) -> list[str]:
+    """Each way `slots` differs from one row per `expected` slot, counted and with the first few named.
+
+    One fixed message for missing, duplicated and extra slots left a 146-slot candidate to be diffed by hand to find
+    the gap (#1251)."""
+    counts = Counter(slots)
+
+    def named(count: int, noun: str, what: str, found: Iterable[tuple[str, int]]) -> str:
+        first = ", ".join(f"{task} r{repeat}" for task, repeat in sorted(found)[:SLOT_SAMPLE])
+        return f"{count} {noun}{'' if count == 1 else 's'} {what} (first: {first})"
+
+    problems = []
+    if missing := expected - counts.keys():
+        problems.append(named(len(missing), "slot", "with no row", missing))
+        # Whole tasks are listed apart: a run that covered only some tasks, such as a targeted `only=` rerun with
+        # nothing earlier in the campaign for the rest, leaves out every repeat of a task, not single repeats.
+        absent = sorted({task for task, _ in expected} - {task for task, _ in counts})
+        if absent:
+            shown = ", ".join(absent[:SLOT_SAMPLE])
+            problems.append(f"{len(absent)} task{'' if len(absent) == 1 else 's'} with no row in any repeat: {shown}")
+    if several := [slot for slot, count in counts.items() if count > 1]:
+        problems.append(named(len(several), "slot", "with several rows", several))
+    if extra := counts.keys() - expected:
+        problems.append(named(len(extra), "slot", "outside the schedule", extra))
+    return problems
 
 
 class Fixture(PublicModel):

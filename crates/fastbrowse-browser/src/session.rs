@@ -191,7 +191,10 @@ pub async fn check_browser_access(check: Option<&CheckAccess>) -> Result<(), Bro
     let Some(check) = check else { return Ok(()) };
     check().await.map_err(|error| {
         let kind = error.downcast_ref::<AccessRefused>().map_or("Exception", |refused| refused.0.as_str());
-        BrowserError::Failed(format!("check_access refused the browser ({kind}, caller supplied)"))
+        BrowserError::failed(
+            "check_access/refused",
+            format!("check_access refused the browser ({kind}, caller supplied)"),
+        )
     })
 }
 
@@ -374,6 +377,8 @@ pub(crate) struct State {
     pub(crate) ad_frames: HashSet<String>,
     /// session -> how many documents its top frame has committed, for `document_mark`.
     pub(crate) documents: HashMap<String, u64>,
+    /// session -> the address Chrome's own error page in its top frame stands for, beside the error page's own address.
+    pub(crate) error_pages: HashMap<String, (String, String)>,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
     pub(crate) denials: u32,
     /// Requests paused and not yet released, so closing can release what a stopped task left paused.
@@ -738,7 +743,8 @@ impl BrowserSession {
     }
 
     pub fn client(&self) -> Result<Cdp, BrowserError> {
-        self.client_opt().ok_or_else(|| BrowserError::Failed("CDP.client failed (SessionClosed)".into()))
+        self.client_opt()
+            .ok_or_else(|| BrowserError::failed("CDP.client/SessionClosed", "CDP.client failed (SessionClosed)"))
     }
 
     /// A command through the client's deadlines.
@@ -1027,6 +1033,18 @@ impl BrowserSession {
         self.0.state.lock().unwrap().documents.get(session_id).copied().unwrap_or_default()
     }
 
+    /// The address `href` stands for in `session_id`'s top frame: the one that answered when `href` is Chrome's own
+    /// error page for it, else `href` itself.
+    ///
+    /// An error status with no body commits Chrome's error page at an address of its own, which held no grant and
+    /// named no site, so the run lost the page it had asked for and the status it got (#1371).
+    pub fn page_address(&self, session_id: &str, href: String) -> String {
+        match self.0.state.lock().unwrap().error_pages.get(session_id) {
+            Some((shown, unreachable)) if *shown == href => unreachable.clone(),
+            _ => href,
+        }
+    }
+
     /// The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it.
     pub fn status_context(&self, session_id: &str, context_id: i64) -> Option<String> {
         self.0.state.lock().unwrap().status_contexts.remove(&(session_id.to_owned(), context_id))
@@ -1052,7 +1070,7 @@ impl BrowserSession {
 
     pub async fn switch_tab(&self, target_id: &str) -> Result<(), BrowserError> {
         if !self.0.state.lock().unwrap().tabs.iter().any(|t| t.target_id == target_id) {
-            return Err(BrowserError::Failed(format!("Unknown tab {target_id}")));
+            return Err(BrowserError::failed("tab/unknown", format!("Unknown tab {target_id}")));
         }
         Shared::set_active_target(&self.0, target_id);
         self.bring_to_front().await
@@ -1203,7 +1221,7 @@ impl BrowserSession {
                 Some(needle) => format!("no page matching {}", py_repr(needle)),
             };
             let seen = seen.iter().map(|s| py_repr(s)).collect::<Vec<_>>().join(", ");
-            return Err(BrowserError::Failed(format!("{wanted} to attach to; pages: [{seen}]")));
+            return Err(BrowserError::failed("attach/no-page", format!("{wanted} to attach to; pages: [{seen}]")));
         };
         let target_id = str_of(&target["targetId"]);
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
@@ -1479,7 +1497,10 @@ impl BrowserSession {
         };
         // Python's `next(...)` raises when nothing is pending; a dispatch for a dialog that is gone fails the same way.
         let Some(session_id) = session_id else {
-            return Err(BrowserError::Failed("Page.handleJavaScriptDialog failed (StopIteration)".into()));
+            return Err(BrowserError::failed(
+                "Page.handleJavaScriptDialog/StopIteration",
+                "Page.handleJavaScriptDialog failed (StopIteration)",
+            ));
         };
         let mut params = json!({"accept": accept});
         if let Some(text) = prompt_text {
@@ -1659,7 +1680,19 @@ impl Shared {
                 if let Some(session) = session
                     && params["frame"]["parentId"].is_null()
                 {
-                    *self.state.lock().unwrap().documents.entry(session.to_owned()).or_default() += 1;
+                    let mut state = self.state.lock().unwrap();
+                    *state.documents.entry(session.to_owned()).or_default() += 1;
+                    // Chrome commits its own error page, at an address of its own, for a response it will not show,
+                    // such as an error status with no body; the frame names the address that answered.
+                    match params["frame"]["unreachableUrl"].as_str().filter(|url| !url.is_empty()) {
+                        Some(unreachable) => {
+                            let shown = str_of(&params["frame"]["url"]);
+                            state.error_pages.insert(session.to_owned(), (shown, unreachable.to_owned()));
+                        }
+                        None => {
+                            state.error_pages.remove(session);
+                        }
+                    }
                 }
             }
             "Page.frameRequestedNavigation" | "Page.frameStartedLoading" => {
@@ -1769,6 +1802,7 @@ impl Shared {
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
                 state.documents.remove(&child);
                 state.main_worlds.remove(&child);
+                state.error_pages.remove(&child);
                 state.navigating.retain(|(sid, _), _| *sid != child);
                 state.frames_loading.retain(|(sid, _), _| *sid != child);
                 state.clicked.remove(&child);

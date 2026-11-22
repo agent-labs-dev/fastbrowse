@@ -718,7 +718,7 @@ async fn test_a_draw_wait_timeout_does_not_queue_a_second_page_evaluation() {
     let obs = h.observe().await;
     armed.store(true, Ordering::SeqCst);
     let error = h.page.act(&click(find(&obs, "Shadow button")), &obs).await.expect_err("the page did not draw");
-    assert!(matches!(&error, BrowserError::PageUnresponsive(m) if m.contains("did not draw")), "{error:?}");
+    assert!(matches!(&error, BrowserError::PageUnresponsive(m) if m.message.contains("did not draw")), "{error:?}");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     h.close().await;
 }
