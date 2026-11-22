@@ -11272,8 +11272,51 @@ async fn test_the_key_question_carries_what_the_page_says_about_a_draggable_card
     let asked = jev.asked.lock().unwrap();
     assert!(asked.iter().any(|q| q.contains("Which key should be pressed in")
         && q.contains("The page calls it 'draggable'.")
-        && q.contains("To pick up a draggable item, press the space bar.")
-        && q.contains("A press moves keyboard focus to this control before it sends the key")));
+        && q.contains("To pick up a draggable item, press the space bar.")));
+}
+
+/// A press that set a widget going leaves focus on that control, and a press elsewhere moves focus away from it (#1466):
+/// the next key is asked in the focused control, as what its own last press did, with "elsewhere" an answer. A sortable
+/// item picked up by Space is moved and dropped by keys pressed on it, though Jev chose another card to press.
+#[tokio::test]
+async fn test_the_next_key_is_asked_in_the_control_the_last_press_set_going() {
+    let mut lifted = Control::new("a", "button", "Test image", [Operation::Click, Operation::Press]);
+    lifted.focused = Some(true);
+    lifted.checked = Some(true);
+    let destination = Control::new("b", "button", "Barrens", [Operation::Click, Operation::Press]);
+    let page = observation(&[lifted.clone(), destination.clone()]);
+    let jev = Arc::new(FirstChoice { wants: Some("ArrowUp"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let mut last = executed(Some(Operation::Press), Some("Test image"), true);
+    last.text = Some("Space".into());
+    last.effect = Some("changed Test image checked: False -> True".into());
+    state.history.push(last);
+    let action = agent
+        .action(&mut state, &page, &code_decision(Operation::Press, Some(destination.clone())))
+        .await
+        .expect("action");
+    assert_eq!((action.target_id.as_deref(), action.text.as_deref()), (Some("a"), Some("ArrowUp")));
+    {
+        let asked = jev.asked.lock().unwrap();
+        assert!(asked.iter().any(|q| {
+            q.contains("The last action pressed 'Space' in 'Test image' and changed Test image")
+                && q.contains("still holds keyboard focus")
+                && q.contains("Which key should be pressed in 'Test image'")
+        }));
+    }
+    // "elsewhere" leaves the press on the control Jev chose.
+    let jev = Arc::new(FirstChoice { wants: Some("different control"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let mut last = executed(Some(Operation::Press), Some("Test image"), true);
+    last.text = Some("Space".into());
+    state.history.push(last);
+    let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(destination))).await;
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in 'Barrens'")), "{asked:?}");
 }
 
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.

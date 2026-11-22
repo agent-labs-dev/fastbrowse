@@ -94,14 +94,6 @@ const PRESS_ROLE_KEYS: &str = "Press a key on a control: one its role supports, 
 /// The Press operation where a control with no role keys, such as a sortable card, takes a press: Space picks it up, the arrows move it, Space drops it.
 const PRESS_STANDARD_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, a standard navigation or editing key (arrows, Home, End, Space, Delete) that moves a caret or picks up, moves and drops an item, or the key or key chord the task gives.";
 
-/// Added to the press target question. The key goes to the control the press names, after focus moves there, so a key
-/// that carries on something under way (an item picked up by keys) is aimed at the control it is under way on; Jev put
-/// the Space that drops a picked-up sortable item on the destination item, which dropped it where it was (#1466).
-const PRESS_FOCUS: &str = "A press moves keyboard focus to the control it names before it sends the key, so focus leaves \
-the control that held it (the element marked focused). A widget can end what it was doing on a control when focus leaves \
-it: an item picked up by keys, shown checked, is dropped where it is. The keys that move and drop that item are pressed \
-on it, and its destination is reached with its arrows, not by pressing another item.";
-
 pub fn operation_label(operation: Operation) -> &'static str {
     match operation {
         Operation::Search => {
@@ -1985,17 +1977,7 @@ fn target_question(
     // context and operations the shared state carries for the operation question. Repeated in every option, they
     // added 45% to a step request's bytes and 18% to its cost (#1286).
     let shown = candidates.iter().any(|c| looks.contains_key(&c.id));
-    let mut rules = vec![json!(rules)];
-    if shown {
-        rules.push(json!(LOOKS_LIKE));
-    }
-    // Only where a control is operated by keys without being a field (a field is pressed in for its Enter): a page of
-    // fields asks what it always has.
-    if operation == Operation::Press && candidates.iter().any(|c| !c.operations.contains(&Operation::Fill)) {
-        rules.push(json!(PRESS_FOCUS));
-    }
-    // A question with one rule carries it as a string, as it always has.
-    let rules = if rules.len() == 1 { rules.remove(0) } else { json!(rules) };
+    let rules = if shown { json!([rules, LOOKS_LIKE]) } else { json!(rules) };
     choice(
         dumps(&json!({"rules": rules, "operation": operation.as_str()})),
         candidates.iter().map(|c| {
@@ -2511,12 +2493,6 @@ mod tests {
         let request = build_request(&page, &sortable, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
         let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
         assert_eq!(operation.criteria["press"], json!(PRESS_STANDARD_KEYS));
-        // The press target question says a press moves focus to its control; no other operation's does.
-        let Question::Choice(press) = &request.questions["press_target"] else { panic!("a choice") };
-        assert!(press.instructions.contains("A press moves keyboard focus to the control it names"));
-        assert!(!press.instructions.contains("looks_like"));
-        let Question::Choice(click) = &request.questions["click_target"] else { panic!("a choice") };
-        assert!(!click.instructions.contains("keyboard focus"));
         let plain = vec![field("name", None), button(1)];
         let page = observation(plain.clone());
         let request = build_request(&page, &plain, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
