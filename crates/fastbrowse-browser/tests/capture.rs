@@ -1546,10 +1546,16 @@ async fn an_editable_cell_or_a_design_mode_body_is_read_once_as_its_field() {
     assert_eq!(holding.len(), 1, "{:?}", holding.iter().map(|b| capture.block_text(b)).collect::<Vec<_>>());
     assert_eq!(capture.block_text(holding[0]), "Cell: cell words");
     assert!(holding[0].control_context.as_ref().is_some_and(|c| c.value.is_some()));
+    // The table survives with its cell empty, and precedes the field block.
+    let position = |text: &str| capture.blocks.iter().position(|b| capture.block_text(b) == text);
+    let table = capture.blocks.iter().position(|b| capture.block_text(b).contains("Item")).expect("the table survives");
+    let field = position("Cell: cell words").expect("field block");
+    assert!(table < field, "the table precedes the field block");
+    assert!(!capture.block_text(&capture.blocks[table]).contains("cell words"), "the cell reads empty in the table");
 
     crate::common::eval_active(
         &h.session,
-        "document.body.innerHTML = '<p>First</p><p>Second</p>'; document.designMode = 'on'",
+        "document.body.innerHTML = '<p>First <a href=\"https://a.test/x\">Linked</a></p><p>Second</p>'; document.designMode = 'on'",
     )
     .await;
     let capture = h.page.capture().await.expect("capture");
@@ -1557,6 +1563,7 @@ async fn an_editable_cell_or_a_design_mode_body_is_read_once_as_its_field() {
     assert_eq!(texts.iter().filter(|t| t.contains("First")).count(), 1, "{texts:?}");
     let body = capture.blocks.iter().find(|b| capture.block_text(b).contains("First")).expect("body field");
     assert!(body.control_context.as_ref().is_some_and(|c| c.value.is_some()), "the body is one field block");
+    assert!(body.links.iter().any(|l| l.href == "https://a.test/x"), "the body field keeps its links: {:?}", body.links);
     h.close().await;
 }
 

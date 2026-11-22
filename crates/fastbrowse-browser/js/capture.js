@@ -247,9 +247,8 @@
   const rendered = new WeakMap();
   const containsHost = e => [...e.querySelectorAll('[contenteditable]')].some(h => isHost(h));
   const hostOf = a => {
-    let host = null;
-    for (let p = a.parentElement; p?.isContentEditable; p = p.parentElement) host = p;
-    return host;
+    for (let p = a.parentElement; p; p = p.parentElement) if (isHost(p)) return p;
+    return null;
   };
   const renderedOf = e => {
     if (rendered.has(e)) return rendered.get(e);
@@ -453,7 +452,7 @@
   // designMode makes every element editable, so the body is the host there, as a contenteditable body is.
   const isHost = e =>
     !CONTROLS.has(e.tagName) && e.isContentEditable &&
-    (!e.parentElement?.isContentEditable || (e === e.ownerDocument.body && e.ownerDocument.designMode === 'on'));
+    (e.ownerDocument.designMode === 'on' ? e === e.ownerDocument.body : !e.parentElement?.isContentEditable);
   const fieldValue = e => {
     if (e.tagName === 'SELECT') return [...e.selectedOptions].map(o => clean(o.label || o.text)).join(', ');
     // A host reads as every other block does, so its links are found by the text the field block quotes.

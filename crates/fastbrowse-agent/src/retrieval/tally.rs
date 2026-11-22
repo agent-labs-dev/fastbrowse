@@ -403,7 +403,8 @@ fn distinct(
     Some(kept)
 }
 
-/// Every note read, once each: a superseded read is a past state, and a note whose whole text a note before it
+/// Every note read, once each: a note holding what the run typed is not the site's own record, so no tally of any
+/// kind (count, total, extreme) takes it. A superseded read is a past state, and a note whose whole text a note before it
 /// already gave is the same record read again, from a later visit or another listing of it. Within one capture the
 /// same text twice is two records, such as a row two tables both hold, so a note is keyed by its text and which
 /// occurrence of that text it is on its capture. A note from a table says
@@ -419,6 +420,7 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
         .into_iter()
         .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact_id(fact), evidence)))
         .filter(|(id, _)| !notes.superseded(id))
+        .filter(|(_, evidence)| notes.typed_by_step(evidence).is_none())
         .collect();
     // Where each text was noted on each capture, in page order.
     let mut starts: HashMap<(&str, String), BTreeSet<i64>> = HashMap::new();
@@ -2508,6 +2510,40 @@ mod tests {
             assert_eq!(result, (mode != "invalid").then(|| records.clone()));
             assert_eq!(jev.questions.load(std::sync::atomic::Ordering::Relaxed), 155);
         }
+    }
+
+    /// A value the run typed into an editable note and read back is the run's own text, not a record of the site, so no
+    /// tally can take it (#1481).
+    #[test]
+    fn a_note_the_run_typed_is_no_candidate_record() {
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::models::{FactReader, SourceControl};
+        use fastbrowse_core::page::BlockKind;
+
+        let mut captured = capture(&[(BlockKind::Paragraph, "Item A £10"), (BlockKind::Paragraph, "Notes: Item B £99")]);
+        captured.blocks[1].control_context = Some(SourceControl {
+            role: "textarea".into(),
+            label: "Notes".into(),
+            context: None,
+            element: Some("main:7".into()),
+            document: Some("doc-1".into()),
+            value: Some("Item B £99".into()),
+        });
+        let page = Page::new(&captured);
+        let note = |index: usize| {
+            let block = &captured.blocks[index];
+            Fact::read("note", evidence(&page, block, block.start, block.end), FactReader::JevChoice)
+        };
+        let mut notes = Notes::new([note(0), note(1)]);
+        notes.remember_capture(&captured, 1);
+        assert_eq!(candidates(&notes).len(), 2);
+        notes.remember_typing(1, "doc-1", "main:7", "Item B £99");
+        let found = candidates(&notes);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].quote.contains("Item A"));
     }
 
     #[tokio::test]
