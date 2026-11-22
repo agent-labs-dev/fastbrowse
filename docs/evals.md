@@ -34,7 +34,7 @@ uv run parallax run fastbrowse \
 The plugin registers `fastbrowse`, `fastbrowse-pool`, `fastbrowse-hosted`, and
 `fastbrowse-llm-picker`, which is `fastbrowse` with `FASTBROWSE_ACTION_PICKER=llm`: the
 run's LLM picks each action in place of Jev, so the two arms differ only in the picker. Parallax also provides `browser-use-cloud`,
-`browser-use-oss`, `browser-harness` (Codex), `browser-harness-claude-code`, and `cua-codex`.
+`browser-use-oss`, `browser-harness` (Codex), `browser-harness-claude-code`, `agent-browser` (Codex), and `cua-codex`.
 
 Each task is world-less, has `Area.BROWSER`, and uses
 `browser-evidence-v2`. A browser harness stores the final page under trial
@@ -56,6 +56,7 @@ The mapping is:
 - `browser-use-cloud` with `bu-ultrafast` to `browser-use-ultrafast`;
 - other `browser-use-cloud` results to `browser-use`;
 - `browser-harness` to `browser-harness`;
+- `agent-browser` on its pinned model to `agent-browser`, a campaign arm that no publication group carries yet;
 - `browser-use-oss` to `browser-use-oss`.
 
 `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` are diagnostic and have no public arm.

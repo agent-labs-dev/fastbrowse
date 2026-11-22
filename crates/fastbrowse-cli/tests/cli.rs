@@ -10,8 +10,9 @@ use std::sync::{Arc, Mutex};
 use common::{Call, Recorder, isolated_binary, model_settings, result, runner};
 use fastbrowse_agent::agent::RecipeOutcome;
 use fastbrowse_cli::cli::{self, Build, Context, Streams};
-use fastbrowse_cli::runner::Runner;
+use fastbrowse_cli::runner::{Host, RunError, RunTask, Runner};
 use fastbrowse_clients::environment::{Secret, Settings};
+use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
 use fastbrowse_core::recipe::{RECIPE_VERSION, Recipe};
 use serde_json::Value;
@@ -82,6 +83,7 @@ async fn cli_run_by(
         environ: environ.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
         streams: Streams { out: Arc::new(Mutex::new(out.clone())), err: Arc::new(Mutex::new(err.clone())) },
         build,
+        kept_at: Default::default(),
     };
     let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
     let code = cli::main(&argv, &context).await;
@@ -500,4 +502,53 @@ fn test_self_update_names_a_release_binary_and_its_upgrade_without_starting_a_ru
     let extra = isolated_binary().args(["self-update", "now"]).output().unwrap();
     assert_eq!(extra.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&extra.stderr).starts_with("usage: fastbrowse self-update"));
+}
+
+#[tokio::test]
+async fn test_a_run_that_ends_short_of_complete_keeps_its_trace_and_names_it() {
+    let state = std::env::temp_dir().join(format!("fastbrowse-kept-trace-{}", std::process::id()));
+    let state_text = state.display().to_string();
+    // Each platform's own per-user state directory, pointed at a scratch one.
+    let (variable, traces) = if cfg!(target_os = "macos") {
+        ("HOME", state.join("Library/Application Support/fastbrowse/traces"))
+    } else if cfg!(windows) {
+        ("LOCALAPPDATA", state.join("fastbrowse/traces"))
+    } else {
+        ("XDG_STATE_HOME", state.join("fastbrowse/traces"))
+    };
+    let home = if variable == "HOME" { state_text.as_str() } else { "/nonexistent" };
+    let environ = [("HOME", home), (variable, state_text.as_str())];
+    let listed = || std::fs::read_dir(&traces).map(|entries| entries.count()).unwrap_or(0);
+
+    let stuck = cli_with(&["t", "--json"], model_settings(), &environ, result(Status::Stuck)).await;
+    let kept = std::path::PathBuf::from(stuck.json()["trace"].as_str().expect("the trace is named"));
+    assert!(kept.starts_with(&traces) && kept.is_file());
+    assert!(stuck.err.contains(&format!("  trace: {}", kept.display())));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&kept).unwrap().permissions().mode() & 0o777, 0o600, "a trace holds page text");
+        assert_eq!(std::fs::metadata(&traces).unwrap().permissions().mode() & 0o777, 0o700);
+    }
+    assert_eq!(listed(), 1);
+
+    let complete = cli_with(&["t", "--json"], model_settings(), &environ, result(Status::Complete)).await;
+    assert_eq!(complete.json().get("trace"), None);
+    assert_eq!(listed(), 1, "a complete run leaves nothing behind");
+
+    // A run that fails without a result still names what it kept, in its JSON as well as on stderr.
+    let failing: Arc<dyn Runner> = Arc::new(|_: RunTask, _: Host| -> BoxFuture<'static, Result<RunResult, RunError>> {
+        Box::pin(async { Err(RunError::Invalid("the model refused the schema".into())) })
+    });
+    let failed = cli_run_by(&["t", "--json"], model_settings(), &environ, failing, Build::default()).await;
+    let named = std::path::PathBuf::from(failed.json()["trace"].as_str().expect("the failed run's trace is named"));
+    assert!(named.is_file() && failed.err.contains(&format!("  trace: {}", named.display())));
+    assert_eq!((failed.code, listed()), (1, 2));
+
+    // A destination the caller chose replaces the kept one; `0` keeps none at all.
+    let chosen = [("HOME", home), (variable, state_text.as_str()), ("FASTBROWSE_TRACE", "0")];
+    let opted_out = cli_with(&["t", "--json"], model_settings(), &chosen, result(Status::Stuck)).await;
+    assert_eq!(opted_out.json().get("trace"), None);
+    assert_eq!(listed(), 2);
+    std::fs::remove_dir_all(&state).unwrap();
 }
