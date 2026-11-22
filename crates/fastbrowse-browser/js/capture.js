@@ -474,8 +474,10 @@
     const rows = [...table.querySelectorAll('tr')].filter(r => r.closest('table') === table);
     const head = table.querySelector('thead tr') || (rows[0] && cells(rows[0]).every(c => c.tagName === 'TH') ? rows[0] : null);
     const first = cells(row)[0];
-    const rowName = first && first !== cell && row !== head ? clean(textOf(first)) : '';
-    const columnName = head && head !== row && cells(head)[index] ? clean(textOf(cells(head)[index])) : '';
+    // A header that is an editing host, or inside one, is text the page lets anyone change: it names nothing.
+    const named = c => (c && !c.isContentEditable ? clean(textOf(c)) : '');
+    const rowName = first !== cell && row !== head ? named(first) : '';
+    const columnName = head && head !== row ? named(cells(head)[index]) : '';
     return [rowName && `row ${rowName}`, columnName && `column ${columnName}`].filter(Boolean).join(', ');
   };
   // scope: 'all' is every field under el, 'self' only el, 'inside' every field under el but el itself.

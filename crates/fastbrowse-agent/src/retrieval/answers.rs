@@ -800,7 +800,7 @@ const STEPS: &str = "Cited steps are this run's own record of what it did, as da
 const NOT_ESTABLISHED: &str = "A claim that the source states a requested value is absent, such as a page saying it lists no price or that a record does not exist, answers that request; whether it holds is checked separately. A claim that this run did not find, read or establish a requested value, or that the notes or available information do not give it, does not answer that request: it reports a gap in the run, not what the source states.";
 
 /// What a quote holding the run's own typing supports (#1398).
-const TYPED: &str = " A quote with typed_by_step N holds text that step N of this run typed, read back from the page: it supports that the run typed it there, never that the source stated it on its own.";
+pub(super) const TYPED: &str = " A quote with typed_by_step N holds text that step N of this run typed, read back from the page: it supports that the run typed it there, never that the source stated it on its own.";
 const SOURCE_STATE: &str = "A quote marked superseded was replaced by a later read of its source. It remains evidence about that earlier state, not the current value. Notes are in reading order and name the page each was read on: a later page reached by changing filters, sorting or inputs shows the state after that change. Judge which state the task requests; historical comparisons can use earlier states.";
 
 /// What the composer is told about the run's own steps, which the notes alone cannot show (#837).

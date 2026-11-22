@@ -23,7 +23,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::answers::{context_limit, request_bytes};
+use super::answers::{TYPED, context_limit, request_bytes};
 use super::reduction::{GroupReads, Within, group_text, select_extremes};
 use super::text::{SpanKind, currency, spans};
 use crate::batches::evaluate_batches;
@@ -403,8 +403,8 @@ fn distinct(
     Some(kept)
 }
 
-/// Every note read, once each: a note holding what the run typed is not the site's own record, so no tally of any
-/// kind (count, total, extreme) takes it. A superseded read is a past state, and a note whose whole text a note before it
+/// Every note read, once each. A note holding what the run typed stays a candidate, marked `typed_by_step`, so the
+/// decision model judges whether the task's own input belongs in the tally. A superseded read is a past state, and a note whose whole text a note before it
 /// already gave is the same record read again, from a later visit or another listing of it. Within one capture the
 /// same text twice is two records, such as a row two tables both hold, so a note is keyed by its text and which
 /// occurrence of that text it is on its capture. A note from a table says
@@ -420,7 +420,6 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
         .into_iter()
         .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact_id(fact), evidence)))
         .filter(|(id, _)| !notes.superseded(id))
-        .filter(|(_, evidence)| notes.typed_by_step(evidence).is_none())
         .collect();
     // Where each text was noted on each capture, in page order.
     let mut starts: HashMap<(&str, String), BTreeSet<i64>> = HashMap::new();
@@ -458,6 +457,9 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
 /// A note as a membership question shows it.
 fn shown(notes: &Notes, evidence: &fastbrowse_core::models::Evidence) -> serde_json::Value {
     let mut note = json!({"quote": evidence.quote, "page": evidence.url, "headings": evidence.heading_path});
+    if let Some(step) = notes.typed_by_step(evidence) {
+        note["typed_by_step"] = step.into();
+    }
     let blocks = notes.table_blocks(evidence);
     if let Some(block) = blocks.iter().find(|block| block.start <= evidence.start && evidence.start < block.end) {
         let count = blocks.last().map_or(0, |last| last.table + 1);
@@ -558,12 +560,18 @@ fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&ser
             dumps(example)
         )
     });
+    let typed = typed_rule(note);
     let question = format!(
-        "Is this note exactly one whole {of}? A note holding several is not one, and nor is its tags, label or heading alone, or a value a page states across several, such as a total.{example}{proof}"
+        "Is this note exactly one whole {of}? A note holding several is not one, and nor is its tags, label or heading alone, or a value a page states across several, such as a total.{example}{proof}{typed}"
     );
     let yes = format!("The note is exactly one whole {of}.");
     let no = format!("The note is no {of}, several, or only part of one.");
     Question::Noul(NoulQuestion::new(format!("{UNTRUSTED}\n{question} Note: {}", dumps(note)), Some(&yes), Some(&no)))
+}
+
+/// What a note's typed_by_step means, told only when one has it.
+fn typed_rule(note: &serde_json::Value) -> &'static str {
+    if note.get("typed_by_step").is_some() { TYPED } else { "" }
 }
 
 const NO_VALUE: &str = "none";
@@ -609,7 +617,8 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     }
     Question::Choice(ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
+            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record.{} Note: {}",
+            typed_rule(note),
             dumps(note)
         ),
         criteria,
@@ -2512,10 +2521,10 @@ mod tests {
         }
     }
 
-    /// A value the run typed into an editable note and read back is the run's own text, not a record of the site, so no
-    /// tally can take it (#1481).
+    /// A value the run typed into an editable note stays a candidate, marked so the decision model judges whether the
+    /// task's own input belongs in the tally (#1481).
     #[test]
-    fn a_note_the_run_typed_is_no_candidate_record() {
+    fn a_note_the_run_typed_is_offered_and_marked() {
         use crate::memory::Fact;
         use crate::retrieval::chunks::evidence;
         use crate::retrieval::testing::capture;
@@ -2542,8 +2551,11 @@ mod tests {
         assert_eq!(candidates(&notes).len(), 2);
         notes.remember_typing(1, "doc-1", "main:7", "Item B £99");
         let found = candidates(&notes);
-        assert_eq!(found.len(), 1);
-        assert!(found[0].quote.contains("Item A"));
+        assert_eq!(found.len(), 2);
+        assert!(found[0].note.get("typed_by_step").is_none());
+        assert_eq!(found[1].note["typed_by_step"], 1);
+        assert!(typed_rule(&found[0].note).is_empty());
+        assert!(typed_rule(&found[1].note).contains("typed_by_step N holds text that step N of this run typed"));
     }
 
     #[tokio::test]
