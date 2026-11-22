@@ -45,8 +45,13 @@ impl Element {
 
     /// Whether the app says this element is on screen now. `visible` alone means only that it would be were its
     /// parent shown: the items of a closed menu are visible and not showing.
+    ///
+    /// Qt leaves the items of a closed combo box showing, moved to x=-10000, and they were offered as options to pick
+    /// (#1408): a box that ends before the window's left or top edge lies outside the window, whatever the state says.
+    /// A box with no size says nothing of where it is, as GTK 4's list cells have none until the window is first drawn.
     fn showing(&self) -> bool {
-        self.has("showing")
+        let outside = self.width > 0 && self.height > 0 && (self.x + self.width <= 0 || self.y + self.height <= 0);
+        self.has("showing") && !outside
     }
 
     /// Whether the app accepts input on this element. GTK 3 and Qt set both `enabled` and `sensitive` on a usable
@@ -135,8 +140,42 @@ const CHECKABLE: &[&str] = &[
 /// Whether an element's checked or pressed state is a value it holds. A toggle button that opens a menu or popover, as
 /// GTK's menu buttons do, is pressed while its popup is open, which is whether it is expanded: read as a checked value,
 /// a click on GNOME Text Editor's Main Menu was refused as a setting the task did not ask to change (#1393).
+///
+/// An element of another role holds one when the app marks it checkable, as Qt does a table cell that ticks its row
+/// (#1408).
 fn holds_checked(element: &Element) -> bool {
-    CHECKABLE.contains(&element.role.as_str()) && !element.has("has popup") && !element.has("expandable")
+    (CHECKABLE.contains(&element.role.as_str()) || element.has("checkable"))
+        && !element.has("has popup")
+        && !element.has("expandable")
+}
+
+/// The role a control is offered as: its own in ARIA's words, or a checkbox for an element of another role that holds a
+/// checked value, since that is what clicking it changes.
+fn offered_role(element: &Element) -> &str {
+    if holds_checked(element) && !CHECKABLE.contains(&element.role.as_str()) {
+        return "checkbox";
+    }
+    aria_role(&element.role)
+}
+
+/// What names a control with no name of its own, from the element before it among `siblings`, at `at` in reading
+/// order. A label read just before an unnamed field names it, as a sighted reader pairs them: Qt's Add Entry dialog
+/// lays out "Name:" beside an unnamed text field, and each field was offered as `textbox`, so the run typed the value
+/// into the name field (#1408). A table cell is named by the first named cell of its row, the cells beside it at its
+/// height, since the tree holds no row element: a checkbox cell offered as `cell` did not say which option it sets.
+fn sibling_label(siblings: &[Element], at: usize) -> Option<&str> {
+    let element = &siblings[at];
+    const CELLS: [&str; 2] = ["table cell", "grid cell"];
+    if CELLS.contains(&element.role.as_str()) {
+        return siblings[..at]
+            .iter()
+            .filter(|sibling| CELLS.contains(&sibling.role.as_str()) && sibling.y == element.y)
+            .find_map(|sibling| Some(sibling.name.as_str()).filter(|name| !name.trim().is_empty()));
+    }
+    let before = siblings[..at].last().filter(|before| before.role == "label")?;
+    Some(before.name.as_str())
+        .filter(|name| !name.trim().is_empty())
+        .or(before.text.as_deref().filter(|text| !text.trim().is_empty()))
 }
 
 fn operations(element: &Element) -> Vec<Operation> {
@@ -231,7 +270,7 @@ pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
     element.children.iter().find_map(|child| find(child, id))
 }
 
-fn control(element: &Element, context: Option<&str>) -> Option<Control> {
+fn control(element: &Element, context: Option<&str>, beside: Option<&str>) -> Option<Control> {
     if !element.showing() || !element.operable() {
         return None;
     }
@@ -239,14 +278,14 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     if operations.is_empty() {
         return None;
     }
-    let role = aria_role(&element.role);
-    // A control with no name is offered under its words, or its role, as a page offers one. An editable's text is
+    let role = offered_role(element);
+    // A control with no name is offered under its words, the label beside it, or its role, as a page offers one. An editable's text is
     // its value, not its label: GNOME Text Editor's unnamed text view, labelled by what it held, was offered as a
     // field named "charger" holding "charger", and labelled '' when empty, Jev copied the task's answer into it.
     let label = match element.text.as_deref() {
         _ if !element.name.is_empty() => element.name.clone(),
         Some(text) if !text.trim().is_empty() && !element.has("editable") => text.to_string(),
-        _ => role.to_string(),
+        _ => beside.unwrap_or(role).to_string(),
     };
     let mut control = Control::new(&element.id, role, &label, operations);
     let sensitive = element.role == "password text";
@@ -289,20 +328,20 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
 /// the observation it was chosen from. A control's context is the name of the nearest named
 /// element holding it below the window itself, as a group box or a page tab names what it holds.
 pub fn controls(root: &Element) -> Vec<Control> {
-    fn walk(element: &Element, context: Option<&str>, out: &mut Vec<Control>) {
-        let made = control(element, context);
+    fn walk(element: &Element, context: Option<&str>, beside: Option<&str>, out: &mut Vec<Control>) {
+        let made = control(element, context, beside);
         // A control's own name is its label, not the context of what it holds.
         let inner = if element.name.is_empty() || made.is_some() { context } else { Some(element.name.as_str()) };
         out.extend(made);
-        for child in &element.children {
-            walk(child, inner, out);
+        for (at, child) in element.children.iter().enumerate() {
+            walk(child, inner, sibling_label(&element.children, at), out);
         }
     }
     // The window's own name is its title, which every control shares, so it tells none apart.
     let mut out = Vec::new();
-    out.extend(control(root, None));
-    for child in &root.children {
-        walk(child, None, &mut out);
+    out.extend(control(root, None, None));
+    for (at, child) in root.children.iter().enumerate() {
+        walk(child, None, sibling_label(&root.children, at), &mut out);
     }
     out
 }
@@ -668,6 +707,81 @@ mod tests {
         let edits: Vec<bool> =
             controls.iter().map(|c| fastbrowse_core::safety::changes_a_value(Operation::Click, c)).collect();
         assert_eq!(edits, [false, true], "opening the menu changes no value; pressing Bold does");
+    }
+
+    #[test]
+    fn a_qt_form_names_fields_by_their_labels_and_ticks_cells_and_drops_closed_combo_items() {
+        // As deskpilot read CMake GUI's Add Entry dialog and cache table (#1408).
+        let at = |element: Element, x, y| Element { x, y, width: 100, height: 20, ..element };
+        let editable = shown(&["editable", "focusable"]);
+        let closed = node(
+            "e20",
+            "list",
+            "",
+            &SHOWN,
+            None,
+            vec![
+                at(node("e21", "list item", "BOOL", &shown(&["selectable", "selected"]), None, vec![]), -10000, -10000),
+                at(node("e22", "list item", "STRING", &shown(&["selectable"]), None, vec![]), -10000, -9980),
+            ],
+        );
+        let dialog = node(
+            "e2",
+            "panel",
+            "",
+            &SHOWN,
+            None,
+            vec![
+                at(node("e3", "label", "Name:", &SHOWN, Some("Name:"), vec![]), 0, 0),
+                at(node("e4", "text", "", &editable, Some(""), vec![]), 100, 0),
+                at(node("e5", "label", "Type:", &SHOWN, Some("Type:"), vec![]), 0, 30),
+                at(node("e6", "combo box", "", &shown(&["focusable"]), None, vec![closed]), 100, 30),
+                at(node("e7", "label", "Value:", &SHOWN, Some("Value:"), vec![]), 0, 60),
+                at(node("e8", "text", "", &editable, Some(""), vec![]), 100, 60),
+            ],
+        );
+        let table = node(
+            "e9",
+            "table",
+            "",
+            &SHOWN,
+            None,
+            vec![
+                at(node("e10", "table cell", "ENABLE_LOGS", &shown(&["selectable"]), None, vec![]), 0, 100),
+                at(node("e11", "table cell", "", &shown(&["selectable", "checkable"]), None, vec![]), 100, 100),
+                at(node("e12", "table cell", "GREETING", &shown(&["selectable"]), None, vec![]), 0, 120),
+                at(
+                    node("e13", "table cell", "", &shown(&["selectable", "checkable", "checked"]), None, vec![]),
+                    100,
+                    120,
+                ),
+            ],
+        );
+        let root = Element {
+            width: 800,
+            height: 600,
+            ..node("e1", "dialog", "Add Cache Entry", &SHOWN, None, vec![dialog, table])
+        };
+        let window = Window { address: "0xabc".into(), class: "cmake-gui".into(), title: "CMake".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let summary: Vec<_> =
+            controls.iter().map(|c| (c.id.as_str(), c.role.as_str(), c.label.as_str(), c.checked)).collect();
+        assert_eq!(
+            summary,
+            [
+                ("e4", "textbox", "Name:", None),
+                ("e6", "combobox", "Type:", None),
+                ("e8", "textbox", "Value:", None),
+                ("e10", "cell", "ENABLE_LOGS", None),
+                ("e11", "checkbox", "ENABLE_LOGS", Some(false)),
+                ("e12", "cell", "GREETING", None),
+                ("e13", "checkbox", "GREETING", Some(true)),
+            ]
+        );
+        // The closed combo box's list is off the window, so it is not open, though Qt says its items are showing.
+        let combo = find(&root, "e6").unwrap();
+        assert!(!list_open(combo));
+        assert_eq!(chosen(combo), Some("BOOL"));
     }
 
     #[test]
