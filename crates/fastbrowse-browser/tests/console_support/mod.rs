@@ -80,6 +80,10 @@ pub async fn description(page: &CdpPage, session: &BrowserSession, base: &str) {
 pub async fn reply(page: &CdpPage, session: &BrowserSession, base: &str) {
     page.navigate(&format!("{base}/addon-comments.html"), None).await.expect("navigate");
     let observation = page.observe().await.expect("observe");
+    // The page's own box sits among the comments and inside none, and says so: told only "Comments", a reply task
+    // filled it and posted a top-level comment (#1476).
+    let own = find(&observation, |c| c.label == "Comment text area", "the page's own comment box");
+    assert_eq!(own.context.as_deref(), Some("Comments, outside every item listed under Comments"));
     let reply = find(
         &observation,
         |c| c.label == "Reply" && c.context.as_deref().is_some_and(|context| context.contains("Nivlemoth_Nathrezim")),

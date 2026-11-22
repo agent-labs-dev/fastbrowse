@@ -60,8 +60,11 @@ pub(crate) mod keys {
     }
 }
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after that action is among the recent actions; what the page already showed before it is not the\nanswer, however close it looks.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nWhat the task writes in or to a record it names, such as a reply to a comment, goes in a field in that record's context; while none is offered, open one there rather than fill a field outside it.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after that action is among the recent actions; what the page already showed before it is not the\nanswer, however close it looks.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task names one, choose\nby context; a link in one record's context opens it and shows no more of the list.";
+/// Asked only where a fill's field is chosen: the other target questions pick controls, not where text goes. A reply
+/// task filled the page's new-comment box, which sits among the comments and inside none of them (#1476).
+const FILL_TARGET_RULES: &str = "A field whose context is not the record the task names is not that record's field: when the task names a record and no offered field is in its context, choose not_here.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could carrying out any part of the task or current subgoal that is still needed, or reading what it needs, act on or rely on the element in each question?\nUse recent actions to judge which task steps are already complete.\nJudge by its label, role, context and href. An already_read link leads to a page this run has read;\nconsider whether visiting it again would help the task. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
 
@@ -1775,7 +1778,14 @@ fn target_question(
     // the model has to go and look up is a worse criterion: the choice is what this whole design rests on, so it gets
     // the attributes in front of it.
     let shown = candidates.iter().any(|c| looks.contains_key(&c.id));
-    let rules = if shown { json!([rules, LOOKS_LIKE]) } else { json!(rules) };
+    let mut rules = vec![rules];
+    if operation == Operation::Fill {
+        rules.push(FILL_TARGET_RULES);
+    }
+    if shown {
+        rules.push(LOOKS_LIKE);
+    }
+    let rules = if rules.len() == 1 { json!(rules[0]) } else { json!(rules) };
     choice(
         dumps(&json!({"rules": rules, "operation": operation.as_str()})),
         candidates.iter().map(|c| {
@@ -2028,6 +2038,29 @@ mod tests {
 
     fn link(id: &str) -> Control {
         Control { href: Some(format!("/{id}")), ..Control::new(id, "link", id, [Operation::Click]) }
+    }
+
+    #[test]
+    fn test_a_record_the_task_names_owns_the_field_a_reply_goes_in() {
+        let page = observation(vec![field("box", None), button(1)]);
+        let request = build_request(
+            &page,
+            &page.controls,
+            &StepContext::new("reply to Kal66"),
+            &Config::default(),
+            MAX_CHOICE_OPTIONS,
+        );
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        let ask = "goes in a field in that record's context; while none is offered, open one there rather than fill a field outside it.";
+        assert!(operation.instructions.contains(ask), "{}", operation.instructions);
+        // Before the sentence that stops a repeated step, so it reads with the fill rules.
+        assert!(operation.instructions.find(ask) < operation.instructions.find("Do not repeat satisfied steps"));
+        // The rule is for choosing where text goes; a click target is not told it.
+        let rule = "is not that record's field: when the task names a record and no offered field is in its context, choose not_here.";
+        let Question::Choice(fill) = &request.questions["fill_target"] else { panic!("a choice") };
+        assert!(fill.instructions.contains(rule), "{}", fill.instructions);
+        let Question::Choice(click) = &request.questions["click_target"] else { panic!("a choice") };
+        assert!(!click.instructions.contains(rule));
     }
 
     #[test]

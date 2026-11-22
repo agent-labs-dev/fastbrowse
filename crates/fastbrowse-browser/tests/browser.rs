@@ -1903,6 +1903,42 @@ async fn test_a_reply_box_is_named_by_its_commenter_whose_name_shows_twice() {
     h.close().await;
 }
 
+/// A section's new-comment box sits before the list of comments and inside none of them, yet got only the section's
+/// heading, the context every comment's own Reply has, so a task to reply to one comment filled the box (#1476).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_control_in_a_section_of_records_but_outside_each_is_named_as_outside_them() {
+    let _turn = turn().await;
+    let comment = |author: &str| format!("<li><p>{author} wrote this.</p><button>Reply</button></li>");
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        &format!(
+            "document.body.innerHTML = '<section><h2>Comments</h2><form><textarea aria-label=\"Comment text area\"></textarea>\
+             <button>Post</button></form><ul>{}{}{}</ul></section>'",
+            comment("Ada"),
+            comment("Grace"),
+            comment("Kal66"),
+        ),
+    )
+    .await;
+    let obs = observe_until(&h.page, "Post").await;
+    let context = |label: &str| {
+        obs.controls
+            .iter()
+            .filter(|c| c.label == label)
+            .map(|c| c.context.clone().unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+    let outside = "Comments, outside every item listed under Comments";
+    assert_eq!(context("Comment text area"), [outside]);
+    assert_eq!(context("Post"), [outside]);
+    for reply in context("Reply") {
+        assert!(!reply.contains("outside every item"), "a Reply is inside its comment: {reply}");
+    }
+    h.close().await;
+}
+
 /// A label kept in a twin's card because some other cards lack it, as a commenter's name is, still does not name the
 /// card alone: an "Edit" link in one product card, and in the page's header, would have named that card's Add
 /// button "Edit" with nothing of the product it adds.
