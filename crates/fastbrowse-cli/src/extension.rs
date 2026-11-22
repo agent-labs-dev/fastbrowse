@@ -144,8 +144,11 @@ fn reported_version(program: &Path) -> Option<String> {
 /// How long a `--version` probe may run before it is a hung process: it only prints a line.
 const VERSION_PROBE_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// [`reported_version`] that kills a probe still running after `limit`, so a hung binary cannot hold up the rest.
+/// [`reported_version`] bounded as a whole by `limit`, the exit and the read of its output alike: a wrapper that exits
+/// but leaves a helper holding stdout open would otherwise block the read. A probe past the limit is killed and its
+/// reader abandoned, so a hung binary cannot hold up the rest.
 fn reported_version_within(program: &Path, limit: std::time::Duration) -> Option<String> {
+    use std::io::Read;
     let mut child = std::process::Command::new(program)
         .arg("--version")
         .stdin(std::process::Stdio::null())
@@ -153,24 +156,34 @@ fn reported_version_within(program: &Path, limit: std::time::Duration) -> Option
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = std::time::Instant::now() + limit;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(10))
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
-    let out = child.wait_with_output().ok()?;
-    let text = String::from_utf8(out.stdout).ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = vec![];
+        let _ = stdout.read_to_end(&mut bytes);
+        let _ = sender.send(bytes);
+    });
+    let bytes = receiver.recv_timeout(limit).ok();
+    let _ = child.kill();
+    let _ = child.wait();
+    let text = String::from_utf8(bytes?).ok()?;
     let version = text.split_whitespace().nth(1)?;
     version.starts_with(|c: char| c.is_ascii_digit()).then(|| version.to_string())
+}
+
+/// What each registered install in `dir` (and `this`) reports now, probed before the registry's lock is taken so a slow
+/// probe never holds it. An install registered after this read keeps the version recorded for it.
+fn probe_registered(dir: &Path, this: &Path) -> impl Fn(&Path) -> Option<String> + use<> {
+    let mut paths: Vec<PathBuf> =
+        read_installs(dir).unwrap_or_default().into_iter().map(|install| install.path).collect();
+    paths.push(this.to_path_buf());
+    paths.sort();
+    paths.dedup();
+    let probes: Vec<_> =
+        paths.into_iter().map(|path| std::thread::spawn(move || (path.clone(), reported_version(&path)))).collect();
+    let versions: std::collections::HashMap<PathBuf, Option<String>> =
+        probes.into_iter().filter_map(|probe| probe.join().ok()).collect();
+    move |path: &Path| versions.get(path).cloned().flatten()
 }
 
 /// `installs` with each version replaced by what the binary reports now, where it answers: an install upgraded in
@@ -441,7 +454,9 @@ fn install(program: &str, out: &mut String) -> Result<Vec<&'static str>, String>
         ));
     }
     let this = Install { path: fastbrowse, version: env!("CARGO_PKG_VERSION").into() };
-    record_install(&data_dir(), this, &reported_version, out, register)
+    let dir = data_dir();
+    let query = probe_registered(&dir, &this.path);
+    record_install(&dir, this, &query, out, register)
 }
 
 /// Add `this` to the registry in `dir` and write the launcher and host manifest, then `register` the manifest with
@@ -545,7 +560,9 @@ enum Uninstalled {
 /// Unregister this fastbrowse. The host stays while another install is registered, so an app removing its bundled
 /// copy does not take the user's own install with it; the last one out removes exactly what `install` wrote.
 fn uninstall(program: &str) -> Result<Uninstalled, String> {
-    unregister(&data_dir(), &this_fastbrowse(program), &reported_version, remove_browsers)
+    let (dir, this) = (data_dir(), this_fastbrowse(program));
+    let query = probe_registered(&dir, &this);
+    unregister(&dir, &this, &query, remove_browsers)
 }
 
 fn unregister(
@@ -989,6 +1006,20 @@ mod tests {
         assert!(waited < std::time::Duration::from_secs(5), "{waited:?}");
         assert!(registered && candidates.is_empty());
         assert!(!probed_by_delegate, "a delegated host ran a version probe");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_whose_helper_holds_stdout_open_is_bounded_by_the_deadline() {
+        let dir = scratch("helper");
+        let wrapper = dir.join("fastbrowse");
+        script(&wrapper, "echo fastbrowse 0.14.0\nsleep 30 &\nexit 0");
+        let started = std::time::Instant::now();
+        let version = reported_version_within(&wrapper, std::time::Duration::from_millis(500));
+        let waited = started.elapsed();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(version, None);
+        assert!(waited < std::time::Duration::from_secs(5), "{waited:?}");
     }
 
     #[cfg(unix)]
