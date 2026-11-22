@@ -440,6 +440,8 @@
         text: name ? `${name}: ${value}` : value,
         control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
         control_element: String(identity(e)),
+        // The value as the page holds it: the text above is collapsed, so only this tells what was typed.
+        ...(e.tagName === 'SELECT' ? {} : { control_value: e.value }),
       }));
 
   const renderTable = table => {

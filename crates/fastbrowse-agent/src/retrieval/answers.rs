@@ -3737,6 +3737,7 @@ mod tests {
             context: Some("right panel".into()),
             element: None,
             document: None,
+            value: None,
         });
         let notes = Notes::new([source]);
         let llm = RecordingLlm {
@@ -5766,6 +5767,7 @@ mod tests {
                 context: None,
                 element: Some(element.into()),
                 document: Some(document.into()),
+                value: Some(value.into()),
             });
             let page = Page::new(&captured);
             let block = &captured.blocks[0];
@@ -5811,6 +5813,16 @@ mod tests {
             (
                 "the same id in a reloaded document",
                 read_value("https://a.test/doc", Some("main:7"), "doc-2", typed, Some(1)),
+            ),
+            (
+                "a site's replacement that differs from the typing only in whitespace",
+                read_value(
+                    "https://a.test/doc",
+                    Some("main:7"),
+                    "doc-1",
+                    "Order 49309  shipped successfully; no error code is listed.",
+                    Some(1),
+                ),
             ),
             (
                 "a value the site replaced",

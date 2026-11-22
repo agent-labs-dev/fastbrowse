@@ -1341,3 +1341,79 @@ async fn a_fill_reports_the_field_the_capture_names() {
     assert_eq!(control.document.as_deref(), Some(observed.document_key.as_str()));
     h.close().await;
 }
+
+/// A field's capture carries the value exactly as the page holds it, beside the block's whitespace-collapsed text, so
+/// typing "A  B" is told from a site that replaced it with "A B".
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_field_reports_its_value_uncollapsed() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<label>Notes <textarea>A  B</textarea></label>"#).await;
+    let capture = h.page.capture().await.expect("capture");
+    let block = capture.blocks.iter().find(|b| capture.block_text(b) == "Notes: A B").expect("field block");
+    assert_eq!(block.control_context.as_ref().and_then(|c| c.value.as_deref()), Some("A  B"));
+    h.close().await;
+}
+
+/// The reported control is the editable focused as the text went in: a handler that moves focus on input names no
+/// later field.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fill_reports_the_field_that_took_the_text_not_the_one_focus_moved_to() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<label>Notes <textarea id=a></textarea></label><label>Next <textarea id=b></textarea></label>"#,
+    )
+    .await;
+    eval_active(
+        &h.session,
+        "document.getElementById('a').addEventListener('input', () => document.getElementById('b').focus())",
+    )
+    .await;
+    let observed = h.observe().await;
+    let notes = observed.controls.iter().find(|c| c.label == "Notes").expect("notes field");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(notes.id.clone()),
+        text: Some("typed words".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_deref(), Some(notes.id.as_str()));
+    h.close().await;
+}
+
+/// A field inside a same-origin frame is reported by its own identity, not as the frame element holding it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fill_in_a_same_origin_frame_reports_the_field_inside_it() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate("about:blank", None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<iframe srcdoc=\"<label>Notes <textarea></textarea></label>\"></iframe>'",
+    )
+    .await;
+    let session = &h.session;
+    wait_until(
+        || async move {
+            eval_active(
+                session,
+                "Boolean(document.querySelector('iframe')?.contentDocument?.querySelector('textarea'))",
+            )
+            .await
+                == true
+        },
+        5.0,
+    )
+    .await;
+    let observed = h.observe().await;
+    let notes = observed.controls.iter().find(|c| c.label == "Notes").expect("framed field");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(notes.id.clone()),
+        text: Some("typed words".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_deref(), Some(notes.id.as_str()));
+    h.close().await;
+}

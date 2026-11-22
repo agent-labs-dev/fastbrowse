@@ -10740,6 +10740,7 @@ fn typed_by(state: &RunState, url: &str, document: &str, element: &str, value: &
         context: None,
         element: Some(element.into()),
         document: Some(document.into()),
+        value: Some(value.into()),
     };
     page.blocks[1].control_context = Some(control.clone());
     let mut quote = block_evidence(&page, "s1");

@@ -628,9 +628,9 @@ impl CdpPage {
             None => None,
         };
         let (outcome, mut detail, failure) = dispatched?;
-        let landed = match &target {
-            Some(target) if action.operation == Operation::Fill && outcome == StepOutcome::Executed => {
-                self.focused_editable(target).await
+        let landed = match action.operation {
+            Operation::Fill => {
+                self.state.lock().unwrap().fill_receiver.take().filter(|_| outcome == StepOutcome::Executed)
             }
             _ => None,
         };
@@ -1296,6 +1296,9 @@ impl CdpPage {
             if let Some(refusal) = refusal {
                 return Ok(refusal);
             }
+            // The receiver is read before the text goes in: an input handler that advances focus would otherwise name
+            // the next field, not the one that took the text.
+            let receiver = self.focused_editable(target).await;
             if secret {
                 // Sealed before the renderer can insert, and not earlier: a fill refused before this point typed
                 // nothing, so no frame of it can show the secret.
@@ -1343,6 +1346,7 @@ impl CdpPage {
             };
             suggests = wants;
             if landed {
+                self.state.lock().unwrap().fill_receiver = receiver;
                 break;
             }
             // An editor that took focus after the hand-off looked, and so never got the text, is typed into once more,
@@ -1370,12 +1374,14 @@ impl CdpPage {
         Ok((StepOutcome::Executed, None, None))
     }
 
-    /// The editable the page holds focus in once a fill has typed, named as the observation names a control: the
-    /// field the text went to, which a page that hands focus to another editor makes a different one from the field
-    /// asked for. None when focus is in no editable of this document, or the page cannot be asked.
+    /// The editable the page holds focus in, named as the observation names a control: the field text inserted now
+    /// goes to, which a page that hands focus to another editor makes a different one from the field asked for. It
+    /// is looked for through shadow roots and same-origin frames, whose elements the capture numbers in this
+    /// document's registry. None when focus is in no such editable, or the page cannot be asked.
     async fn focused_editable(&self, target: &Target) -> Option<String> {
         let script = "(() => { let e = document.activeElement; \
-             while (e?.shadowRoot?.activeElement) e = e.shadowRoot.activeElement; \
+             for (let inner = null; (inner = e?.shadowRoot?.activeElement ?? \
+                 (['IFRAME', 'FRAME'].includes(e?.tagName) ? e.contentDocument?.activeElement : null)); ) e = inner; \
              const registry = window.__fastbrowse; \
              if (!registry || !e || !(e.isContentEditable || ['INPUT', 'TEXTAREA'].includes(e.tagName))) return null; \
              if (!registry.ids.has(e)) registry.ids.set(e, registry.next++); \

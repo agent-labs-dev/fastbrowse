@@ -1687,6 +1687,7 @@ impl Agent {
                     context: context.context.as_deref().map(mask),
                     element: context.element.clone(),
                     document: context.document.clone(),
+                    value: context.value.as_deref().map(mask),
                 }),
                 href: block.href.as_deref().map(mask),
                 // An address can carry a token in its query, and a link's text is page text like the rest.

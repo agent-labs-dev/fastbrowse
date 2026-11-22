@@ -276,6 +276,9 @@ struct SnapshotBlock {
     /// The id the observation gives the native field this block is the value of.
     #[serde(default)]
     control_element: Option<String>,
+    /// That field's value exactly as the page holds it, before the capture's whitespace collapse.
+    #[serde(default)]
+    control_value: Option<String>,
     frame_path: Option<String>,
     #[serde(default)]
     source_path: String,
@@ -404,6 +407,9 @@ pub(crate) struct PageState {
     /// The frame session whose new-tab link a background run's click held when a dialog the click opened blocked
     /// reading it back. The dialog step reads it once the dialog is answered.
     pub(crate) held_link: Option<String>,
+    /// For the fill just made: the editable that held focus as its text was inserted, named as the observation names
+    /// a control. Taken by `act` once the fill is done.
+    pub(crate) fill_receiver: Option<String>,
 }
 
 pub struct CdpPage {
@@ -1250,6 +1256,7 @@ impl CdpPage {
                         control.element =
                             block.control_element.as_ref().map(|element| format!("{frame_key}:{element}"));
                         control.document = document_key.clone();
+                        control.value = block.control_value.clone();
                         control
                     }),
                     href: block.href.clone(),

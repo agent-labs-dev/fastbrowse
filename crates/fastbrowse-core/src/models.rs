@@ -177,6 +177,10 @@ pub struct SourceControl {
     /// same id after a reload names another control. Held with `element`, and as unwritten.
     #[serde(skip)]
     pub document: Option<String>,
+    /// For a native text field, exactly the value the control held when read (the block's text is the whitespace
+    /// collapsed form), so a run compares it with the text it typed as typed. Held with `element`, and as unwritten.
+    #[serde(skip)]
+    pub value: Option<String>,
 }
 
 impl Schema for SourceControl {

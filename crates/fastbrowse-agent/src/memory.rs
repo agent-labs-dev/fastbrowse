@@ -309,28 +309,6 @@ struct Typing {
     text: String,
 }
 
-/// A field's value as the capture records it: whitespace runs collapse, lines are trimmed and the whole is trimmed.
-fn captured_form(text: &str) -> String {
-    let mut collapsed = String::with_capacity(text.len());
-    let mut blank = false;
-    for c in text.chars() {
-        if matches!(c, ' ' | '\t' | '\r' | '\x0c' | '\x0b') {
-            if !blank {
-                collapsed.push(' ');
-            }
-            blank = true;
-        } else {
-            blank = false;
-            collapsed.push(c);
-        }
-    }
-    let mut joined = collapsed.split('\n').map(|line| line.trim_matches(' ')).collect::<Vec<_>>().join("\n");
-    while joined.contains("\n\n\n") {
-        joined = joined.replace("\n\n\n", "\n\n");
-    }
-    joined.trim().to_string()
-}
-
 impl fmt::Debug for Notes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Notes").field("facts", &self.facts).field("answering", &self.answering).finish()
@@ -353,12 +331,12 @@ impl Notes {
             page: address(url),
             document: document.to_string(),
             element: element.to_string(),
-            text: captured_form(text),
+            text: text.to_string(),
         });
     }
 
     /// The last step before this quote's read that typed, into the control it was read from, exactly the value the
-    /// control held when read. The control is the same one by its document, page and id, never by the quote's words;
+    /// control held when read, compared as typed and as held, whitespace and all. The control is the same one by its document, page and id, never by the quote's words;
     /// a value the typing did not leave (the site replaced it, or another source wrote it) is not the run's typing.
     pub fn typed_by_step(&self, evidence: &Evidence) -> Option<usize> {
         let control = evidence.control_context.as_ref()?;
@@ -394,14 +372,10 @@ impl Notes {
             if let Some(control) = &block.control_context
                 && let Some(element) = &control.element
             {
-                // A native field's block reads "label: value", or the value alone when the field has no label.
-                let text = capture.block_text(block);
-                let value = match control.label.as_str() {
-                    "" => Some(text),
-                    label => text.strip_prefix(label).and_then(|rest| rest.strip_prefix(": ")),
-                };
-                if let Some(value) = value {
-                    self.field_values.entry((key.clone(), element.clone())).or_insert_with(|| value.to_string());
+                // The value as the page held it, not the block's collapsed text: only that tells typing "A  B" from a
+                // site that replaced it with "A B".
+                if let Some(value) = &control.value {
+                    self.field_values.entry((key.clone(), element.clone())).or_insert_with(|| value.clone());
                 }
             }
             let url = block.source_url.as_ref().unwrap_or(&capture.url);
@@ -1301,6 +1275,7 @@ mod tests {
                 context: Some(position.into()),
                 element: None,
                 document: None,
+                value: None,
             };
             let evidence = Evidence { control_context: Some(control), ..span("capture", 0, 4) };
             assert!(notes.add(Fact::read("fact", evidence, FactReader::JevChoice)));

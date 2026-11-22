@@ -925,6 +925,7 @@ mod tests {
                         context: Some((*position).into()),
                         element: None,
                         document: None,
+                        value: None,
                     }),
                     ..base.clone()
                 },
