@@ -10234,12 +10234,13 @@ async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
 
 /// A press on a field whose role defines no keys copies its key from the task. Told to make a document's text bold and
 /// save it, Jev pressed the editor and the copy came out "document.", which the browser refused, ending the run as an
-/// error (#1212). Copied words that are no key leave the press unmade, and Jev is asked again.
+/// error (#1212). Copied words that are no key leave the press unmade, and Jev is asked again. Jev answers that the
+/// task gives the key, as none of the standard keys offered is it, and the copy is the task's first words.
 #[tokio::test]
 async fn test_a_press_copied_from_a_task_that_names_no_key_is_not_made() {
     let editor = Control::new("e", "textbox", "Editor", [Operation::Fill, Operation::Press]);
     let page = observation(std::slice::from_ref(&editor));
-    let jev = Arc::new(FirstChoice { wants: Some("document"), noul: Some(0.0), ..Default::default() });
+    let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), noul: Some(0.0), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Make the document's text bold, then save the document.".into();
