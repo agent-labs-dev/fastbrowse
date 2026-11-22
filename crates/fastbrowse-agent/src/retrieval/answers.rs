@@ -4812,6 +4812,7 @@ mod tests {
             &notes,
             None,
             true,
+            Screenshot::Absent,
             true,
             &[],
         )
@@ -4821,7 +4822,19 @@ mod tests {
         let feedback: Value = serde_json::from_str(&rejection).unwrap();
         assert_eq!(feedback["copied"][0]["text"], "katherine@example.com.");
         let llm = RecordingLlm::new(None);
-        compose_reviewed(&Support::new(true), &llm, task, &notes, None, Some(&rejection), true, &[]).await.unwrap();
+        compose_reviewed(
+            &Support::new(true),
+            &llm,
+            task,
+            &notes,
+            None,
+            Some(&rejection),
+            true,
+            Screenshot::Absent,
+            &[],
+        )
+        .await
+        .unwrap();
         let user = &llm.calls()[0][1].content;
         let shown = user.split_once("# Previous composition feedback\n").unwrap().1.lines().nth(1).unwrap();
         let shown: Value = serde_json::from_str(shown).unwrap();
