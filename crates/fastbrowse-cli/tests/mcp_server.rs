@@ -637,6 +637,41 @@ async fn test_an_external_cancel_replies_immediately_and_keeps_cleanup_running()
 }
 
 #[tokio::test]
+async fn test_an_external_cancel_names_the_trace_the_run_keeps() {
+    // The cancel reply goes out before the run ends, so it named no trace though the cancelled run keeps one (#1414).
+    let traces = std::env::temp_dir().join(format!("fastbrowse-mcp-cancel-traces-{}", std::process::id()));
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let cleaned = Arc::new(Notify::new());
+    let (began, allowed, finished) = (started.clone(), release.clone(), cleaned.clone());
+    let runner = runner(move |args: Call| {
+        let (began, allowed, finished) = (began.clone(), allowed.clone(), finished.clone());
+        async move {
+            began.notify_one();
+            args.host.cancel.tripped().await;
+            allowed.notified().await;
+            finished.notify_one();
+            Err(RunError::Cancelled(CancellationReceipt::default()))
+        }
+    });
+    let config = ServerConfig { traces: Some(traces.clone()), ..ServerConfig::default() };
+    let mut client = Client::new(config, runner);
+    let id = client.start_call(json!({"task": "t", "start": START}));
+    started.notified().await;
+    client.send(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId": id}}));
+    let reply = client.reply(id, &mut Vec::new()).await;
+    assert_eq!(reply["error"]["message"], "Request cancelled");
+    let kept = PathBuf::from(
+        reply["error"]["data"].as_str().and_then(|data| data.strip_prefix("trace: ")).expect("the trace is named"),
+    );
+    assert!(kept.starts_with(&traces));
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), cleaned.notified()).await.expect("run cleanup completed");
+    assert!(kept.exists(), "a cancelled run keeps its trace");
+    std::fs::remove_dir_all(&traces).unwrap();
+}
+
+#[tokio::test]
 async fn test_cancelled_calls_stop_notifications_before_replying_but_finish_cleanup() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());

@@ -83,6 +83,7 @@ async fn cli_run_by(
         environ: environ.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
         streams: Streams { out: Arc::new(Mutex::new(out.clone())), err: Arc::new(Mutex::new(err.clone())) },
         build,
+        kept_at: Default::default(),
     };
     let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
     let code = cli::main(&argv, &context).await;

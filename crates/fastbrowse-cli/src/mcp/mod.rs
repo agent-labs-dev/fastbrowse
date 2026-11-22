@@ -825,7 +825,10 @@ impl McpServer {
                             }
                         })
                     };
-                    let call = server.call(&name, arguments, token, run_cancel, &events);
+                    // Where the run keeps its trace, read here because a cancel answers before the run ends: the
+                    // reply named nothing, though a cancelled run keeps its trace.
+                    let trace_at = std::sync::Mutex::new(None);
+                    let call = server.call(&name, arguments, token, run_cancel, &events, &trace_at);
                     tokio::pin!(call);
                     let outcome = tokio::select! {
                         biased;
@@ -835,7 +838,12 @@ impl McpServer {
                             run_stop.trip();
                             // Remove before replying so cleanup cannot remove a newer request reusing this id.
                             session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
-                            outbox(error_response(&id, 0, "Request cancelled", None));
+                            let trace = trace_at
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .as_ref()
+                                .map(|path: &std::path::PathBuf| format!("trace: {}", path.display()));
+                            outbox(error_response(&id, 0, "Request cancelled", trace.as_deref()));
                             let _ = tokio::time::timeout(
                                 Duration::from_secs_f64(server.config.grace_seconds.max(0.0)),
                                 &mut call,
@@ -898,13 +906,14 @@ impl McpServer {
         token: Option<Value>,
         cancel: crate::runner::Cancel,
         outbox: &Outbox,
+        trace_at: &std::sync::Mutex<Option<std::path::PathBuf>>,
     ) -> Result<Value, ToolFailure> {
         if name != "browse" {
             crate::log::warning(&format!("Tool {} not listed, no validation will be performed", repr(name)));
             return Err(ToolFailure::Unknown(name.to_string()));
         }
         let arguments = Browse::read(arguments).map_err(ToolFailure::Tool)?;
-        self.browse(arguments, token, cancel, outbox).await
+        self.browse(arguments, token, cancel, outbox, trace_at).await
     }
 
     async fn browse(
@@ -913,6 +922,7 @@ impl McpServer {
         token: Option<Value>,
         cancel: crate::runner::Cancel,
         outbox: &Outbox,
+        trace_at: &std::sync::Mutex<Option<std::path::PathBuf>>,
     ) -> Result<Value, ToolFailure> {
         let config = &self.config;
         let origin = arguments.start.as_deref().map(start_origin).transpose()?;
@@ -983,6 +993,9 @@ impl McpServer {
             ..RunTask::default()
         };
         let kept = config.traces.as_deref().and_then(crate::kept_trace::KeptTrace::start);
+        if let Some(kept) = &kept {
+            *trace_at.lock().unwrap_or_else(|p| p.into_inner()) = Some(kept.path().to_owned());
+        }
         let host = Host {
             browser_api_key: config.browser_api_key.clone(),
             secrets: secrets.map(|secrets| Arc::new(secrets) as _),

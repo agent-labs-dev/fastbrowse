@@ -76,6 +76,8 @@ pub struct Context {
     pub environ: HashMap<String, String>,
     pub streams: Streams,
     pub build: Build,
+    /// Where the running run keeps its trace, read by the interrupt handler, which drops the run before it can say.
+    pub kept_at: crate::kept_trace::KeptAt,
 }
 
 /// Which commit is running, as `fastbrowse.build.identity()` works it out: the Python command passes it in, and the
@@ -535,6 +537,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         .and_then(|directory| crate::kept_trace::KeptTrace::start(&directory));
     if let Some(kept) = &kept {
         kept.trace().event("build", || context.build.fields());
+        *context.kept_at.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(kept.path().to_owned());
     }
     let host = Host {
         recipe_sink: recipe_sink.clone(),
@@ -547,6 +550,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let outcome = context.runner.run(task, host).await;
     let status = outcome.as_ref().ok().map(|result| result.status);
     let trace = kept.and_then(|kept| kept.finish(status));
+    *context.kept_at.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     let mut result = match outcome {
         Ok(result) => result,
         // Stopped from the browser: the extension's Stop, Cancel on Chrome's debugging bar, or the user closing the

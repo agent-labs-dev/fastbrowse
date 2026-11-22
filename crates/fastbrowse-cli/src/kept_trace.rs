@@ -18,6 +18,9 @@ use fastbrowse_core::telemetry::{TRACE_ENV, Trace};
 /// once they are too old to still be the trace of a failure someone is looking into, rather than piling up.
 const KEPT_FOR: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 
+/// Where a run that is still going keeps its trace, for whoever must name it after dropping the run.
+pub type KeptAt = std::sync::Arc<std::sync::Mutex<Option<PathBuf>>>;
+
 /// One run's trace file, removed unless [`KeptTrace::finish`] keeps it.
 pub struct KeptTrace {
     path: PathBuf,
@@ -47,6 +50,11 @@ impl KeptTrace {
     /// What the run writes through: hand it to the run's HTTP client, whose trace every part of the run shares.
     pub fn trace(&self) -> Trace {
         self.trace.clone()
+    }
+
+    /// Where the file is, for a caller that answers before the run ends, such as a cancelled MCP call.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// The file's path when the run ended short of `complete` (or with no result at all), else None, the file gone. A
