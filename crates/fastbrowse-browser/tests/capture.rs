@@ -144,6 +144,39 @@ async fn composed_shadow_text_keeps_values_destinations_and_boundaries() {
     let capture = h.page.capture().await.expect("capture");
     let hrefs: Vec<_> = capture.blocks.iter().flat_map(|b| b.links.iter().map(|l| l.href.clone())).collect();
     assert!(hrefs.iter().any(|href| href == "https://example.test/docs"), "{hrefs:?}");
+    // A block's links are listed in the order its text shows them.
+    let ordered: &[(&str, &str, &str, [&str; 2])] = &[
+        (
+            "<p>Before <span id=host><a href=https://example.test/slotted>Slotted</a></span> after</p>",
+            "<slot></slot><a href=https://example.test/inside>Inside</a>",
+            "slotted-host",
+            ["https://example.test/slotted", "https://example.test/inside"],
+        ),
+        (
+            "<p><span><span id=host></span><a href=https://example.test/after>After</a></span></p>",
+            "<a href=https://example.test/inside>Inside</a>",
+            "descendant-host",
+            ["https://example.test/inside", "https://example.test/after"],
+        ),
+        (
+            "<table><tr><td><span id=host></span><a href=https://example.test/after>After</a></td></tr></table>",
+            "<a href=https://example.test/inside>Inside</a>",
+            "cell-host",
+            ["https://example.test/inside", "https://example.test/after"],
+        ),
+    ];
+    for (body, shadow, name, expected) in ordered {
+        set_body(&h.session, body).await;
+        eval_active(
+            &h.session,
+            &format!("document.querySelector('#host').attachShadow({{mode:'open'}}).innerHTML = '{shadow}'"),
+        )
+        .await;
+        let capture = h.page.capture().await.expect("capture");
+        let block = capture.blocks.iter().find(|b| b.kind != BlockKind::Observation).unwrap();
+        let hrefs: Vec<_> = block.links.iter().map(|l| l.href.as_str()).collect();
+        assert_eq!(hrefs, expected, "{name}");
+    }
     h.close().await;
 }
 

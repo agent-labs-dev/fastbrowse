@@ -340,17 +340,16 @@
   // places in the block's text. A footnote reference is no part of the text it marks, and a script link leads nowhere.
   const readableLink = a => typeof a.href === 'string' && !a.href.startsWith('javascript:') && !(a.matches(IN_PAGE) && noteReference(a));
   // A host read through its shadow tree in a sentence owns that tree's links too, which querySelectorAll does not reach.
-  const anchorsIn = root => [
-    ...root.querySelectorAll('a[href]'),
-    ...[...root.querySelectorAll('*')].flatMap(e => (composedHosts.has(e) ? anchorsIn(e.shadowRoot) : [])),
-  ];
+  // They are listed in the order the text shows them, which locates each after the one before it.
+  const anchorsIn = node => {
+    if (node.nodeType !== 1) return [];
+    const assigned = node.localName === 'slot' ? node.assignedNodes({ flatten: true }) : [];
+    const children = composedHosts.has(node) ? node.shadowRoot.childNodes : assigned.length ? assigned : node.childNodes;
+    return [...(node.matches('a[href]') ? [node] : []), ...[...children].flatMap(anchorsIn)];
+  };
   const linksIn = elements =>
     elements
-      .flatMap(e => [
-        ...(e.matches('a[href]') ? [e] : []),
-        ...(composedHosts.has(e) ? anchorsIn(e.shadowRoot) : []),
-        ...anchorsIn(e),
-      ])
+      .flatMap(anchorsIn)
       // An SVG link's `href` is an animated value, not an address.
       .filter(readableLink)
       .map(a => ({ text: composedText(a), href: a.href }))
