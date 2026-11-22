@@ -261,8 +261,9 @@ everyday Chrome use `--extension` instead, which needs no approval; see [Your ow
 `--extension` reaches Chrome through the fastbrowse extension, which Chrome connects to fastbrowse when the
 browser starts. When the run ends `unavailable` with `no browser has the fastbrowse extension connected`:
 
-- Check that `fastbrowse extension install` ran for this user, and run it again after moving or reinstalling
-  fastbrowse, since it records where fastbrowse is.
+- Run `fastbrowse extension status` to see which fastbrowse installs are registered, in the order the extension
+  tries them. Run `fastbrowse extension install` again after moving or reinstalling fastbrowse, since it records
+  where fastbrowse is.
 - Check that the [store extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop)
   is installed and on at `chrome://extensions`, and that Chrome is open.
 - After installing, restart Chrome or turn the extension off and on, so it connects.

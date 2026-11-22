@@ -103,7 +103,9 @@ The extension has to match the fastbrowse you install: the Store's **0.1.0** wor
    ```
 
 2. Run `fastbrowse extension install`. It registers the installed program with the Chromium browsers it finds
-   for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows.
+   for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows. Every fastbrowse
+   that runs `install`, such as an app's bundled copy and your own, stays registered: the extension starts the
+   newest one still present, and `fastbrowse extension status` lists them in that order.
 3. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
    Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
 4. Run a task that reads a public page:
@@ -150,7 +152,8 @@ sends, naming the commands: update the extension from the Chrome Web Store. With
 `--extension-browser LABEL`. `fastbrowse extension install --policy` (Linux) prints a Chrome policy for you to write
 as root, which installs the extension for every profile with no debugging bar and marks Chrome as managed by your
 organization;
-`fastbrowse extension uninstall` removes what `install` wrote; remove the extension separately in Chrome.
+`fastbrowse extension uninstall` unregisters the fastbrowse it runs from, and removes what `install` wrote once no
+other fastbrowse is registered; remove the extension separately in Chrome.
 
 For extension development, `fastbrowse extension path` writes an unpacked copy. Open `chrome://extensions`,
 turn on Developer mode, choose **Load unpacked** and select that folder. Use the store version for ordinary runs.
