@@ -1982,11 +1982,18 @@ impl CdpPage {
             }
             let (landed, no_hits) = self.drop_point(&drop, false).await?;
             let Point::At(x, y) = landed else { break };
-            if (x, y) == at || (no_hits && self.receives_drop(&drop, at).await?) {
-                self.release(session_id, at.0, at.1).await?;
-                return Ok((StepOutcome::Executed, None, None));
+            // A target that takes no hits is released where the pointer rests, so what lies under that point decides
+            // the drop: an unchanged centre does not show it is still the target, or a container holding it.
+            if no_hits {
+                if !self.receives_drop(&drop, at).await? {
+                    break;
+                }
+            } else if (x, y) != at {
+                at = (x, y);
+                continue;
             }
-            at = (x, y);
+            self.release(session_id, at.0, at.1).await?;
+            return Ok((StepOutcome::Executed, None, None));
         }
         self.cancel_drag(session_id, (start_x, start_y)).await?;
         Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))

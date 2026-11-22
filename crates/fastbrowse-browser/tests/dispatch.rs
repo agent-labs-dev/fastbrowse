@@ -624,6 +624,7 @@ async fn test_a_drop_that_takes_no_hits_is_not_released_on_a_different_control()
     // on another control, which must not receive the drop.
     for setup in [
         "destination.style.pointerEvents = 'none'; destination.style.left = '600px';",
+        "destination.style.pointerEvents = 'none'; document.getElementById('nested').style.pointerEvents = 'auto';",
         "destination.style.pointerEvents = 'none'; destination.innerHTML = \"<button id=delete style='position:absolute;inset:0;pointer-events:auto'>Delete</button>\";",
     ] {
         let Some(h) = harness().await else { return };
@@ -634,7 +635,7 @@ async fn test_a_drop_that_takes_no_hits_is_not_released_on_a_different_control()
                 "document.body.innerHTML = `
                   <div id=source draggable=true aria-label=Card style=\"position:fixed;left:20px;top:20px;width:100px;height:80px\">Card</div>
                   <div id=trash aria-label=Trash style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\">Trash</div>
-                  <div id=destination role=button tabindex=0 aria-label=Destination style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\">Destination</div>`;
+                  <div id=destination role=button tabindex=0 aria-label=Destination style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\"><button id=nested style='position:absolute;inset:0;pointer-events:none'>Nested</button></div>`;
                 window.drops = [];
                 document.addEventListener('dragover', e => e.preventDefault());
                 document.addEventListener('drop', e => {{ e.preventDefault(); window.drops.push(e.target.id); }});
