@@ -603,7 +603,9 @@ impl DeskpilotPage {
     /// The item combo box `id` has chosen, and whether its list is open, as the window says now.
     async fn choice(&self, window: &str, id: &str) -> Result<Option<(Option<String>, bool)>, ToolError> {
         let root = self.peeked(window).await?;
-        Ok(tree::find(&root, id).map(|element| (tree::chosen(element).map(str::to_string), tree::list_open(element))))
+        Ok(tree::find(&root, id).map(|element| {
+            (tree::chosen(element).map(str::to_string), tree::list_open(element, tree::Size::of(&root)))
+        }))
     }
 
     /// Moves a focused combo box's choice to `wanted` one arrow key at a time, as a person picks in a list they

@@ -49,15 +49,46 @@ impl Element {
     /// Qt leaves the items of a closed combo box showing, moved to x=-10000, and they were offered as options to pick
     /// (#1408): a box that ends before the window's left or top edge lies outside the window, whatever the state says.
     /// A box with no size says nothing of where it is, as GTK 4's list cells have none until the window is first drawn.
-    fn showing(&self) -> bool {
-        let outside = self.width > 0 && self.height > 0 && (self.x + self.width <= 0 || self.y + self.height <= 0);
-        self.has("showing") && !outside
+    /// One that starts past the right or bottom edge of `window`, the window's size, is outside it too: a tiled window
+    /// smaller than its content leaves the app reporting elements beyond it (#1395). A window of no size says nothing.
+    fn showing(&self, window: Size) -> bool {
+        let sized = self.width > 0 && self.height > 0;
+        let before = self.x + self.width <= 0 || self.y + self.height <= 0;
+        let after = window.known() && (self.x >= window.width || self.y >= window.height);
+        self.has("showing") && !(sized && (before || after))
+    }
+
+    /// Whether the point an action on this element aims at, its centre, lies inside `window`: deskpilot refuses a
+    /// point outside the window, so an element whose centre is beyond its edge cannot be clicked though part of it shows.
+    fn reachable(&self, window: Size) -> bool {
+        let inside = |at: i64, size: i64, edge: i64| (0..edge).contains(&(at + size / 2));
+        !window.known()
+            || self.width <= 0
+            || self.height <= 0
+            || (inside(self.x, self.width, window.width) && inside(self.y, self.height, window.height))
     }
 
     /// Whether the app accepts input on this element. GTK 3 and Qt set both `enabled` and `sensitive` on a usable
     /// control, while GTK 4's AT-SPI bridge sets only `sensitive`; a disabled control carries neither.
     fn operable(&self) -> bool {
         self.has("enabled") || self.has("sensitive")
+    }
+}
+
+/// The size of the window a tree is read from, in the window pixels its elements are placed in, as its root says.
+#[derive(Debug, Clone, Copy)]
+pub struct Size {
+    width: i64,
+    height: i64,
+}
+
+impl Size {
+    pub fn of(root: &Element) -> Size {
+        Size { width: root.width, height: root.height }
+    }
+
+    fn known(self) -> bool {
+        self.width > 0 && self.height > 0
     }
 }
 
@@ -245,9 +276,9 @@ pub fn chosen(element: &Element) -> Option<&str> {
     items(element).into_iter().find(|item| item.has("selected")).map(|item| item.name.as_str())
 }
 
-/// Whether a combo box's list is open on screen.
-pub fn list_open(element: &Element) -> bool {
-    items(element).iter().any(|item| item.showing())
+/// Whether a combo box's list is open on screen, in a window of size `window`.
+pub fn list_open(element: &Element, window: Size) -> bool {
+    items(element).iter().any(|item| item.showing(window))
 }
 
 /// The element with `id`, anywhere in the tree.
@@ -270,8 +301,8 @@ pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
     element.children.iter().find_map(|child| find(child, id))
 }
 
-fn control(element: &Element, context: Option<&str>, beside: Option<&str>) -> Option<Control> {
-    if !element.showing() || !element.operable() {
+fn control(element: &Element, window: Size, context: Option<&str>, beside: Option<&str>) -> Option<Control> {
+    if !element.showing(window) || !element.reachable(window) || !element.operable() {
         return None;
     }
     let operations = operations(element);
@@ -332,11 +363,11 @@ const DIALOGS: [&str; 4] = ["alert", "alert message", "alert dialog", "dialog"];
 /// judged by its name alone could not be told to answer "Are you sure you want to delete the cache?", so a run asked
 /// to delete the cache ended `needs_confirmation` with the task judged not to ask for that click (#1404). None for an
 /// element that is no dialog, or one that says nothing.
-fn question(element: &Element) -> Option<String> {
+fn question(element: &Element, window: Size) -> Option<String> {
     if !DIALOGS.contains(&element.role.as_str()) {
         return None;
     }
-    let (shown, _) = texts(element);
+    let (shown, _) = texts_in(element, window);
     let shown = shown.replace('\n', " ");
     match (element.name.trim(), shown.as_str()) {
         ("", "") => None,
@@ -352,10 +383,10 @@ fn question(element: &Element) -> Option<String> {
 /// element holding it below the window itself, as a group box or a page tab names what it holds, or what the dialog
 /// holding it asks.
 pub fn controls(root: &Element) -> Vec<Control> {
-    fn walk(element: &Element, context: Option<&str>, beside: Option<&str>, out: &mut Vec<Control>) {
-        let made = control(element, context, beside);
+    fn walk(element: &Element, window: Size, context: Option<&str>, beside: Option<&str>, out: &mut Vec<Control>) {
+        let made = control(element, window, context, beside);
         // A control's own name is its label, not the context of what it holds.
-        let asked = question(element);
+        let asked = question(element, window);
         let inner = match asked.as_deref() {
             Some(asked) => Some(asked),
             None if element.name.is_empty() || made.is_some() => context,
@@ -363,16 +394,17 @@ pub fn controls(root: &Element) -> Vec<Control> {
         };
         out.extend(made);
         for (at, child) in element.children.iter().enumerate() {
-            walk(child, inner, sibling_label(&element.children, at), out);
+            walk(child, window, inner, sibling_label(&element.children, at), out);
         }
     }
     // The window's own name is its title, which every control shares, so it tells none apart; a dialog's is part of
     // what it asks.
+    let window = Size::of(root);
     let mut out = Vec::new();
-    out.extend(control(root, None, None));
-    let asked = question(root);
+    out.extend(control(root, window, None, None));
+    let asked = question(root, window);
     for (at, child) in root.children.iter().enumerate() {
-        walk(child, asked.as_deref(), sibling_label(&root.children, at), &mut out);
+        walk(child, window, asked.as_deref(), sibling_label(&root.children, at), &mut out);
     }
     out
 }
@@ -388,16 +420,21 @@ fn own_text(element: &Element) -> Option<&str> {
 
 /// The text the window shows on screen, and the text it holds out of view, each in the tree's order.
 pub fn texts(root: &Element) -> (String, String) {
-    fn walk<'a>(element: &'a Element, shown: &mut Vec<&'a str>, hidden: &mut Vec<&'a str>) {
+    texts_in(root, Size::of(root))
+}
+
+/// The text `element` shows and holds out of view, in a window of size `window`.
+fn texts_in(element: &Element, window: Size) -> (String, String) {
+    fn walk<'a>(element: &'a Element, window: Size, shown: &mut Vec<&'a str>, hidden: &mut Vec<&'a str>) {
         if let Some(text) = own_text(element) {
-            if element.showing() { shown.push(text) } else { hidden.push(text) }
+            if element.showing(window) { shown.push(text) } else { hidden.push(text) }
         }
         for child in &element.children {
-            walk(child, shown, hidden);
+            walk(child, window, shown, hidden);
         }
     }
     let (mut shown, mut hidden) = (Vec::new(), Vec::new());
-    walk(root, &mut shown, &mut hidden);
+    walk(element, window, &mut shown, &mut hidden);
     (shown.join("\n"), hidden.join("\n"))
 }
 
@@ -811,7 +848,7 @@ mod tests {
         );
         // The closed combo box's list is off the window, so it is not open, though Qt says its items are showing.
         let combo = find(&root, "e6").unwrap();
-        assert!(!list_open(combo));
+        assert!(!list_open(combo, Size::of(&root)));
         assert_eq!(chosen(combo), Some("BOOL"));
     }
 
@@ -949,6 +986,46 @@ mod tests {
         });
         let root: Element = serde_json::from_value(sent).unwrap();
         assert_eq!(root.snapshot.as_deref(), Some("s-1"));
+    }
+
+    #[test]
+    fn an_element_past_the_windows_right_or_bottom_edge_is_no_control() {
+        // As deskpilot read GNOME Text Editor tiled to 613x373 (#1395): its content wants more room, so the app places
+        // elements beyond the window, and deskpilot refused each point as outside it.
+        let at = |id: &str, name: &str, x, y, width| Element {
+            x,
+            y,
+            width,
+            height: 30,
+            ..node(id, "button", name, &shown(&["focusable"]), None, vec![])
+        };
+        let label =
+            Element { x: 650, y: 10, width: 80, height: 20, ..node("e7", "label", "", &SHOWN, Some("Beyond"), vec![]) };
+        let root = Element {
+            width: 613,
+            height: 373,
+            ..node(
+                "e1",
+                "window",
+                "Text Editor",
+                &SHOWN,
+                None,
+                vec![
+                    at("e2", "Inside", 10, 10, 80),
+                    at("e3", "Right", 620, 10, 80),
+                    at("e4", "Below", 10, 380, 80),
+                    // Half of it shows, but deskpilot aims at its centre, which is past the right edge.
+                    at("e5", "Straddling", 560, 50, 200),
+                    at("e6", "Edge", 540, 90, 60),
+                    label,
+                ],
+            )
+        };
+        let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "x".into() };
+        let observation = observation(&window, &root, &[]);
+        let labels: Vec<_> = observation.controls.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["Inside", "Edge"]);
+        assert_eq!(observation.offscreen_text, "Beyond");
     }
 
     #[test]

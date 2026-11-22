@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A desktop run no longer offers an element the app places past the right or bottom edge of its window ([#1395](https://github.com/agent-labs-dev/fastbrowse/issues/1395)). A window tiled smaller than its content leaves the app reporting elements beyond it, and every click on one was refused as a point outside the window. An element whose centre, the point deskpilot clicks, lies outside the window is no longer a control, and text past the edge reads as out of view.
+
 - A desktop recording no longer stretches a window of another size to the size of the first frame, as when a second window opens and the first is tiled to half its width ([#1395](https://github.com/agent-labs-dev/fastbrowse/issues/1395)). Each window is shrunk to fit and centred on a black frame of the first window's size, so its text keeps its shape.
 
 - A desktop run whose click closes the app's last window, such as confirming a quit dialog, records that click as a step that changed the app, then tells Jev every window is closed and which action closed the last one ([#1405](https://github.com/agent-labs-dev/fastbrowse/issues/1405)). The step used to fail on a missing window and leave a closed app behind a run that reported nothing about it. A recording's end card now draws the outcome in green only for a complete run, and in red for any other status.
