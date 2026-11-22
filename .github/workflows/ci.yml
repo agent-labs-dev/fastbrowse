@@ -268,7 +268,8 @@ jobs:
 
   # Every bench cassette replayed at zero latency, failing on any model request a cassette did not record. The proxy
   # has no upstream and the job no secrets, so a miss is an error, never a paid call. A change to model requests
-  # refreshes the cassettes this reports with `bench fill`, a paid run a maintainer starts.
+  # makes it report the tasks to refresh, which `cassette-refill.yml` fills and commits on a pull request from this
+  # repository; a fork's author, or a maintainer, runs `bench fill --only TASK` instead.
   replay:
     if: ${{ !inputs.task }}
     permissions: {contents: read}
@@ -289,6 +290,16 @@ jobs:
           installed=$(npx -y @puppeteer/browsers@3.2.6 install chrome@stable --path "$RUNNER_TEMP/cft" --format '{{path}}')
           echo "FASTBROWSE_CHROME=$installed" >> "$GITHUB_ENV"
       - run: uv run pytest -q -m cassette_replay tests/browser/test_native_replay.py
+        env:
+          # Each task that missed is recorded here as a file, which the cassette refill reads (no log parsing).
+          FASTBROWSE_REPLAY_MISSES: ${{ runner.temp }}/replay-misses
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: replay-misses
+          path: ${{ runner.temp }}/replay-misses
+          if-no-files-found: ignore
+          retention-days: 3
 
   # The builds on their own runners cost more than the rest of CI together, so a pull request pays for them only
   # when it changes how they are built or packed (the toolchain, the profiles, the lockfile, the packaging and smoke

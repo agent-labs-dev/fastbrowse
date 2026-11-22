@@ -1292,6 +1292,30 @@ async fn test_an_element_with_only_a_script_click_listener_is_offered() {
     h.close().await;
 }
 
+/// A same-origin frame's elements belong to the frame's own script realm, and Chrome's `getEventListeners` reports
+/// only the listeners of the realm it was read in, so a span the frame's script listens on was never offered (#1312).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_element_with_only_a_script_click_listener_in_a_frame_is_offered() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/listened-frame.html").await;
+    let obs = h.observe().await;
+    let labels: Vec<&str> = obs.controls.iter().map(|c| c.label.as_str()).collect();
+    for label in ["Remove Combat", "Delegated row", "Dropped listener", "Shadow action"] {
+        assert!(labels.contains(&label), "{label:?} not offered in {labels:?}");
+    }
+    assert_eq!(act(&h.page, click(find(&obs, "Remove Combat")), &obs).await.outcome, StepOutcome::Executed);
+    let frame = "document.querySelector('iframe').contentWindow";
+    assert_eq!(
+        eval_active(&h, &format!("{frame}.document.getElementById('status').textContent")).await,
+        "Nothing chosen"
+    );
+    eval_active(&h, &format!("{frame}.dropListener()")).await;
+    let labels: Vec<String> = h.observe().await.controls.into_iter().map(|c| c.label).collect();
+    assert!(!labels.iter().any(|l| l == "Dropped listener"), "{labels:?}");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_table_cell_drawn_with_an_icon_is_not_read_as_blank() {
     let _turn = turn().await;
@@ -1845,6 +1869,50 @@ async fn test_reply_buttons_under_one_authors_comments_are_told_apart_by_their_t
     h.close().await;
 }
 
+/// A CurseForge comment links its author's name, so an author with two comments made that link a twin, and a twin's
+/// label was cut from every card's lines: both Reply buttons and the thread's Post were named by the comment's age,
+/// "29 days ago", and a reply went under another commenter's thread (#881).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reply_and_post_are_named_by_the_comment_author_a_link_names() {
+    let _turn = turn().await;
+    let comment = |user: &str, date: &str, text: &str, thread: &str| {
+        format!(
+            "<li><div class=\"comment\"><div class=\"comment-body\"><div class=\"user-meta\">\
+             <a class=\"user\" href=\"#{user}\">{user}</a><div class=\"date\">{date}</div></div>\
+             <p>{text}</p><button>Reply</button><button>Quote</button></div></div>{thread}</li>"
+        )
+    };
+    let reply = format!("<ul>{}</ul>", comment("cjber", "28 days ago", "Fixed in 1.2", ""));
+    let form = "<form><textarea aria-label=\"Comment text area\"></textarea><button>Post</button></form>";
+    let page = |thread_form: &str| {
+        format!(
+            "<ul>{}{}{}</ul>{form}",
+            comment("Syrberus", "30 days ago", "Is 75 enough?", &reply),
+            comment("Syrberus", "29 days ago", "Works on 100%", thread_form),
+            comment("Belth", "29 days ago", "Thanks", ""),
+        )
+    };
+    let contexts = |obs: &Observation, label: &str| -> Vec<String> {
+        obs.controls.iter().filter(|c| c.label == label).map(|c| c.context.clone().unwrap_or_default()).collect()
+    };
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(&h, &format!("document.body.innerHTML = {}", serde_json::to_string(&page("")).unwrap())).await;
+    let obs = observe_until(&h.page, "Reply").await;
+    let replies = contexts(&obs, "Reply");
+    assert_eq!(replies.len(), 4, "{replies:?}");
+    assert!(replies[0].contains("Syrberus") && replies[2].contains("Syrberus"), "{replies:?}");
+    assert_ne!(replies[0], replies[2], "{replies:?}");
+    assert!(replies[3].contains("Belth"), "{replies:?}");
+    // Reply opened the second comment's thread form: its Post belongs to Syrberus' thread, not to an age.
+    eval_active(&h, &format!("document.body.innerHTML = {}", serde_json::to_string(&page(form)).unwrap())).await;
+    let obs = observe_until(&h.page, "Post").await;
+    let posts = contexts(&obs, "Post");
+    assert_eq!(posts.len(), 2, "{posts:?}");
+    assert!(posts[0].contains("Syrberus"), "{posts:?}");
+    h.close().await;
+}
+
 /// Options that are direct children of one list share every ancestor, and an aria-label hides the text inside
 /// them, so two "Springfield" options read as "1 of 2" and "2 of 2" and the run picked one blind.
 #[tokio::test(flavor = "multi_thread")]
@@ -2357,6 +2425,26 @@ async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
         assert_eq!(partial, path == "/report.csv?partial", "{path}");
         h.close().await;
     }
+}
+
+/// A CSV inside a ZIP was read as one block, so composing from it sent the whole file (#1311). It is read as a
+/// downloaded CSV is: one block per record under its header, named for the member it is.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_csv_inside_a_zip_download_is_read_row_by_row() {
+    read_pdfs();
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    h.goto("/report.zip").await;
+    let capture = h.page.capture().await.expect("capture");
+    let rows: Vec<_> = capture.blocks.iter().filter(|b| b.source_id.starts_with("download/")).collect();
+    let texts: Vec<_> = rows.iter().map(|block| capture.block_text(block)).collect();
+    assert_eq!(texts, ["name,total\nReport,139.79", "name,total\nKettle,34.50", "name,total\nLamp,12"]);
+    for block in &rows {
+        assert_eq!(block.kind, BlockKind::Table);
+        assert_eq!(block.heading_path, ["Downloaded file: report.zip/orders.csv"]);
+    }
+    h.close().await;
 }
 
 /// A try restarts the load, so a page whose parse waits on a script slower than one try's wait was never ready on any.

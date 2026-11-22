@@ -679,6 +679,11 @@ impl DeskpilotPage {
 }
 
 impl Page for DeskpilotPage {
+    /// deskpilot's `key` tool owns its own key names, such as `Return`, and refuses a combo it cannot press.
+    fn key_error(&self, _key: &str) -> Option<String> {
+        None
+    }
+
     /// Nothing is downloaded from a desktop window.
     fn artifacts(&self) -> Vec<Artifact> {
         Vec::new()

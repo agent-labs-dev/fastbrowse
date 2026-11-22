@@ -5,7 +5,6 @@
 //! thread. A reservation is checked against the receipts recorded when it is made.
 
 use std::future::Future;
-use std::io::Write;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
@@ -267,7 +266,8 @@ pub fn monotonic() -> f64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
 
-/// `TRACE_ENV`: where a run writes its trace as JSON lines: `-` or `1` for stderr, otherwise a file path appended to.
+/// `TRACE_ENV`: where a run writes its trace as JSON lines: `-` or `1` for stderr, `0` for nowhere, otherwise a file path
+/// appended to.
 pub const TRACE_ENV: &str = "FASTBROWSE_TRACE";
 
 type Sink = Mutex<Box<dyn std::io::Write + Send>>;
@@ -287,7 +287,7 @@ pub fn trace_to(destination: Option<&str>) -> std::io::Result<()> {
         Some(destination) => destination.to_string(),
         None => std::env::var(TRACE_ENV).unwrap_or_default(),
     };
-    if destination.is_empty() || SINK.get().is_some() {
+    if destination.is_empty() || destination == "0" || SINK.get().is_some() {
         return Ok(());
     }
     let stream: Box<dyn std::io::Write + Send> = if destination == "-" || destination == "1" {
@@ -300,12 +300,11 @@ pub fn trace_to(destination: Option<&str>) -> std::io::Result<()> {
 }
 
 /// One event as a JSON line: when it was made, then the event.
-fn write_line(sink: &Sink, record: &Map<String, Value>) {
+fn write_line(stream: &mut dyn std::io::Write, record: &Map<String, Value>) {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |at| at.as_secs_f64());
     let mut line = Map::new();
     line.insert("at".into(), crate::py::round(now, 3).into());
     line.extend(record.iter().map(|(key, value)| (key.clone(), value.clone())));
-    let mut stream = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     // A trace that cannot be written is the trace's loss, never the run's.
     let _ = writeln!(stream, "{}", crate::py::json::dumps(&Value::Object(line))).and_then(|()| stream.flush());
 }
@@ -318,6 +317,9 @@ fn write_line(sink: &Sink, record: &Map<String, Value>) {
 #[derive(Debug, Clone, Default)]
 pub struct Trace {
     events: Option<Arc<Mutex<Vec<Value>>>>,
+    /// This run's own file, written as events are made, beside the process's destination if it has one. Every clone
+    /// shares the one handle, so [`Trace::close`] shuts it for all of them.
+    file: Option<Arc<Mutex<Option<std::fs::File>>>>,
     /// The run's secrets. Every clone of a run's trace shares them, so an event made anywhere in the run, by the loop,
     /// a reader or a check, is redacted as it is written rather than wherever its fields were built.
     redactor: Option<Arc<Mutex<Redactor>>>,
@@ -326,12 +328,27 @@ pub struct Trace {
 impl Trace {
     /// A trace that keeps nothing.
     pub fn disabled() -> Trace {
-        Trace { events: None, redactor: None }
+        Trace { events: None, file: None, redactor: None }
     }
 
     /// `traced()`: a trace that keeps every record made through it or a clone of it.
     pub fn collecting() -> Trace {
-        Trace { events: Some(Arc::new(Mutex::new(Vec::new()))), redactor: None }
+        Trace { events: Some(Arc::new(Mutex::new(Vec::new()))), file: None, redactor: None }
+    }
+
+    /// A trace that writes every record made through it or a clone of it to `file` as a JSON line when it is made, so a
+    /// run that dies part way still leaves what it had done.
+    pub fn writing_to(file: std::fs::File) -> Trace {
+        Trace { events: None, file: Some(Arc::new(Mutex::new(Some(file)))), redactor: None }
+    }
+
+    /// Close this trace's file for every clone of it; events made afterwards are not written. Parts of a run, such as
+    /// the extension relay's reader, can outlive the run with a clone in hand, and Windows refuses to delete a file
+    /// still open, so a run's file is closed before it is removed.
+    pub fn close(&self) {
+        if let Some(file) = &self.file {
+            file.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+        }
     }
 
     /// This trace, redacting with `redactor` from now on.
@@ -345,13 +362,13 @@ impl Trace {
     }
 
     pub fn enabled(&self) -> bool {
-        self.events.is_some() || SINK.get().is_some()
+        self.events.is_some() || self.file.is_some() || SINK.get().is_some()
     }
 
     /// Record one event. The fields are built only when the trace keeps or writes them.
     pub fn event(&self, event: &str, fields: impl FnOnce() -> Map<String, Value>) {
         let sink = SINK.get();
-        if self.events.is_none() && sink.is_none() {
+        if self.events.is_none() && self.file.is_none() && sink.is_none() {
             return;
         }
         let mut record = Map::new();
@@ -362,7 +379,12 @@ impl Trace {
             record.values_mut().for_each(|value| redactor.redact_value(value));
         }
         if let Some(sink) = sink {
-            write_line(sink, &record);
+            write_line(&mut **sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), &record);
+        }
+        if let Some(file) = &self.file
+            && let Some(file) = file.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut()
+        {
+            write_line(file, &record);
         }
         if let Some(events) = &self.events {
             events.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(Value::Object(record));
@@ -520,6 +542,28 @@ mod tests {
         let outcomes: Vec<Value> = trace.events().iter().map(|e| e["outcome"].clone()).collect();
         assert_eq!(outcomes, [json!("ok"), json!("error")], "a span never polled was never begun");
         assert!(Trace::disabled().events().is_empty());
+    }
+
+    #[test]
+    fn a_file_trace_writes_each_event_as_it_is_made() {
+        let path = std::env::temp_dir().join(format!("fastbrowse-trace-test-{}.jsonl", std::process::id()));
+        let trace = Trace::writing_to(std::fs::File::create(&path).unwrap());
+        assert!(trace.enabled());
+        trace.clone().event("first", || Map::from_iter([("n".into(), json!(1))]));
+        let written = std::fs::read_to_string(&path).unwrap();
+        // Closing one handle closes the file for a clone that outlives the run, which then writes nothing.
+        let late = trace.clone();
+        trace.close();
+        late.event("late", Map::new);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), written);
+        std::fs::remove_file(&path).unwrap();
+        let line: Value = serde_json::from_str(written.lines().next().unwrap()).unwrap();
+        assert_eq!(
+            (line["event"].clone(), line["n"].clone()),
+            (json!("first"), json!(1)),
+            "a clone writes to the same file"
+        );
+        assert!(trace.events().is_empty(), "nothing is held in memory");
     }
 
     #[test]

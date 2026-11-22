@@ -91,7 +91,7 @@ def test_requests_reads_jev_exchanges_from_cassettes_and_http_events_from_traces
             exchange(f"{JEV_MOUNT}/v1/systemone", body(seen=noul()), {"answers": {}}),
             exchange(f"{LLM_MOUNT}/chat/completions", body(actions_done=choice("done", "undone")), {"choices": []}),
         ],
-    ).save(tmp_path / "t.jsonl.gz")
+    ).save(tmp_path / "t.jsonl")
     trace = tmp_path / "trace.jsonl"
     confirm = body(stops_to_confirm=choice("confirm", "no"))
     trace.write_text(
@@ -107,10 +107,10 @@ def test_requests_reads_jev_exchanges_from_cassettes_and_http_events_from_traces
         )
         + "\n"
     )
-    found = list(requests([tmp_path / "t.jsonl.gz", trace]))
+    found = list(requests([tmp_path / "t.jsonl", trace]))
     assert [request for _, request, _ in found] == [gate, confirm]
     assert found[0][2] == recorded
-    assert found[0][0].endswith("t.jsonl.gz") and found[1][0].endswith("trace.jsonl")
+    assert found[0][0].endswith("t.jsonl") and found[1][0].endswith("trace.jsonl")
 
 
 def test_positions_gives_each_option_its_offered_place_and_recorded_probability() -> None:
