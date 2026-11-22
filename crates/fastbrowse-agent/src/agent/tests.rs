@@ -10815,7 +10815,7 @@ async fn typed_run(landed: Option<&str>) -> RunState {
         now: std::sync::Mutex::new(Observation { document_key: "parent-doc".into(), ..observation(&[field("Date")]) }),
         left: observation(&[Control { value: Some("2026-11-04".into()), ..field("Date") }]),
     };
-    let agent = Agent::new(Arc::new(page), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let agent = Agent::new(Arc::new(page), Arc::new(Answers(Some("write"))), Arc::new(DateWriter::default()));
     let mut state = RunState::new(
         "Book a table for input date".into(),
         IndexMap::from([("date".to_string(), "2026-11-04".to_string())]),
