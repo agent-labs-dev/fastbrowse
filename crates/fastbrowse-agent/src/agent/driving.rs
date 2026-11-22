@@ -1269,6 +1269,7 @@ impl Agent {
             });
         }
         let note = self.redact(act.detail.as_deref().unwrap_or_default());
+        let refused = (act.outcome == StepOutcome::Failed && !note.is_empty()).then(|| note.clone());
         let facts: Vec<_> = state.notes.facts()[facts_before.min(state.notes.facts().len())..]
             .iter()
             .map(|fact| self.public_fact(fact, &state.notes))
@@ -1291,7 +1292,7 @@ impl Agent {
         self.record_step(state, step, false, frame).await?;
         match progressed {
             Some(progressed) => {
-                let stalled = Idle { action: withheld(decision), outcome: act.outcome };
+                let stalled = Idle { action: withheld(decision), outcome: act.outcome, refused };
                 self.count_progress(state, progressed, observation, stalled, Status::Stuck).await
             }
             None => {

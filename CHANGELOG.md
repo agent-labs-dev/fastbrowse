@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A step the browser or desktop app refused is named in the next decision with the refusal it gave, such as deskpilot's "scroll it into view", instead of as a step that did not move the task on. A desktop run no longer presses OK after its click on a list row out of view failed without knowing why (#1403).
+
 - A desktop run with no time limit no longer waits forever on a window that does not change ([#1406](https://github.com/agent-labs-dev/fastbrowse/issues/1406)). A WAIT polled the window until it changed, spending nothing, so `--max-dollars` never ended the run and it was killed with no result, cost or clip. A WAIT with no deadline now watches the window for 60 seconds, as a browser's watches for one reply, and hands the step back unchanged, so the stall rule counts it and the run ends `stuck`. A scroll that brings lines into the window now counts as changing it, since text past the window's bottom edge reads as out of view.
 
 - A desktop window's own Close, in its title bar, is offered with the window's title as its context, so the check that asks whether a click can be undone reads it as closing the app's window ([#1399](https://github.com/agent-labs-dev/fastbrowse/issues/1399)). It was offered as a bare "Close", rated reversible, and a run that clicked it ended on a closed app. A control is told to be the window's own by what holds it in the accessibility tree, not by its words. Each input a desktop run sends to an element is now recorded in the trace as `desktop_input`, with the snapshot and element it names and what the run last read that element to be, so a click that lands on another element can be traced.
