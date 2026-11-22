@@ -230,7 +230,8 @@ the task again.
 - With `--extension`, Chrome took the run's tab away because the page loaded another extension's frame; see
   [Another extension's frame takes the tab away](#another-extensions-frame-takes-the-tab-away).
 - With `--extension`, no browser has the fastbrowse extension connected. The error is `no browser has the
-  fastbrowse extension connected`.
+  fastbrowse extension connected`, or `no browser's fastbrowse extension can be reached from this process` when a
+  sandbox refuses the run its host's directory or socket; see [The extension is not connected](#the-extension-is-not-connected).
 
 **Next step.**
 
@@ -271,6 +272,13 @@ browser starts. When the run ends `unavailable` with `no browser has the fastbro
   both use `$XDG_RUNTIME_DIR/fastbrowse-hosts`, or `/run/user/<uid>/fastbrowse-hosts` when the variable is
   unset. A run started with `FASTBROWSE_EXTENSION_DIR` set, or with a different `XDG_RUNTIME_DIR` from
   Chrome's, looks somewhere else.
+
+From inside an agent's sandbox, such as Codex's `workspace-write` or Claude Code's, the run must be able to read
+that directory and connect to the sockets in it. A run counts a browser as connected when its host's socket
+accepts a connection, so a sandbox that only hides other processes, as Codex's does, still reaches the extension.
+When the sandbox refuses the directory or the socket, the run ends `unavailable` with
+`no browser's fastbrowse extension can be reached from this process` and names the refusal: allow that directory
+in the sandbox's settings, or run fastbrowse with the sandbox off.
 
 If the error says the extension does not report its supported commands, it is too old for this build.
 Extension 0.1.1 or later must advertise every required command. Store 0.1.0 cannot do that. Update the

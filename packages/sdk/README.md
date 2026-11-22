@@ -20,7 +20,9 @@ first use. It needs Node.js 20 or newer, and on Linux it needs glibc.
 
 The binary brings no browser. `local: true` drives your own Chrome through the
 [fastbrowse extension](../../docs/cli.md#your-own-chrome), signed in as you are; add `launch: true` to start a separate
-Chrome instead. Without either a run starts a Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
+Chrome instead. A process inside a sandbox reaches the extension only when the sandbox lets it read the host's
+directory and connect to its sockets; otherwise the run ends `unavailable` and
+[names the refusal](../../docs/troubleshooting.md#the-extension-is-not-connected). Without either a run starts a Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
 
 ## First run
 
