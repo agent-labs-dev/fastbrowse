@@ -79,6 +79,9 @@ pub struct ServerConfig {
     pub mcp_token: Option<String>,
     /// [`OVERRUN_GRACE_SECONDS`], which a test shortens.
     pub grace_seconds: f64,
+    /// Where each call writes its trace, kept when the call ends short of complete; None when the operator chose
+    /// where traces go. See [`crate::kept_trace`].
+    pub traces: Option<PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -99,6 +102,7 @@ impl Default for ServerConfig {
             cursor: None,
             mcp_token: None,
             grace_seconds: OVERRUN_GRACE_SECONDS,
+            traces: None,
         }
     }
 }
@@ -343,7 +347,12 @@ fn download(name: &str, mime_type: &str, size_bytes: i64, uri: &str) -> Value {
 }
 
 /// `BrowseResult`, dumped.
-pub fn browse_result(result: &RunResult, live_url: Option<&str>, config: &ServerConfig) -> Value {
+pub fn browse_result(
+    result: &RunResult,
+    live_url: Option<&str>,
+    trace: Option<&std::path::Path>,
+    config: &ServerConfig,
+) -> Value {
     // Without a downloads directory the files went with the run's scratch space, so there is nothing to point at.
     let downloads: Vec<Value> = if config.downloads.is_some() {
         result.artifacts.iter().map(|a| download(&a.name, &a.mime_type, a.size_bytes, &a.uri)).collect()
@@ -374,6 +383,8 @@ pub fn browse_result(result: &RunResult, live_url: Option<&str>, config: &Server
         "browser": result.browser.as_ref().map(Dump::dump),
         "downloads": downloads,
         "screenshot": screenshot,
+        // The call's own trace when it ended short of complete, so its caller can read what the run saw (#1414).
+        "trace": trace.map(|path| path.display().to_string()),
     })
 }
 
@@ -587,6 +598,7 @@ pub fn configure(
         cursor: args.cursor,
         mcp_token: token,
         grace_seconds: OVERRUN_GRACE_SECONDS,
+        traces: crate::kept_trace::directory(None, environ),
     })
 }
 
@@ -637,6 +649,8 @@ enum ToolFailure {
         message: String,
         receipt: CancellationReceipt,
     },
+    /// Any of the others, from a call whose trace was kept, which its text names.
+    Traced(Box<ToolFailure>, PathBuf),
 }
 
 impl From<RunError> for ToolFailure {
@@ -811,7 +825,10 @@ impl McpServer {
                             }
                         })
                     };
-                    let call = server.call(&name, arguments, token, run_cancel, &events);
+                    // Where the run keeps its trace, read here because a cancel answers before the run ends: the
+                    // reply named nothing, though a cancelled run keeps its trace.
+                    let trace_at = std::sync::Mutex::new(None);
+                    let call = server.call(&name, arguments, token, run_cancel, &events, &trace_at);
                     tokio::pin!(call);
                     let outcome = tokio::select! {
                         biased;
@@ -821,7 +838,12 @@ impl McpServer {
                             run_stop.trip();
                             // Remove before replying so cleanup cannot remove a newer request reusing this id.
                             session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
-                            outbox(error_response(&id, 0, "Request cancelled", None));
+                            let trace = trace_at
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .as_ref()
+                                .map(|path: &std::path::PathBuf| format!("trace: {}", path.display()));
+                            outbox(error_response(&id, 0, "Request cancelled", trace.as_deref()));
                             let _ = tokio::time::timeout(
                                 Duration::from_secs_f64(server.config.grace_seconds.max(0.0)),
                                 &mut call,
@@ -843,7 +865,11 @@ impl McpServer {
                             response(&id, result)
                         }
                         Err(failure) => {
-                            let (text, receipt) = match failure {
+                            let (failure, trace) = match failure {
+                                ToolFailure::Traced(failure, path) => (*failure, Some(path)),
+                                failure => (failure, None),
+                            };
+                            let (mut text, receipt) = match failure {
                                 ToolFailure::Tool(message) => (format!("Error executing tool browse: {message}"), None),
                                 ToolFailure::Unknown(name) => (format!("Unknown tool: {name}"), None),
                                 ToolFailure::Cancelled(receipt) => (
@@ -854,7 +880,11 @@ impl McpServer {
                                     format!("Error executing tool browse: {message}"),
                                     Some(("fastbrowse.ai/receipt", receipt)),
                                 ),
+                                ToolFailure::Traced(..) => unreachable!("a failure is traced once"),
                             };
+                            if let Some(path) = trace {
+                                text.push_str(&format!(" (trace: {})", path.display()));
+                            }
                             let mut result = json!({"content": [{"type": "text", "text": text}], "isError": true});
                             if let Some((key, receipt)) = receipt {
                                 result["_meta"] = json!({key: receipt.dump()});
@@ -876,13 +906,14 @@ impl McpServer {
         token: Option<Value>,
         cancel: crate::runner::Cancel,
         outbox: &Outbox,
+        trace_at: &std::sync::Mutex<Option<std::path::PathBuf>>,
     ) -> Result<Value, ToolFailure> {
         if name != "browse" {
             crate::log::warning(&format!("Tool {} not listed, no validation will be performed", repr(name)));
             return Err(ToolFailure::Unknown(name.to_string()));
         }
         let arguments = Browse::read(arguments).map_err(ToolFailure::Tool)?;
-        self.browse(arguments, token, cancel, outbox).await
+        self.browse(arguments, token, cancel, outbox, trace_at).await
     }
 
     async fn browse(
@@ -891,6 +922,7 @@ impl McpServer {
         token: Option<Value>,
         cancel: crate::runner::Cancel,
         outbox: &Outbox,
+        trace_at: &std::sync::Mutex<Option<std::path::PathBuf>>,
     ) -> Result<Value, ToolFailure> {
         let config = &self.config;
         let origin = arguments.start.as_deref().map(start_origin).transpose()?;
@@ -942,6 +974,11 @@ impl McpServer {
             outbox(info("waiting for another browse call to finish".into()));
         }
         let _slot = self.slots.acquire().await.map_err(|error| error.to_string())?;
+        // A call cancelled while it waited has been answered already; starting it then kept a trace its reply never
+        // named, and opened a browser for a run nobody waits on.
+        if cancel.is_tripped() {
+            return Err(ToolFailure::Cancelled(CancellationReceipt::default()));
+        }
         // The deadline starts once the slot is held, so a queued call does not spend its own time waiting for it.
         let deadline =
             limits.max_seconds.map(|seconds| Duration::from_secs_f64((seconds + config.grace_seconds).max(0.0)));
@@ -960,40 +997,46 @@ impl McpServer {
             cursor: config.cursor,
             ..RunTask::default()
         };
+        let kept = config.traces.as_deref().and_then(crate::kept_trace::KeptTrace::start);
+        if let Some(kept) = &kept {
+            *trace_at.lock().unwrap_or_else(|p| p.into_inner()) = Some(kept.path().to_owned());
+        }
         let host = Host {
             browser_api_key: config.browser_api_key.clone(),
             secrets: secrets.map(|secrets| Arc::new(secrets) as _),
             on_event: Some(on_event),
+            http: kept.as_ref().map(|kept| fastbrowse_clients::http::Http::hyper().with_trace(kept.trace())),
             cancel: cancel.clone(),
             ..Host::default()
         };
         let running = self.runner.run(task, host);
         tokio::pin!(running);
-        let outcome = match deadline {
-            None => running.await,
+        let outcome: Result<RunResult, ToolFailure> = match deadline {
+            None => running.await.map_err(ToolFailure::from),
             Some(deadline) => match tokio::time::timeout(deadline, &mut running).await {
-                Ok(outcome) => outcome,
+                Ok(outcome) => outcome.map_err(ToolFailure::from),
                 Err(_) => {
                     cancel.trip();
                     match tokio::time::timeout(Duration::from_secs_f64(config.grace_seconds.max(0.0)), &mut running)
                         .await
                     {
-                        Ok(Ok(outcome)) => Ok(outcome),
-                        Ok(Err(error)) => return Err(error.into()),
+                        Ok(outcome) => outcome.map_err(ToolFailure::from),
                         Err(_) => {
                             let seconds = json::float(limits.max_seconds.unwrap_or_default(), Floats::Repr);
-                            return Err(format!("the run overran max_seconds={seconds} and was abandoned").into());
+                            Err(format!("the run overran max_seconds={seconds} and was abandoned").into())
                         }
                     }
                 }
             },
         };
-        let result = match outcome {
-            Ok(result) => result,
-            Err(error) => return Err(error.into()),
+        let trace = kept.and_then(|kept| kept.finish(outcome.as_ref().ok().map(|result| result.status)));
+        let result = match (outcome, trace.clone()) {
+            (Ok(result), _) => result,
+            (Err(failure), Some(path)) => return Err(ToolFailure::Traced(Box::new(failure), path)),
+            (Err(failure), None) => return Err(failure),
         };
         let live_url = live_url.lock().unwrap_or_else(|p| p.into_inner()).clone();
-        Ok(browse_result(&result, live_url.as_deref(), config))
+        Ok(browse_result(&result, live_url.as_deref(), trace.as_deref(), config))
     }
 }
 

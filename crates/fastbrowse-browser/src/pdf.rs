@@ -50,6 +50,15 @@ pub(crate) async fn document_text(request: &str, raw: Vec<u8>) -> Result<Option<
     text_with_request(command, request, raw, Duration::from_secs(PARSE_SECONDS)).await
 }
 
+/// A ZIP's members, each as its path in the archive and its text, read in the helper.
+pub(crate) async fn archive_members(raw: Vec<u8>, max_bytes: usize) -> Result<Vec<(String, String)>, PdfUnread> {
+    let request = format!("{}:{max_bytes}", helper::ZIP_MEMBERS);
+    match document_text(&request, raw).await? {
+        Some(members) => serde_json::from_str(&members).map_err(|_| PdfUnread::ReaderFailed),
+        None => Ok(Vec::new()),
+    }
+}
+
 #[cfg(test)]
 pub(crate) async fn text_with(
     command: &HelperCommand,
@@ -162,13 +171,13 @@ pub(crate) mod tests {
         zip.start_file("report.csv", zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(b"Item,Amount\nKettle,34.50").unwrap();
         let raw = zip.finish().unwrap().into_inner();
-        let text = text_with_request(&helper("read"), helper::ZIP_TEXT, raw.clone(), Duration::from_secs(30))
+        let text = text_with_request(&helper("read"), helper::ZIP_MEMBERS, raw.clone(), Duration::from_secs(30))
             .await
             .unwrap()
             .unwrap();
-        assert!(text.contains("[Archive member: report.csv]\nItem,Amount\nKettle,34.50"));
+        assert_eq!(text, r#"[["report.csv","Item,Amount\nKettle,34.50"]]"#);
         assert_eq!(
-            text_with_request(&helper("read"), "zip-text:1", raw, Duration::from_secs(30)).await,
+            text_with_request(&helper("read"), "zip-members:1", raw, Duration::from_secs(30)).await,
             Err(PdfUnread::TooLarge)
         );
     }

@@ -93,6 +93,10 @@ A result short of `complete` also has `failure_kind`, the cause without page tex
 `Wall/sign-in`, `Llm.Rejected/openrouter/action/http-401`). Quote it when reporting a failure, and read `error`
 for the detail.
 
+A CLI or MCP result short of `complete` also names `trace`, a file of the run's model requests, replies and steps.
+Read it to see what the run saw before it stopped, and give its path to whoever debugs the failure. It holds the
+pages the run read, so do not paste it anywhere public.
+
 For every status other than `complete`, preserve any returned answer and citations as partial alongside the
 status and its recovery instructions. Checked partial claims can survive stops such as a sign-in wall,
 pending authorization or an exhausted budget while their source evidence remains unchanged.

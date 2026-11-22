@@ -12,6 +12,7 @@ pub mod cli;
 pub mod embed;
 pub mod entry;
 pub mod extension;
+pub mod kept_trace;
 pub mod mcp;
 pub mod options;
 pub mod runner;
