@@ -1858,14 +1858,48 @@ impl CdpPage {
         if out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD)) {
             // A look weighs pointer listeners through `getEventListeners`, which only an evaluate with the command
             // line API has. That API also lends the page `$` and the rest while it runs, so it gets an evaluate of its
-            // own, once per document, which keeps the function for every later look (snapshot.js `listeners`).
-            let mark = json!({
-                "expression": format!("{}('listeners')", self.page_js),
-                "includeCommandLineAPI": true,
-                "returnByValue": true,
-            });
-            self.session.send("Runtime.evaluate", mark, Some(session_id)).await?;
-            out = self.session.send("Runtime.evaluate", params, Some(session_id)).await?;
+            // own, once per document, which keeps the function for every later look (snapshot.js `listeners`). The
+            // function answers only for its own realm, so each same-process frame's page world reads its own too:
+            // read from the parent alone, a frame's listened span was no control (#1312).
+            let mark = |unique: Option<String>| {
+                let mut mark = json!({
+                    "expression": format!("({})('listeners')", self.session.snapshot().install),
+                    "includeCommandLineAPI": true,
+                    "returnByValue": true,
+                });
+                if let Some(unique) = unique {
+                    mark["uniqueContextId"] = unique.into();
+                }
+                mark
+            };
+            // A look that first touches a frame's document makes Chrome create that frame's page world, and reports it
+            // before the look's own answer, so a look still unread after its marks has met a world it can mark now.
+            // Worlds are marked once each, and a round that finds no new world ends the retries.
+            let mut marked = std::collections::HashSet::new();
+            loop {
+                let worlds: Vec<String> =
+                    self.session.main_worlds(session_id).into_iter().filter(|world| !marked.contains(world)).collect();
+                if worlds.is_empty() {
+                    if !marked.is_empty() {
+                        break;
+                    }
+                    self.session.send("Runtime.evaluate", mark(None), Some(session_id)).await?;
+                    marked.insert(String::new());
+                }
+                // Sent together, so a page of many frames waits one round trip, not one per frame. A frame can go away
+                // between the event and its call, which leaves it nothing to read.
+                futures_util::future::join_all(
+                    worlds.iter().map(|world| {
+                        self.session.send("Runtime.evaluate", mark(Some(world.clone())), Some(session_id))
+                    }),
+                )
+                .await;
+                marked.extend(worlds);
+                out = self.session.send("Runtime.evaluate", params.clone(), Some(session_id)).await?;
+                if !out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD)) {
+                    break;
+                }
+            }
         }
         if out.get("exceptionDetails").is_some() {
             return Err(BrowserError::Script);

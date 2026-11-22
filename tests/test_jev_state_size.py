@@ -1,4 +1,3 @@
-import gzip
 import json
 from pathlib import Path
 
@@ -19,9 +18,13 @@ def test_profiles_count_unanswered_states_without_inventing_tokens(tmp_path: Pat
             ]
         )
     )
-    cassette = tmp_path / "cassette.jsonl.gz"
-    with gzip.open(cassette, "wt") as output:
-        output.write(json.dumps({"request": request, "body": '{"usage":{"input_tokens":60}}'}))
+    cassette = tmp_path / "cassette.jsonl"
+    cassette.write_text(
+        json.dumps({"cassette": 1, "task": "t"})
+        + "\n"
+        + json.dumps({"request": request, "body": '{"usage":{"input_tokens":60}}'})
+        + "\n"
+    )
     measured = profile([trace, cassette])["kinds"]["carried"]
     assert measured["requests"] == 3
     assert measured["metered_requests"] == 2

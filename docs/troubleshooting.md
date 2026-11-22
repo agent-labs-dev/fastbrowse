@@ -231,7 +231,8 @@ the task again.
 - With `--extension`, Chrome took the run's tab away because the page loaded another extension's frame; see
   [Another extension's frame takes the tab away](#another-extensions-frame-takes-the-tab-away).
 - With `--extension`, no browser has the fastbrowse extension connected. The error is `no browser has the
-  fastbrowse extension connected`.
+  fastbrowse extension connected`, or `no browser's fastbrowse extension can be reached from this process` when a
+  sandbox refuses the run its host's directory or socket; see [The extension is not connected](#the-extension-is-not-connected).
 
 **Next step.**
 
@@ -239,8 +240,9 @@ the task again.
 - For a deadline, set `Limits(max_seconds=...)` in the embedding API, or `--max-seconds` on the MCP server.
   Step and dollar limits do not bound elapsed time. Without `max_seconds` a Wait waits for the page to change, with
   no bound, so a run nobody watches, such as a benchmark or a scheduled job, should set one.
-- For a stalled run, write its trace with `--trace FILE` or `FASTBROWSE_TRACE=FILE` and keep the last event
-  with the result. Each `decide_choices` event lists the controls a step was chosen from, the chosen one marked.
+- For a stalled run, read the trace its result names in `trace` (kept for any CLI or MCP run that ends short of
+  `complete`), or write one with `--trace FILE` or `FASTBROWSE_TRACE=FILE`, and keep the last event with the
+  result. Each `decide_choices` event lists the controls a step was chosen from, the chosen one marked.
 
 ### An attached Chrome that waits for approval
 
@@ -272,6 +274,13 @@ browser starts. When the run ends `unavailable` with `no browser has the fastbro
   unset. A run started with `FASTBROWSE_EXTENSION_DIR` set, or with a different `XDG_RUNTIME_DIR` from
   Chrome's, looks somewhere else.
 
+From inside an agent's sandbox, such as Codex's `workspace-write` or Claude Code's, the run must be able to read
+that directory and connect to the sockets in it. A run counts a browser as connected when its host's socket
+accepts a connection, so a sandbox that only hides other processes, as Codex's does, still reaches the extension.
+When the sandbox refuses the directory or the socket, the run ends `unavailable` with
+`no browser's fastbrowse extension can be reached from this process` and names the refusal: allow that directory
+in the sandbox's settings, or run fastbrowse with the sandbox off.
+
 If the error says the extension does not report its supported commands, it is too old for this build.
 Extension 0.1.1 or later must advertise every required command. Store 0.1.0 cannot do that. Update the
 extension, or run `fastbrowse extension path` and load its folder unpacked through **Developer mode** at
@@ -291,10 +300,15 @@ away from fastbrowse as soon as one appears. Screen recorders, password managers
 such frames to every page. The run ends `unavailable` with `Chrome detached fastbrowse from the run's tab when
 the page loaded a frame from another extension (chrome-extension://<id>)`.
 
-**Next step.** Open `chrome://extensions/?id=<id>` from the error, set **Site access** to **On click**, and run
-again. The extension then adds its frame only on pages where you click it. With `--trace FILE`, every message
-between the run and the extension is in the trace as an `extension` event, with screenshots and screencast
-frames replaced by their length, and an `extension_tab_lost` event names the frame that took the tab.
+**Next step.** When the address in the error is an extension id (32 letters from a to p), open
+`chrome://extensions/?id=<id>` from the error, set **Site access** to **On click**, and run again. The extension
+then adds its frame only on pages where you click it. Some extensions, password managers among them, load their
+frames from an address that changes each session and does not name the extension: `chrome-extension://` followed
+by a UUID such as `f4a2011c-a215-4438-99a1-3acaa81a2208`. The error then says so instead of linking to an
+extension: open `chrome://extensions` and set **Site access** to **On click** for each extension that adds frames to
+pages. With `--trace FILE`, every message between the run and the extension is in the trace as an `extension`
+event, with screenshots and screencast frames replaced by their length, and an `extension_tab_lost` event names
+the frame that took the tab.
 
 ### DevToolsActivePort and finding the DevTools address
 

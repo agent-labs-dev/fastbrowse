@@ -7,7 +7,6 @@ key, per question set, beside the provider's input tokens for the whole request.
 """
 
 import argparse
-import gzip
 import json
 from collections import Counter
 from pathlib import Path
@@ -23,10 +22,14 @@ def profile(paths: list[Path]) -> dict[str, Any]:
     """Aggregate recorded exchanges, retaining unanswered requests in the size counts."""
     groups: dict[str, dict[str, Any]] = {}
     for path in paths:
-        opener = gzip.open if path.suffix == ".gz" else open
-        with opener(path, "rt", encoding="utf-8") as lines:
+        cassette = False
+        with path.open(encoding="utf-8") as lines:
             for line in lines:
                 record = json.loads(line)
+                if "cassette" in record:
+                    # A cassette's head line; its exchanges hold the response as `body`, a trace's as `response`.
+                    cassette = True
+                    continue
                 request = record.get("request")
                 if (
                     not isinstance(request, dict)
@@ -34,9 +37,9 @@ def profile(paths: list[Path]) -> dict[str, Any]:
                     or not isinstance(request.get("questions"), dict)
                 ):
                     continue
-                if path.suffix != ".gz" and record.get("event") != "http":
+                if not cassette and record.get("event") != "http":
                     continue
-                response = record.get("body") if path.suffix == ".gz" else record.get("response")
+                response = record.get("body") if cassette else record.get("response")
                 if isinstance(response, str):
                     try:
                         response = json.loads(response)
@@ -75,7 +78,7 @@ def profile(paths: list[Path]) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("paths", nargs="+", type=Path, help="run trace JSONL or bench cassette JSONL.gz")
+    parser.add_argument("paths", nargs="+", type=Path, help="run trace JSONL or bench cassette JSONL")
     args = parser.parse_args()
     print(json.dumps(profile(args.paths), indent=2))
 

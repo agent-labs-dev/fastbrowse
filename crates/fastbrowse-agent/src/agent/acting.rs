@@ -1114,7 +1114,7 @@ impl Agent {
     ) -> Step<String> {
         let supported = role_keys(&target.role);
         if supported.is_empty() || decision.replayed && self.recorded_key(state, observation, target).is_some() {
-            return self.text_with_scope(state, observation, decision, target, true).await;
+            return self.task_key(state, observation, decision, target).await;
         }
         let options: Vec<String> = supported.iter().map(|key| key.to_string()).collect();
         let question = format!(
@@ -1127,7 +1127,28 @@ impl Agent {
                 state.text_source = Some(RecipeText::Literal(key.clone()));
                 Ok(key)
             }
-            Chosen::Instead(_) => self.text_with_scope(state, observation, decision, target, true).await,
+            Chosen::Instead(_) => self.task_key(state, observation, decision, target).await,
+        }
+    }
+
+    /// A key copied from the task's words, checked by the key grammar of the page that presses it. Words that name no
+    /// key, as when the task gives none, leave the press unmade and Jev is asked again, rather than the page refusing
+    /// them and ending the run (#1212).
+    async fn task_key(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        target: &Control,
+    ) -> Step<String> {
+        let key = self.text_with_scope(state, observation, decision, target, true).await?;
+        match self.page.key_error(&key) {
+            None => Ok(key),
+            Some(error) => Err(Unsure::new(format!(
+                "the task gives no key to press in {}: {error}",
+                text::repr(&describe(target))
+            ))
+            .into()),
         }
     }
 

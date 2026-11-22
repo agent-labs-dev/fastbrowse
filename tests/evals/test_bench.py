@@ -2,12 +2,16 @@ import dataclasses
 import hashlib
 import json
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
 import pytest
 
+from fastbrowse.evals import bench
 from fastbrowse.evals.bench import (
+    BenchTask,
     agent_environment,
     compare_runs,
     corpus,
@@ -17,11 +21,13 @@ from fastbrowse.evals.bench import (
     run_params,
 )
 from fastbrowse.evals.replay import (
+    BUDGET_STATUS,
     EMBEDDED_JSON,
     MISS_STATUS,
     Cassette,
     Exchange,
     Proxy,
+    Spend,
     canonical_json,
     canonical_value,
     describe_request,
@@ -169,7 +175,7 @@ def test_nearest_body_is_the_most_similar() -> None:
 def test_cassette_round_trips_and_writes_the_same_bytes(tmp_path: Path) -> None:
     cassette = Cassette(task="t", meta={"recorded_at": "2026-10-23"})
     cassette.exchanges.append(_exchange(JEV, {"q": 1}, '{"usage": {"cost": 0.5}}', latency=1.25))
-    first, second = tmp_path / "a.jsonl.gz", tmp_path / "b.jsonl.gz"
+    first, second = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
     cassette.save(first)
     cassette.save(second)
     assert first.read_bytes() == second.read_bytes()
@@ -179,13 +185,28 @@ def test_cassette_round_trips_and_writes_the_same_bytes(tmp_path: Path) -> None:
     assert loaded.exchanges[0].latency == 1.25
 
 
+def test_a_cassette_is_plain_jsonl_a_reviewer_can_read_in_a_diff(tmp_path: Path) -> None:
+    cassette = Cassette(task="t")
+    cassette.exchanges += [_exchange(JEV, {"b": 1, "a": 2}, "{}"), _exchange(JEV, {"q": "later"}, "{}")]
+    path = tmp_path / "t.jsonl"
+    cassette.save(path)
+    head, first, second = path.read_text(encoding="utf-8").splitlines()
+    assert json.loads(head)["task"] == "t" and Cassette.is_cassette(path)
+    assert first.startswith('{"purpose":') and '"request": {"b": 1, "a": 2}' in first
+    assert json.loads(second)["request"] == {"q": "later"}
+    assert '"key"' not in first and Cassette.load(path).exchanges[0].key == request_key(JEV, {"b": 1, "a": 2})
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text('{"event": "http"}\n')
+    assert not Cassette.is_cassette(trace)
+
+
 def test_loading_rekeys_from_the_request(tmp_path: Path) -> None:
     cassette = Cassette(task="t")
     stale = _exchange(JEV, {"q": 1}, "{}")
     stale.key = "stale"
     cassette.exchanges.append(stale)
-    cassette.save(tmp_path / "c.jsonl.gz")
-    assert Cassette.load(tmp_path / "c.jsonl.gz").exchanges[0].key == request_key(JEV, {"q": 1})
+    cassette.save(tmp_path / "c.jsonl")
+    assert Cassette.load(tmp_path / "c.jsonl").exchanges[0].key == request_key(JEV, {"q": 1})
 
 
 def _post(base: str, path: str, body: object, token: str = "one") -> httpx.Response:
@@ -198,6 +219,109 @@ def test_replay_ignores_the_bearer_token_and_serves_duplicates_in_order() -> Non
     with Proxy(cassette) as base:
         served = [_post(base, JEV, {"q": 1}, token=str(i)).json()["n"] for i in range(4)]
     assert served == [1, 2, 2, 2]
+
+
+def test_an_upstream_error_is_shown_to_the_agent_but_never_recorded() -> None:
+    """A fill that met a 429 once replayed it on every later fill instead of asking again (#1198)."""
+    answers = iter([(429, "application/json", '{"error": "rate limited"}'), (200, "application/json", '{"n": 1}')])
+    cassette = Cassette(task="t")
+    proxy = Proxy(cassette, forward=lambda path, body: next(answers))
+    with proxy as base:
+        assert _post(base, JEV, {"q": 1}).status_code == 429
+        assert cassette.exchanges == [] and proxy.upstream_errors == [429]
+        assert _post(base, JEV, {"q": 1}).json() == {"n": 1}
+    assert [e.status for e in cassette.exchanges] == [200] and proxy.forwarded == 1
+
+
+def test_a_fill_sends_nothing_upstream_once_the_budget_is_spent() -> None:
+    """The budget was checked only between tasks, so one task's passes could spend past it."""
+    sent: list[bytes] = []
+
+    def forward(path: str, body: bytes) -> tuple[int, str, str]:
+        sent.append(body)
+        return 200, "application/json", json.dumps({"usage": {"cost": 0.6}})
+
+    spend = Spend(1.0)
+    proxy = Proxy(Cassette(task="t"), forward=forward, spend=spend)
+    with proxy as base:
+        assert _post(base, JEV, {"q": 1}).status_code == 200
+        assert _post(base, JEV, {"q": 2}).status_code == 200
+        refused = _post(base, JEV, {"q": 3})
+    assert refused.status_code == BUDGET_STATUS and "budget reached" in refused.json()["error"]["message"]
+    assert len(sent) == 2 and spend.spent == pytest.approx(1.2) and spend.reached()
+    assert proxy.budget_refusals == 1 and len(proxy.cassette.exchanges) == 2
+
+
+def test_a_fill_pass_a_provider_refused_leaves_the_cassette_as_it_was(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pass that met a 429 went on down a path the agent took because of it, so none of it is kept (#1198)."""
+    path = tmp_path / "mock-basket.jsonl"
+    Cassette(task="mock-basket", exchanges=[_exchange(JEV, {"q": 0}, '{"n": 0}')]).save(path)
+    before = path.read_bytes()
+    answers = iter(
+        [(200, "application/json", json.dumps({"usage": {"cost": 0.1}})), (429, "application/json", '{"error": 1}')]
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setattr(bench, "openrouter_forward", lambda key: lambda path, body: next(answers))
+
+    async def run(task: BenchTask, *, agent_argv: list[str], proxy: Proxy, logs: Path) -> dict[str, object]:
+        for question in ({"q": 0}, {"q": 1}, {"q": 2}):
+            proxy.answer(JEV, json.dumps(question).encode())
+        return {
+            "task": task.id,
+            "metrics": {"wall_s": 1.0, "cpu_s": 0.0, "rss_bytes": 0, "steps": 0},
+            "result": {"status": "error", "grade": {"passed": False, "failure": "refused"}},
+            "misses": [miss.to_json() for miss in proxy.misses],
+            "forwarded": proxy.forwarded,
+            "upstream_errors": proxy.upstream_errors,
+            "budget_refusals": proxy.budget_refusals,
+        }
+
+    monkeypatch.setattr(bench, "bench_task", run)
+    out = tmp_path / "fill.json"
+    assert bench.main(["fill", "--only", "mock-basket", "--cassettes", str(tmp_path), "--out", str(out)]) == 0
+    assert path.read_bytes() == before
+    [entry] = json.loads(out.read_text())["tasks"]
+    assert entry["upstream_errors"] == [429] and entry["fill_passes"] == 1
+    assert entry["recorded_cost_usd"] == 0 and entry["spent_usd"] == pytest.approx(0.1)
+
+
+def test_concurrent_requests_under_a_budget_go_upstream_one_at_a_time() -> None:
+    """Checked side by side, two $0.60 requests each passed a $0.50 budget before either was priced."""
+    inside = threading.Semaphore(0)
+    release = threading.Event()
+
+    def forward(path: str, body: bytes) -> tuple[int, str, str]:
+        inside.release()
+        release.wait(5)
+        return 200, "application/json", json.dumps({"usage": {"cost": 0.6}})
+
+    spend = Spend(0.5)
+    proxy = Proxy(Cassette(task="t"), forward=forward, spend=spend)
+    with proxy as base, ThreadPoolExecutor(2) as pool:
+        first = pool.submit(_post, base, JEV, {"q": 1})
+        assert inside.acquire(timeout=5)
+        second = pool.submit(_post, base, JEV, {"q": 2})
+        assert not inside.acquire(timeout=0.2), "the second request went upstream before the first was priced"
+        release.set()
+        assert first.result().status_code == 200 and second.result().status_code == BUDGET_STATUS
+    assert spend.spent == pytest.approx(0.6) and proxy.forwarded == 1
+
+
+def test_a_response_without_a_price_ends_the_spending() -> None:
+    sent: list[bytes] = []
+
+    def forward(path: str, body: bytes) -> tuple[int, str, str]:
+        sent.append(body)
+        return 200, "application/json", "{}"
+
+    proxy = Proxy(Cassette(task="t"), forward=forward, spend=Spend(1.0))
+    with proxy as base:
+        assert _post(base, JEV, {"q": 1}).status_code == 200
+        refused = _post(base, JEV, {"q": 2})
+    assert refused.status_code == BUDGET_STATUS and "no price" in refused.json()["error"]["message"]
+    assert len(sent) == 1
 
 
 def test_replay_keeps_each_sent_request_with_its_response_as_a_trace_line() -> None:
@@ -328,8 +452,8 @@ def test_recording_saves_actual_origin_and_replays_at_two_new_ports(tmp_path: Pa
     with recording as base:
         response = _post(base, JEV, {"q": 1})
     assert response.status_code == 201 and response.headers["content-type"] == "application/custom"
-    cassette.save(tmp_path / "cassette.jsonl.gz")
-    loaded = Cassette.load(tmp_path / "cassette.jsonl.gz")
+    cassette.save(tmp_path / "cassette.jsonl")
+    loaded = Cassette.load(tmp_path / "cassette.jsonl")
     assert loaded.meta == {"port": 39123}
 
     for port in (40234, 41234):
@@ -354,9 +478,9 @@ def test_fill_records_live_origin_per_exchange_before_replay_at_another_port(tmp
     filling.set_fixture_origin("http://127.0.0.1:39123")
     with filling as base:
         assert _post(base, JEV, {"q": "new"}).json()["url"].endswith(":39123/new")
-    cassette.save(tmp_path / "filled.jsonl.gz")
+    cassette.save(tmp_path / "filled.jsonl")
 
-    loaded = Cassette.load(tmp_path / "filled.jsonl.gz")
+    loaded = Cassette.load(tmp_path / "filled.jsonl")
     assert loaded.exchanges[-1].fixture_origin == "http://127.0.0.1:39123"
     replay = Proxy(loaded)
     replay.set_fixture_origin("http://127.0.0.1:41234")
