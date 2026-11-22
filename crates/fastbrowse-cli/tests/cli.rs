@@ -7,10 +7,13 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use common::{Call, Recorder, isolated_binary, model_settings, result};
+use common::{Call, Recorder, isolated_binary, model_settings, result, runner};
+use fastbrowse_agent::agent::RecipeOutcome;
 use fastbrowse_cli::cli::{self, Build, Context, Streams};
+use fastbrowse_cli::runner::Runner;
 use fastbrowse_clients::environment::{Secret, Settings};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
+use fastbrowse_core::recipe::{RECIPE_VERSION, Recipe};
 use serde_json::Value;
 
 #[derive(Clone, Default)]
@@ -60,9 +63,21 @@ async fn cli_built(
     build: Build,
 ) -> Ran {
     let recorder = Recorder { result: Some(answer), ..Recorder::default() };
+    let ran = cli_run_by(argv, settings, environ, recorder.runner(), build).await;
+    Ran { call: recorder.calls().pop(), ..ran }
+}
+
+/// One invocation run by `runner`, which records no call.
+async fn cli_run_by(
+    argv: &[&str],
+    settings: Settings,
+    environ: &[(&str, &str)],
+    runner: Arc<dyn Runner>,
+    build: Build,
+) -> Ran {
     let (out, err) = (Buffer::default(), Buffer::default());
     let context = Context {
-        runner: recorder.runner(),
+        runner,
         settings: Arc::new(move || Ok(settings.clone())),
         environ: environ.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
         streams: Streams { out: Arc::new(Mutex::new(out.clone())), err: Arc::new(Mutex::new(err.clone())) },
@@ -70,8 +85,7 @@ async fn cli_built(
     };
     let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
     let code = cli::main(&argv, &context).await;
-    let call = recorder.calls().pop();
-    Ran { out: out.text(), err: err.text(), code, call }
+    Ran { out: out.text(), err: err.text(), code, call: None }
 }
 
 async fn cli(argv: &[&str]) -> Ran {
@@ -185,6 +199,14 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
         (&["--cdp-port", "9222"], "cdp_port"),
         (&["--cursor"], "cursor"),
         (&["--downloads", "/tmp/d"], "downloads"),
+        // A fetched page can only follow links, so nothing it is given is ever typed, attached or submitted (#1337).
+        (&["--input", "name=Ada"], "inputs"),
+        // A file that does not exist: read before the check, its read error was reported in place of the conflict.
+        (&["--file", "/nonexistent/upload.pdf"], "attachments"),
+        (&["--authorize"], "authorization"),
+        // Refused before either is resolved: an unset variable or a vault lookup was reported in its place.
+        (&["--secret", "p=NOT_SET"], "secrets"),
+        (&["--bitwarden", "vault-item"], "secrets"),
     ] {
         let mut argv = vec!["t", "--start", "https://example.com", "--fetch"];
         argv.extend_from_slice(flag);
@@ -192,6 +214,13 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
         assert!(ran.call.is_none());
         assert_eq!(ran.err, format!("fastbrowse: fetch starts no browser, so it cannot be combined with {field}\n"));
     }
+}
+
+#[tokio::test]
+async fn cloud_refuses_a_desktop_run_that_starts_no_browser() {
+    let ran = cli(&["t", "--cloud", "--desktop", "app"]).await;
+    assert!(ran.call.is_none());
+    assert!(ran.err.contains("--cloud cannot be combined with") && ran.err.contains("--desktop"), "{}", ran.err);
 }
 
 #[tokio::test]
@@ -252,7 +281,7 @@ async fn test_explicit_cloud_overrides_environment_profile() {
         &["task", "--cloud", "--cloud-profile", "signed-in", "--viewport", "800x600", "--proxy-country", "uk"],
         settings,
         &[],
-        fastbrowse_cli::options::error_result("test"),
+        fastbrowse_cli::options::error_result("test", "test"),
     )
     .await;
     let call = ran.call.unwrap();
@@ -264,7 +293,7 @@ async fn test_explicit_cloud_overrides_environment_profile() {
 async fn test_cli_login_and_blocked_have_distinct_exit_codes() {
     let mut codes = Vec::new();
     for status in [Status::NeedsLogin, Status::Blocked] {
-        let answer = RunResult { status, ..fastbrowse_cli::options::error_result("test") };
+        let answer = RunResult { status, ..fastbrowse_cli::options::error_result("test", "test") };
         codes.push(cli_with(&["task", "--local"], model_settings(), &[], answer).await.code);
     }
     assert_eq!(codes, [4, 6]);
@@ -272,7 +301,8 @@ async fn test_cli_login_and_blocked_have_distinct_exit_codes() {
 
 #[tokio::test]
 async fn test_login_advice_is_added_only_to_cli_output() {
-    let answer = RunResult { status: Status::NeedsLogin, ..fastbrowse_cli::options::error_result("Sign-in required") };
+    let answer =
+        RunResult { status: Status::NeedsLogin, ..fastbrowse_cli::options::error_result("test", "Sign-in required") };
     let ran = cli_with(&["task", "--local", "--json"], model_settings(), &[], answer).await;
     assert_eq!(ran.code, 4);
     assert!(ran.json()["error"].as_str().unwrap().contains("--secret NAME=ENV_VAR@https://host"));
@@ -365,10 +395,52 @@ async fn test_the_summary_line_says_when_some_calls_reported_no_cost() {
             CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.002)),
             CostLine::new(CostComponent::Llm, basis, if basis == CostBasis::Unknown { None } else { Some(0.0) }),
         ];
-        let answer = RunResult { cost: CostBreakdown { lines }, ..fastbrowse_cli::options::error_result("test") };
+        let answer =
+            RunResult { cost: CostBreakdown { lines }, ..fastbrowse_cli::options::error_result("test", "test") };
         let ran = cli_with(&["task", "--local"], model_settings(), &[], answer).await;
         assert!(ran.out.contains(expected), "{}", ran.out);
     }
+}
+
+#[tokio::test]
+async fn test_the_json_result_gives_the_total_cost_beside_the_status() {
+    // The plain line and the MCP result gave a total, and a `--json` caller had to sum the cost lines itself (#1342).
+    for (basis, complete) in [(CostBasis::Metered, true), (CostBasis::Unknown, false)] {
+        let lines = vec![
+            CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.002)),
+            CostLine::new(CostComponent::Llm, basis, if basis == CostBasis::Unknown { None } else { Some(0.0001) }),
+        ];
+        let answer = RunResult { cost: CostBreakdown { lines }, ..result(Status::Complete) };
+        let ran = cli_with(&["task", "--local", "--json"], model_settings(), &[], answer).await;
+        let json = ran.json();
+        assert_eq!(json["dollars"], if complete { 0.0021 } else { 0.002 });
+        assert_eq!(json["cost_complete"], complete);
+        let names: Vec<&String> = json.as_object().unwrap().keys().collect();
+        let status = names.iter().position(|name| *name == "status").unwrap();
+        assert_eq!(names[status + 1..status + 3], ["dollars", "cost_complete"]);
+    }
+}
+
+#[tokio::test]
+async fn test_replay_accounting_is_printed_only_for_a_replayed_run() {
+    // A run that only saved a recipe printed "0 actions reused, 0 unmatched observations" (#1342).
+    let filled = |status: Status| {
+        runner(move |call: Call| async move {
+            let sink = call.host.recipe_sink.clone().unwrap();
+            let recipe = Recipe { version: RECIPE_VERSION, task: "t".into(), start: None, steps: Vec::new() };
+            *sink.lock().unwrap() = Some(RecipeOutcome { recipe, replayed: 2, fell_back: 1 });
+            Ok(result(status))
+        })
+    };
+    let run = |argv: &'static [&'static str], status: Status| {
+        cli_run_by(argv, model_settings(), &[], filled(status), Build::default())
+    };
+    let saved = run(&["t", "--local", "--save-recipe", "/nonexistent/r.json"], Status::Complete).await;
+    assert!(!saved.err.contains("recipe"), "{}", saved.err);
+    let replayed = run(&["t", "--local", "--recipe", "/nonexistent/r.json"], Status::Complete).await;
+    assert!(replayed.err.contains("recipe: 2 actions reused, 1 unmatched observations"), "{}", replayed.err);
+    let stopped = run(&["t", "--local", "--save-recipe", "/nonexistent/r.json"], Status::Stuck).await;
+    assert!(stopped.err.contains("recipe not saved to /nonexistent/r.json"), "{}", stopped.err);
 }
 
 #[tokio::test]

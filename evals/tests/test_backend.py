@@ -1,10 +1,16 @@
+import hashlib
 import json
+import time
+from contextlib import asynccontextmanager
 from importlib.metadata import entry_points
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastbrowse.evals import harness
 from fastbrowse.models import (
+    Artifact,
+    ArtifactKind,
     Citation,
     CostBasis,
     CostBreakdown,
@@ -18,6 +24,7 @@ from fastbrowse.models import (
     StepOutcome,
     StepResult,
 )
+from parallax.assets import TrialAssets
 from parallax.browser_evidence import BrowserEvidence
 from parallax.harnesses.base import credential_env_problems
 from parallax.harnesses.browser.cloud import Browser
@@ -244,3 +251,92 @@ def test_a_cancelled_run_reports_the_pages_and_steps_it_reached() -> None:
     BrowserEvidence.model_validate(
         {"final_page": None, "answer": None, "steps": evidence["step_log"], "pages": pages, "citations": []}
     )
+
+
+async def test_a_cloud_browser_lives_only_as_long_as_its_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A browser whose stop is missed (the process was killed) stops itself when its turn ends, not after Browser
+    Use's 240 minute default (#1264)."""
+    asked: list[int] = []
+
+    @asynccontextmanager
+    async def cloud_browser(http: object, *, screen: tuple[int, int], minutes: int):
+        asked.append(minutes)
+        yield Browser(cdp_url="ws://browser")
+
+    monkeypatch.setattr(backend, "cloud_browser", cloud_browser)
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._turn_ends_at = time.monotonic() + 600
+    async with harness.browser(None):  # ty: ignore[invalid-argument-type]
+        pass
+    assert asked == [10]
+
+
+def _kept(directory: Path, kind: ArtifactKind, name: str, mime_type: str, content: bytes) -> Artifact:
+    """An artifact as fastbrowse's directory sink keeps it: the bytes on disk and a `file://` reference."""
+    path = directory / kind.value / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    return Artifact(
+        kind=kind, name=name, mime_type=mime_type, size_bytes=len(content), sha256=digest, uri=path.as_uri()
+    )
+
+
+def test_the_screenshot_an_image_reading_read_is_retained_under_the_reference_its_trace_cites(tmp_path: Path) -> None:
+    """Campaign 43745284709: an image reading's input was a redacted `data:image/<image>` in its receipt, and its
+    PNG was kept nowhere, so the wrong reading could not be replayed (#1150)."""
+    png = b"\x89PNG\r\n\x1a\nviewport"
+    digest = hashlib.sha256(png).hexdigest()
+    screenshot = _kept(tmp_path / "run", ArtifactKind.SCREENSHOT, f"screenshot-{digest}.png", "image/png", png)
+    capture = _kept(tmp_path / "run", ArtifactKind.CAPTURE, "prices.txt", "text/plain; charset=utf-8", b"USD 986")
+    assets = TrialAssets(tmp_path / "trial")
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._trial = SimpleNamespace(assets=assets)  # ty: ignore[invalid-assignment]
+
+    harness.retain([screenshot, capture])
+
+    assert assets.read(f"assets/{digest}") == (png, "image/png")
+    assert assets.read(f"assets/{capture.sha256}") == (b"USD 986", "text/plain")
+    assert assets.validate() == ()
+    assert json.loads(json.dumps(harness.trial_metadata))["assets"] == [
+        {"kind": "screenshot", "name": f"screenshot-{digest}.png", "asset": f"assets/{digest}"},
+        {"kind": "capture", "name": "prices.txt", "asset": f"assets/{capture.sha256}"},
+    ]
+
+
+def test_an_empty_download_and_one_content_under_two_media_types_do_not_abort_retention(tmp_path: Path) -> None:
+    """fastbrowse keeps an empty download and the same bytes under two media types; a trial asset takes neither
+    as is, and the registration error would discard the completed result."""
+    run = tmp_path / "run"
+    empty = _kept(run, ArtifactKind.DOWNLOAD, "empty.csv", "text/csv", b"")
+    csv = b"item,price\nbook,12\n"
+    first = _kept(run, ArtifactKind.DOWNLOAD, "report-a.csv", "text/csv", csv)
+    second = _kept(run, ArtifactKind.DOWNLOAD, "report-b.csv", "application/octet-stream", csv)
+    assets = TrialAssets(tmp_path / "trial")
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._trial = SimpleNamespace(assets=assets)  # ty: ignore[invalid-assignment]
+
+    harness.retain([empty, first, second])
+
+    assert assets.validate() == ()
+    assert assets.read(f"assets/{first.sha256}") == (csv, "text/csv")
+    assert harness.trial_metadata["assets"] == [
+        {"kind": "download", "name": "empty.csv", "asset": None},
+        {"kind": "download", "name": "report-a.csv", "asset": f"assets/{first.sha256}"},
+        {"kind": "download", "name": "report-b.csv", "asset": f"assets/{first.sha256}"},
+    ]
+
+
+def test_a_task_that_binds_secrets_retains_no_run_artifact(tmp_path: Path) -> None:
+    """A bound login can show in a screenshot's pixels, which the trace's text scrubbing cannot reach."""
+    screenshot = _kept(tmp_path / "run", ArtifactKind.SCREENSHOT, "login.png", "image/png", b"\x89PNG\r\n\x1a\nlogin")
+    assets = TrialAssets(tmp_path / "trial")
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._trial = SimpleNamespace(assets=assets)  # ty: ignore[invalid-assignment]
+    harness._secret_values = {"PASSWORD": "fixture-private-value"}
+
+    harness.retain([screenshot])
+
+    assert not assets.root.exists()
+    assert "assets" not in harness.trial_metadata
+    assert harness.trial_notes == ["run artifacts not retained: the task binds secrets"]

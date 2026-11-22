@@ -30,6 +30,11 @@ checked partial answer while its source evidence remains unchanged, including a 
 authorization. Preserve any returned answer as partial. Some partial answers start with `Partial evidence only.`;
 use the status to determine whether the task completed.
 
+`failure_kind` names the cause without quoting the page or the provider: for example
+`Jev.Failed/openrouter/verify/http-500` for a decision call the provider refused, `Budget/dollars` for the spend
+limit, or `Wall/sign-in` for a sign-in page. Group failures by it, and read `error` for the detail. See
+[Results](cli.md#results) for its parts.
+
 The causes below name Jev, the model that picks each action from the controls on the page; the LLM
 plans, reads and writes. See [Models](cli.md#models).
 

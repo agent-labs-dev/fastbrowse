@@ -273,22 +273,28 @@ pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecor
                 1 => Ok(found.remove(0)),
                 // The named browser is connected but this process may not reach it, while another browser it can.
                 0 if !blocked.is_empty() => Err(refused(blocked)),
-                0 => Err(BrowserError::Failed(format!(
-                    "no connected browser is named {wanted:?}; connected: {}",
-                    names(&hosts)
-                ))),
-                _ => Err(BrowserError::Failed(format!(
-                    "{wanted:?} names more than one connected browser ({}); give each a label in the extension's \
+                0 => Err(BrowserError::failed(
+                    "extension/unnamed",
+                    format!("no connected browser is named {wanted:?}; connected: {}", names(&hosts)),
+                )),
+                _ => Err(BrowserError::failed(
+                    "extension/ambiguous",
+                    format!(
+                        "{wanted:?} names more than one connected browser ({}); give each a label in the extension's \
                      popup",
-                    names(&found)
-                ))),
+                        names(&found)
+                    ),
+                )),
             }
         }
         None if hosts.len() == 1 => Ok(hosts.remove(0)),
-        None => Err(BrowserError::Failed(format!(
-            "more than one browser has the fastbrowse extension connected ({}); pick one with --extension-browser",
-            names(&hosts)
-        ))),
+        None => Err(BrowserError::failed(
+            "extension/ambiguous",
+            format!(
+                "more than one browser has the fastbrowse extension connected ({}); pick one with --extension-browser",
+                names(&hosts)
+            ),
+        )),
     }
 }
 
