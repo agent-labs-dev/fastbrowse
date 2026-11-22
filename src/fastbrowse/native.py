@@ -19,6 +19,7 @@ import warnings
 import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, ClassVar, NoReturn, Protocol
 
 import httpcore
@@ -806,6 +807,16 @@ async def stop_cloud_browser(browser: CloudBrowser, browser_api_key: str, *, ori
         raise _cloud_error(exc) from None
 
 
+def program_path(program: str) -> str:
+    """The launcher this process was started as, absolute, when it is the `program` command; else the bare name.
+
+    The core identifies the running fastbrowse by this path (the extension registry keys on it), so a bare name would
+    stand for whichever copy comes first on `PATH` instead of the one that is running.
+    """
+    started = Path(sys.argv[0])
+    return str(started.resolve()) if started.stem == program else program
+
+
 def command(program: str) -> NoReturn:
     """Run the Rust core's `program` command in this process with this process's arguments, then exit with its code."""
     core: Any = importlib.import_module("fastbrowse._native")
@@ -813,4 +824,8 @@ def command(program: str) -> NoReturn:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     sys.stdout.flush()
     commit = build.identity()
-    sys.exit(core.cli_main(program, sys.argv[1:], commit["git_sha"], commit["git_dirty"], **build.install_facts()))
+    sys.exit(
+        core.cli_main(
+            program_path(program), sys.argv[1:], commit["git_sha"], commit["git_dirty"], **build.install_facts()
+        )
+    )

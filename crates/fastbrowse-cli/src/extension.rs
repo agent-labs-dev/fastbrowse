@@ -20,6 +20,9 @@ const USAGE: &str = "usage: fastbrowse extension install [--policy] | uninstall 
 /// The file in [`data_dir`] that lists every fastbrowse registered as the host, newest first.
 const INSTALLS: &str = "installs.json";
 
+/// The variable the launcher sets to the folder it is in, which holds the registry.
+const HOST_DIR: &str = "FASTBROWSE_HOST_DIR";
+
 /// One fastbrowse that ran `install`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Install {
@@ -241,26 +244,29 @@ fn locked<T>(dir: &Path, work: impl FnOnce() -> Result<T, String>) -> Result<T, 
     work()
 }
 
-/// Record `installs` and write the launcher that runs the first of them still present.
+/// Record `installs`, then write the launcher that runs the first of them still present. The registry goes first: it
+/// is the source of truth the host reads when it hands over, and the launcher is derived from it, so a write that is
+/// interrupted between the two leaves a launcher that is stale, never a registry that disagrees with what was asked.
 fn write_host(dir: &Path, installs: &[Install]) -> Result<PathBuf, String> {
-    let commands: Vec<PathBuf> = installs.iter().map(|install| install.path.clone()).collect();
-    let launcher = write_launcher(dir, &commands).map_err(|e| format!("cannot write the launcher: {e}"))?;
     let path = dir.join(INSTALLS);
     let text = serde_json::to_string_pretty(installs).map_err(|e| format!("cannot record the installs: {e}"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     write_atomic(&path, text.as_bytes(), false).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    Ok(launcher)
+    let commands: Vec<PathBuf> = installs.iter().map(|install| install.path.clone()).collect();
+    write_launcher(dir, &commands).map_err(|e| format!("cannot write the launcher: {e}"))
 }
 
 /// A launcher that runs the first of `commands` that is a regular, executable file as the host. There is no fallback
 /// to a `fastbrowse` on the `PATH` Chrome starts it with: that is a binary nobody registered, and an explicit
 /// `uninstall` must stay uninstalled. With none left it says so and fails. A newer registered install than the one
-/// it runs takes over inside `fastbrowse native-host` (see [`delegate`]).
+/// it runs takes over inside `fastbrowse native-host` (see [`delegate`]). The launcher tells it where the registry
+/// is, by its own location, because Chrome's environment can differ from the one `install` ran in.
 fn write_launcher(dir: &Path, commands: &[PathBuf]) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     const NONE: &str = "fastbrowse: no registered install is present; run `fastbrowse extension install`";
     if cfg!(windows) {
         let launcher = dir.join("native-host.bat");
-        let mut text = String::from("@echo off\r\n");
+        let mut text = format!("@echo off\r\nset \"{HOST_DIR}=%~dp0\"\r\n");
         for command in commands {
             // In a batch file a `%` in a path would start a variable, so each is doubled. `name\` exists only for a folder.
             let command = command.display().to_string().replace('%', "%%");
@@ -276,39 +282,54 @@ fn write_launcher(dir: &Path, commands: &[PathBuf]) -> std::io::Result<PathBuf> 
     let quoted: Vec<String> =
         commands.iter().map(|command| format!("'{}'", command.display().to_string().replace('\'', r"'\''"))).collect();
     let text = format!(
-        "#!/bin/sh\nfor fastbrowse in {}; do\n    if [ -f \"$fastbrowse\" ] && [ -x \"$fastbrowse\" ]; then exec \"$fastbrowse\" native-host \"$@\"; fi\ndone\necho '{NONE}' >&2\nexit 127\n",
+        "#!/bin/sh\n{HOST_DIR}=$(dirname \"$0\"); export {HOST_DIR}\nfor fastbrowse in {}; do\n    if [ -f \"$fastbrowse\" ] && [ -x \"$fastbrowse\" ]; then exec \"$fastbrowse\" native-host \"$@\"; fi\ndone\necho '{NONE}' >&2\nexit 127\n",
         quoted.join(" ")
     );
     write_atomic(&launcher, text.as_bytes(), true)?;
     Ok(launcher)
 }
 
-/// The registered install newer than this one, by what each reports now; the host `fastbrowse native-host` hands over
-/// to, so an install upgraded in place serves ahead of an older one that is listed first.
-fn newer_install(
+/// The registered installs newer than this one, newest first, by what each reports now. An install that does not answer
+/// `--version` cannot be started, so it is not a candidate: a broken newer copy must not shadow a working one.
+fn newer_installs(
     installs: &[Install],
     own: &Path,
     own_version: &str,
     query: &dyn Fn(&Path) -> Option<String>,
-) -> Option<Install> {
+) -> Vec<Install> {
     let own = canonical(own);
-    refreshed(
-        installs.iter().filter(|install| install.path.is_file() && canonical(&install.path) != own).cloned().collect(),
-        query,
-    )
-    .into_iter()
-    .next()
-    .filter(|newest| precedence(&newest.version) > precedence(own_version))
+    let mut newer: Vec<Install> = installs
+        .iter()
+        .filter(|install| canonical(&install.path) != own)
+        .filter_map(|install| Some(Install { version: query(&install.path)?, path: install.path.clone() }))
+        .filter(|install| precedence(&install.version) > precedence(own_version))
+        .collect();
+    newer.sort_by_key(|install| std::cmp::Reverse(precedence(&install.version)));
+    newer
 }
 
-/// Run the newest registered fastbrowse as the host instead of this one, when one is newer; its exit code. `None` runs
-/// this one: it is the newest, or the registry cannot be read, or the other will not start.
+/// The folder holding the registry: the launcher's, when Chrome started this through it.
+fn host_dir() -> PathBuf {
+    std::env::var_os(HOST_DIR).map_or_else(data_dir, PathBuf::from)
+}
+
+/// The command that runs `install` as the host in this one's place, with Chrome's arguments.
+fn handover_command(install: &Install, args: &[String]) -> std::process::Command {
+    let mut command = std::process::Command::new(&install.path);
+    command.arg("native-host").args(args).env(GUARD, "1");
+    command
+}
+
+const GUARD: &str = "FASTBROWSE_HOST_DELEGATED";
+
+/// Run the newest registered fastbrowse as the host instead of this one, when one is newer; its exit code. Newer
+/// installs are tried newest first until one starts. `None` runs this one: it is the newest, or the registry cannot be
+/// read, or no newer one will start.
 pub fn delegate(args: &[String]) -> Option<i32> {
-    const GUARD: &str = "FASTBROWSE_HOST_DELEGATED";
     if std::env::var_os(GUARD).is_some() {
         return None;
     }
-    let installs = match read_installs(&data_dir()) {
+    let installs = match read_installs(&host_dir()) {
         Ok(installs) => installs,
         Err(error) => {
             eprintln!("fastbrowse native-host: {error}");
@@ -316,24 +337,21 @@ pub fn delegate(args: &[String]) -> Option<i32> {
         }
     };
     let own = std::env::current_exe().ok()?;
-    let newer = newer_install(&installs, &own, env!("CARGO_PKG_VERSION"), &reported_version)?;
-    let mut command = std::process::Command::new(&newer.path);
-    command.arg("native-host").args(args).env(GUARD, "1");
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let error = command.exec();
-        eprintln!("fastbrowse native-host: cannot start {}: {error}", newer.path.display());
-        None
-    }
-    #[cfg(not(unix))]
-    match command.status() {
-        Ok(status) => Some(status.code().unwrap_or(1)),
-        Err(error) => {
+    for newer in newer_installs(&installs, &own, env!("CARGO_PKG_VERSION"), &reported_version) {
+        let mut command = handover_command(&newer, args);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let error = command.exec();
             eprintln!("fastbrowse native-host: cannot start {}: {error}", newer.path.display());
-            None
+        }
+        #[cfg(not(unix))]
+        match command.status() {
+            Ok(status) => return Some(status.code().unwrap_or(1)),
+            Err(error) => eprintln!("fastbrowse native-host: cannot start {}: {error}", newer.path.display()),
         }
     }
+    None
 }
 
 /// Register the host with every browser found, keeping the other registered installs; the names of the browsers
@@ -788,13 +806,14 @@ mod tests {
         };
         let only_a_folder = run(std::slice::from_ref(&folder));
         let real = dir.join("real/fastbrowse");
-        script(&real, "echo real \"$@\"");
+        script(&real, "echo real \"$@\" $FASTBROWSE_HOST_DIR");
         let after_a_folder = run(&[folder, real]);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!only_a_folder.status.success());
         assert_eq!(String::from_utf8_lossy(&only_a_folder.stdout), "");
         assert!(String::from_utf8_lossy(&only_a_folder.stderr).contains("extension install"));
-        assert_eq!(String::from_utf8_lossy(&after_a_folder.stdout), "real native-host\n");
+        // The launcher says where it lives, which is where the registry is.
+        assert_eq!(String::from_utf8_lossy(&after_a_folder.stdout), format!("real native-host {}\n", dir.display()));
     }
 
     #[cfg(unix)]
@@ -813,6 +832,34 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_broken_newer_install_does_not_shadow_a_working_one() {
+        let dir = scratch("broken");
+        let (own, broken, working) =
+            (dir.join("own/fastbrowse"), dir.join("broken/fastbrowse"), dir.join("working/fastbrowse"));
+        script(&own, "echo fastbrowse 0.13.0");
+        script(&working, "echo fastbrowse 0.15.0");
+        // Registered as 0.16 but not executable: it cannot report a version, so it cannot be started.
+        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        std::fs::write(&broken, "not a program").unwrap();
+        let installs = vec![at(&own, "0.13.0"), at(&broken, "0.16.0"), at(&working, "0.15.0")];
+        let candidates = newer_installs(&installs, &own, "0.13.0", &reported_version);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(candidates, vec![at(&working, "0.15.0")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_handover_runs_the_native_host_with_chromes_origin() {
+        let dir = scratch("handover");
+        let newer = dir.join("newer/fastbrowse");
+        script(&newer, "echo \"$@\" \"$FASTBROWSE_HOST_DELEGATED\"");
+        let out = handover_command(&at(&newer, "0.15.0"), &["chrome-extension://x/".into()]).output().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "native-host chrome-extension://x/ 1\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn the_host_hands_over_to_an_install_upgraded_in_place() {
         let dir = scratch("upgraded");
         let bundled = dir.join("bundled/fastbrowse");
@@ -821,11 +868,11 @@ mod tests {
         script(&user, "echo fastbrowse 0.14.0 \\(abc123\\)");
         // The user's copy registered as 0.13.0 and was upgraded in place since; the registry still says 0.13.0.
         let installs = vec![at(&bundled, "0.13.5"), at(&user, "0.13.0")];
-        let from_bundled = newer_install(&installs, &bundled, "0.13.5", &reported_version);
-        let from_user = newer_install(&installs, &user, "0.14.0", &reported_version);
+        let from_bundled = newer_installs(&installs, &bundled, "0.13.5", &reported_version);
+        let from_user = newer_installs(&installs, &user, "0.14.0", &reported_version);
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(from_bundled, Some(at(&user, "0.14.0")));
-        assert_eq!(from_user, None);
+        assert_eq!(from_bundled, vec![at(&user, "0.14.0")]);
+        assert_eq!(from_user, vec![]);
     }
 
     #[cfg(unix)]

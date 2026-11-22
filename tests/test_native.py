@@ -897,3 +897,15 @@ def test_capture_document_title_kind_crosses_the_python_model_boundary() -> None
     assert capture.blocks[0].kind is BlockKind.DOCUMENT_TITLE
     assert capture.blocks[0].heading_path == ()
     assert Capture.model_validate_json(capture.model_dump_json()).blocks == capture.blocks
+
+
+def test_the_entry_passes_the_running_launchers_path_not_the_bare_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    launcher = tmp_path / "fastbrowse"
+    launcher.write_text("")
+    monkeypatch.setattr(sys, "argv", [str(launcher), "extension", "uninstall"])
+    assert native.program_path("fastbrowse") == str(launcher.resolve())
+    # Run as another entry point (`python -m`), no launcher is known: the name stands.
+    monkeypatch.setattr(sys, "argv", [str(tmp_path / "__main__.py")])
+    assert native.program_path("fastbrowse") == "fastbrowse"
