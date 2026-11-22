@@ -64,6 +64,7 @@ from fastbrowse.evals.replay import (
     Exchange,
     Latency,
     Proxy,
+    Spend,
     openrouter_forward,
     translate_origin,
 )
@@ -539,6 +540,8 @@ async def bench_task(
         | {"misses": sorted(f"{m.purpose} {m.model}" for m in proxy.misses)},
         "misses": [m.to_json() for m in proxy.misses],
         "forwarded": proxy.forwarded,
+        "upstream_errors": proxy.upstream_errors,
+        "budget_refusals": proxy.budget_refusals,
         "unused_responses": proxy.unused(),
     }
     return entry
@@ -587,7 +590,7 @@ def _select(only: list[str]) -> list[BenchTask]:
 
 
 def _cassette_path(directory: Path, task: str) -> Path:
-    return directory / f"{task}.jsonl.gz"
+    return directory / f"{task}.jsonl"
 
 
 async def run_suite(args: argparse.Namespace) -> int:
@@ -607,11 +610,11 @@ async def run_suite(args: argparse.Namespace) -> int:
     # A reused --out holds an earlier run's request logs, and profiling the directory would count them as this run's.
     for stale in logs.glob("*.requests.jsonl"):
         stale.unlink()
-    spent = 0.0
+    spend = Spend(args.budget) if forward is not None else None
     for task in tasks:
         path = _cassette_path(args.cassettes, task.id)
-        if forward is not None and spent >= args.budget:
-            print(f"budget: ${spent:.4f} of ${args.budget:.2f} spent; stopping before {task.id}", flush=True)
+        if spend is not None and spend.reached():
+            print(f"budget: ${spend.spent:.4f} of ${spend.limit:.2f} spent; stopping before {task.id}", flush=True)
             break
         if mode == "record":
             cassette = Cassette(
@@ -627,23 +630,31 @@ async def run_suite(args: argparse.Namespace) -> int:
         else:
             raise SystemExit(f"{task.id}: no cassette at {path}; record it first")
         before = len(cassette.exchanges)
+        spent_before = 0.0 if spend is None else spend.spent
         # A fill pass serves what it has at once and sends each miss upstream, where it takes real time, so the
         # run can branch again after it. Each pass extends the instant path, until one sends nothing upstream.
         passes = args.passes if mode == "fill" else 1
         for done in range(1, passes + 1):
-            proxy = Proxy(cassette, forward=forward, replay=mode != "record", latency=latency)
+            kept = len(cassette.exchanges)
+            proxy = Proxy(cassette, forward=forward, replay=mode != "record", latency=latency, spend=spend)
             entry = await bench_task(task, agent_argv=shlex.split(args.agent), proxy=proxy, logs=logs)
-            if forward is not None and (mode == "record" or proxy.forwarded):
+            # A pass that met a provider refusal or the budget took a path a live run would not, after a response it
+            # could not use, so it is not kept: the cassette stays as the last whole pass left it (#1198).
+            cut_short = bool(proxy.upstream_errors or proxy.budget_refusals)
+            if cut_short:
+                del cassette.exchanges[kept:]
+            elif forward is not None and (mode == "record" or proxy.forwarded):
                 cassette.save(path)
             if mode == "fill":
                 entry["fill_passes"] = done
-                if not proxy.forwarded:
-                    break
+            if cut_short or not proxy.forwarded:
+                break
         cost, unpriced = priced(cassette.exchanges[before:])
-        spent += cost
-        if forward is not None:
+        if spend is not None:
             entry["recorded_cost_usd"] = None if unpriced else round(cost, 6)
             entry["unpriced_exchanges"] = unpriced
+            # What the task paid for, a pass that was not kept included.
+            entry["spent_usd"] = round(spend.spent - spent_before, 6)
         run["tasks"].append(entry)
         _write(args.out, run)
         # The requests the last pass sent, for scripts/jev_state_size.py to measure.
@@ -654,14 +665,21 @@ async def run_suite(args: argparse.Namespace) -> int:
                 for miss in entry["misses"]:
                     out.write(f"## {miss['purpose']} ({miss['model']}) {miss['path']}\n{miss['diff']}\n\n")
         extra = f"{len(entry['misses'])} misses"
-        if forward is not None:
-            extra += f", {entry['forwarded']} forwarded, ${cost:.4f} (total ${spent:.4f})"
+        if spend is not None:
+            extra += f", {entry['forwarded']} forwarded, ${cost:.4f} kept (total ${spend.spent:.4f} spent)"
             if unpriced:
                 extra += f", {unpriced} unpriced, so the budget undercounts"
+            if entry["upstream_errors"]:
+                extra += (
+                    f", upstream refused {len(entry['upstream_errors'])} (not recorded: {entry['upstream_errors']})"
+                )
+            if entry["budget_refusals"]:
+                extra += f", {entry['budget_refusals']} not sent for the budget, so this pass is not kept"
         _print_row(entry, extra=extra)
     # The file is rewritten after every task, so a reader can tell a finished run from one still going.
     run["meta"]["finished"] = datetime.now(UTC).isoformat(timespec="seconds")
     _write(args.out, run)
+    spent = 0.0 if spend is None else spend.spent
     print(f"{mode}: {len(run['tasks'])} tasks, ${spent:.4f} spent; run written to {args.out}")
     return 0
 
@@ -952,10 +970,10 @@ def parser() -> argparse.ArgumentParser:
 
     rec = commands.add_parser("record", help="run every task against the real models and keep their responses")
     common(rec, "record")
-    rec.add_argument("--budget", type=float, default=5.0, help="stop before the next task once this many dollars went")
+    rec.add_argument("--budget", type=float, default=5.0, help="send no request upstream once this many dollars went")
     fill = commands.add_parser("fill", help="replay, sending only the misses to the real models and keeping them")
     common(fill, "fill")
-    fill.add_argument("--budget", type=float, default=5.0, help="stop before the next task once this many dollars went")
+    fill.add_argument("--budget", type=float, default=5.0, help="send no request upstream once this many dollars went")
     fill.add_argument("--latency", type=Latency, choices=list(Latency), default=Latency.ZERO)
     fill.add_argument("--passes", type=int, default=6, help="most passes per task before giving up on converging")
     rep = commands.add_parser("replay", help="run every task against the recorded responses")

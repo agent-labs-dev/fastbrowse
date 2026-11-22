@@ -177,7 +177,7 @@ def test_encryption_retains_raw_artifacts_without_plaintext_upload(tmp_path, mon
     raw.mkdir(parents=True, mode=0o700)
     (raw / "probe.trace.jsonl").write_text("private request payload")
     Path("bench/cassettes").mkdir(parents=True)
-    Path("bench/cassettes/task.jsonl.gz").write_bytes(b"cassette payload")
+    Path("bench/cassettes/task.jsonl").write_bytes(b"cassette payload")
     assert helper.encrypt() == 0
     encrypted = Path("artifacts/evals/diagnostics.cms")
     assert b"private request payload" not in encrypted.read_bytes()
@@ -203,7 +203,7 @@ def test_encryption_retains_raw_artifacts_without_plaintext_upload(tmp_path, mon
         trace = archive.extractfile("diagnostics/probe.trace.jsonl")
         assert trace is not None and trace.read() == b"private request payload"
         assert "diagnostics/raw.tar.gz" not in archive.getnames()
-        cassette = archive.extractfile("cassettes/task.jsonl.gz")
+        cassette = archive.extractfile("cassettes/task.jsonl")
         assert cassette is not None and cassette.read() == b"cassette payload"
 
 

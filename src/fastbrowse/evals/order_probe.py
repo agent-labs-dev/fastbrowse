@@ -102,10 +102,11 @@ def _cassette_requests(path: Path) -> Iterator[Recorded]:
 def requests(paths: Iterable[Path]) -> Iterator[Recorded]:
     """(source, Jev request body, recorded response) for every recorded Jev request that asks a choice.
 
-    A path ending in `.gz` is a bench cassette; any other is a run trace, whose `http` events hold each request.
+    A file that opens with a cassette head line is a bench cassette; any other is a run trace, whose `http` events
+    hold each request.
     """
     for path in paths:
-        found = _cassette_requests(path) if path.suffix == ".gz" else _trace_requests(path)
+        found = _cassette_requests(path) if Cassette.is_cassette(path) else _trace_requests(path)
         for source, body, response in found:
             if _choices(body):
                 yield source, body, response
@@ -305,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.yes_spend and (args.max_dollars is None or not math.isfinite(args.max_dollars) or args.max_dollars < 0):
         print("--yes-spend needs a --max-dollars cap of 0 or more.", file=sys.stderr)
         return 2
-    paths = (args.cassettes or sorted(CASSETTES.glob("*.jsonl.gz"))) + args.trace
+    paths = (args.cassettes or sorted(CASSETTES.glob("*.jsonl"))) + args.trace
     recorded = list(requests(paths))
     rows = [row for source, body, response in recorded for row in positions(body, response, source)]
     result: dict[str, Any] = {"requests": len(recorded), "recorded": recorded_report(rows)}
