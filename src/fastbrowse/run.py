@@ -212,11 +212,10 @@ async def run_task(
     Live frames and recordings are held back while a resolved secret shows on the page, as PNG step frames are.
     No handler means no live capture.
 
-    The agent's cursor is drawn by default over a visible local or attached Chrome, through the Cua Driver on
-    Linux with X11 or deskpilot on Hyprland, whenever that window is uncovered; it never moves the real pointer or
-    changes focus, and does nothing where it cannot place the cursor exactly, including with no `cua-driver` or
-    `deskpilot` installed, no display, a headless or cloud browser. `cursor=True` also implies `foreground`, so the
-    window is brought to the front and the cursor is always drawn; `cursor=False` turns it off.
+    The agent's cursor is drawn inside the page wherever someone can see it: the user's own Chrome, a headed or
+    attached local browser, a cloud browser's live view, live frames or a recording. It glides to each action point
+    and pulses on each press, never moves the real pointer or changes focus, and is never in the snapshot or a
+    screenshot the model reads. `cursor=True` draws it in every run; `cursor=False` turns it off.
 
     `fetch` reads every page over HTTP and starts no browser at all, for a task that only has to read: the
     document becomes the same `Capture` blocks a browser capture produces, so reads, quotes and citations

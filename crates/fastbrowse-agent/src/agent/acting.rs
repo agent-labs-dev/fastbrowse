@@ -496,20 +496,36 @@ impl Agent {
                 Ok(Action { target_id: Some(target.id.clone()), text: Some(chord), ..Action::new(Operation::Press) })
             }
             Operation::Drag => {
-                let Some(destination) = &decision.destination else {
-                    return Err(Stop::new(
-                        Status::NeedsInput,
-                        "Drag/no-target",
-                        "the page offers no drop target for the drag",
-                    )
-                    .into());
+                let target = require(target)?;
+                // A page drawn on has no drop target: the screenshot model draws the path instead.
+                let drawn = target.drawn == Some(true);
+                let destination = match (&decision.destination, drawn) {
+                    (Some(destination), false) => Some(destination),
+                    (None, false) => {
+                        return Err(Stop::new(
+                            Status::NeedsInput,
+                            "Drag/no-target",
+                            "the page offers no drop target for the drag",
+                        )
+                        .into());
+                    }
+                    (_, true) => None,
                 };
                 self.gate_irreversible(state, observation, decision).await?;
-                Ok(Action {
-                    target_id: Some(require(target)?.id.clone()),
-                    destination_id: Some(destination.id.clone()),
-                    ..Action::new(Operation::Drag)
-                })
+                if let Some(destination) = destination {
+                    Ok(Action {
+                        target_id: Some(target.id.clone()),
+                        destination_id: Some(destination.id.clone()),
+                        ..Action::new(Operation::Drag)
+                    })
+                } else {
+                    let drag_path = self.drag_path(state, target).await?;
+                    Ok(Action {
+                        target_id: Some(target.id.clone()),
+                        drag_path: Some(drag_path),
+                        ..Action::new(Operation::Drag)
+                    })
+                }
             }
             Operation::Fill => {
                 let target = require(target)?;

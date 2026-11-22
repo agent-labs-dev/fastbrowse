@@ -13,6 +13,7 @@ use crate::models::{Artifact, Attachment, Link, MaybeUnavailable, Operation, Sou
 use crate::py::datetime::DateTime;
 use crate::py::json::dumped_len;
 use crate::py::{lax, text};
+use crate::schema::{Field, ModelTy, Schema, Ty};
 use indexmap::IndexMap;
 
 pub mod json;
@@ -471,6 +472,9 @@ pub struct Action {
     /// Drop target of a drag: the control the dragged element is released onto.
     #[serde(default)]
     pub destination_id: Option<String>,
+    /// A path drawn on the target itself, with coordinates normalized to its live box.
+    #[serde(default)]
+    pub drag_path: Option<DragPath>,
     /// Value to type or option to select. May hold a resolved secret: never log or persist an Action.
     #[serde(default)]
     pub text: Option<String>,
@@ -495,6 +499,7 @@ impl Action {
             url: None,
             target_id: None,
             destination_id: None,
+            drag_path: None,
             text: None,
             secret: false,
             tab_id: None,
@@ -513,10 +518,61 @@ impl std::fmt::Debug for Action {
             .field("url", &self.url)
             .field("target_id", &self.target_id)
             .field("destination_id", &self.destination_id)
+            .field("drag_path", &self.drag_path)
             .field("text", &self.text.as_ref().map(|_| ".."))
             .field("secret", &self.secret)
             .field("tab_id", &self.tab_id)
             .finish_non_exhaustive()
+    }
+}
+
+/// One point in a same-control drag, normalized to the target's live box.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DragPoint {
+    #[serde(deserialize_with = "lax::float")]
+    pub x: f64,
+    #[serde(deserialize_with = "lax::float")]
+    pub y: f64,
+}
+
+impl Schema for DragPoint {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "DragPoint",
+            vec![
+                Field::required("x", Ty::Float).doc("Horizontal position within the target box, from 0 to 1."),
+                Field::required("y", Ty::Float).doc("Vertical position within the target box, from 0 to 1."),
+            ],
+        )
+        .ty()
+    }
+}
+
+/// The complete pointer path for a drag drawn on one control.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DragPath {
+    pub press: DragPoint,
+    pub points: Vec<DragPoint>,
+    pub release: DragPoint,
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub shift: bool,
+}
+
+impl Schema for DragPath {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "DragPath",
+            vec![
+                Field::required("press", DragPoint::ty()),
+                Field::required("points", Ty::list(DragPoint::ty()).constrained("minItems", 1)),
+                Field::required("release", DragPoint::ty()),
+                Field::default("shift", Ty::Bool, false),
+            ],
+        )
+        .doc("A complete pointer path relative to the target's live box.")
+        .ty()
     }
 }
 
@@ -764,6 +820,12 @@ pub trait Page: Send + Sync {
         Box::pin(async { Ok(None) })
     }
 
+    /// Scroll control `id` of the last observation into view if it is not already in full view, as an action on it
+    /// would, so a screenshot taken next shows the box the action will use. A page with no viewport does nothing.
+    fn reveal<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.
     fn withhold_frames(&self, withheld: bool);
 
@@ -911,5 +973,24 @@ mod tests {
         let mut action = Action::new(Operation::Fill);
         action.text = Some("hunter2".into());
         assert!(!format!("{action:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn a_same_control_drag_path_defaults_shift_and_requires_a_move() {
+        let value = serde_json::json!({
+            "operation": "drag",
+            "target_id": "pad",
+            "drag_path": {
+                "press": {"x": 0.1, "y": 0.2},
+                "points": [{"x": 0.5, "y": 0.6}],
+                "release": {"x": 0.9, "y": 0.8}
+            }
+        });
+        let action: Action = serde_json::from_value(value).expect("drag action");
+        assert_eq!(action.drag_path.as_ref().unwrap().points.len(), 1);
+        assert!(!action.drag_path.as_ref().unwrap().shift);
+        let schema = crate::schema::json_schema(&DragPath::ty());
+        assert_eq!(schema["properties"]["points"]["minItems"], 1);
+        assert!(schema["properties"]["points"]["maxItems"].is_null());
     }
 }

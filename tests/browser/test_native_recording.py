@@ -1,5 +1,5 @@
-"""`record`, `cursor` and step frames on the Rust core: both videos written and reported, a cursor that cannot be drawn
-leaves the run to go on without it, and the final frame reaches the caller."""
+"""`record`, `cursor` and step frames on the Rust core: both videos written and reported, a run that draws the cursor
+in the page goes on as it would without it, and the final frame reaches the caller."""
 
 import asyncio
 import shutil
@@ -68,11 +68,8 @@ async def test_a_recording_that_cannot_start_raises_recording_error(
         )
 
 
-async def test_a_cursor_draws_nothing_where_it_cannot_and_the_run_goes_on(
-    cdp_url: str, main_site: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # No cua-driver on PATH, so there is nothing to draw with and the run goes on without it.
-    monkeypatch.setenv("PATH", "")
+async def test_a_run_that_draws_the_cursor_goes_on_as_without_it(cdp_url: str, main_site: str) -> None:
+    # The page draws it, so a headless browser with no desktop tool draws it too.
     result = await run_task(
         "Open the dispatch page",
         start=f"{main_site}/dispatch.html",

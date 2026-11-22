@@ -45,8 +45,8 @@ options:
                         runs at once; more wait
   --downloads DOWNLOADS
                         directory to keep downloaded files in
-  --cursor              bring the window to the front so the agent's cursor
-                        is always drawn
+  --cursor              draw the agent's cursor in every run, even one nobody
+                        watches
   --no-cursor           do not draw the agent's cursor (by default it is
-                        drawn over a headed Chrome with the Cua Driver on
-                        Linux X11, and skipped where unsupported)
+                        drawn in the page wherever the page can be seen: a
+                        visible Chrome, a live view or a recording)

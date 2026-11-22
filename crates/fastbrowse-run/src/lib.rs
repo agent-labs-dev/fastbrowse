@@ -18,7 +18,6 @@ use fastbrowse_agent::agent::{Agent, RecipeSink, Resume, RunOptions};
 use fastbrowse_agent::verification::RecordSchema;
 use fastbrowse_browser::adapters::browser_use_cloud::{BrowserUseCloudBrowser, BrowserUseCloudOptions};
 use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
-use fastbrowse_browser::cursor::{CursorFeedback, cursor_feedback};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::extension::SCHEME;
 use fastbrowse_browser::extension::protocol::{HostRecord, host_dir, pick_host};
@@ -816,7 +815,7 @@ async fn browser(
 ) -> Result<(BrowserConnection, Owned), Refused> {
     let key = host.browser_api_key.as_deref();
     let lazily = host.open_browser.is_some();
-    let foreground = lazily || task.foreground || task.cursor == Some(true);
+    let foreground = lazily || task.foreground;
     if task.wants_extension() {
         let (record, connected) = pick_host(&host_dir(), task.extension_browser.as_deref())?;
         // The task after `#` names the run's tab group.
@@ -1083,7 +1082,6 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     // Kept outside the run so each is closed however the run ends, before the browser is.
     let recording: Filming = Arc::default();
     let mut recording_failed: Option<String> = None;
-    let mut feedback: Option<Arc<CursorFeedback>> = None;
     let work = async {
         check_browser_access(host.check_access.as_ref()).await?;
         // Asked while the browser starts: a task that answers a consent banner itself needs it left on the page.
@@ -1137,23 +1135,18 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         );
         session = Some(opened.clone());
         opened.open().await?;
-        // A cloud or headless browser has no window on this machine to draw over.
-        let extension_pid = match owned.as_ref() {
-            Some(Owned::Extension(host)) => host.browser_pid,
-            _ => None,
-        };
-        let shown = task.cursor != Some(false)
-            && host.browser_api_key.is_none()
-            && (extension_pid.is_some()
-                || (is_loopback(&opened.connection().cdp_url)
-                    && (task.cdp_url.is_some() || task.cdp_port.is_some() || chrome.headed)));
-        feedback = cursor_feedback(shown).await.map(Arc::new);
-        let pointer_marks = Arc::new(std::sync::Mutex::new(Vec::<fastbrowse_browser::pointer::PointerMark>::new()));
-        let mut cdp = CdpPage::new(opened.clone(), config.clone())
-            .with_cursor(feedback.clone())
-            .with_cursor_browser_pid(extension_pid);
-        if task.record.is_some() {
-            cdp = cdp.with_pointer_marks(pointer_marks.clone());
+        // The cursor is drawn wherever someone can see the page: the user's own Chrome, a headed or attached local
+        // browser, a cloud browser's live view, the frames a host streams, or a recording. A headless run nobody
+        // watches or films has no one to draw it for.
+        let watched = matches!(owned.as_ref(), Some(Owned::Extension(_)))
+            || opened.connection().live_url.is_some()
+            || host.on_frame.is_some()
+            || task.record.is_some()
+            || (is_loopback(&opened.connection().cdp_url)
+                && (task.cdp_url.is_some() || task.cdp_port.is_some() || chrome.headed));
+        let mut cdp = CdpPage::new(opened.clone(), config.clone());
+        if task.cursor.unwrap_or(watched) {
+            cdp = cdp.with_cursor();
         }
         let page: Arc<dyn Page> = Arc::new(cdp);
         let page: Arc<dyn Page> = match &search {
@@ -1165,7 +1158,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             None => page,
         };
         if let Some(path) = &task.record {
-            match Recording::start_with_marks(opened.clone(), path, pointer_marks).await {
+            match Recording::start(opened.clone(), path).await {
                 Ok(started) => *recording.lock().await = Some(started),
                 Err(error) => {
                     recording_failed = Some(error.0.clone());
@@ -1223,9 +1216,6 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         Some(filming) => filming.finish().await,
         None => Vec::new(),
     };
-    if let Some(feedback) = feedback.take() {
-        feedback.close().await;
-    }
     if let Some(session) = &session {
         let _ = session.close().await;
     }

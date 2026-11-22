@@ -1090,11 +1090,13 @@ impl Agent {
                 },
                 _ => None,
             };
-            // A drawn control pressed as one element changes pixels, not elements: a canvas switch turned on read as
-            // "nothing visible changed", was withheld as idle, and the run went looking elsewhere. Its frame before the
-            // click lets the one after judge it.
+            // A drawn control pressed as one element changes pixels, not elements: a canvas switch or gesture that read
+            // as "nothing visible changed" was withheld as idle, and the run went looking elsewhere. Its frame before
+            // the action lets the one after judge it.
             let drawn_before = match (&located, decision.target.as_ref()) {
-                (None, Some(target)) if action.operation == Operation::Click && target.drawn == Some(true) => {
+                (None, Some(target))
+                    if matches!(action.operation, Operation::Click | Operation::Drag) && target.drawn == Some(true) =>
+                {
                     self.viewport().await?
                 }
                 _ => None,
