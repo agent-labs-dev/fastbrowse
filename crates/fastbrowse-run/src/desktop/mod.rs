@@ -1083,7 +1083,9 @@ impl Page for DeskpilotPage {
             });
             self.point(Operation::Click, (x * shot.width, y * shot.height, shot.width, shot.height));
             let sent = self.tool("click", point).await.map(|()| None);
-            let measured = self.followed(self.measured(sent, &before, SETTLE_SECONDS).await, Duration::from_secs_f64(SETTLE_SECONDS)).await;
+            let measured = self
+                .followed(self.measured(sent, &before, SETTLE_SECONDS).await, Duration::from_secs_f64(SETTLE_SECONDS))
+                .await;
             self.hold_frame().await;
             measured
         })

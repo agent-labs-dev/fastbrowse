@@ -416,7 +416,9 @@ pub fn changes_a_value(operation: Operation, control: &Control) -> bool {
         Operation::Fill | Operation::Press | Operation::Select => {
             control.role != "searchbox" && control.input_type.as_deref() != Some("search")
         }
-        Operation::Click | Operation::DoubleClick => SETTING_ROLES.contains(&control.role.as_str()) || control.checked.is_some(),
+        Operation::Click | Operation::DoubleClick => {
+            SETTING_ROLES.contains(&control.role.as_str()) || control.checked.is_some()
+        }
         _ => false,
     }
 }
