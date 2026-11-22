@@ -15,6 +15,11 @@
   if (globalThis.__fastbrowseCursor) return globalThis.__fastbrowseCursor;
 
   const HOST_ATTRIBUTE = 'data-fastbrowse-cursor';
+  // A disconnected controller can leave its host in the attached document.
+  for (const stale of document.querySelectorAll(`[${HOST_ATTRIBUTE}]`)) {
+    stale.removeAttribute(HOST_ATTRIBUTE);
+    stale.remove();
+  }
   const EMBER = '#c55230';
   const ARM = 6; // a bracket's arm, end to end, and its rounded stroke
   const STROKE = 1.8;
@@ -152,7 +157,7 @@
 
   // The host goes back to the top of the top layer: a dialog or fullscreen element opened since would cover it.
   function raise() {
-    if (state.hidden) return;
+    if (state.hidden || !host.hasAttribute(HOST_ATTRIBUTE)) return;
     if (!host.isConnected) (document.body || document.documentElement).appendChild(host);
     try {
       if (host.matches(':popover-open')) host.hidePopover();
@@ -162,9 +167,10 @@
     }
   }
 
-  new MutationObserver(() => {
+  const observer = new MutationObserver(() => {
     if (!host.isConnected && !state.hidden) raise();
-  }).observe(document, { childList: true, subtree: true });
+  });
+  observer.observe(document, { childList: true, subtree: true });
   document.addEventListener('fullscreenchange', raise, true);
 
   // Resolves once the cursor has landed. Timed by the clock rather than by drawn frames, so a tab that is not painting
@@ -237,7 +243,15 @@
       // The next frame no longer has it; a tab that paints nothing has no frame to wait for.
       return Promise.race([new Promise((resolve) => requestAnimationFrame(() => resolve())), after(100)]).then(() => true);
     },
+    dispose() {
+      observer.disconnect();
+      document.removeEventListener('fullscreenchange', raise, true);
+      cancelAnimationFrame(state.frame);
+      host.remove();
+      delete globalThis.__fastbrowseCursor;
+    },
     show() {
+      if (!state.at) return;
       state.hidden = false;
       raise();
       schedule();

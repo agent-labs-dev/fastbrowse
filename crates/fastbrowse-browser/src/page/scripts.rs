@@ -55,7 +55,7 @@ pub const TOP_RECT_JS: &str = concat!(
 );
 
 pub const HIT_TEST_JS: &str = concat!(
-    "((id, scroll = true) => { const e = window.__fastbrowse?.nodes.get(id); ",
+    "((id, scroll = true, at = null, topRect) => { const e = window.__fastbrowse?.nodes.get(id); ",
     "if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled=\"true\"],[inert]') || ",
     "!window.__fastbrowse.visible(e)) return null; ",
     // Scrolling only when the control is not already in full view: a page scroll closes open menus and
@@ -103,6 +103,10 @@ pub const HIT_TEST_JS: &str = concat!(
     "y = frame.y + (node.clientTop + parseFloat(pad.paddingTop) + y) * frame.height / node.offsetHeight; ",
     "doc = node.ownerDocument; } ",
     "return [x, y]; }; ",
+    // Drawn gestures specify the point in top-viewport coordinates, unlike the sampled points in frame CSS pixels.
+    "if (at !== null) { const local = e.getBoundingClientRect(); const top = topRect(e); if (!top || !local.width || !local.height) return null; ",
+    "return hitAt(local.x + (at[0] - top.left) * local.width / (top.right - top.left), ",
+    "local.y + (at[1] - top.top) * local.height / (top.bottom - top.top)); } ",
     "for (const r of rects) { for (const [fx, fy] of [[.5, .5], [.25, .25], [.75, .25], [.25, .75], [.75, .75]]) { ",
     "const point = hitAt(r.left + (r.right - r.left) * fx, r.top + (r.bottom - r.top) * fy); ",
     "if (Array.isArray(point)) return point; } } return 'covered'; })",

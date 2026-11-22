@@ -84,9 +84,6 @@ impl PageCursor {
     /// live view hold their last frame meanwhile, so they never show the page without it. None, without running
     /// `work`, when the page did not confirm the cursor is gone.
     pub async fn hidden<T>(&self, work: impl Future<Output = T>) -> Option<T> {
-        if self.last.lock().unwrap().is_none() {
-            return Some(work.await);
-        }
         // Frames resume however this ends: a run cancelled mid-screenshot must not freeze the recording and live view.
         struct Withheld<'a>(&'a BrowserSession);
         impl Drop for Withheld<'_> {
@@ -119,10 +116,12 @@ impl PageCursor {
                 )
                 .await
                 .ok()?;
+            let context = world["executionContextId"].as_i64()?;
+            self.session.track_cursor(&session_id, context);
             let expression = format!("({}).{method}", CURSOR_JS.trim_end().trim_end_matches(';'));
             let params = json!({
                 "expression": expression,
-                "contextId": world["executionContextId"],
+                "contextId": context,
                 "awaitPromise": await_promise,
                 "returnByValue": true,
             });

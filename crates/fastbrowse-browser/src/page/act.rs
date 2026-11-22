@@ -1998,6 +1998,16 @@ impl CdpPage {
             return Ok((StepOutcome::Stale, Some("drag target changed before pointer press".into()), None));
         }
         self.trace_action_cursor(&points, duration).await;
+        let exact_press = format!(
+            "(() => {{ const id = {}; const r = window.__fastbrowse; \
+             return r?.guardKey(r.nodes.get(id), id) === {} && Array.isArray(({HIT_TEST_JS})(id, false, {}, {TOP_RECT_JS})); }})()",
+            target.2,
+            json!(target.3),
+            json!(press),
+        );
+        if self.evaluate(session_id, &exact_press).await? != Value::Bool(true) {
+            return Ok((StepOutcome::Covered, Some("the drag press point is covered".into()), None));
+        }
         let press_event = json!({
             "type": "mousePressed",
             "x": press.0,
@@ -2007,8 +2017,9 @@ impl CdpPage {
             "buttons": 1,
             "modifiers": modifiers,
         });
-        self.input(self.session.send("Input.dispatchMouseEvent", press_event, Some(session_id))).await?;
+        // Chrome can receive the press even if this future is dropped while its reply is pending.
         let mut held = self.held(session_id, press, modifiers);
+        self.input(self.session.send("Input.dispatchMouseEvent", press_event, Some(session_id))).await?;
         // The pointer moves to the release point too, so a surface that strokes on pointer moves draws the last leg.
         for &(x, y) in &points[1..] {
             sleep(secs(DRAG_STEP_SECONDS)).await;

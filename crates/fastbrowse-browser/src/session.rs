@@ -331,6 +331,8 @@ pub(crate) struct State {
     /// Set while the agent cursor is out of the page for a model screenshot: the video and live view hold their last
     /// frame rather than show the page without it.
     pub(crate) cursor_hidden: bool,
+    /// The cursor world in each tab the run drew in, for tabs that outlive the session.
+    pub(crate) cursor_contexts: HashMap<String, i64>,
     pub(crate) screencast_session_id: Option<String>,
     pub(crate) pending_frame: Option<Frame>,
     pub(crate) frame_scheduled: bool,
@@ -635,6 +637,15 @@ impl BrowserSession {
                 state.owned.intersection(&state.handed_over).cloned().collect(),
             )
         };
+        let cursor_contexts = std::mem::take(&mut self.0.state.lock().unwrap().cursor_contexts);
+        futures_util::future::join_all(cursor_contexts.iter().map(|(session_id, context)| async move {
+            let params = json!({
+                "contextId": context,
+                "expression": "globalThis.__fastbrowseCursor?.dispose()",
+            });
+            let _ = timeout(secs(FRAME_RELEASE_SECONDS), self.send("Runtime.evaluate", params, Some(session_id))).await;
+        }))
+        .await;
         // Removing a scope gate before closing an owned tab could let its pending navigation escape the grant.
         for target_id in owned {
             // Best-effort teardown; the browser may already be gone.
@@ -686,6 +697,10 @@ impl BrowserSession {
     pub fn frames_withheld(&self) -> bool {
         let state = self.0.state.lock().unwrap();
         state.frames_withheld || state.frames_sealed || state.cursor_hidden || self.0.grant.is_some()
+    }
+
+    pub(crate) fn track_cursor(&self, session_id: &str, context: i64) {
+        self.0.state.lock().unwrap().cursor_contexts.insert(session_id.to_owned(), context);
     }
 
     pub(crate) fn set_cursor_hidden(&self, hidden: bool) {
