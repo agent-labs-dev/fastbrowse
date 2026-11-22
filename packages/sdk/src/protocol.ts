@@ -34,6 +34,8 @@ export type BrowserWarningFailure =
   | 'cancelled';
 export type Operation =
   | 'click'
+  | 'right_click'
+  | 'double_click'
   | 'hover'
   | 'drag'
   | 'fill'

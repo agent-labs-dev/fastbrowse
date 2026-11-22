@@ -378,6 +378,7 @@ async fn test_a_wait_is_told_how_far_a_playing_clock_moved() {
         state.idle.push(super::recovery::Idle {
             action: Some((Operation::Click, Some("Next".into()))),
             outcome: StepOutcome::Covered,
+            refused: None,
         });
         state.history.push(executed(Some(operation), Some("Theme"), false));
         agent().note_effect(&mut state, &playing(17.0));
@@ -1882,6 +1883,27 @@ fn test_an_idle_wait_stays_on_offer_and_an_idle_click_does_not() {
     let mut context = crate::policy::StepContext::new(&state.task);
     super::recovery::leave_out_idle(&state, &mut offered, &mut context);
     assert!(offered.controls.is_empty(), "{:?}", offered.controls);
+}
+
+/// A desktop run pressed OK right after its click on a list row failed (#1403): deskpilot said to scroll the row into
+/// view, and the next ask said only that the click did not move the task on. A refused action is named with the
+/// refusal, so the next decision is made knowing what it takes.
+#[test]
+fn test_an_action_refused_is_left_out_with_the_refusal_its_page_gave() {
+    let page = observation(&[button("entry 173"), button("OK")]);
+    let mut state = run_state();
+    let refusal = "Element e180 reports no size; scroll it into view or take a new snapshot.";
+    state.idle.push(super::recovery::Idle {
+        action: Some((Operation::Click, Some(super::helpers::describe(&page.controls[0])))),
+        outcome: StepOutcome::Failed,
+        refused: Some(refusal.into()),
+    });
+    let mut offered = page.clone();
+    let mut context = crate::policy::StepContext::new(&state.task);
+    super::recovery::leave_out_idle(&state, &mut offered, &mut context);
+    let problem = context.problem.unwrap_or_default();
+    assert!(problem.contains(refusal), "{problem}");
+    assert!(!problem.contains("did not move the task on"), "{problem}");
 }
 
 #[tokio::test]

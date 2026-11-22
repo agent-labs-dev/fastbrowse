@@ -266,7 +266,11 @@ instance when it has one.
 
 A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window of
 that app class. `--authorize` and the step and spend ceilings work as for a browser. An open combo box's list and a
-popup menu's entries are controls like any other, and the run clicks the item it wants. Choosing a combo box's option
+popup menu's entries are controls like any other, and the run clicks the item it wants. The items of a list, tree,
+table, grid or icon view can also be double-clicked to open them, right-clicked for their context menu, such as a
+file's Rename or Compress, and dragged onto another control; a text field can be right-clicked for its edit menu.
+deskpilot refuses a drag and drop out of view, so dragging a file between folders needs
+`FASTBROWSE_DESKTOP_SHOWN=1`. Choosing a combo box's option
 by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. Recipes,
 `--start` and every browser option are refused, `--cursor` among them: a desktop run never brings its window to the
 front, so it draws its cursor in the recording, or on screen with `FASTBROWSE_DESKTOP_SHOWN=1`, described below. Two

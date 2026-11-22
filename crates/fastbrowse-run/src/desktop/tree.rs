@@ -49,15 +49,46 @@ impl Element {
     /// Qt leaves the items of a closed combo box showing, moved to x=-10000, and they were offered as options to pick
     /// (#1408): a box that ends before the window's left or top edge lies outside the window, whatever the state says.
     /// A box with no size says nothing of where it is, as GTK 4's list cells have none until the window is first drawn.
-    fn showing(&self) -> bool {
-        let outside = self.width > 0 && self.height > 0 && (self.x + self.width <= 0 || self.y + self.height <= 0);
-        self.has("showing") && !outside
+    /// One that starts past the right or bottom edge of `window`, the window's size, is outside it too: a tiled window
+    /// smaller than its content leaves the app reporting elements beyond it (#1395). A window of no size says nothing.
+    fn showing(&self, window: Size) -> bool {
+        let sized = self.width > 0 && self.height > 0;
+        let before = self.x + self.width <= 0 || self.y + self.height <= 0;
+        let after = window.known() && (self.x >= window.width || self.y >= window.height);
+        self.has("showing") && !(sized && (before || after))
+    }
+
+    /// Whether the point an action on this element aims at, its centre, lies inside `window`: deskpilot refuses a
+    /// point outside the window, so an element whose centre is beyond its edge cannot be clicked though part of it shows.
+    fn reachable(&self, window: Size) -> bool {
+        let inside = |at: i64, size: i64, edge: i64| (0..edge).contains(&(at + size / 2));
+        !window.known()
+            || self.width <= 0
+            || self.height <= 0
+            || (inside(self.x, self.width, window.width) && inside(self.y, self.height, window.height))
     }
 
     /// Whether the app accepts input on this element. GTK 3 and Qt set both `enabled` and `sensitive` on a usable
     /// control, while GTK 4's AT-SPI bridge sets only `sensitive`; a disabled control carries neither.
     fn operable(&self) -> bool {
         self.has("enabled") || self.has("sensitive")
+    }
+}
+
+/// The size of the window a tree is read from, in the window pixels its elements are placed in, as its root says.
+#[derive(Debug, Clone, Copy)]
+pub struct Size {
+    width: i64,
+    height: i64,
+}
+
+impl Size {
+    pub fn of(root: &Element) -> Size {
+        Size { width: root.width, height: root.height }
+    }
+
+    fn known(self) -> bool {
+        self.width > 0 && self.height > 0
     }
 }
 
@@ -178,15 +209,31 @@ fn sibling_label(siblings: &[Element], at: usize) -> Option<&str> {
         .or(before.text.as_deref().filter(|text| !text.trim().is_empty()))
 }
 
+/// Roles of the items of a collection: a file in a file manager, a row of a list or tree, a cell of a table or grid.
+/// A desktop app opens such an item on a double click, keeps its commands (rename, compress, move to trash) in the
+/// context menu a secondary click opens, and moves it by drag and drop. Offered only a left click, a run could not
+/// rename or compress a file, open a folder or drag a file into one (#1407).
+const ITEMS: &[&str] = &["list item", "tree item", "table cell", "grid cell", "icon"];
+
 fn operations(element: &Element) -> Vec<Operation> {
-    // Editable is a state the app sets, on entries, spin buttons, password fields and editable combo boxes alike.
+    // Editable is a state the app sets, on entries, spin buttons, password fields and editable combo boxes alike. A
+    // text field's context menu holds the edits it offers, such as a text editor's Change Case.
     if element.has("editable") {
-        return vec![Operation::Click, Operation::Fill, Operation::Enter];
+        return vec![Operation::Click, Operation::RightClick, Operation::Fill, Operation::Enter];
     }
     // A combo box's list opens as a popup whose items cannot be clicked in the background, so it is chosen in as a
     // web page's dropdown is, by naming an option, and the page picks it with the keyboard.
     if !options(element).is_empty() {
         return vec![Operation::Select];
+    }
+    if ITEMS.contains(&element.role.as_str()) {
+        return vec![
+            Operation::Click,
+            Operation::DoubleClick,
+            Operation::RightClick,
+            Operation::Drag,
+            Operation::Hover,
+        ];
     }
     if CLICKABLE.contains(&element.role.as_str()) {
         return vec![Operation::Click, Operation::Hover];
@@ -245,9 +292,9 @@ pub fn chosen(element: &Element) -> Option<&str> {
     items(element).into_iter().find(|item| item.has("selected")).map(|item| item.name.as_str())
 }
 
-/// Whether a combo box's list is open on screen.
-pub fn list_open(element: &Element) -> bool {
-    items(element).iter().any(|item| item.showing())
+/// Whether a combo box's list is open on screen, in a window of size `window`.
+pub fn list_open(element: &Element, window: Size) -> bool {
+    items(element).iter().any(|item| item.showing(window))
 }
 
 /// The element with `id`, anywhere in the tree.
@@ -270,8 +317,8 @@ pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
     element.children.iter().find_map(|child| find(child, id))
 }
 
-fn control(element: &Element, context: Option<&str>, beside: Option<&str>) -> Option<Control> {
-    if !element.showing() || !element.operable() {
+fn control(element: &Element, window: Size, context: Option<&str>, beside: Option<&str>) -> Option<Control> {
+    if !element.showing(window) || !element.reachable(window) || !element.operable() {
         return None;
     }
     let operations = operations(element);
@@ -332,11 +379,11 @@ const DIALOGS: [&str; 4] = ["alert", "alert message", "alert dialog", "dialog"];
 /// judged by its name alone could not be told to answer "Are you sure you want to delete the cache?", so a run asked
 /// to delete the cache ended `needs_confirmation` with the task judged not to ask for that click (#1404). None for an
 /// element that is no dialog, or one that says nothing.
-fn question(element: &Element) -> Option<String> {
+fn question(element: &Element, window: Size) -> Option<String> {
     if !DIALOGS.contains(&element.role.as_str()) {
         return None;
     }
-    let (shown, _) = texts(element);
+    let (shown, _) = texts_in(element, window);
     let shown = shown.replace('\n', " ");
     match (element.name.trim(), shown.as_str()) {
         ("", "") => None,
@@ -352,10 +399,10 @@ fn question(element: &Element) -> Option<String> {
 /// element holding it below the window itself, as a group box or a page tab names what it holds, or what the dialog
 /// holding it asks.
 pub fn controls(root: &Element) -> Vec<Control> {
-    fn walk(element: &Element, context: Option<&str>, beside: Option<&str>, out: &mut Vec<Control>) {
-        let made = control(element, context, beside);
+    fn walk(element: &Element, window: Size, context: Option<&str>, beside: Option<&str>, out: &mut Vec<Control>) {
+        let made = control(element, window, context, beside);
         // A control's own name is its label, not the context of what it holds.
-        let asked = question(element);
+        let asked = question(element, window);
         let inner = match asked.as_deref() {
             Some(asked) => Some(asked),
             None if element.name.is_empty() || made.is_some() => context,
@@ -363,24 +410,30 @@ pub fn controls(root: &Element) -> Vec<Control> {
         };
         out.extend(made);
         for (at, child) in element.children.iter().enumerate() {
-            walk(child, inner, sibling_label(&element.children, at), out);
+            walk(child, window, inner, sibling_label(&element.children, at), out);
         }
     }
-    // The window's own name is its title, which every control shares, so it tells none apart; a dialog's is part of
-    // what it asks.
+    // A control nothing below the window holds is the window's own, as its title bar's Close is: its context is the
+    // window's title, so closing the app's window reads as that and not as dismissing some panel. GNOME Text Editor's
+    // titlebar Close, offered as a bare "Close", was rated reversible and ended the run on a closed app (#1399). A
+    // dialog's context is what it asks, its title included.
+    let window = Size::of(root);
     let mut out = Vec::new();
-    out.extend(control(root, None, None));
-    let asked = question(root);
+    out.extend(control(root, window, None, None));
+    let asked = question(root, window).or_else(|| Some(root.name.clone()).filter(|name| !name.trim().is_empty()));
     for (at, child) in root.children.iter().enumerate() {
-        walk(child, asked.as_deref(), sibling_label(&root.children, at), &mut out);
+        walk(child, window, asked.as_deref(), sibling_label(&root.children, at), &mut out);
     }
     out
 }
 
 /// The text an element shows of its own: an editable field's value is the control's, and a control's name is its
-/// label, so only elements that are neither add text.
+/// label, so only elements that are neither add text. A multi-line text view is the exception: what it holds is the
+/// document the window shows, as GNOME Text Editor's body is, and left to its control's value alone the page read as
+/// its title bar and status line while the run was asked about the document (#1398). A password field never adds its.
 fn own_text(element: &Element) -> Option<&str> {
-    if !operations(element).is_empty() {
+    let document = element.has("editable") && element.has("multi line") && element.role != "password text";
+    if !operations(element).is_empty() && !document {
         return None;
     }
     element.text.as_deref().filter(|text| !text.trim().is_empty())
@@ -388,16 +441,21 @@ fn own_text(element: &Element) -> Option<&str> {
 
 /// The text the window shows on screen, and the text it holds out of view, each in the tree's order.
 pub fn texts(root: &Element) -> (String, String) {
-    fn walk<'a>(element: &'a Element, shown: &mut Vec<&'a str>, hidden: &mut Vec<&'a str>) {
+    texts_in(root, Size::of(root))
+}
+
+/// The text `element` shows and holds out of view, in a window of size `window`.
+fn texts_in(element: &Element, window: Size) -> (String, String) {
+    fn walk<'a>(element: &'a Element, window: Size, shown: &mut Vec<&'a str>, hidden: &mut Vec<&'a str>) {
         if let Some(text) = own_text(element) {
-            if element.showing() { shown.push(text) } else { hidden.push(text) }
+            if element.showing(window) { shown.push(text) } else { hidden.push(text) }
         }
         for child in &element.children {
-            walk(child, shown, hidden);
+            walk(child, window, shown, hidden);
         }
     }
     let (mut shown, mut hidden) = (Vec::new(), Vec::new());
-    walk(root, &mut shown, &mut hidden);
+    walk(element, window, &mut shown, &mut hidden);
     (shown.join("\n"), hidden.join("\n"))
 }
 
@@ -639,11 +697,11 @@ mod tests {
             summary,
             [
                 ("e4", "Country", vec!["select"]),
-                ("e7", "Name", vec!["click", "enter", "fill"]),
+                ("e7", "Name", vec!["click", "enter", "fill", "right_click"]),
                 ("e8", "Gift wrap", vec!["click", "hover"]),
                 ("e9", "Small", vec!["click", "hover"]),
                 ("e10", "Place order", vec!["click", "hover"]),
-                ("e12", "Password", vec!["click", "enter", "fill"]),
+                ("e12", "Password", vec!["click", "enter", "fill", "right_click"]),
             ]
         );
         let roles: Vec<&str> = observation.controls.iter().map(|c| c.role.as_str()).collect();
@@ -707,6 +765,34 @@ mod tests {
         assert!(controls.iter().all(|c| c.operations.contains(&Operation::Click)));
         // What the window says names them too, so a quote of a file name is found in it.
         assert!(capture(&window, &root).text.contains("IMG_4471.txt. File"));
+    }
+
+    #[test]
+    fn an_item_of_a_collection_is_offered_a_double_click_a_secondary_click_and_a_drag() {
+        // GNOME Files keeps a file's Rename and Compress in its context menu and opens a folder on a double click
+        // (#1407); a button does neither, so it is offered what it was.
+        let item = |id: &str, role: &str| node(id, role, id, &shown(&["selectable"]), None, vec![]);
+        let root = node(
+            "e1",
+            "window",
+            "scans",
+            &SHOWN,
+            None,
+            vec![
+                item("e2", "grid cell"),
+                item("e3", "list item"),
+                item("e4", "tree item"),
+                item("e5", "table cell"),
+                item("e6", "icon"),
+                node("e7", "push button", "New Folder", &SHOWN, None, vec![]),
+            ],
+        );
+        let window = Window { address: "0xabc".into(), class: "org.gnome.Nautilus".into(), title: "scans".into() };
+        let controls = observation(&window, &root, &[]).controls;
+        let offered: Vec<Vec<&str>> =
+            controls.iter().map(|c| c.operations.iter().map(|o| o.as_str()).collect()).collect();
+        let item = vec!["click", "double_click", "drag", "hover", "right_click"];
+        assert_eq!(offered, [&item[..], &item, &item, &item, &item, &["click", "hover"]]);
     }
 
     #[test]
@@ -811,7 +897,7 @@ mod tests {
         );
         // The closed combo box's list is off the window, so it is not open, though Qt says its items are showing.
         let combo = find(&root, "e6").unwrap();
-        assert!(!list_open(combo));
+        assert!(!list_open(combo, Size::of(&root)));
         assert_eq!(chosen(combo), Some("BOOL"));
     }
 
@@ -847,7 +933,41 @@ mod tests {
         assert!(action.contains(asked), "{action}");
         // A main window's text is no control's context: only a dialog asks something its buttons answer.
         let (_, form) = form();
-        assert!(super::controls(&form).iter().all(|c| c.context.as_deref().is_none_or(|c| c == "Delivery")));
+        assert!(super::controls(&form).iter().all(|c| c.context.as_deref() == Some("Delivery")));
+    }
+
+    #[test]
+    fn a_windows_own_close_carries_the_window_it_closes() {
+        // As deskpilot read GNOME Text Editor (#1399): the titlebar's Close sits in unnamed groups below the window,
+        // and a dialog's Close in the dialog. Told apart by what holds each, never by its words.
+        let close = |id: &str| node(id, "button", "Close", &shown(&["focusable"]), None, vec![]);
+        let controls = node(
+            "e2",
+            "group",
+            "",
+            &SHOWN,
+            None,
+            vec![node(
+                "e3",
+                "generic",
+                "",
+                &SHOWN,
+                None,
+                vec![node("e4", "group", "", &SHOWN, None, vec![close("e5")])],
+            )],
+        );
+        let title = "invoice.py - Text Editor";
+        let root = node("e1", "window", title, &SHOWN, None, vec![controls]);
+        let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: title.into() };
+        let closing = &observation(&window, &root, &[]).controls[0];
+        assert_eq!(closing.context.as_deref(), Some(title));
+        // The authorization gate's question names the window the click closes.
+        let action =
+            fastbrowse_core::safety::control_action(Operation::Click, closing, None, std::slice::from_ref(closing));
+        assert!(action.contains(title), "{action}");
+        let dialog = node("e1", "dialog", "Preferences", &SHOWN, None, vec![close("e2")]);
+        let preferences = Window { title: "Preferences".into(), ..window };
+        assert_eq!(observation(&preferences, &dialog, &[]).controls[0].context.as_deref(), Some("Preferences"));
     }
 
     #[test]
@@ -909,6 +1029,32 @@ mod tests {
     }
 
     #[test]
+    fn a_text_views_whole_document_is_the_text_the_window_shows() {
+        // As deskpilot read GNOME Text Editor holding a long document (#1398): the text view is the window's body, and
+        // the page text was its title alone.
+        let body: String = (1..=240).map(|line| format!("line {line}: item, qty, price\n")).collect();
+        let view = Element {
+            y: 47,
+            width: 1238,
+            height: 711,
+            ..node("e2", "text box", "", &shown(&["editable", "focusable", "multi line"]), Some(&body), vec![])
+        };
+        let entry = node("e3", "text", "Search", &shown(&["editable", "focusable"]), Some("qty"), vec![]);
+        let status = node("e4", "label", "", &SHOWN, Some("Ln 1, Col 1"), vec![]);
+        let root = Element {
+            width: 1238,
+            height: 758,
+            ..node("e1", "window", "invoice.txt - Text Editor", &SHOWN, None, vec![view, entry, status])
+        };
+        let window =
+            Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "invoice.txt".into() };
+        let observation = observation(&window, &root, &[]);
+        assert_eq!(observation.viewport_text, format!("{body}\nLn 1, Col 1"));
+        // The view is still a field to write in, holding the same text.
+        assert_eq!(observation.controls[0].value.as_deref(), Some(body.as_str()));
+    }
+
+    #[test]
     fn a_peek_binds_no_snapshot_and_a_capture_never_holds_a_password() {
         let (window, mut root) = form();
         root.snapshot = None;
@@ -949,6 +1095,46 @@ mod tests {
         });
         let root: Element = serde_json::from_value(sent).unwrap();
         assert_eq!(root.snapshot.as_deref(), Some("s-1"));
+    }
+
+    #[test]
+    fn an_element_past_the_windows_right_or_bottom_edge_is_no_control() {
+        // As deskpilot read GNOME Text Editor tiled to 613x373 (#1395): its content wants more room, so the app places
+        // elements beyond the window, and deskpilot refused each point as outside it.
+        let at = |id: &str, name: &str, x, y, width| Element {
+            x,
+            y,
+            width,
+            height: 30,
+            ..node(id, "button", name, &shown(&["focusable"]), None, vec![])
+        };
+        let label =
+            Element { x: 650, y: 10, width: 80, height: 20, ..node("e7", "label", "", &SHOWN, Some("Beyond"), vec![]) };
+        let root = Element {
+            width: 613,
+            height: 373,
+            ..node(
+                "e1",
+                "window",
+                "Text Editor",
+                &SHOWN,
+                None,
+                vec![
+                    at("e2", "Inside", 10, 10, 80),
+                    at("e3", "Right", 620, 10, 80),
+                    at("e4", "Below", 10, 380, 80),
+                    // Half of it shows, but deskpilot aims at its centre, which is past the right edge.
+                    at("e5", "Straddling", 560, 50, 200),
+                    at("e6", "Edge", 540, 90, 60),
+                    label,
+                ],
+            )
+        };
+        let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "x".into() };
+        let observation = observation(&window, &root, &[]);
+        let labels: Vec<_> = observation.controls.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["Inside", "Edge"]);
+        assert_eq!(observation.offscreen_text, "Beyond");
     }
 
     #[test]

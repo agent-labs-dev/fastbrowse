@@ -32,12 +32,23 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Observation, Page, PageResult};
 use fastbrowse_core::safety::origin_of;
+use fastbrowse_core::telemetry::Trace;
 
 pub use mcp::{Deskpilot, ToolError, View};
 use tree::{Element, Window};
 
 /// How long an action's effect is waited for before it is reported as having changed nothing.
 const SETTLE_SECONDS: f64 = 0.5;
+/// How long a WAIT watches the window when the run gives it no deadline: as long as one deskpilot call may take, as a
+/// browser's WAIT watches for one CDP reply. Unbounded, a run with no time limit polled a window that never changed
+/// until it was killed, spending nothing, so `--max-dollars` never ended it and the stall rule never counted the wait
+/// (#1406). Handed back unchanged, the step is counted, and Jev may wait again.
+const WATCH_SECONDS: f64 = 60.0;
+
+/// The seconds a WAIT given `seconds` watches the window for.
+fn watched(seconds: f64) -> f64 {
+    if seconds.is_finite() { seconds } else { WATCH_SECONDS }
+}
 const POLL: Duration = Duration::from_millis(100);
 /// Wheel clicks one SCROLL turns.
 const SCROLL_CLICKS: i64 = 5;
@@ -105,6 +116,8 @@ pub struct DeskpilotPage {
     /// asked for, and calling that a lost connection ended a finished task `unavailable` before its last step was
     /// recorded (#1405); the page now shows a closed app, which Jev reads like any other state.
     closed: Mutex<Option<String>>,
+    /// The run's trace, where each input sent to an element is recorded with what the page took that element to be.
+    trace: Trace,
 }
 
 fn unavailable(error: ToolError) -> BrowserError {
@@ -200,6 +213,7 @@ impl DeskpilotPage {
             withheld: AtomicBool::new(false),
             pending: Mutex::new(None),
             sent: Mutex::new(None),
+            trace: Trace::disabled(),
             closed: Mutex::new(None),
         })
     }
@@ -231,11 +245,15 @@ impl DeskpilotPage {
         (!self.withheld.load(Ordering::SeqCst)).then_some(png)
     }
 
-    /// Tells the film where `operation` lands: window pixels in a window `width` by `height`. Only a click is drawn
-    /// as a press: deskpilot fills, hovers and selects through the element, not a press at this point.
+    /// Tells the film where `operation` lands: window pixels in a window `width` by `height`. Only a click or the
+    /// start of a drag is drawn as a press: deskpilot fills, hovers and selects through the element, not a press at
+    /// this point.
     fn point(&self, operation: Operation, (x, y, width, height): (f64, f64, f64, f64)) {
         if let Some(film) = &self.film {
-            let pressed = matches!(operation, Operation::Click);
+            let pressed = matches!(
+                operation,
+                Operation::Click | Operation::RightClick | Operation::DoubleClick | Operation::Drag
+            );
             film.point(PointerMark { at: Instant::now(), x, y, operation, pressed, width, height });
         }
     }
@@ -480,14 +498,51 @@ impl DeskpilotPage {
 
     /// Calls an input tool, in the run's view wherever the connected deskpilot's schema offers it for that tool.
     async fn tool(&self, name: &str, arguments: Value) -> Result<(), ToolError> {
-        self.client.call(name, self.client.placed(name, arguments)).await.map(|_| ())
+        let arguments = self.client.placed(name, arguments);
+        self.trace_input(name, &arguments);
+        self.client.call(name, arguments).await.map(|_| ())
+    }
+
+    /// Records an input sent to an element: the snapshot and id it names, the snapshot the page last read, and the
+    /// element that id is in the tree the page last read. A click that landed on another element than the one chosen
+    /// could not be traced to either side, since only deskpilot's replies were logged (#1399).
+    fn trace_input(&self, name: &str, arguments: &Value) {
+        let Some(element) = arguments.get("element").and_then(Value::as_str) else { return };
+        self.trace.event("desktop_input", || {
+            let (snapshot, id) = element.rsplit_once(':').unwrap_or(("", element));
+            let observed = self.observed.lock().unwrap();
+            let found = observed.as_ref().and_then(|root| tree::find(root, id));
+            serde_json::Map::from_iter([
+                ("tool".into(), name.into()),
+                ("window".into(), arguments.get("window").cloned().unwrap_or_default()),
+                ("snapshot".into(), snapshot.into()),
+                ("element".into(), id.into()),
+                ("latest".into(), json!(*self.latest.lock().unwrap())),
+                ("role".into(), json!(found.map(|element| &element.role))),
+                ("name".into(), json!(found.map(|element| &element.name))),
+            ])
+        });
+    }
+
+    /// This page, recording each input it sends to an element in `trace`.
+    pub fn traced(mut self, trace: Trace) -> Self {
+        self.trace = trace;
+        self
     }
 
     async fn dispatch(&self, action: &Action, observation: &Observation) -> Result<Option<String>, ToolError> {
         let window = self.address();
         // The pointer actions a browser recording marks; a secret field stays unmarked, as it does there.
-        if matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover | Operation::Select)
-            && !action.secret
+        if matches!(
+            action.operation,
+            Operation::Click
+                | Operation::RightClick
+                | Operation::DoubleClick
+                | Operation::Drag
+                | Operation::Fill
+                | Operation::Hover
+                | Operation::Select
+        ) && !action.secret
             && let Some(id) = action.target_id.as_deref()
             && let Some(aim) = self.observed.lock().unwrap().as_ref().and_then(|root| tree::aim(root, id))
         {
@@ -499,6 +554,13 @@ impl DeskpilotPage {
         let target = bound.as_deref();
         match action.operation {
             Operation::Click => self.tool("click", json!({"window": window, "element": target})).await?,
+            Operation::RightClick => {
+                self.tool("click", json!({"window": window, "element": target, "button": "right"})).await?
+            }
+            Operation::DoubleClick => {
+                self.tool("click", json!({"window": window, "element": target, "double": true})).await?
+            }
+            Operation::Drag => return self.drag(&window, action).await,
             Operation::Hover => {
                 self.tool("hover", json!({"window": window, "element": target, "wait": SETTLE_SECONDS})).await?
             }
@@ -590,6 +652,41 @@ impl DeskpilotPage {
         Ok(None)
     }
 
+    /// Presses on the action's target, moves to its destination and lets go there. deskpilot's drag takes points, not
+    /// elements, in the pixels of a shot, so both centres are placed in a shot taken now: the model's last shot may be
+    /// scaled differently or be of the window before it changed.
+    async fn drag(&self, window: &str, action: &Action) -> Result<Option<String>, ToolError> {
+        let (Some(source), Some(destination)) = (action.target_id.as_deref(), action.destination_id.as_deref()) else {
+            return Ok(Some("drag needs an element to drag and one to drop it onto".into()));
+        };
+        let ends = {
+            let observed = self.observed.lock().unwrap();
+            let root = observed.as_ref();
+            (root.and_then(|root| tree::aim(root, source)), root.and_then(|root| tree::aim(root, destination)))
+        };
+        let (Some((x1, y1, width, height)), Some((x2, y2, _, _))) = ends else {
+            return Ok(Some("the window does not say where both ends of the drag are".into()));
+        };
+        let shot = match self.shoot().await {
+            Ok((shot, _, path)) => {
+                // Only its id is wanted, to place the points: the PNG is not film and must not pile up.
+                let _ = tokio::fs::remove_file(&path).await;
+                shot
+            }
+            Err(error) => return Ok(Some(format!("no shot to place the drag in: {error}"))),
+        };
+        let (sx, sy) = (shot.width / width, shot.height / height);
+        self.tool(
+            "drag",
+            json!({
+                "window": window, "shot": shot.id,
+                "x1": x1 * sx, "y1": y1 * sy, "x2": x2 * sx, "y2": y2 * sy,
+            }),
+        )
+        .await?;
+        Ok(None)
+    }
+
     /// The window's tree, read without replacing the snapshot.
     async fn peeked(&self, window: &str) -> Result<Element, ToolError> {
         let value = self
@@ -603,7 +700,9 @@ impl DeskpilotPage {
     /// The item combo box `id` has chosen, and whether its list is open, as the window says now.
     async fn choice(&self, window: &str, id: &str) -> Result<Option<(Option<String>, bool)>, ToolError> {
         let root = self.peeked(window).await?;
-        Ok(tree::find(&root, id).map(|element| (tree::chosen(element).map(str::to_string), tree::list_open(element))))
+        Ok(tree::find(&root, id).map(|element| {
+            (tree::chosen(element).map(str::to_string), tree::list_open(element, tree::Size::of(&root)))
+        }))
     }
 
     /// Moves a focused combo box's choice to `wanted` one arrow key at a time, as a person picks in a list they
@@ -808,7 +907,7 @@ impl Page for DeskpilotPage {
 
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move {
-            let seconds = if action.operation == Operation::Wait { f64::INFINITY } else { SETTLE_SECONDS };
+            let seconds = if action.operation == Operation::Wait { WATCH_SECONDS } else { SETTLE_SECONDS };
             self.act_within(action, observation, seconds).await
         })
     }
@@ -819,7 +918,7 @@ impl Page for DeskpilotPage {
         observation: &'a Observation,
         seconds: f64,
     ) -> BoxFuture<'a, PageResult<ActResult>> {
-        Box::pin(async move { self.act_within(action, observation, seconds).await })
+        Box::pin(async move { self.act_within(action, observation, watched(seconds)).await })
     }
 
     fn redrawn<'a>(
@@ -913,5 +1012,16 @@ impl Drop for RemoveOnDrop {
         if let Some(path) = self.0.take() {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wait_with_no_deadline_watches_the_window_for_one_call_and_hands_the_step_back() {
+        assert_eq!(watched(f64::INFINITY), WATCH_SECONDS);
+        assert_eq!(watched(0.15), 0.15);
     }
 }

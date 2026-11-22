@@ -28,7 +28,9 @@ pub const MASK: char = '\u{2022}';
 /// one-click unsubscribe is an href, and a script handler runs whatever the element says.
 pub fn may_be_irreversible(operation: Operation) -> bool {
     match operation {
-        Operation::Click | Operation::Drag => true,
+        // A double click opens or runs what it lands on, and a secondary click hands the app the same press a click
+        // does: what its handler then does is the app's to say, as a click's is.
+        Operation::Click | Operation::RightClick | Operation::DoubleClick | Operation::Drag => true,
         // Not only a form's Enter: a chat, comment or DM box sends on Enter through its own script, with no form for
         // the page to describe, and a key chord can trigger the same opaque handler without a reliable chord list.
         Operation::Enter | Operation::Press => true,
