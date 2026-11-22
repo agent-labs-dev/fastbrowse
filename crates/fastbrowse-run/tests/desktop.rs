@@ -360,6 +360,26 @@ async fn a_filmed_click_marks_its_element_centre_for_the_recording_cursor() {
 }
 
 #[tokio::test]
+async fn a_click_is_traced_with_the_snapshot_and_element_it_names() {
+    // A click that landed on the window's own Close could not be traced to the id fastbrowse sent (#1399).
+    let button = json!({"id":"e2", "role":"push button", "name":"Save", "states":["showing", "enabled"]});
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "children": [button]});
+    let fake = editor("traced-click", &[launch_tool()]);
+    fake.replies("wait_for", [ok(&window(false))]).replies("elements", [ok(&root)]);
+    fake.replies("click", [ok(&json!({"x": 1, "y": 1}))]);
+    let trace = fastbrowse_core::telemetry::Trace::collecting();
+    let page = open(&fake).await.traced(trace.clone());
+    let before = page.observe().await.unwrap();
+    let mut click = Action::new(Operation::Click);
+    click.target_id = Some("e2".into());
+    page.act(&click, &before).await.unwrap();
+    let inputs: Vec<_> = trace.events().into_iter().filter(|event| event["event"] == "desktop_input").collect();
+    let expected = json!({"event": "desktop_input", "tool": "click", "window": "0xabc", "snapshot": "s1",
+        "element": "e2", "latest": "s1", "role": "push button", "name": "Save"});
+    assert_eq!(inputs, [expected]);
+}
+
+#[tokio::test]
 async fn a_frame_after_an_action_that_reveals_a_secret_is_never_filmed() {
     let fake = filmed("revealed");
     let (film, frames) = frames();

@@ -397,12 +397,14 @@ pub fn controls(root: &Element) -> Vec<Control> {
             walk(child, window, inner, sibling_label(&element.children, at), out);
         }
     }
-    // The window's own name is its title, which every control shares, so it tells none apart; a dialog's is part of
-    // what it asks.
+    // A control nothing below the window holds is the window's own, as its title bar's Close is: its context is the
+    // window's title, so closing the app's window reads as that and not as dismissing some panel. GNOME Text Editor's
+    // titlebar Close, offered as a bare "Close", was rated reversible and ended the run on a closed app (#1399). A
+    // dialog's context is what it asks, its title included.
     let window = Size::of(root);
     let mut out = Vec::new();
     out.extend(control(root, window, None, None));
-    let asked = question(root, window);
+    let asked = question(root, window).or_else(|| Some(root.name.clone()).filter(|name| !name.trim().is_empty()));
     for (at, child) in root.children.iter().enumerate() {
         walk(child, window, asked.as_deref(), sibling_label(&root.children, at), &mut out);
     }
@@ -887,7 +889,41 @@ mod tests {
         assert!(action.contains(asked), "{action}");
         // A main window's text is no control's context: only a dialog asks something its buttons answer.
         let (_, form) = form();
-        assert!(super::controls(&form).iter().all(|c| c.context.as_deref().is_none_or(|c| c == "Delivery")));
+        assert!(super::controls(&form).iter().all(|c| c.context.as_deref() == Some("Delivery")));
+    }
+
+    #[test]
+    fn a_windows_own_close_carries_the_window_it_closes() {
+        // As deskpilot read GNOME Text Editor (#1399): the titlebar's Close sits in unnamed groups below the window,
+        // and a dialog's Close in the dialog. Told apart by what holds each, never by its words.
+        let close = |id: &str| node(id, "button", "Close", &shown(&["focusable"]), None, vec![]);
+        let controls = node(
+            "e2",
+            "group",
+            "",
+            &SHOWN,
+            None,
+            vec![node(
+                "e3",
+                "generic",
+                "",
+                &SHOWN,
+                None,
+                vec![node("e4", "group", "", &SHOWN, None, vec![close("e5")])],
+            )],
+        );
+        let title = "invoice.py - Text Editor";
+        let root = node("e1", "window", title, &SHOWN, None, vec![controls]);
+        let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: title.into() };
+        let closing = &observation(&window, &root, &[]).controls[0];
+        assert_eq!(closing.context.as_deref(), Some(title));
+        // The authorization gate's question names the window the click closes.
+        let action =
+            fastbrowse_core::safety::control_action(Operation::Click, closing, None, std::slice::from_ref(closing));
+        assert!(action.contains(title), "{action}");
+        let dialog = node("e1", "dialog", "Preferences", &SHOWN, None, vec![close("e2")]);
+        let preferences = Window { title: "Preferences".into(), ..window };
+        assert_eq!(observation(&preferences, &dialog, &[]).controls[0].context.as_deref(), Some("Preferences"));
     }
 
     #[test]

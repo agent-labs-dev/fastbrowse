@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A desktop window's own Close, in its title bar, is offered with the window's title as its context, so the check that asks whether a click can be undone reads it as closing the app's window ([#1399](https://github.com/agent-labs-dev/fastbrowse/issues/1399)). It was offered as a bare "Close", rated reversible, and a run that clicked it ended on a closed app. A control is told to be the window's own by what holds it in the accessibility tree, not by its words. Each input a desktop run sends to an element is now recorded in the trace as `desktop_input`, with the snapshot and element it names and what the run last read that element to be, so a click that lands on another element can be traced.
+
 - A desktop run reads the document a text view holds as the text the window shows ([#1398](https://github.com/agent-labs-dev/fastbrowse/issues/1398)). A multi-line text view, such as GNOME Text Editor's body, was read only as a field's value, so the page text was the window's title bar and status line, and a question about the document was judged against them. A single-line field and a password field still add nothing to the page text.
 
 - A desktop run no longer offers an element the app places past the right or bottom edge of its window ([#1395](https://github.com/agent-labs-dev/fastbrowse/issues/1395)). A window tiled smaller than its content leaves the app reporting elements beyond it, and every click on one was refused as a point outside the window. An element whose centre, the point deskpilot clicks, lies outside the window is no longer a control, and text past the edge reads as out of view.
