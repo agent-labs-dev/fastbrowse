@@ -26,7 +26,7 @@ Only `complete` exits 0. The full table, including the statuses that stop before
 
 ## Opting in, one run at a time
 
-`--authorize` allows submit, pay, delete and send. It does not override a task that says to change nothing or not to download, so a task carrying its own constraint is still refused.
+`--authorize` lets a run submit, pay, delete or send when Jev judges that the task asks for the action. Task constraints still apply. After a run makes a requested commit, it refuses an extra unrequested commit and gives Jev a chance to choose another step or finish.
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
