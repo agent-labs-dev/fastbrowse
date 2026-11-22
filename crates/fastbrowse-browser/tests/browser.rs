@@ -1943,7 +1943,7 @@ async fn test_a_control_in_a_section_of_records_but_outside_each_is_named_as_out
 /// card alone: an "Edit" link in one product card, and in the page's header, would have named that card's Add
 /// button "Edit" with nothing of the product it adds.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_a_card_whose_first_line_is_a_shared_link_is_named_by_its_next_line_too() {
+async fn test_a_card_whose_first_lines_are_shared_links_is_named_by_its_own_line_too() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/icons.html").await;
@@ -1958,6 +1958,19 @@ async fn test_a_card_whose_first_line_is_a_shared_link_is_named_by_its_next_line
     let contexts: Vec<Option<String>> =
         obs.controls.iter().filter(|c| c.label == "Add").map(|c| c.context.clone()).collect();
     assert_eq!(contexts, vec![Some("Edit / Brass Kettle".into()), Some("Copper Pan".into())]);
+    // Two shared links ahead of the product's name, as Edit and Delete in the header and the card, named its Add
+    // "Edit / Delete" with nothing of the product.
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<header><a href=\"#edit\">Edit</a><a href=\"#delete\">Delete</a></header><ul>\
+         <li><div><a href=\"#a\">Edit</a></div><div><a href=\"#d\">Delete</a></div><div>Brass Kettle</div>\
+         <button>Add</button></li><li><div>Copper Pan</div><button>Add</button></li></ul>'",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Add").await;
+    let contexts: Vec<Option<String>> =
+        obs.controls.iter().filter(|c| c.label == "Add").map(|c| c.context.clone()).collect();
+    assert_eq!(contexts, vec![Some("Edit / Delete / Brass Kettle".into()), Some("Copper Pan".into())]);
     h.close().await;
 }
 

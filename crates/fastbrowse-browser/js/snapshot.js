@@ -1478,9 +1478,11 @@
     if (section) return section;
     // A line kept though other controls share it, as a commenter's name link is under each of their comments, does
     // not name the card alone: an "Edit" link in one card of several would name that card "Edit" and drop the
-    // product it edits. The card's next line goes beside it.
-    const [first = '', next] = linesOf(scope, element, label, own, furniture);
-    return repeated.has(first) && next ? `${first} / ${next}` : first;
+    // product it edits. The card's lines run on to its first one no control shares, so "Edit" and "Delete" links
+    // ahead of a product's name keep it beside them.
+    const lines = linesOf(scope, element, label, own, furniture);
+    const named = lines.findIndex(line => !repeated.has(line));
+    return (named < 0 ? lines.slice(0, 2) : lines.slice(0, named + 1)).join(' / ');
   };
   // The lines of `scope` that can name `element`, in reading order. `furniture` holds the repeated controls' labels
   // that read the same in every repeat, so name none of them.
