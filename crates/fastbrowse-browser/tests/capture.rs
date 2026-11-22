@@ -1530,6 +1530,36 @@ async fn an_editing_host_in_a_heading_code_block_or_body_is_its_field_block() {
     h.close().await;
 }
 
+/// A table cell that is itself the editing host is read once, as its field block after the table; a document in
+/// designMode is one field block for its body.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_editable_cell_or_a_design_mode_body_is_read_once_as_its_field() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<table><tr><th>Item</th></tr><tr><td contenteditable="true" aria-label="Cell">cell words</td></tr></table>"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let holding: Vec<_> = capture.blocks.iter().filter(|b| capture.block_text(b).contains("cell words")).collect();
+    assert_eq!(holding.len(), 1, "{:?}", holding.iter().map(|b| capture.block_text(b)).collect::<Vec<_>>());
+    assert_eq!(capture.block_text(holding[0]), "Cell: cell words");
+    assert!(holding[0].control_context.as_ref().is_some_and(|c| c.value.is_some()));
+
+    crate::common::eval_active(
+        &h.session,
+        "document.body.innerHTML = '<p>First</p><p>Second</p>'; document.designMode = 'on'",
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let texts: Vec<String> = capture.blocks.iter().map(|b| capture.block_text(b).to_string()).collect();
+    assert_eq!(texts.iter().filter(|t| t.contains("First")).count(), 1, "{texts:?}");
+    let body = capture.blocks.iter().find(|b| capture.block_text(b).contains("First")).expect("body field");
+    assert!(body.control_context.as_ref().is_some_and(|c| c.value.is_some()), "the body is one field block");
+    h.close().await;
+}
+
 /// A native date or time fill returns before the typing path, and reports its field all the same.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_native_date_fill_reports_the_field() {

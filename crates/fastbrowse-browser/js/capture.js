@@ -407,7 +407,8 @@
     }
     return '';
   };
-  const cellText = c => textOf(c) || drawn(c);
+  // A cell that is itself an editing host is read as its field block after the table, never twice.
+  const cellText = c => (isHost(c) ? '' : textOf(c) || drawn(c));
 
   // What a form holds is in its controls' values, which no text node carries: a task that asked for dates to be
   // chosen was refused as unanswered because "the dates chosen" had nothing to quote. A filled control reads as
@@ -449,7 +450,10 @@
         '',
     );
   };
-  const isHost = e => !CONTROLS.has(e.tagName) && e.isContentEditable && !e.parentElement?.isContentEditable;
+  // designMode makes every element editable, so the body is the host there, as a contenteditable body is.
+  const isHost = e =>
+    !CONTROLS.has(e.tagName) && e.isContentEditable &&
+    (!e.parentElement?.isContentEditable || (e === e.ownerDocument.body && e.ownerDocument.designMode === 'on'));
   const fieldValue = e => {
     if (e.tagName === 'SELECT') return [...e.selectedOptions].map(o => clean(o.label || o.text)).join(', ');
     // A host reads as every other block does, so its links are found by the text the field block quotes.
@@ -501,7 +505,7 @@
     // A row block is its text with the links of the rows it writes, in the order it writes them.
     const of = (written, headed) => ({
       text: [...(headed ? [...headers.map(line), divider] : []), ...written.map(line)].join('\n'),
-      links: linksIn([...(headed ? headers : []), ...written].flatMap(row => row.cells)),
+      links: linksIn([...(headed ? headers : []), ...written].flatMap(row => row.cells).filter(c => !isHost(c))),
     });
     // Headerless comparison rows need leading cells for identity and separate source spans for counting.
     if (!headers.length) return rows.map((row, index) => of(index ? [rows[0], row] : [row], false));
