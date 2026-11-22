@@ -906,12 +906,9 @@ def test_the_entry_passes_the_running_launchers_resolved_path_not_the_bare_name(
     real.parent.mkdir()
     real.write_text("")
     real.chmod(0o755)
-    renamed = tmp_path / "bin" / "fb"
+    renamed = tmp_path / "bin" / "fb-entry"
     renamed.parent.mkdir()
     renamed.symlink_to(real)
-    other = tmp_path / "install-a" / "fastbrowse"
-    other.parent.mkdir()
-    other.write_text("")
     passed: list[str] = []
 
     class Core:
@@ -928,15 +925,15 @@ def test_the_entry_passes_the_running_launchers_resolved_path_not_the_bare_name(
     monkeypatch.setattr(native.build, "install_facts", lambda: {})
     monkeypatch.setattr(native.signal, "signal", lambda *_: None)
 
-    def run(argv0: str, path: str) -> str:
+    def run(argv0: str, *, module: bool = False) -> str:
         monkeypatch.setattr(sys, "argv", [argv0, "extension", "uninstall"])
-        monkeypatch.setenv("PATH", path)
+        monkeypatch.setattr(sys.modules["__main__"], "__spec__", object() if module else None, raising=False)
         with pytest.raises(SystemExit):
             native.command("fastbrowse")
         return passed[-1]
 
-    # A symlink under another name, run bare with another install first on PATH, is the install it points to.
-    assert run("fb", f"{other.parent}:{renamed.parent}") == str(real.resolve())
-    assert run(str(real), "") == str(real.resolve())
-    # Run as another entry point (`python -m`), no launcher is known: the name stands.
-    assert run(str(tmp_path / "__main__.py"), "") == "fastbrowse"
+    # A symlink under another name is the file it points to: the name is never looked up.
+    assert run(str(renamed)) == str(real.resolve())
+    assert run(str(real)) == str(real.resolve())
+    # Run as a module (`python -m`), no script is known: the name stands.
+    assert run(str(tmp_path / "__main__.py"), module=True) == "fastbrowse"

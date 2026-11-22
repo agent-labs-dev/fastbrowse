@@ -32,3 +32,23 @@ fn native_host_hands_over_with_chromes_origin_from_the_launchers_registry() {
     let _ = std::fs::remove_dir_all(&root);
     assert_eq!(String::from_utf8_lossy(&out.stdout), "native-host chrome-extension://x/\n");
 }
+
+#[test]
+fn an_unregistered_native_host_exits_naming_the_registry_when_no_install_starts() {
+    let root = std::env::temp_dir().join(format!("fastbrowse-unregistered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let removed = root.join("removed/fastbrowse");
+    let host_dir = root.join("host");
+    std::fs::create_dir_all(&host_dir).unwrap();
+    let registry = serde_json::json!([{"path": removed, "version": "999.0.0"}]);
+    std::fs::write(host_dir.join("installs.json"), registry.to_string()).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_fastbrowse"))
+        .args(["native-host", "chrome-extension://x/"])
+        .env("FASTBROWSE_HOST_DIR", &host_dir)
+        .env_remove("FASTBROWSE_HOST_DELEGATED")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("installs.json"), "{}", String::from_utf8_lossy(&out.stderr));
+}

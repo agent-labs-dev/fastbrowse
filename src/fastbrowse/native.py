@@ -12,7 +12,6 @@ import contextlib
 import copy
 import importlib
 import json
-import shutil
 import signal
 import sys
 import time
@@ -809,17 +808,17 @@ async def stop_cloud_browser(browser: CloudBrowser, browser_api_key: str, *, ori
 
 
 def program_path(program: str) -> str:
-    """The script this process runs, resolved, when it is the `program` command; else the bare name.
+    """The real path of the script this process runs, as the identity of this install; else the bare `program` name.
 
     The core identifies the running fastbrowse by this path (the extension registry keys on it), so a bare name would
-    stand for whichever copy comes first on `PATH` instead of the one that is running. A name without a separator is
-    looked up on `PATH` first, and the identity is the resolved file, so a symlink under another name is the program
-    it points to.
+    stand for whichever copy comes first on `PATH` instead of the one that is running. The script's name is never
+    consulted: a symlink or a renamed entry is the file it points to. Run as a module (`python -m`), there is no
+    script, so the name stands.
     """
-    started = sys.argv[0]
-    found = started if Path(started).name != started else shutil.which(started)
-    resolved = Path(found).resolve() if found else None
-    return str(resolved) if resolved is not None and resolved.stem == program else program
+    if getattr(sys.modules["__main__"], "__spec__", None) is not None:
+        return program
+    started = Path(sys.argv[0])
+    return str(started.resolve()) if started.is_file() else program
 
 
 def command(program: str) -> NoReturn:

@@ -256,9 +256,9 @@ fn write_host(dir: &Path, installs: &[Install]) -> Result<PathBuf, String> {
     write_launcher(dir, &commands).map_err(|e| format!("cannot write the launcher: {e}"))
 }
 
-/// A launcher that runs the first of `commands` that is a regular, executable file and starts, as the host. A command
-/// that cannot start (exit 126 or 127, as a script whose interpreter is gone) falls through to the next; any other
-/// exit is the host's own and ends the launcher, stdio inherited throughout. There is no fallback
+/// A launcher that runs the first of `commands` that is a regular, executable file as the host (on Unix it
+/// `exec`s, so Chrome stays the host's parent). A registered install that cannot start, as a script whose interpreter was
+/// removed, is not skipped: uninstall or reinstall it, which rewrites the launcher. There is no fallback
 /// to a `fastbrowse` on the `PATH` Chrome starts it with: that is a binary nobody registered, and an explicit
 /// `uninstall` must stay uninstalled. With none left it says so and fails. A newer registered install than the one
 /// it runs takes over inside `fastbrowse native-host` (see [`delegate`]). The launcher tells it where the registry
@@ -284,7 +284,7 @@ fn write_launcher(dir: &Path, commands: &[PathBuf]) -> std::io::Result<PathBuf> 
     let quoted: Vec<String> =
         commands.iter().map(|command| format!("'{}'", command.display().to_string().replace('\'', r"'\''"))).collect();
     let text = format!(
-        "#!/bin/sh\n{HOST_DIR}=$(dirname \"$0\"); export {HOST_DIR}\nfor fastbrowse in {}; do\n    if [ -f \"$fastbrowse\" ] && [ -x \"$fastbrowse\" ]; then\n        \"$fastbrowse\" native-host \"$@\"; code=$?\n        if [ \"$code\" -ne 126 ] && [ \"$code\" -ne 127 ]; then exit \"$code\"; fi\n    fi\ndone\necho '{NONE}' >&2\nexit 127\n",
+        "#!/bin/sh\n{HOST_DIR}=$(dirname \"$0\"); export {HOST_DIR}\nfor fastbrowse in {}; do\n    if [ -f \"$fastbrowse\" ] && [ -x \"$fastbrowse\" ]; then exec \"$fastbrowse\" native-host \"$@\"; fi\ndone\necho '{NONE}' >&2\nexit 127\n",
         quoted.join(" ")
     );
     write_atomic(&launcher, text.as_bytes(), true)?;
@@ -301,7 +301,7 @@ fn newer_installs(
     query: &dyn Fn(&Path) -> Option<String>,
 ) -> Vec<Install> {
     let own = canonical(own);
-    let registered = installs.iter().any(|install| canonical(&install.path) == own);
+    let registered = is_registered(installs, &own);
     let mut newer: Vec<Install> = installs
         .iter()
         .filter(|install| canonical(&install.path) != own)
@@ -310,6 +310,24 @@ fn newer_installs(
         .collect();
     newer.sort_by_key(|install| std::cmp::Reverse(precedence(&install.version)));
     newer
+}
+
+fn is_registered(installs: &[Install], own: &Path) -> bool {
+    let own = canonical(own);
+    installs.iter().any(|install| canonical(&install.path) == own)
+}
+
+/// What a host does when no install took over: a registered one serves itself; an unregistered one (a stray copy that
+/// the launcher or a stale manifest reached) must not serve, and says where the registry is.
+fn without_handover(registered: bool, dir: &Path) -> Option<i32> {
+    if registered {
+        return None;
+    }
+    eprintln!(
+        "fastbrowse native-host: this fastbrowse is not registered and no registered install started; see {} or run `fastbrowse extension install`",
+        dir.join(INSTALLS).display()
+    );
+    Some(1)
 }
 
 /// The folder holding the registry: the launcher's, when Chrome started this through it.
@@ -327,13 +345,14 @@ fn handover_command(install: &Install, args: &[String]) -> std::process::Command
 const GUARD: &str = "FASTBROWSE_HOST_DELEGATED";
 
 /// Run the newest registered fastbrowse as the host instead of this one, when one is newer; its exit code. Newer
-/// installs are tried newest first until one starts. `None` runs this one: it is the newest, or the registry cannot be
-/// read, or no newer one will start.
+/// installs are tried newest first until one starts. `None` runs this one: it is registered and the newest (or no newer
+/// one starts), or the registry cannot be read. An unregistered one exits 1 instead of serving (see [`without_handover`]).
 pub fn delegate(args: &[String]) -> Option<i32> {
     if std::env::var_os(GUARD).is_some() {
         return None;
     }
-    let installs = match read_installs(&host_dir()) {
+    let dir = host_dir();
+    let installs = match read_installs(&dir) {
         Ok(installs) => installs,
         Err(error) => {
             eprintln!("fastbrowse native-host: {error}");
@@ -341,6 +360,7 @@ pub fn delegate(args: &[String]) -> Option<i32> {
         }
     };
     let own = std::env::current_exe().ok()?;
+    let registered = is_registered(&installs, &own);
     for newer in newer_installs(&installs, &own, env!("CARGO_PKG_VERSION"), &reported_version) {
         let mut command = handover_command(&newer, args);
         #[cfg(unix)]
@@ -355,7 +375,7 @@ pub fn delegate(args: &[String]) -> Option<i32> {
             Err(error) => eprintln!("fastbrowse native-host: cannot start {}: {error}", newer.path.display()),
         }
     }
-    None
+    without_handover(registered, &dir)
 }
 
 /// Register the host with every browser found, keeping the other registered installs; the names of the browsers
@@ -821,28 +841,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_launcher_falls_through_a_command_that_cannot_start_but_keeps_a_hosts_own_exit() {
-        let dir = scratch("fallthrough");
-        let broken = dir.join("broken/fastbrowse");
-        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
-        std::fs::write(&broken, "#!/nonexistent-interpreter\ntrue\n").unwrap();
-        std::fs::set_permissions(&broken, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        let working = dir.join("working/fastbrowse");
-        script(&working, "echo working \"$@\"");
-        let failing = dir.join("failing/fastbrowse");
-        script(&failing, "exit 3");
-        let run = |commands: &[PathBuf]| {
-            std::process::Command::new(write_launcher(&dir, commands).unwrap()).output().unwrap()
-        };
-        let after_broken = run(&[broken.clone(), working.clone()]);
-        let host_failed = run(&[failing, working]);
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(String::from_utf8_lossy(&after_broken.stdout), "working native-host\n");
-        assert_eq!(host_failed.status.code(), Some(3));
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn an_unregistered_host_hands_over_to_the_newest_install_even_when_older() {
         let dir = scratch("stray");
         let (stray, old) = (dir.join("stray/fastbrowse"), dir.join("old/fastbrowse"));
@@ -852,6 +850,20 @@ mod tests {
         let candidates = newer_installs(&installs, &stray, "0.16.0", &reported_version);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(candidates, vec![at(&old, "0.15.0")]);
+    }
+
+    #[test]
+    fn an_unregistered_host_that_no_install_took_over_from_exits_instead_of_serving() {
+        let dir = scratch("unserved");
+        let (known, stray) = (dir.join("a/fastbrowse"), dir.join("stray/fastbrowse"));
+        let installs = vec![at(&known, "0.15.0")];
+        assert!(is_registered(&installs, &known));
+        assert!(!is_registered(&installs, &stray));
+        let registered_serves = without_handover(true, &dir);
+        let stray_exits = without_handover(false, &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(registered_serves, None);
+        assert_eq!(stray_exits, Some(1));
     }
 
     #[cfg(unix)]
