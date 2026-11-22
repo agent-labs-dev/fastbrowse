@@ -1550,12 +1550,12 @@ impl Agent {
             // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
-            // Only text added to the page the step stayed on: another document or address is all new, and recorded
-            // as this step's, the whole destination page was quoted as a commit's reply.
-            let done = fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited);
-            state.replied = (state.committing || keeping || last.look.is_some()) && !done.put.is_empty();
-            last.put = (!done.put.is_empty()).then(|| (observation.url.clone(), done.put.clone()));
-            done
+            // A send that lands on another page is answered by that page: a contact form's "Your message has been
+            // sent." is the only record that the send went through, so the whole new text is the step's reply.
+            let put = fastbrowse_core::effects::added_text(&before, observation);
+            state.replied = (state.committing || keeping || last.look.is_some()) && !put.is_empty();
+            last.put = (!put.is_empty()).then(|| (observation.url.clone(), put));
+            fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)
         };
