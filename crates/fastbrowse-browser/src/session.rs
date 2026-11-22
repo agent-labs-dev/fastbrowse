@@ -2253,10 +2253,25 @@ impl Drop for AdoptionSettled<'_> {
 }
 
 /// Whether Chrome accepted the command: a cast that was refused is not running.
-async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, session_id: Option<&str>) -> bool {
-    let Some(client) = shared.client.lock().unwrap().clone() else { return false };
+/// How a screencast command ended. A timeout is not a refusal: Chrome may still have run it.
+#[derive(PartialEq)]
+enum CastReply {
+    Accepted,
+    /// Chrome (or a closed transport) definitely did not start the cast.
+    Refused,
+    /// No answer in time; the command may have taken effect.
+    Unanswered,
+}
+
+async fn screencast_command(
+    shared: &Arc<Shared>,
+    method: &str,
+    params: Value,
+    session_id: Option<&str>,
+) -> CastReply {
+    let Some(client) = shared.client.lock().unwrap().clone() else { return CastReply::Refused };
     match timeout(secs(SCREENCAST_COMMAND_SECONDS), client.send(method, params, session_id)).await {
-        Ok(Ok(_)) => true,
+        Ok(Ok(_)) => CastReply::Accepted,
         Ok(Err(error)) => {
             if let Some(operation) = screencast_operation(method) {
                 // The error text is built from the method and a typed reason, never Chrome's own message.
@@ -2264,7 +2279,7 @@ async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, s
                     warn(&format!("{method} failed ({error})"))
                 });
             }
-            false
+            CastReply::Refused
         }
         Err(_) => {
             if let Some(operation) = screencast_operation(method) {
@@ -2272,7 +2287,7 @@ async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, s
                     warn(&format!("{method} failed (TimeoutError)"))
                 });
             }
-            false
+            CastReply::Unanswered
         }
     }
 }
@@ -2334,11 +2349,16 @@ async fn update_screencast(shared: &Arc<Shared>) {
     };
     if let Some(active) = active {
         let params = json!({"format": "jpeg", "quality": 60, "maxWidth": 1280, "maxHeight": 800});
-        // Recorded only once Chrome accepts the start: a refused one left marked as running would make every later
-        // switch to this tab think the cast was already going, and no frame would ever arrive. Left unrecorded, the
-        // next tab switch tries again.
-        if screencast_command(shared, "Page.startScreencast", params, Some(&active)).await {
-            shared.state.lock().unwrap().screencast_session_id = Some(active);
+        // Recorded before the send, so a start Chrome runs but answers late, or that is cancelled mid-await, is still
+        // stopped by the next switch or close. Cleared only when Chrome definitely refused it: a refused start left
+        // marked as running would make every later switch to this tab think the cast was going, and no frame would
+        // ever arrive.
+        shared.state.lock().unwrap().screencast_session_id = Some(active.clone());
+        if screencast_command(shared, "Page.startScreencast", params, Some(&active)).await == CastReply::Refused {
+            let mut state = shared.state.lock().unwrap();
+            if state.screencast_session_id.as_deref() == Some(active.as_str()) {
+                state.screencast_session_id = None;
+            }
         }
     }
 }

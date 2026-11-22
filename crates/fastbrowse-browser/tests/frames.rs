@@ -372,6 +372,34 @@ async fn test_a_stalled_screencast_does_not_delay_switching_tabs() {
     assert_eq!(client.pending(), 0);
 }
 
+/// A start Chrome runs but never answers in time, or that a close cancels mid-await, was recorded only after the
+/// answer, so close never stopped a cast Chrome might still be sending.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_screencast_start_cancelled_by_close_is_still_stopped() {
+    let fake = FakeChrome::start().await;
+    fake.block("Page.startScreencast");
+    let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async {}));
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    fake.sent("Page.startScreencast").await;
+    session.close().await.unwrap();
+    assert!(fake.calls().iter().any(|m| m == "Page.stopScreencast"), "{:?}", fake.calls());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_screencast_start_that_times_out_is_stopped_on_close() {
+    let fake = FakeChrome::start().await;
+    fake.block("Page.startScreencast");
+    let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async {}));
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    fake.sent("Page.startScreencast").await;
+    // Outlast the command timeout so the start ends unanswered rather than cancelled.
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    session.close().await.unwrap();
+    assert!(fake.calls().iter().any(|m| m == "Page.stopScreencast"), "{:?}", fake.calls());
+}
+
 /// Python also checks the warning that nothing was recorded; see the note on the live view failures test.
 #[cfg(feature = "recording")]
 #[tokio::test(flavor = "multi_thread")]
