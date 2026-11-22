@@ -11272,7 +11272,8 @@ async fn test_the_key_question_carries_what_the_page_says_about_a_draggable_card
     let asked = jev.asked.lock().unwrap();
     assert!(asked.iter().any(|q| q.contains("Which key should be pressed in")
         && q.contains("The page calls it 'draggable'.")
-        && q.contains("To pick up a draggable item, press the space bar.")));
+        && q.contains("To pick up a draggable item, press the space bar.")
+        && q.contains("A press moves keyboard focus to this control before it sends the key")));
 }
 
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.

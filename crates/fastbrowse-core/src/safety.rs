@@ -58,8 +58,14 @@ pub fn may_be_irreversible(operation: Operation) -> bool {
     }
 }
 
-/// What tells this control apart from another with the same label: where it sits, what it drops onto, the form it
-/// submits and the address it links to.
+/// What a press does before it sends its key, as the browser layer carries it out. Without it Jev aimed the Space that
+/// drops a picked-up sortable item at the destination item: the press moved focus there, the widget dropped the item
+/// where it was, and the run ended with the order unchanged (#1466).
+pub const PRESS_FOCUSES: &str = "A press moves keyboard focus to this control before it sends the key, so focus leaves \
+the control that held it. A widget can end what it was doing on a control when focus leaves it: an item picked up by keys \
+is dropped where it is, and an open menu closes. A key that carries on what is under way is pressed on the control it is \
+under way on.";
+
 /// What the page itself says a control is and how it works (`aria-roledescription`, `aria-describedby`), as page data.
 ///
 /// A dnd-kit card's role is "button", so a Space press on it read as a stray edit (0.08 requested); with the page's
@@ -107,6 +113,8 @@ fn drag_places(source: &Control, destination: &Control) -> Option<String> {
     }
 }
 
+/// What tells this control apart from another with the same label: where it sits, what it drops onto, the form it
+/// submits and the address it links to.
 fn describe_control(
     instructions: &mut String,
     operation: Operation,
@@ -118,6 +126,10 @@ fn describe_control(
         instructions.push_str(&format!("It sits under {} on the page.\n", text::repr(context)));
     }
     instructions.extend(page_description(control));
+    if operation == Operation::Press && !control.operations.contains(&Operation::Fill) {
+        instructions.push_str(PRESS_FOCUSES);
+        instructions.push('\n');
+    }
     if destination.is_none()
         && let Some((position, count)) = item_place(control)
     {
@@ -1399,6 +1411,8 @@ mod tests {
                 .contains("item 6 of the 6 items listed under 'Reorder Media'; the drop target is item 1 of them.")
         );
         let press = control_action(Operation::Press, &last, None, &[]);
+        assert!(press.contains(PRESS_FOCUSES));
+        assert!(!control_action(Operation::Click, &last, None, &[]).contains(PRESS_FOCUSES));
         assert!(press.contains("It is item 6 of the 6 items in its list.\n"));
         assert!(!control_action(Operation::Press, &button("Plain"), None, &[]).contains("items in its list"));
     }
