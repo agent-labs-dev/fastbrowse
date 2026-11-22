@@ -40,7 +40,9 @@ uvx --from fastbrowse fastbrowse \
 ```
 
 With no browser connected the run ends `unavailable` and names the install step; tell the user rather than
-switching to another browser. With the extension in more than one browser, the error lists their labels; pass
+switching to another browser. When it says `no browser's fastbrowse extension can be reached from this process`, the
+extension is installed but your sandbox refuses the directory or socket the error names: ask the user to allow
+that directory in your sandbox or to run fastbrowse with the sandbox off. With the extension in more than one browser, the error lists their labels; pass
 the one the user chooses with `--extension-browser LABEL`. A run the user stops in the browser ends `cancelled`:
 report that it was stopped and do not retry it.
 
