@@ -872,6 +872,8 @@ impl DeskpilotPage {
             let opened = tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), self.follow_opened()).await;
             if let Ok(Ok(Some(_))) = opened {
                 self.generation.fetch_add(1, Ordering::Relaxed);
+                // Every earlier observation was of the window before: its ids must not be sent to the new one.
+                *self.latest.lock().unwrap() = None;
                 return Ok(ActResult {
                     outcome: StepOutcome::Stale,
                     failure: None,

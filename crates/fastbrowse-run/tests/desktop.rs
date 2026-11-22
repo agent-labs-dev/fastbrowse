@@ -871,9 +871,12 @@ async fn a_window_the_action_opened_during_a_slow_lookup_is_followed_by_the_next
     let clicks = calls(&fake, "click").len();
     let result = page.act(&click, &between).await.unwrap();
     assert!(result.page_changed, "{result:?}");
-    assert_eq!(page.observe().await.unwrap().title, "Save As");
     // The dialog is followed before the click is sent, so a click its modal would refuse never goes out.
     assert_eq!((result.outcome, calls(&fake, "click").len()), (StepOutcome::Stale, clicks), "{result:?}");
+    // A retry with the old editor observation, before the dialog is read, is refused too: its ids are not the dialog's.
+    let retry = page.act(&click, &between).await.unwrap();
+    assert_eq!((retry.outcome, calls(&fake, "click").len()), (StepOutcome::Stale, clicks), "{retry:?}");
+    assert_eq!(page.observe().await.unwrap().title, "Save As");
 }
 
 #[tokio::test]
