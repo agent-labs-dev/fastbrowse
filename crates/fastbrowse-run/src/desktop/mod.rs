@@ -720,10 +720,7 @@ impl DeskpilotPage {
         let fresh = self.peeked(window).await?;
         let ends = {
             let observed = self.observed.lock().unwrap();
-            let chosen = |id: &str| {
-                let was = tree::find(observed.as_ref()?, id)?;
-                was.still_in(&fresh, id).then(|| tree::aim(&fresh, id)).flatten()
-            };
+            let chosen = |id: &str| observed.as_ref()?.still_in(&fresh, id).then(|| tree::aim(&fresh, id)).flatten();
             (chosen(source), chosen(destination))
         };
         let (Some((x1, y1, width, height)), Some((x2, y2, _, _))) = ends else {
@@ -868,6 +865,24 @@ impl DeskpilotPage {
     async fn act_within(&self, action: &Action, observation: &Observation, seconds: f64) -> PageResult<ActResult> {
         if self.still_closed().await? {
             return Err(self.ended());
+        }
+        // A window the last step opened, which its lookup was too slow to find, is followed before anything is sent: the
+        // action was chosen in the window before it, and a modal it opened would refuse or misdirect the action.
+        if self.lookup_missed.load(Ordering::SeqCst) {
+            let opened = tokio::time::timeout(Duration::from_secs_f64(SETTLE_SECONDS), self.follow_opened()).await;
+            if let Ok(Ok(Some(_))) = opened {
+                self.generation.fetch_add(1, Ordering::Relaxed);
+                return Ok(ActResult {
+                    outcome: StepOutcome::Stale,
+                    failure: None,
+                    page_changed: true,
+                    detail: Some("a window opened since this observation".to_string()),
+                    moved: false,
+                });
+            }
+            if let Ok(Err(error)) = opened {
+                return Err(error);
+            }
         }
         // Only the latest snapshot's ids are live; deskpilot refuses the rest too, but a glance has no snapshot.
         let latest = self.latest.lock().unwrap().clone();

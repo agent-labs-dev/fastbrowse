@@ -39,14 +39,17 @@ pub struct Element {
 }
 
 impl Element {
-    /// Whether the element `id` names in `fresh`, a later read of the window, is this one. Ids are the tree's order
-    /// and deskpilot gives an element no identity of its own, so a read cannot prove which of two elements of one role
-    /// and name an id names: two fixed-size rows named alike swap, and every field but the file behind them matches.
-    /// Only an element no other shares its role and name with is told by them, and by where it lies.
+    /// Whether the element `id` names in `fresh`, a later read of the window, is the one it named in `self`, the
+    /// read the agent observed. Ids are the tree's order and deskpilot gives an element no identity of its own, so a
+    /// read cannot prove which of two elements of one role and name an id names: two fixed-size rows named alike swap,
+    /// and every field but the file behind them matches. Only an element no other shares its role and name with is
+    /// told by them, and by where it lies, and it must be so in both reads: were it a twin when observed, the agent
+    /// chose between two, and were it alone only now, the one it chose may be gone and a sibling have taken its row.
     pub fn still_in(&self, fresh: &Element, id: &str) -> bool {
-        let Some(now) = find(fresh, id) else { return false };
-        (&self.role, &self.name, self.x, self.y, self.width, self.height)
+        let (Some(was), Some(now)) = (find(self, id), find(fresh, id)) else { return false };
+        (&was.role, &was.name, was.x, was.y, was.width, was.height)
             == (&now.role, &now.name, now.x, now.y, now.width, now.height)
+            && count_named(self, &was.role, &was.name) == 1
             && count_named(fresh, &now.role, &now.name) == 1
     }
 

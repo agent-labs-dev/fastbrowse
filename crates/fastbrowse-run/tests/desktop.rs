@@ -868,9 +868,42 @@ async fn a_window_the_action_opened_during_a_slow_lookup_is_followed_by_the_next
     // The observation lists the dialog and the editor stays active: the dialog is not one that was always there.
     let between = page.observe().await.unwrap();
     assert_eq!(between.document_key, "0xabc", "{between:?}");
+    let clicks = calls(&fake, "click").len();
     let result = page.act(&click, &between).await.unwrap();
     assert!(result.page_changed, "{result:?}");
     assert_eq!(page.observe().await.unwrap().title, "Save As");
+    // The dialog is followed before the click is sent, so a click its modal would refuse never goes out.
+    assert_eq!((result.outcome, calls(&fake, "click").len()), (StepOutcome::Stale, clicks), "{result:?}");
+}
+
+#[tokio::test]
+async fn a_drag_end_whose_twin_was_gone_from_the_fresh_read_is_stale() {
+    // Two rows named report.pdf when observed; the chosen one then vanishes and the other keeps one row. The fresh read
+    // has one report.pdf only, but the agent chose between two, so the id is not provably the file it picked.
+    let fake = editor("drag-twin-gone", &[launch_tool(), shot_tool()]);
+    fake.replies("wait_for", [ok(&window(false))]);
+    let cell = |id: &str, name: &str, y: i64| {
+        json!({"id": id, "role": "grid cell", "name": name, "states": ["showing", "enabled", "selectable"],
+            "x": 100, "y": y, "width": 80, "height": 20})
+    };
+    let root = |children: Vec<serde_json::Value>| {
+        json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "width": 800, "height": 600,
+            "children": children})
+    };
+    fake.replies(
+        "elements",
+        [ok(&root(vec![cell("e2", "report.pdf", 40), cell("e3", "report.pdf", 80), cell("e4", "target", 200)]))],
+    );
+    fake.replies("shot", [shot(&fake, "placed", b"placed")]).replies("drag", [ok(&json!({"x": 1, "y": 1}))]);
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    fake.replies("elements", [ok(&root(vec![cell("e2", "report.pdf", 40), cell("e3", "target", 200)]))]);
+    let mut drag = Action::new(Operation::Drag);
+    drag.target_id = Some("e2".into());
+    drag.destination_id = Some("e3".into());
+    let result = page.act(&drag, &before).await.unwrap();
+    assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
+    assert!(calls(&fake, "drag").is_empty());
 }
 
 #[tokio::test]
