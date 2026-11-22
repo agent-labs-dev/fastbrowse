@@ -296,7 +296,8 @@ impl Recording {
             card.push_str(&format!("<div style='display:grid;gap:6px;color:#8b949e;font-size:20px'>{sources}</div>"));
         }
         card.push_str(&format!(
-            "<div style='color:#3fb950'>{}</div></body>",
+            "<div style='color:{}'>{}</div></body>",
+            outcome_colours(result).0,
             html_escape(&outcome_line(result, (card_at - self.started).as_secs_f64()))
         ));
         let url = format!("data:text/html;base64,{}", BASE64.encode(card.as_bytes()));
@@ -661,13 +662,19 @@ fn ass_text(text: &str) -> String {
     text.replace('\\', "\\\u{2060}").replace('{', "\\{").replace("\r\n", "\n").replace('\n', "\\N")
 }
 
+/// The outcome line's colour as CSS and as ASS: green only for a completed run, red for every other status, so a card
+/// never shows a closed app, an error or a stopped run in the colour of success.
+fn outcome_colours(result: &ResultCard) -> (&'static str, &'static str) {
+    if result.status == "complete" { ("#3fb950", "&H50B93F&") } else { ("#f85149", "&H4951F8&") }
+}
+
 /// The result card a tab shows, as an ASS overlay that covers the frame from `start` seconds to the end of the video:
 /// the task, the answer with its citation numbers, the cited quotes and the outcome line, in the tab card's colours.
 fn card_ass(card: &DrawnCard, start: f64, width: u32, height: u32) -> String {
     // The tab card's sizes are CSS pixels on a page about 720 pixels tall.
     let px = |size: f64| (size * f64::from(height) / 720.0).round().max(1.0);
     let margin = (f64::from(width) * 0.08).round();
-    let (grey, white, blue, green) = ("&H9E948B&", "&HF3EDE6&", "&HFFA658&", "&H50B93F&");
+    let (grey, white, blue, outcome) = ("&H9E948B&", "&HF3EDE6&", "&HFFA658&", outcome_colours(&card.result).1);
     let text = card.result.answer.clone().or_else(|| card.result.error.clone()).unwrap_or_default();
     let parts = split_citation_links(&text);
     let cited: Vec<u32> = parts.iter().skip(1).step_by(2).filter_map(|n| n.parse().ok()).collect();
@@ -700,7 +707,7 @@ fn card_ass(card: &DrawnCard, start: f64, width: u32, height: u32) -> String {
         body.push_str(&format!("\\N\\N{{\\fs{}}}{}", px(20.0), sources.join("\\N")));
     }
     body.push_str(&format!(
-        "\\N\\N{{\\fs{}\\c{green}}}{}",
+        "\\N\\N{{\\fs{}\\c{outcome}}}{}",
         px(24.0),
         ass_text(&outcome_line(&card.result, card.seconds))
     ));
@@ -1151,6 +1158,27 @@ mod tests {
         assert!(!text.contains("<desktop://"), "{text}");
         assert!(text.contains("\u{201c}hello\u{201d}"), "{text}");
         assert!(text.ends_with("complete in 12.3s, 3 steps, $0.0123"), "{text}");
+        assert!(text.contains("\\c&H50B93F&}complete"), "{text}");
+    }
+
+    #[test]
+    fn a_card_for_a_run_that_did_not_complete_draws_its_outcome_in_red() {
+        let card = DrawnCard {
+            task: "save the file".into(),
+            result: ResultCard {
+                status: "unavailable".into(),
+                answer: None,
+                error: Some("every window of the run is closed".into()),
+                citations: vec![],
+                steps: 2,
+                known_dollars: 0.0,
+            },
+            seconds: 4.0,
+        };
+        let text = card_ass(&card, 1.0, 1280, 720);
+        let text = text.lines().find(|line| line.starts_with("Dialogue: 1,")).unwrap();
+        assert!(!text.contains("&H50B93F&"), "{text}");
+        assert!(text.contains("\\c&H4951F8&}unavailable"), "{text}");
     }
 
     #[test]

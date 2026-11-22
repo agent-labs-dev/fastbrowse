@@ -618,3 +618,36 @@ async fn an_app_with_no_accessibility_tree_is_named_as_one_a_desktop_run_cannot_
     assert!(failure.message.contains("only through its accessibility tree"), "{}", failure.message);
     assert!(failure.message.ends_with(message), "{}", failure.message);
 }
+
+/// A dialog with one button, No, whose click closes its window and so the run's only window.
+fn closing_dialog(name: &str) -> Fake {
+    let button = json!({"id":"e2", "role":"push button", "name":"No", "states":["showing", "enabled"]});
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"], "children": [button]});
+    let fake = editor(name, &[launch_tool()]);
+    fake.replies("wait_for", [ok(&window(false)), refused("not_found", "no window 0xabc")]);
+    fake.replies("elements", [ok(&root)]).replies("windows", [list(&[window(false)]), list(&[])]);
+    fake.replies("click", [ok(&json!({"x": 1, "y": 1}))]);
+    fake
+}
+
+/// #1405: the click the task asked for closed the dialog, and the read after it called that a lost connection, so a
+/// finished task ended `unavailable` before its step was recorded.
+#[tokio::test]
+async fn a_click_that_closes_the_last_window_is_a_step_that_leaves_a_closed_app() {
+    let fake = closing_dialog("closed-by-click");
+    let page = open(&fake).await;
+    let before = page.observe().await.unwrap();
+    let mut click = Action::new(Operation::Click);
+    click.target_id = Some("e2".into());
+    let result = page.act(&click, &before).await.unwrap();
+    assert_eq!((result.outcome, result.page_changed), (StepOutcome::Executed, true), "{result:?}");
+    assert_eq!(result.detail.as_deref(), Some("every window of the app closed"));
+    let after = page.observe().await.unwrap();
+    assert!(after.controls.is_empty() && after.tabs.is_empty(), "{after:?}");
+    assert!(after.viewport_text.contains("Every window of this app is closed"), "{}", after.viewport_text);
+    assert!(after.viewport_text.contains(r#"click "No""#), "{}", after.viewport_text);
+    assert!(page.capture().await.unwrap().text.contains(r#"after the run's click "No""#));
+    // #1399: nothing more can be done, and the error says the run's own click closed the app.
+    let BrowserError::Unavailable(message) = page.act(&click, &after).await.unwrap_err() else { panic!("not ended") };
+    assert!(message.contains(r#"the last one closed after the run's click "No""#), "{message}");
+}

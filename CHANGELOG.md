@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A desktop run whose click closes the app's last window, such as confirming a quit dialog, records that click as a step that changed the app, then tells Jev every window is closed and which action closed the last one ([#1405](https://github.com/agent-labs-dev/fastbrowse/issues/1405)). The step used to fail on a missing window and leave a closed app behind a run that reported nothing about it. A recording's end card now draws the outcome in green only for a complete run, and in red for any other status.
+
 - `--desktop` says that it drives an app through its accessibility tree, in `--help`, in the docs and in the error a run ends on when its app exposes none ([#1400](https://github.com/agent-labs-dev/fastbrowse/issues/1400)). A terminal such as kitty ended at step 0 on deskpilot's message about Chromium flags, which read as if a variable would fix it. The error now names the app and says a desktop run cannot drive it as it runs now, then quotes deskpilot.
 
 - A desktop run no longer ends on "deskpilot mcp sent a line that is not JSON" after a call to deskpilot is abandoned partway through its reply ([#1401](https://github.com/agent-labs-dev/fastbrowse/issues/1401)). The bytes of the reply read so far were dropped with the abandoned call, so the next call began reading mid-line. They are now kept for the next read, and a line that really is not JSON is quoted in the error.
