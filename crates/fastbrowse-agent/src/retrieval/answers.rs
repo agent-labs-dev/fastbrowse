@@ -2063,7 +2063,8 @@ fn typed_by_step(quote: &Evidence, notes: &Notes, steps: &[Value]) -> Option<usi
         .iter()
         .take(taken)
         .rposition(|step| {
-            step.get("text").is_some_and(Value::is_string) && step.get("target").and_then(Value::as_str) == Some(&described)
+            step.get("text").is_some_and(Value::is_string)
+                && step.get("target").and_then(Value::as_str) == Some(&described)
         })
         .map(|index| index + 1)
 }
@@ -5786,12 +5787,9 @@ mod tests {
             }
             let page = Page::new(&captured);
             let block = &captured.blocks[0];
-            let mut notes = Notes::new([Fact::read(
-                typed,
-                evidence(&page, block, block.start, block.end),
-                FactReader::JevChoice,
-            )
-            .answering()]);
+            let mut notes =
+                Notes::new([Fact::read(typed, evidence(&page, block, block.start, block.end), FactReader::JevChoice)
+                    .answering()]);
             if let Some(taken) = taken {
                 notes.remember_capture(&captured, taken);
             }
