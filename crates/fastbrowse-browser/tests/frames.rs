@@ -279,6 +279,8 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
         emit_frame(&session, 2, b"next jpeg", "session");
         settle(&session).await;
         session.switch_tab("owned").await.unwrap();
+        // The retry and the stop run in the background; close() would race them.
+        settle(&session).await;
         session.close().await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2, "{failure}");
         let calls = fake.calls();
@@ -290,8 +292,8 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
             "Page.stopScreencast" => BrowserWarningOperation::ScreencastStop,
             _ => BrowserWarningOperation::ScreencastFrameAck,
         };
-        let expected =
-            usize::from(failure == "Page.screencastFrameAck") * 2 + usize::from(failure != "Page.screencastFrameAck");
+        // A refused start is tried again on the switch; a refused stop or ack is not repeated.
+        let expected = if failure == "Page.stopScreencast" { 1 } else { 2 };
         assert_eq!(warnings.iter().filter(|warning| warning.operation == operation).count(), expected, "{failure}");
         assert!(warnings.iter().all(|warning| warning.failure == BrowserWarningFailure::BrowserError));
         let serialized = serde_json::to_string(&*warnings).unwrap();
@@ -327,6 +329,33 @@ async fn test_a_stalled_frame_ack_does_not_block_delivery_or_tab_input() {
     assert_eq!(client.pending(), 0);
 }
 
+/// Chrome can refuse the first start, as while a tab is still attaching. The cast was marked running anyway, so no
+/// later switch to the tab started it again and no frame ever came.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_refused_screencast_start_is_tried_again_on_the_next_switch() {
+    let fake = FakeChrome::start().await;
+    fake.script().results.entry("Page.startScreencast".into()).or_default().push_back(Reply::Error(-32000));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let on_frame: FrameHandler = Arc::new({
+        let calls = calls.clone();
+        move |_frame| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    settle(&session).await;
+    assert_eq!(fake.script().count("Page.startScreencast"), 1);
+    session.switch_tab("owned").await.unwrap();
+    settle(&session).await;
+    assert_eq!(fake.script().count("Page.startScreencast"), 2);
+    emit_frame(&session, 1, b"jpeg", "session");
+    settle(&session).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    session.close().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_stalled_screencast_does_not_delay_switching_tabs() {
     let fake = FakeChrome::start().await;
@@ -341,6 +370,42 @@ async fn test_a_stalled_screencast_does_not_delay_switching_tabs() {
     assert!(client.pending() >= 1);
     session.close().await.unwrap();
     assert_eq!(client.pending(), 0);
+}
+
+/// A start Chrome runs but never answers in time, or that a close cancels mid-await, was recorded only after the
+/// answer, so close never stopped a cast Chrome might still be sending.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_screencast_start_cancelled_by_close_is_still_stopped() {
+    let fake = FakeChrome::start().await;
+    fake.block("Page.startScreencast");
+    let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async {}));
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    fake.sent("Page.startScreencast").await;
+    session.close().await.unwrap();
+    assert!(fake.calls().iter().any(|m| m == "Page.stopScreencast"), "{:?}", fake.calls());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_screencast_start_that_times_out_is_stopped_on_close() {
+    let fake = FakeChrome::start().await;
+    fake.block("Page.startScreencast");
+    let on_frame: FrameHandler = Arc::new(|_frame| Box::pin(async {}));
+    let (timed_out, mut timeouts) = tokio::sync::mpsc::unbounded_channel();
+    let on_warning = Arc::new(move |warning: BrowserWarningEvent| {
+        if warning.operation == BrowserWarningOperation::ScreencastStart
+            && warning.failure == BrowserWarningFailure::Timeout
+        {
+            let _ = timed_out.send(());
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), on_warning: Some(on_warning), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    fake.sent("Page.startScreencast").await;
+    // The start must end unanswered, not cancelled by close.
+    tokio::time::timeout(Duration::from_secs(10), timeouts.recv()).await.unwrap().expect("start timeout warning");
+    session.close().await.unwrap();
+    assert!(fake.calls().iter().any(|m| m == "Page.stopScreencast"), "{:?}", fake.calls());
 }
 
 /// Python also checks the warning that nothing was recorded; see the note on the live view failures test.
