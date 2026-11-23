@@ -86,7 +86,10 @@ pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTIO
 pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
 pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
 pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
-pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. Match each member ID to its element in the shared state for its context.
+const TARGET_GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names.";
+const DESTINATION_GROUP: &str =
+    "Too many elements to list at once. Choose the group that contains the best drop destination.";
+const GROUP_CONTEXT: &str = "Match each member ID to its element in the shared state for its context.
 A later question picks the element inside the group.";
 
 /// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
@@ -1453,7 +1456,8 @@ pub fn build_request(
             continue;
         }
         let parts = chunks(candidates, size);
-        questions.insert(keys::group(*operation), group_question(*operation, &parts, target_rules).into());
+        questions
+            .insert(keys::group(*operation), group_question(*operation, &parts, target_rules, TARGET_GROUP).into());
         groups.insert(*operation, parts);
     }
     let drops: Vec<Control> = controls.iter().filter(|control| !control.label.is_empty()).cloned().collect();
@@ -2003,9 +2007,9 @@ fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
     element
 }
 
-fn group_question(operation: Operation, groups: &[Vec<Control>], rules: &str) -> ChoiceQuestion {
+fn group_question(operation: Operation, groups: &[Vec<Control>], rules: &str, group_rule: &str) -> ChoiceQuestion {
     choice(
-        dumps(&json!({"rules": [rules, GROUP], "operation": operation.as_str()})),
+        dumps(&json!({"rules": [rules, format!("{group_rule} {GROUP_CONTEXT}")], "operation": operation.as_str()})),
         groups.iter().enumerate().map(|(i, group)| {
             // Two groups can contain controls with the same label. The ID connects each one to its context.
             let members: Map<String, Value> = group.iter().map(|c| (c.id.clone(), c.label.clone().into())).collect();
@@ -2015,7 +2019,7 @@ fn group_question(operation: Operation, groups: &[Vec<Control>], rules: &str) ->
 }
 
 fn destination_group_questions(groups: &[Vec<Control>]) -> IndexMap<String, Question> {
-    let question = group_question(Operation::Drag, groups, &DESTINATION);
+    let question = group_question(Operation::Drag, groups, &DESTINATION, DESTINATION_GROUP);
     IndexMap::from([(keys::DRAG_DESTINATION_GROUP.into(), question.into())])
 }
 
@@ -2677,6 +2681,10 @@ mod tests {
         let request = build_request(&page, &page.controls, &context, &config, fitting.options);
         let state_chars = text::len(&dumps(&request.state)) as i64;
         let group = &request.destination_groups[0];
+        let questions = destination_group_questions(&request.destination_groups);
+        let Question::Choice(question) = &questions[keys::DRAG_DESTINATION_GROUP] else { panic!("a group choice") };
+        assert!(question.instructions.contains("Choose the group that contains the best drop destination"));
+        assert_eq!(question.criteria["0"]["b1"], "Button 1");
         let initial_room = input_room(state_chars, &request.questions, &config, 0);
         let followup_room = input_room(state_chars, &destination_questions(group), &config, 0);
         assert!(followup_room < initial_room);
