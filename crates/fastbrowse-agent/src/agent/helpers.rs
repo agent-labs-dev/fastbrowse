@@ -182,13 +182,15 @@ pub(crate) fn typed_before_send(
 ) -> Vec<(String, Option<String>)> {
     let Some((send, before)) = history.split_last() else { return Vec::new() };
     let form_of = |name: &str| page.controls.iter().find(|c| describe(c) == name).map(|c| c.form_id.as_deref());
-    // A confirm's acceptance names no control: the click that opened it is what sent the form, and `page` is the one
-    // that click was made on.
+    // A confirm's acceptance names no control: the click or Enter that opened it is what sent the form, and `page` is
+    // the one it was made on.
     let sender = if send.operation == Some(Operation::Dialog) {
         before
             .iter()
             .rev()
-            .find(|e| e.operation == Some(Operation::Click) && e.outcome == StepOutcome::Executed)
+            .find(|e| {
+                matches!(e.operation, Some(Operation::Click | Operation::Enter)) && e.outcome == StepOutcome::Executed
+            })
             .and_then(|e| e.target.as_deref())
     } else {
         send.target.as_deref()

@@ -12363,6 +12363,31 @@ fn a_confirmed_send_checks_only_the_form_of_the_click_that_opened_the_confirm() 
     );
 }
 
+/// A confirm opened by Enter in a field belongs to that field's form, not to an earlier click on another form.
+#[test]
+fn a_send_confirmed_after_enter_checks_the_form_of_the_field_that_submitted() {
+    let in_form = |control: Control, form: &str| Control { form_id: Some(form.into()), ..control };
+    let field =
+        |label: &str| Control::new(&label.to_lowercase(), "textbox", label, [Operation::Fill, Operation::Enter]);
+    let page = Observation {
+        document_key: "d1".into(),
+        ..at(
+            "https://example.test/thread",
+            &[in_form(field("Filter"), "filter"), in_form(button("Apply"), "filter"), in_form(field("Reply"), "reply")],
+        )
+    };
+    let history = [
+        executed(Some(Operation::Click), Some("Apply"), true),
+        filled("Reply", "Thanks"),
+        executed(Some(Operation::Enter), Some("Reply"), false),
+        executed(Some(Operation::Dialog), None, true),
+    ];
+    assert_eq!(
+        super::helpers::typed_before_send(&history, 0, &Default::default(), &page),
+        vec![("Reply".to_string(), Some("Thanks".to_string()))]
+    );
+}
+
 /// A short reply already on the page in an older reply was taken as the new one showing, so a reload that served the
 /// copy from before the post ended the check.
 #[test]
