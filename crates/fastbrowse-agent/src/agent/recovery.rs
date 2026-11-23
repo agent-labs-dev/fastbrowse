@@ -180,13 +180,15 @@ const EDITS_FORBIDDEN: &str =
 /// Offer covered actions again once a performed action changed the page, since it may have removed what covered them. A
 /// change the browser made while refusing one, as leaving the field a cover came from, removed no cover.
 pub(super) fn uncover(idle: &mut Vec<Idle>, before: &Observation, after: &Observation, summary: &mut String) {
+    // Closing a route-backed overlay can change the URL while keeping the same document and control.
+    let same_page =
+        before.document_key == after.document_key && (!before.document_key.is_empty() || before.url == after.url);
     let mut available = Vec::new();
     idle.retain(|idle| {
         if idle.outcome != StepOutcome::Covered {
             return true;
         }
-        if before.url == after.url
-            && before.document_key == after.document_key
+        if same_page
             && let Some((operation, Some(label))) = &idle.action
             && after.controls.iter().any(|control| takes(control, *operation) && describe(control) == *label)
         {

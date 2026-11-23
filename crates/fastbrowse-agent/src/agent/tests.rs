@@ -7356,6 +7356,26 @@ async fn test_a_covered_link_is_offered_again_once_close_removes_its_cover() {
 }
 
 #[tokio::test]
+async fn a_covered_action_stays_in_history_when_closing_the_overlay_changes_the_route() {
+    let covered = Observation { document_key: "app".into(), ..header_under_dialog(false) };
+    let uncovered = Observation { url: "https://example.com/#closed".into(), document_key: "app".into(), ..header() };
+    let page = Scripted::new(
+        covered.clone(),
+        vec![
+            (Operation::Click, StepOutcome::Covered, covered.clone()),
+            (Operation::Click, StepOutcome::Executed, uncovered),
+        ],
+    );
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &covered).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Contact us")).await;
+    take(&agent, &mut state, Operation::Click, Some("Close")).await;
+    let effect = state.history.last().unwrap().effect.as_deref().unwrap();
+    assert!(effect.contains("Previously covered, with the target still on the page: click 'Contact us'"), "{effect}");
+}
+
+#[tokio::test]
 async fn test_a_covered_click_that_only_moves_focus_stays_left_out() {
     // BU Bench bu2-140: the browser left the focused search field while trying to reach a covered Search button, and
     // that focus change cleared the click from what was left out, so Jev picked it again and it was covered again.
