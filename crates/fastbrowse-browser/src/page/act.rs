@@ -1956,6 +1956,16 @@ impl CdpPage {
                 self.drag_move(session_id, at.0, at.1, 0).await?;
                 sleep(secs(DRAG_STEP_SECONDS)).await;
             }
+            // The destination may slide, but it must still be the control that was chosen: a document-level release
+            // handler acts on whatever zone now holds the point, so a destination the drag replaced, renamed or
+            // covered cancels the drag as a native one does.
+            let (_, live, landed, _, _, _, connected) =
+                self.before_action(Some(&drop), true, false, false, false, false).await?;
+            if !connected || live != drop.3 || !matches!(landed, Point::At(..)) {
+                self.cancel_drag(session_id, (start_x, start_y), 0).await?;
+                held.done();
+                return Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None));
+            }
             self.release(session_id, at.0, at.1, 0).await?;
             held.done();
             return Ok((StepOutcome::Executed, None, None));

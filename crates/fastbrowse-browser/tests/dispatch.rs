@@ -2277,3 +2277,35 @@ async fn test_a_list_sorted_by_the_pages_pointer_script_is_reordered_by_a_drag()
     );
     h.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_pointer_drag_cancels_when_its_destination_is_replaced_before_release() {
+    for change in ["rename", "cover"] {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        let html = r#"<div id=source style="position:fixed;left:20px;top:20px;width:100px;height:80px;cursor:grab">Card A</div><button id=drop style="position:fixed;left:220px;top:20px;width:100px;height:80px">Done</button>"#;
+        eval_active(
+            &h.page,
+            &format!(
+                "document.body.innerHTML = {}; const drop = document.getElementById('drop'); window.drops = []; \
+                 let held = false; \
+                 document.getElementById('source').addEventListener('pointerdown', () => {{ held = true; }}); \
+                 document.addEventListener('pointermove', event => {{ if (held && event.clientX > 150 && !window.changed) {{ window.changed = true; \
+                 if ({}) drop.textContent = 'Trash'; else document.body.insertAdjacentHTML('beforeend', \
+                 '<div id=zone style=\"position:fixed;left:200px;top:0;width:160px;height:120px;z-index:10\">Trash</div>'); }} }}); \
+                 document.addEventListener('pointerup', event => {{ held = false; const hit = document.elementFromPoint(event.clientX, event.clientY); \
+                 if (hit && hit.id !== 'source') window.drops.push(hit.textContent); }}); true",
+                serde_json::to_string(html).unwrap(),
+                change == "rename",
+            ),
+        )
+        .await;
+        let observation = h.observe().await;
+        let source = find(&observation, "Card A");
+        assert!(source.operations.contains(&Operation::Drag), "{change}: {source:?}");
+        let result = h.page.act(&drag(source, find(&observation, "Done")), &observation).await.expect("act");
+        assert_eq!(result.outcome, StepOutcome::Stale, "{change}: {:?}", result.detail);
+        assert_eq!(eval_active(&h.page, "window.drops").await, json!([]), "{change}");
+        h.close().await;
+    }
+}
