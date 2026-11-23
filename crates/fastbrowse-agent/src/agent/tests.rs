@@ -5151,9 +5151,121 @@ async fn test_jev_asked_again_is_shown_the_cards_of_pictured_controls() {
     let page = observation(&[apply.clone(), next]);
     let withheld = super::recovery::withheld(&code_decision(Operation::Click, Some(apply)));
     agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.expect("recovered");
-    let (_, picked, look) = state.picked.expect("Jev's pick is the next decision");
-    assert_eq!(picked.target.map(|c| c.label).as_deref(), Some("Next"));
-    assert!(look.is_some_and(|look| !look.before.is_empty() && look.after.is_none()));
+    let picked = state.picked.expect("Jev's pick is the next decision");
+    assert_eq!(picked.decision.target.map(|c| c.label).as_deref(), Some("Next"));
+    assert!(picked.look.is_some_and(|look| !look.before.is_empty() && look.after.is_none()));
+}
+
+/// After a refusal Jev's pick (hover on the card) was dropped because an "Edit successful" toast closed before the
+/// next step, so Jev was asked afresh without the refusal and picked the refused click again (#1471). The pick holds
+/// while its address and target are as they were, and is dropped, with the reason, only when they are not.
+#[tokio::test]
+async fn test_a_pick_after_a_refusal_outlives_an_unrelated_control_and_not_its_target() {
+    let card = Control::new("card", "button", "Card", [Operation::Hover]);
+    let toast = button("Edit successful");
+    let picked = code_decision(Operation::Hover, Some(card.clone()));
+    let url = "https://example.test/";
+    let stale = |page: &Observation| {
+        super::driving::pick_stale(
+            &super::state::Picked {
+                url: url.into(),
+                page_key: "k".into(),
+                document_key: String::new(),
+                decision: picked.clone(),
+                look: None,
+            },
+            page,
+        )
+    };
+
+    assert_eq!(stale(&observation(&[card.clone(), toast.clone()])), None);
+    assert_eq!(stale(&observation(std::slice::from_ref(&card))), None);
+    assert_eq!(stale(&observation(std::slice::from_ref(&toast))), Some("target_gone"));
+    assert_eq!(stale(&at("https://example.test/other", std::slice::from_ref(&card))), Some("address_changed"));
+    let renamed = Control::new("card", "button", "Other card", [Operation::Hover]);
+    assert_eq!(stale(&observation(&[renamed])), Some("target_changed"));
+    let no_hover = Control::new("card", "button", "Card", [Operation::Click]);
+    assert_eq!(stale(&observation(&[no_hover])), Some("operation_gone"));
+    let done = super::state::Picked {
+        url: url.into(),
+        page_key: "k".into(),
+        document_key: String::new(),
+        decision: code_decision(Operation::Done, None),
+        look: None,
+    };
+    assert_eq!(super::driving::pick_stale(&done, &observation(&[toast])), None);
+}
+
+#[test]
+fn test_a_targeted_recovered_pick_is_stale_when_the_document_is_replaced() {
+    let card = Control::new("card", "button", "Save", [Operation::Click]);
+    let original = Observation { document_key: "first".into(), ..observation(std::slice::from_ref(&card)) };
+    let picked = super::state::Picked {
+        url: original.url.clone(),
+        page_key: original.page_key.clone(),
+        document_key: original.document_key.clone(),
+        decision: code_decision(Operation::Click, Some(card)),
+        look: None,
+    };
+    assert_eq!(super::driving::pick_stale(&picked, &original), None);
+    let reloaded = Observation { document_key: "second".into(), ..original.clone() };
+    assert_eq!(super::driving::pick_stale(&picked, &reloaded), Some("page_changed"));
+    let toast_closed = Observation { page_key: "other".into(), ..original };
+    assert_eq!(super::driving::pick_stale(&picked, &toast_closed), None);
+}
+
+#[test]
+fn test_a_recovered_pick_is_stale_when_target_safety_changes() {
+    let target = Control {
+        href: Some("/export".into()),
+        download: Some(false),
+        value: Some("ready".into()),
+        checked: Some(false),
+        drawn: Some(false),
+        ..Control::new("export", "link", "Export", [Operation::Click])
+    };
+    let picked = super::state::Picked {
+        url: "https://example.test/".into(),
+        page_key: "k".into(),
+        document_key: String::new(),
+        decision: code_decision(Operation::Click, Some(target.clone())),
+        look: None,
+    };
+    let changes = [
+        ("href", Control { href: Some("/other".into()), ..target.clone() }),
+        ("download", Control { download: Some(true), ..target.clone() }),
+        ("value", Control { value: Some("changed".into()), ..target.clone() }),
+        ("checked", Control { checked: Some(true), ..target.clone() }),
+        ("drawn", Control { drawn: Some(true), ..target }),
+    ];
+
+    for (field, changed) in changes {
+        assert_eq!(
+            super::driving::pick_stale(&picked, &observation(&[changed])),
+            Some("target_changed"),
+            "changed {field} must invalidate the recovered pick"
+        );
+    }
+}
+
+#[test]
+fn test_a_targetless_recovered_pick_is_stale_when_page_state_changes() {
+    let original = observation(&[button("Continue")]);
+    let mut changed = original.clone();
+    changed.page_key = "login-page".into();
+    let picked = super::state::Picked {
+        url: original.url.clone(),
+        page_key: original.page_key.clone(),
+        document_key: original.document_key.clone(),
+        decision: code_decision(Operation::Done, None),
+        look: None,
+    };
+
+    assert_eq!(super::driving::pick_stale(&picked, &changed), Some("page_changed"));
+
+    let mut replaced = original;
+    replaced.document_key = "login-document".into();
+    assert_eq!(super::driving::pick_stale(&picked, &replaced), Some("page_changed"));
 }
 
 #[tokio::test]
@@ -5445,8 +5557,11 @@ async fn test_a_required_field_the_task_gives_no_value_for_ends_the_run_needing_
 #[tokio::test]
 async fn test_a_stall_is_answered_by_jev_even_when_it_is_unsure() {
     let (state, jev) = stalled_on_apply(0.3).await;
-    let (_, picked, _) = state.picked.expect("Jev's pick is the next decision");
-    assert_eq!((picked.operation, picked.target.map(|c| c.label)), (Operation::Click, Some("Next".to_string())));
+    let picked = state.picked.expect("Jev's pick is the next decision");
+    assert_eq!(
+        (picked.decision.operation, picked.decision.target.map(|c| c.label)),
+        (Operation::Click, Some("Next".to_string()))
+    );
     // Jev was told what failed, and the click that changed nothing was not among its options.
     let shown = jev.2.lock().unwrap()[0].to_string();
     assert!(shown.contains("did not move the task on from this page"), "{shown}");
@@ -8055,7 +8170,7 @@ async fn test_rejected_composition_returns_to_existing_recovery_without_withhold
     assert!(result.is_none(), "a rejected composition should return to recovery before finalization");
     assert_eq!(state.rewrites, 1);
     assert_eq!(state.notes.facts().len(), original_facts);
-    assert_eq!(state.picked.as_ref().unwrap().1.operation, Operation::Done);
+    assert_eq!(state.picked.as_ref().unwrap().decision.operation, Operation::Done);
 }
 
 struct RepairComposeJev {
