@@ -2399,6 +2399,27 @@
     .map(e => [identity(e), reveal(e), nativeProperty(e, 'checked'), chosen(e), nativeProperty(e, 'disabled'), nativeProperty(e, 'readOnly')]);
   // Compare meaning and identity for the page_key fingerprint; geometry is re-resolved just before input.
   const semantics = controls.map(({ distance, ...c }) => c);
+  // A scroll can land on a new part without changing text, while live text can change on the same part. Keep this
+  // identity to let the agent distinguish those cases without treating page content as geometry.
+  // A scroll area is named by its label and its place among areas of that label, never by its registry id: a page
+  // that replaces the container while rendering would otherwise turn a place already shown into a new one.
+  const seen_areas = new Map();
+  const scroll_positions = controls
+    .filter(c => registry.scrollAxes?.has(c.id))
+    .map(c => {
+      const e = registry.nodes.get(c.id);
+      const nth = seen_areas.get(c.label) ?? 0;
+      seen_areas.set(c.label, nth + 1);
+      return [c.label, nth, ...renderFact('scrollPosition', e)];
+    });
+  const viewport_key = digest(JSON.stringify([
+    location.href,
+    scrollX,
+    scrollY,
+    innerWidth,
+    innerHeight,
+    scroll_positions,
+  ]));
   const page_key = digest(JSON.stringify([
     location.href,
     scrollX,
@@ -2503,6 +2524,7 @@
     url: location.href,
     title: document.title,
     viewport_text,
+    viewport_key,
     offscreen_text,
     visual_content,
     media,

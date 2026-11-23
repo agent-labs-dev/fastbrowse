@@ -322,6 +322,10 @@ pub struct Observation {
     /// The visible text in the viewport of every frame the observation read; a cross-origin frame's text follows
     /// the page's own under a `[Frame: origin]` line.
     pub viewport_text: String,
+    /// Identity of the place the viewport shows, from the page's and its scroll containers' scroll positions: text that
+    /// updates by itself made a place a run had seen read as new, and a textless place could not be told apart.
+    #[serde(default)]
+    pub viewport_key: String,
     /// The visible text outside the viewport, from every frame the observation read in the same order and form.
     #[serde(default)]
     pub offscreen_text: String,
