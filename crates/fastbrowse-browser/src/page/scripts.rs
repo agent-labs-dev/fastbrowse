@@ -55,7 +55,7 @@ pub const TOP_RECT_JS: &str = concat!(
 );
 
 pub const HIT_TEST_JS: &str = concat!(
-    "((id, scroll = true, at = null, topRect) => { const e = window.__fastbrowse?.nodes.get(id); ",
+    "((id, scroll = true, at = null, topRect, hover = false) => { const e = window.__fastbrowse?.nodes.get(id); ",
     "if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled=\"true\"],[inert]') || ",
     "!window.__fastbrowse.visible(e)) return null; ",
     // Scrolling only when the control is not already in full view: a page scroll closes open menus and
@@ -89,9 +89,10 @@ pub const HIT_TEST_JS: &str = concat!(
     // A control nested inside the target (a row's Delete button, a link or checkbox inside a label) takes the
     // click itself, so a point is the target's only when no other control sits between it and the hit: one the
     // snapshot offered, a widget, or a label with its own input. A label and its input are one target. A hover
-    // target is not one: it reveals content but takes no click from its container.
+    // target is not one: the pointer over a nested control is still inside the target, and its enter handler fires, so
+    // a card filled by a link or button keeps points to hover on.
     "const same = x => x === e || x.control === e || e.control === x; ",
-    "const owns = root => { if (!root.contains(hit)) return false; ",
+    "const owns = root => { if (!root.contains(hit)) return false; if (hover) return true; ",
     "for (let x = hit; x !== root; x = x.parentElement) { if (same(x)) return true; ",
     "if (x.matches(ACTIVE) || window.__fastbrowse.controls.has(x) || x.control) return false; } return true; }; ",
     "if (node === e ? !owns(e) && !labels.some(owns) : !node.contains(hit)) return 'covered'; ",

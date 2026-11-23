@@ -17,17 +17,17 @@
       r => !cursorHost(r.target) && !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(cursorHost)),
     );
   const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
-  // Whether `read`, this document's `getEventListeners` (`listeners` below), finds a pointer listener on `e`.
-  const hears = (read, e) => {
+  // Whether `read`, this document's `getEventListeners` (`listeners` below), finds a listener for one of `types` on `e`.
+  const hears = (read, e, types = POINTER) => {
     let listeners = null;
     try {
       listeners = read?.(e);
     } catch {}
-    return Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+    return Boolean(listeners) && types.some(type => Array.isArray(listeners[type]) && listeners[type].length);
   };
   // A parent document's look asks this one, a frame inside it, about this document's elements (`readerOf` below). It
   // returns before anything else here runs, and hands out only that answer, never the function.
-  if (mode === 'reader') return 'listeners' in own ? (own.reader ||= e => hears(own.listeners, e)) : null;
+  if (mode === 'reader') return 'listeners' in own ? (own.reader ||= (e, types) => hears(own.listeners, e, types)) : null;
   // Reading a cross-origin frame's document can throw.
   const childDocument = frame => {
     try {
@@ -455,11 +455,14 @@
   }
   if ((mode === 'snapshot' || mode === 'glance') && !('listeners' in own))
     throw new Error(own.unread);
+  // What a script listens for to show something while the pointer is over an element.
+  const HOVER = ['mouseenter', 'mouseover', 'pointerenter', 'pointerover'];
   let listenerStates = new Map();
+  let hoverStates = new Map();
   // The function answers only for elements of the realm it was read in, and a same-origin frame's document has a realm
   // of its own: read from the parent, a frame's listened span was no control (#1312). So a frame's elements are asked of
   // that document's own function, through its `reader` mode, which throws `own.unread` there until it has read its own.
-  const readers = new Map([[document, e => hears(own.listeners, e)]]);
+  const readers = new Map([[document, (e, types) => hears(own.listeners, e, types)]]);
   const readerOf = doc => {
     if (!readers.has(doc)) {
       const reader = doc.defaultView?.__fastbrowseScripts?.[own.key]?.('reader');
@@ -469,11 +472,30 @@
     return readers.get(doc);
   };
   // The root element and the body hear clicks on the whole page, as the document does, so neither counts.
-  const listened = e => {
+  const listened = (e, types = POINTER, states = listenerStates) => {
     if (e === e.ownerDocument.documentElement || e === e.ownerDocument.body) return false;
-    if (listenerStates?.has(e)) return listenerStates.get(e);
-    const value = readerOf(e.ownerDocument)(e);
-    listenerStates?.set(e, value);
+    if (states?.has(e)) return states.get(e);
+    const value = readerOf(e.ownerDocument)(e, types);
+    states?.set(e, value);
+    return value;
+  };
+  // React 17+ attaches no listener to an element: its root hears every hover and calls the handler the element's
+  // current props name, which it keeps on a `__reactProps$<id>` expando (`__reactEventHandlers$<id>` before 17). Chrome's
+  // reader sees only the root, so the props are the one place the page says which element reveals something on hover.
+  // The expando is React's own record of the handlers it will call, not a guess at the page's markup.
+  const REACT_HOVER = [
+    'onMouseEnter', 'onMouseOver', 'onPointerEnter', 'onPointerOver',
+    'onMouseEnterCapture', 'onMouseOverCapture', 'onPointerEnterCapture', 'onPointerOverCapture',
+  ];
+  const reactHover = e => {
+    const key = Object.keys(e).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
+    const props = key && e[key];
+    return Boolean(props) && REACT_HOVER.some(name => typeof props[name] === 'function');
+  };
+  const hoverListened = e => {
+    if (hoverStates?.has(e)) return hoverStates.get(e);
+    const value = listened(e, HOVER, hoverStates) || reactHover(e);
+    hoverStates?.set(e, value);
     return value;
   };
   // Text the page rewrites by itself, such as a player's clock or a countdown, says nothing about which item a control
@@ -643,6 +665,7 @@
     !kept.undefinedElements?.some(e => e.isConnected && e.matches(':defined')) &&
     // Adding, removing or aborting a native listener writes no DOM node or attribute.
     kept.listenerStates?.every(([e, value]) => listened(e) === value) &&
+    kept.hoverStates?.every(([e, value]) => hoverListened(e) === value) &&
     kept.inputs.every(([kind, target, args, value]) =>
       sameRenderFact(kind, value, readRenderFact(kind, target, args)));
   if (still)
@@ -675,6 +698,7 @@
   registry.nativeQueueMicrotask(() => {
     reading = false;
     listenerStates = null;
+    hoverStates = null;
     for (const cache of caches) cache.clear();
     caches.length = 0;
   });
@@ -1812,12 +1836,30 @@
   // opening the repository. Only the outermost such card is offered.
   const holding = new Set();
   for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
+  // Looked up per hovered card: a scan of every control for each card was quadratic on a long feed.
+  for (const c of controls) {
+    const element = registry.nodes.get(c.id);
+    if (!controlByElement.has(element)) controlByElement.set(element, c);
+  }
   for (const doc of docs) {
     let host = null;
     for (const e of indexedElements(doc.body)) {
       if (host?.contains(e)) continue;
-      if (offered.has(e) || holding.has(e) || !isCard(e)) continue;
-      if (![...descendants(e, VISUAL)].some(v => !decorative(v))) continue;
+      if (offered.has(e)) {
+        // A card that is itself a clickable control still reveals its buttons only under the pointer: the control
+        // gains Hover beside Click, as one choice rather than a second control for the same element.
+        if (hoverListened(e)) {
+          const own = controlByElement.get(e);
+          if (own && !own.operations.includes('hover')) own.operations.push('hover');
+        }
+        continue;
+      }
+      if (!isCard(e)) continue;
+      // A card whose script listens for the pointer entering it shows something under it, whatever else it holds:
+      // a gallery card keeps a drag handle on screen and renders its delete button only while hovered.
+      if (!hoverListened(e)) {
+        if (holding.has(e) || ![...descendants(e, VISUAL)].some(v => !decorative(v))) continue;
+      }
       const y = pointerBox(e);
       if (y === null) continue;
       offerHover(e, y);
@@ -2513,6 +2555,7 @@
     frames: walkedFrames,
     undefinedElements: walkedRoots.flatMap(([root]) => own.queryTrees.get(root).undefinedElements),
     listenerStates: [...listenerStates],
+    hoverStates: [...hoverStates],
     listenerAPI: Boolean(own.listeners),
     inputs: renderInputs,
     url: location.href,
