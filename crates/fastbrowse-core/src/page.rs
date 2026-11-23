@@ -377,6 +377,10 @@ str_enum! {
         Code = "code",
         Link = "link",
         Observation = "observation",
+        /// A line code wrote of a control's state ("Save: disabled", "Email: [empty]", "Remember me: checked"), apart
+        /// from other observations: told every observation was a control's state, Jev could set aside an image's
+        /// address or an icon link's destination that a task asked for.
+        ControlState = "control_state",
     }
 }
 

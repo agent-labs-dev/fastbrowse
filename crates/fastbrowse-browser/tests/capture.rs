@@ -84,8 +84,12 @@ async fn inline_shadow_text_stays_in_its_sentence() {
         )
         .await;
         let capture = h.page.capture().await.expect("capture");
-        let read: Vec<_> =
-            capture.blocks.iter().filter(|b| b.kind != BlockKind::Observation).map(|b| text_of(&capture, b)).collect();
+        let read: Vec<_> = capture
+            .blocks
+            .iter()
+            .filter(|b| !matches!(b.kind, BlockKind::Observation | BlockKind::ControlState))
+            .map(|b| text_of(&capture, b))
+            .collect();
         assert_eq!(read, [*expected], "{name}");
         if *name == "link" {
             let link = capture.blocks.iter().find(|b| b.kind != BlockKind::Observation).unwrap();

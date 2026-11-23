@@ -10,7 +10,7 @@ use dispatch_support::{action, eval_active, fill};
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, Operation, StepOutcome};
-use fastbrowse_core::page::Action;
+use fastbrowse_core::page::{Action, BlockKind};
 use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -137,6 +137,11 @@ async fn test_capture_preserves_empty_fields_disabled_actions_and_layout() {
     assert!(capture.text.contains("Name: [empty]"), "{}", capture.text);
     assert!(capture.text.contains("Create: disabled"), "{}", capture.text);
     assert!(capture.text.contains("Horizontal overflow: no"), "{}", capture.text);
+    // A control's state is its own kind, so a read can say what it is without calling every observation one.
+    let kind = |text: &str| capture.blocks.iter().find(|b| capture.block_text(b) == text).map(|b| b.kind);
+    assert_eq!(kind("Create: disabled"), Some(BlockKind::ControlState));
+    assert_eq!(kind("Name: [empty]"), Some(BlockKind::ControlState));
+    assert_eq!(kind("Observed viewport: Horizontal overflow: no"), Some(BlockKind::Observation));
     h.close().await;
 }
 
