@@ -210,6 +210,33 @@ fn done_sees_the_selected_answer_separately_from_unselected_evidence() {
 }
 
 #[test]
+fn a_read_keeps_the_last_unfinished_step_in_the_next_decision() {
+    let agent = agent();
+    let mut state = run_state();
+    let step = "Submit the revised form.";
+    state.undone = Some(step.into());
+    let page = capture(&[(BlockKind::Paragraph, "Status: Draft")]);
+    state.notes.add(Fact::read("Status: Draft", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let controls = [
+        Control::new("save", "button", "Save draft", [Operation::Click]),
+        Control::new("submit", "button", "Submit", [Operation::Click]),
+    ];
+    let observed = observation(&controls);
+    let context = agent.context(&state, &observed, Vec::new(), false, false).unwrap();
+    let request = crate::policy::build_request(&observed, &controls, &context, &Default::default(), 64);
+    assert_eq!(request.state["unfinished_step"], step);
+    assert_eq!(request.state["answered_in_notes"], true);
+    assert!(request.state.get("problem").is_none());
+    assert!(request.questions["operation"].dump_json().contains("last completion check"));
+    assert!(request.questions["click_target"].dump_json().contains("If unfinished_step still needs work"));
+
+    state.undone = None;
+    let context = agent.context(&state, &observed, Vec::new(), false, false).unwrap();
+    let request = crate::policy::build_request(&observed, &controls, &context, &Default::default(), 64);
+    assert!(request.state.get("unfinished_step").is_none());
+}
+
+#[test]
 fn done_keeps_composition_sources_distinct_from_a_written_answer() {
     let agent = agent();
     let mut state = run_state();

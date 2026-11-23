@@ -517,6 +517,9 @@ pub struct StepContext {
     /// it had read still worth reading and scrolled instead of finishing.
     #[serde(default)]
     pub answered_in_notes: bool,
+    /// The last completion check identified a step that the observed actions had not carried out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unfinished_step: Option<String>,
     pub history: Vec<HistoryEntry>,
     #[serde(deserialize_with = "lax::boolean")]
     pub check_login: bool,
@@ -606,6 +609,7 @@ impl StepContext {
             has_attachments: false,
             secrets: Vec::new(),
             answered_in_notes: false,
+            unfinished_step: None,
             start_url: None,
             start_landing_url: None,
             known_pages: Vec::new(),
@@ -1326,6 +1330,12 @@ pub fn build_request(
     let mut questions: IndexMap<String, Question> = IndexMap::new();
     let mut target_rules = told_sites(&TARGET, controls);
     let mut action_rules = HistoryEntry::told(&NEXT_ACTION, &context.history);
+    if context.unfinished_step.is_some() {
+        action_rules.push_str("\nThe last completion check identified unfinished_step. Use subsequent actions and the current page to decide whether it still needs work. Evidence in the notes can answer what the task asks to report before its actions are complete.");
+        target_rules.push_str(
+            "\nIf unfinished_step still needs work, choose the control that advances it in the context it names.",
+        );
+    }
     if HistoryEntry::has_unperformed_actions(&context.history) {
         // History includes attempts as well as executions. A covered action can still be needed when the cover goes.
         action_rules.push_str("\nUse the outcome of each recorded action. A covered or stale action did not execute, and a failed action does not establish that its task step was carried out. Reconsider a task-required action once its obstruction is gone, before advancing to a later requested step.\nWhen a required action was covered and its target is available now, the next operation is the one that carries out that unfinished action.");
@@ -1830,6 +1840,9 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext)
         state["page"]["media"] = json!(observation.media);
     }
     state.insert("answered_in_notes".into(), context.answered_in_notes.into());
+    if let Some(step) = &context.unfinished_step {
+        state.insert("unfinished_step".into(), step.clone().into());
+    }
     state.insert("notes".into(), context.notes.clone().into());
     state.insert("recent_actions".into(), Value::Array(context.history.iter().map(HistoryEntry::seen).collect()));
     if context.omitted_actions > 0 {

@@ -541,7 +541,7 @@ impl RunState {
 
     pub fn read_note(&self) -> &'static str {
         if self.notes.answered() {
-            "Read this content. The notes hold evidence that answers the task."
+            "Read this content. The notes hold evidence for the requested answer."
         } else if self.compose && (!self.notes.evidence().is_empty() || !self.read_whole.is_empty()) {
             "Read this content. The notes hold source material for an answer that still needs composing."
         } else {

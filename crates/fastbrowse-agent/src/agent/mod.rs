@@ -1072,6 +1072,7 @@ impl Agent {
             dates: state.dates.clone(),
             notes: self.decision_notes(state),
             answered_in_notes: Self::answer_notes(state).answered(),
+            unfinished_step: state.undone.as_deref().map(|step| self.redact(step)),
             history: state.history.clone(),
             check_login,
             check_answer: check_bot && !state.read_pages.contains(&observation.page_key),
