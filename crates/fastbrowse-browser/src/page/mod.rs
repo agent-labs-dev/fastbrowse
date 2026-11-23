@@ -135,6 +135,7 @@ struct SnapshotControl {
     id: i64,
     frame_path: Option<String>,
     frame_origin: Option<String>,
+    frame_document_key: Option<String>,
     form_id: Option<String>,
     role: String,
     label: String,
@@ -509,8 +510,10 @@ fn control_from_raw(
     c: &SnapshotControl,
     retarget: Option<String>,
 ) -> Control {
+    let document_key = c.frame_document_key.as_deref().unwrap_or(document_key);
     Control {
         id: control_id,
+        frame_document_key: c.form_id.as_ref().and(frame_id.as_ref()).map(|_| document_key.to_owned()),
         frame_id,
         frame_origin: c.frame_origin.clone(),
         // An iframe can navigate and reuse its local form ids while the top-level document stays put.

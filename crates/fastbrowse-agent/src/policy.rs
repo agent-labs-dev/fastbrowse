@@ -247,9 +247,10 @@ pub enum Commit {
 /// The form a step submitted, and what its other fields held as it went.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Submitted {
-    /// The document the form was in: form ids are numbered per document, so the same id on another page is another form.
+    /// The top-level document containing the form.
     document: (String, String),
     frame_id: Option<String>,
+    frame_document_key: Option<String>,
     form_id: String,
     held: Vec<String>,
 }
@@ -279,6 +280,7 @@ impl Submitted {
         Some(Submitted {
             document: (observation.url.clone(), observation.document_key.clone()),
             frame_id: target.frame_id.clone(),
+            frame_document_key: target.frame_document_key.clone(),
             form_id,
             held,
         })
@@ -286,11 +288,22 @@ impl Submitted {
 
     /// Which form this was beside the one `target` submits, and what it held.
     fn told(&self, target: Option<&Control>, observation: &Observation) -> String {
-        let same = (&observation.url, &observation.document_key) == (&self.document.0, &self.document.1)
-            && target.is_some_and(|t| (&t.frame_id, t.form_id.as_ref()) == (&self.frame_id, Some(&self.form_id)));
-        let which = match same {
-            true => "the same form the action now asked about submits",
-            false => "a different form from the one the action now asked about submits",
+        let same_page = (&observation.url, &observation.document_key) == (&self.document.0, &self.document.1);
+        let same_frame = same_page && target.is_some_and(|t| t.frame_id == self.frame_id);
+        let current_form = target.and_then(|t| t.form_id.as_ref());
+        let same_id = current_form == Some(&self.form_id);
+        let frame_document = target.and_then(|t| t.frame_document_key.as_ref());
+        let frame_reloaded = match (self.frame_document_key.as_ref(), frame_document) {
+            (Some(previous), Some(current)) => previous != current,
+            // Older observations lack the receiving document, so a changed id could be a reload.
+            _ => !same_id,
+        };
+        let which = if same_frame && self.frame_id.is_some() && current_form.is_some() && frame_reloaded {
+            "an earlier form whose relationship to the current form is unknown"
+        } else if same_frame && same_id {
+            "the same form the action now asked about submits"
+        } else {
+            "a different form from the one the action now asked about submits"
         };
         // The observation can omit fields in the submitted form, so no recorded values is not proof of emptiness.
         match self.held.is_empty() {
@@ -2098,6 +2111,27 @@ mod tests {
             "viewport_text": "", "tabs": [],
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn submitted_form_relationship_is_unknown_after_iframe_reload() {
+        let mut target = button(0);
+        target.frame_id = Some("frame".into());
+        target.form_id = Some("first-document:1".into());
+        target.frame_document_key = Some("first-document".into());
+        let mut outer = observation(vec![target.clone()]);
+        outer.document_key = "outer-document".into();
+        let submitted = Submitted::of(Operation::Click, &target, &outer).unwrap();
+
+        assert!(submitted.told(Some(&target), &outer).contains("the same form"));
+        target.form_id = Some("first-document:2".into());
+        assert!(submitted.told(Some(&target), &outer).contains("a different form"));
+
+        target.form_id = Some("second-document:1".into());
+        target.frame_document_key = Some("second-document".into());
+        outer.controls = vec![target.clone()];
+        let evidence = submitted.told(Some(&target), &outer);
+        assert!(evidence.contains("unknown"), "{evidence}");
     }
 
     /// Picks `pick` for every choice it names, else the first option; scores relevance high for `relevant` labels

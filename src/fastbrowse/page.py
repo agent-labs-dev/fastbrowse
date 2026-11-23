@@ -17,6 +17,7 @@ class Control(Frozen):
     """Kept across observations for as long as the same DOM node survives."""
     frame_id: str | None
     frame_origin: str | None = None
+    frame_document_key: str | None = Field(default=None, exclude_if=lambda key: key is None)
     form_id: str | None = None
     """Owner form or local field group, scoped to the frame and document that observed it."""
     retarget_key: str | None = Field(default=None, exclude=True)

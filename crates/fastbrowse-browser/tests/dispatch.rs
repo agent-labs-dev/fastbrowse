@@ -19,6 +19,36 @@ use fastbrowse_core::page::{Action, DragPath, DragPoint};
 use serde_json::{Value, json};
 
 #[tokio::test(flavor = "multi_thread")]
+async fn observes_the_receiving_document_when_an_inlined_iframe_reloads() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        r#"const f = document.createElement('iframe'); f.id = 'reload-frame';
+           f.srcdoc = '<form><button>First submit</button></form>'; document.body.append(f);"#,
+    )
+    .await;
+    let before = observe_until(&h.page, "First submit").await;
+    eval_active(
+        &h.page,
+        r#"document.querySelector('#reload-frame').srcdoc = '<form><button>Second submit</button></form>'"#,
+    )
+    .await;
+    let after = observe_until(&h.page, "Second submit").await;
+
+    let first = find(&before, "First submit");
+    let second = find(&after, "Second submit");
+    assert_eq!(before.document_key, after.document_key);
+    assert!(first.frame_id.is_some());
+    assert_eq!(first.frame_id, second.frame_id);
+    assert!(first.frame_document_key.is_some());
+    assert!(second.frame_document_key.is_some());
+    assert_ne!(first.frame_document_key, second.frame_document_key);
+    assert_ne!(first.form_id, second.form_id);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_screenshot_glance_preserves_action_guards() {
     for change_target in [false, true] {
         let Some(h) = harness().await else { return };

@@ -1298,6 +1298,14 @@ mod benchmark {
         for digest in ["document_key", "page_key", "retarget_keys", "read"] {
             view.remove(digest);
         }
+        if let Some(Value::Array(controls)) = view.get_mut("controls") {
+            for control in controls {
+                // Inlined iframe document keys are clock readings too.
+                if let Some(control) = control.as_object_mut() {
+                    control.remove("frame_document_key");
+                }
+            }
+        }
         // A guard holds its document's `performance.timeOrigin` at index 16.
         let Value::Object(guards) = guards else { panic!("guards are not an object: {guards}") };
         let guards = guards
