@@ -12,9 +12,15 @@
   // The run's own cursor (cursor.js) goes into the page and out again around actions and screenshots. That is the run
   // drawing, not the page changing, so its host's records are left out of every observer below.
   const cursorHost = node => node.nodeType === Node.ELEMENT_NODE && node.hasAttribute('data-fastbrowse-cursor');
+  // An attribute written with the value it already held moves nothing: `attributeOldValue` lets a record say so.
+  const rewritten = r =>
+    r.type === 'attributes' && r.oldValue !== null && r.oldValue === r.target.getAttributeNS(r.attributeNamespace, r.attributeName);
   const pageRecords = records =>
     records.filter(
-      r => !cursorHost(r.target) && !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(cursorHost)),
+      r =>
+        !cursorHost(r.target) &&
+        !rewritten(r) &&
+        !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(cursorHost)),
     );
   const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
   // Whether `read`, this document's `getEventListeners` (`listeners` below), finds a listener for one of `types` on `e`.
@@ -367,8 +373,16 @@
     registry.observeRoot = root => {
       if (observed.has(root)) return;
       observed.add(root);
-      new MutationObserver(records => pageRecords(records).length && bumped()).observe(root, { subtree: true, characterData: true, childList: true, attributes: true });
+      new MutationObserver(records => {
+        records = pageRecords(records);
+        if (!records.length) return;
+        bumped();
+        // A same-origin iframe moves the page as the top document does: the settle and the changed text below watch the
+        // top document only, so its frames report here.
+        if (root !== document) registry.moved?.(records);
+      }).observe(root, { subtree: true, characterData: true, childList: true, attributes: true, attributeOldValue: true });
       const target = root.nodeType === Node.DOCUMENT_NODE ? root.defaultView : root;
+      if (root.nodeType === Node.DOCUMENT_NODE && root !== document) registry.listenInput?.(target);
       // Passive, as Chrome makes a wheel listener only on a window, document or body: one on a shadow root would hold
       // every scroll inside it to the main thread.
       for (const type of events) target.addEventListener(type, bumped, { capture: true, passive: true });
@@ -523,15 +537,17 @@
       registry.lastInput = performance.now();
     };
     // Chrome can deliver release in a later task than press, after the press's input turn has ended.
-    for (const type of [
-      'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick',
-      'keydown', 'keyup', 'keypress', 'submit', 'input', 'change', 'wheel', 'scroll',
-    ]) {
-      addEventListener(type, input, true);
-    }
-    new MutationObserver(records => {
-      records = pageRecords(records);
-      if (!records.length) return;
+    // A frame's window hears its own events, so each same-origin child document asks for the same listeners.
+    registry.listenInput = target => {
+      for (const type of [
+        'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick',
+        'keydown', 'keyup', 'keypress', 'submit', 'input', 'change', 'wheel', 'scroll',
+      ]) {
+        target.addEventListener(type, input, true);
+      }
+    };
+    registry.listenInput(window);
+    registry.moved = records => {
       registry.lastMutation = performance.now();
       for (const r of records) {
         // An attribute change moves the page but rewrites no text, so it stamps the clock above and is not a changed
@@ -542,7 +558,11 @@
         const element = r.type === 'characterData' ? r.target.parentElement : r.target;
         if (textOnly && element) registry.changed.add(element);
       }
-    }).observe(document, { subtree: true, characterData: true, childList: true, attributes: true });
+    };
+    new MutationObserver(records => {
+      records = pageRecords(records);
+      if (records.length) registry.moved(records);
+    }).observe(document, { subtree: true, characterData: true, childList: true, attributes: true, attributeOldValue: true });
   }
   if (mode !== 'glance') {
     if (registry.quiet) for (const e of registry.changed) registry.selfUpdating.add(e);
@@ -1548,11 +1568,13 @@
       base.operations = ['upload'];
       base.value = null;
     } else {
-      const editable =
-        !nativeProperty(e, 'readOnly') &&
-        e.getAttribute('aria-readonly') !== 'true' &&
-        (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
-          (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
+      const fieldRole = ['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
+        (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName));
+      const readOnly = !!nativeProperty(e, 'readOnly') || e.getAttribute('aria-readonly') === 'true';
+      const editable = !readOnly && fieldRole;
+      // A readonly field still takes a click (a datepicker opens on it) but fill is refused: say so, since the
+      // click operation alone reads as an ordinary button.
+      if (readOnly && fieldRole) base.read_only = true;
       // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
       // A scripted value control announces its current value instead of exposing a field's value property.
       const announced = ['slider', 'spinbutton'].includes(rname)

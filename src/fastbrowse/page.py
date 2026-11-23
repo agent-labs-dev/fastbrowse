@@ -45,6 +45,8 @@ class Control(Frozen):
     expanded: bool | None = None
     sensitive: bool = False
     offscreen: bool = False
+    read_only: bool = Field(default=False, exclude_if=lambda read_only: not read_only)
+    """A field the page marks readonly (`readonly` or `aria-readonly`): it takes a click but not typing."""
     required: bool | None = None
     """A field the page marks required (`required` or `aria-required`)."""
     invalid: bool | None = None
