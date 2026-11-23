@@ -209,5 +209,5 @@ async def judge(
     for index, claim in enumerate(claims):
         probability = probabilities.get(f"claim_{index}")
         if probability is None or probability < ACCEPTED:
-            return f"the output does not hold: {claim.statement} (answer {answer!r}, data {data!r})"
+            return f"the output does not hold: {claim.statement}"
     return None
