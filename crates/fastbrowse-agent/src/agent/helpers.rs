@@ -182,7 +182,18 @@ pub(crate) fn typed_before_send(
 ) -> Vec<(String, Option<String>)> {
     let Some((send, before)) = history.split_last() else { return Vec::new() };
     let form_of = |name: &str| page.controls.iter().find(|c| describe(c) == name).map(|c| c.form_id.as_deref());
-    let form = send.target.as_deref().and_then(form_of).flatten();
+    // A confirm's acceptance names no control: the click that opened it is what sent the form, and `page` is the one
+    // that click was made on.
+    let sender = if send.operation == Some(Operation::Dialog) {
+        before
+            .iter()
+            .rev()
+            .find(|e| e.operation == Some(Operation::Click) && e.outcome == StepOutcome::Executed)
+            .and_then(|e| e.target.as_deref())
+    } else {
+        send.target.as_deref()
+    };
+    let form = sender.and_then(form_of).flatten();
     let mut typed = Vec::new();
     let mut filled = std::collections::HashSet::new();
     let steps = before.iter().enumerate().skip(since).rev().filter(|(_, e)| e.outcome == StepOutcome::Executed);
