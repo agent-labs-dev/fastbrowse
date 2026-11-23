@@ -743,10 +743,7 @@ impl CdpPage {
                 self.drag(target, point, action.destination_id.as_deref(), action.drag_path.as_ref()).await
             }
             Operation::Escape => self.key(None, Key::Escape, Point::Gone).await,
-            Operation::Scroll | Operation::ScrollUp => {
-                self.scroll(action.operation, target).await?;
-                Ok((StepOutcome::Executed, None, None))
-            }
+            Operation::Scroll | Operation::ScrollUp => self.scroll(action.operation, target).await,
             Operation::Back => self.back().await,
             Operation::Wait => {
                 Err(BrowserError::failed("act/wait", "wait is dispatched by act, with the run's time left"))
@@ -1452,7 +1449,11 @@ impl CdpPage {
         self.input(self.session.send("Input.dispatchKeyEvent", up, Some(session_id))).await
     }
 
-    async fn scroll(&self, operation: Operation, target: Option<&Target>) -> Result<(), BrowserError> {
+    async fn scroll(
+        &self,
+        operation: Operation,
+        target: Option<&Target>,
+    ) -> Result<(StepOutcome, Option<String>, Option<StepFailure>), BrowserError> {
         if let Some((session_id, _, local_id, ..)) = target {
             let direction = if operation == Operation::ScrollUp { -1 } else { 1 };
             let script = format!(
@@ -1461,13 +1462,16 @@ impl CdpPage {
                  e.scrollBy({{left: axis === 'x' ? e.clientWidth * {direction} : 0, \
                  top: axis === 'y' ? e.clientHeight * {direction} : 0, behavior: 'instant'}}); return true; }})()"
             );
+            // A scroll area the page redrew away is a stale target, as a disconnected click target is: raised as an
+            // error, it ended the run where a click on the same page was told back and tried again.
             if !truthy(&self.evaluate(session_id, &script).await?) {
-                return Err(BrowserError::failed(
-                    "scroll/target-gone",
-                    "scroll target is no longer an indexed scroll area",
+                return Ok((
+                    StepOutcome::Stale,
+                    Some("scroll target is no longer an indexed scroll area".into()),
+                    None,
                 ));
             }
-            return Ok(());
+            return Ok((StepOutcome::Executed, None, None));
         }
         let session_id = self.session.active_session_id()?;
         let delta = if operation == Operation::ScrollUp { -560 } else { 560 };
@@ -1475,7 +1479,8 @@ impl CdpPage {
         // pre-action measurement this action already made returned the viewport, so the centre costs no command.
         let (width, height) = self.viewport(&session_id).await?;
         let params = json!({"type": "mouseWheel", "x": width / 2.0, "y": height / 2.0, "deltaX": 0, "deltaY": delta});
-        self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await
+        self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await?;
+        Ok((StepOutcome::Executed, None, None))
     }
 
     /// Wait for the page to change by itself, for at most `seconds`: the run's remaining time, unbounded for a run
