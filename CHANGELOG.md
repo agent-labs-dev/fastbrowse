@@ -12,6 +12,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - After an iframe reload, the form submission check tells Jev that the earlier form's relationship to the current form is unknown ([#1496](https://github.com/agent-labs-dev/fastbrowse/issues/1496)).
+- A commit the task orders after earlier steps ("click Reorder gallery and Cancel, then delete the image") is no longer refused as depending on an unshown condition ([#1006](https://github.com/agent-labs-dev/fastbrowse/issues/1006)). The check that judges a conditional commit saw only the page, which cannot show a dialog that was opened and cancelled, so it read the "then" as values given for later and answered the same request differently from one attempt to the next. Its questions now state the steps the run took, in order, and what the action takes from the task (it types no text), and ask for a site response only where the task waits for one; Jev still decides.
 
 - Steps fit pictures and text to the decision model's context. When a screenshot would overflow the step budget, the agent drops it before cutting page text or controls. OpenRouter decision model pins, including catalog aliases, use the listed context, price and image support. Question names are encoded for each decision wire and restored in the answers.
 - Install Chrome extension 0.1.2 for the full command set. Extension 0.1.1 can still run tasks and releases request interception when the run closes.

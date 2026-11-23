@@ -1158,7 +1158,9 @@ impl Agent {
             let commits = wanted && (!reversible || keeps);
             if commits
                 && (conditional || state.commits > 0)
-                && let Some(why) = self.condition_refusal(state, observation, decision.target.as_ref(), action).await?
+                && let Some(why) = self
+                    .condition_refusal(state, observation, decision.target.as_ref(), decision.operation, action)
+                    .await?
             {
                 self.trace_authorization(state, decision, GateReason::ConditionUnmet);
                 return self.refuse_once(state, observation, decision, label, why).await;
@@ -1224,14 +1226,19 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         target: Option<&Control>,
+        operation: Operation,
         action: &str,
     ) -> Step<Option<&'static str>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let recent_actions = state.history.iter().map(|entry| entry.shown_beside(target, observation)).collect();
         let page = self.condition_page(state, observation, recent_actions);
+        // The page cannot show a dialog that was opened and cancelled or a form that was posted and cleared, so the
+        // steps the run took are stated beside the page (#1006).
+        let action = format!("{action}{}", self.redact(&steps_taken(&state.history)));
+        let action = action.as_str();
         let questions = IndexMap::from([
             ("met".to_string(), Question::Choice(met_question(action))),
-            ("values".to_string(), Question::Choice(values_question(action))),
+            ("values".to_string(), Question::Choice(values_question(operation, action))),
             ("happened".to_string(), Question::Choice(happened_question(action))),
         ]);
         let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {
@@ -2763,4 +2770,29 @@ fn takes(field: CredentialField) -> &'static str {
         CredentialField::Username => "an account name",
         CredentialField::Passkey => PASSKEY,
     }
+}
+
+/// The steps a run took, in order, as the facts a condition is judged against: a task says "then" of steps whose
+/// effect the page no longer shows. Empty when the run took none. A secret's value is never named.
+fn steps_taken(history: &[HistoryEntry]) -> String {
+    let steps: Vec<String> = history
+        .iter()
+        .filter(|entry| entry.outcome == StepOutcome::Executed)
+        .filter_map(|entry| {
+            // Back, Escape and a wait have no target, and are the steps the page shows no trace of.
+            let operation = entry.operation?;
+            let typed = entry.text.as_deref().filter(|text| *text != "<secret>");
+            Some(match (entry.target.as_deref(), typed) {
+                (Some(target), Some(text)) => {
+                    format!("- {operation} {} with {}\n", text::repr(target), text::repr(text))
+                }
+                (Some(target), None) => format!("- {operation} {}\n", text::repr(target)),
+                (None, _) => format!("- {operation}\n"),
+            })
+        })
+        .collect();
+    if steps.is_empty() {
+        return String::new();
+    }
+    format!("The steps this run has already taken, in order:\n{}", steps.concat())
 }
