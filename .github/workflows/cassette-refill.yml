@@ -20,7 +20,7 @@ name: Cassette refill
 #     model request is sent. Paid requests go one at a time, since a price is known only from its response, so only
 #     the last one can pass the cap; a response with no price stops the spending.
 #
-# A manual retry can also use CI on a verified partial refill's ancestor when its head has no finished check.
+# A manual retry can also use CI on a verified partial refill's ancestor when its head has no replay result.
 # Repository configuration: secrets OPENROUTER_API_KEY and AUR_SYNC_TOKEN (a token with contents and pull request
 # write access to this repository; a push made with the run's own token starts no checks). Without the token the fill
 # still runs and the pull request is told why nothing was committed.
@@ -96,6 +96,7 @@ jobs:
           INPUT_PR: ${{ inputs.pr }}
           RETRY: ${{ inputs.retry }}
       - name: Download the missed task ids
+        if: steps.resolve.outputs.run_id != ''
         # A run with no miss uploads none, which is the answer.
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

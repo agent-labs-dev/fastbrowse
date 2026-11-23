@@ -497,9 +497,18 @@ def test_a_moved_branch_with_another_blob_is_not_treated_as_the_expected_batch(
     assert "[111111111111]" not in comment
 
 
-@pytest.mark.parametrize("retry, unrelated", [(True, False), (False, False), (True, True)])
+@pytest.mark.parametrize(
+    ("retry", "unrelated", "head_replay"),
+    [
+        (True, False, None),
+        (False, False, None),
+        (True, True, None),
+        (True, False, "cancelled"),
+        (True, False, "success"),
+    ],
+)
 def test_manual_retry_only_reuses_ci_after_verified_cassette_commits(
-    monkeypatch: pytest.MonkeyPatch, retry: bool, unrelated: bool
+    monkeypatch: pytest.MonkeyPatch, retry: bool, unrelated: bool, head_replay: str | None
 ) -> None:
     head = "b" * 40
     monkeypatch.setenv("REPO", REPO)
@@ -513,8 +522,16 @@ def test_manual_retry_only_reuses_ci_after_verified_cassette_commits(
         if route.endswith("/pulls/7"):
             repo = {"full_name": REPO}
             return {"state": "open", "head": {"sha": head, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
-        if "/actions/" in route:
-            return {"workflow_runs": [{"id": 7}] if f"head_sha={SHA}" in route else []}
+        if "/actions/workflows/" in route:
+            if f"head_sha={SHA}" in route:
+                return [{"workflow_runs": [{"id": 7}]}]
+            return [{"workflow_runs": [{"id": 8}] if head_replay else []}]
+        if "/actions/runs/8/jobs" in route:
+            return [{"jobs": [{"name": "replay", "conclusion": head_replay}]}]
+        if "/actions/runs/7/jobs" in route:
+            return [{"jobs": [{"name": "replay", "conclusion": "failure"}]}]
+        if "/actions/runs/7/artifacts" in route:
+            return {"artifacts": [{"name": "replay-misses", "expired": False}]}
         commit = {"message": f"{refill.REFILL_SUBJECT}mock-basket", "verification": {"verified": True}}
         if route.endswith(f"/commits/{head}"):
             return {"commit": commit}
@@ -543,7 +560,46 @@ def test_manual_retry_only_reuses_ci_after_verified_cassette_commits(
             refill.resolve()
     else:
         assert refill.resolve() == 0
-        assert outputs == {"pr": "7", "sha": head, "run_id": "7", "covered": '["mock-basket"]'}
+        expected = (
+            {"run_id": "", "covered": "[]"}
+            if head_replay == "success"
+            else {"run_id": "7", "covered": '["mock-basket"]'}
+        )
+        assert outputs == {"pr": "7", "sha": head, **expected}
+
+
+@pytest.mark.parametrize("middle_run", [None, ""])
+def test_a_partial_retry_stops_at_an_ancestor_with_a_passing_replay(
+    monkeypatch: pytest.MonkeyPatch, middle_run: str | None
+) -> None:
+    head, middle = "b" * 40, "c" * 40
+    history = {head: (middle, "mock-basket"), middle: (SHA, "mock-swatch")}
+    checked = []
+
+    def read_commit(repo: str, sha: str, token: str) -> dict[str, Any]:
+        parent, task = history[sha]
+        return {
+            "commit": {"message": f"{refill.REFILL_SUBJECT}{task}", "verification": {"verified": True}},
+            "committer": {"login": "web-flow"},
+            "parents": [{"sha": parent}],
+            "files": [{"filename": f"bench/cassettes/{task}.jsonl", "status": "modified"}],
+        }
+
+    def replay_ci(repo: str, sha: str, token: str) -> str | None:
+        checked.append(sha)
+        return middle_run if sha == middle else "7"
+
+    monkeypatch.setattr(refill, "pull_facts", lambda *args: (pull(head_sha=head), "b"))
+    monkeypatch.setattr(refill, "find_comment", lambda *args: {"body": f"<!-- cassette-refill-attempted: {SHA} -->"})
+    monkeypatch.setattr(refill, "read_commit", read_commit)
+    monkeypatch.setattr(refill, "replay_ci", replay_ci)
+    resolved = refill.retry_from_partial(REPO, "7", head, "t")
+    if middle_run is None:
+        assert resolved == ("7", {"mock-basket", "mock-swatch"})
+        assert checked == [middle, SHA]
+    else:
+        assert resolved == ("", {"mock-basket"})
+        assert checked == [middle]
 
 
 def test_a_cassette_over_the_request_limit_on_its_own_is_refused_by_name(tmp_path: Path) -> None:

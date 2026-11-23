@@ -146,7 +146,7 @@ On a pull request from a branch in this repository, a second workflow, `Cassette
 
 It tries each head commit once, and never refills its own commit. If it rejects a fill, fix what the comment names
 and push; that starts a new attempt. A maintainer can rerun it for a pull request from the Actions tab (`Cassette
-refill`, with the pull request number). Select `retry` to resume a partial refill if CI has not run on its head. A pull request from a fork
+refill`, with the pull request number). Select `retry` to resume a partial refill if its head has no replay result. A pull request from a fork
 never gets the model key, so a maintainer refills
 for it, or you do with your own key:
 

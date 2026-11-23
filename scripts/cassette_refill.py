@@ -424,10 +424,28 @@ def upsert_comment(repo: str, number: str, token: str, body: str) -> None:
 
 
 def completed_ci(repo: str, sha: str, token: str) -> list[dict[str, Any]]:
-    return gh(
-        f"repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&event=pull_request&status=completed&per_page=1",
+    pages = gh(
+        f"repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&event=pull_request&status=completed&per_page=100",
+        "--paginate",
+        "--slurp",
         token=token,
-    )["workflow_runs"]
+    )
+    return [run for page in pages for run in page["workflow_runs"]]
+
+
+def replay_ci(repo: str, sha: str, token: str) -> str | None:
+    """Return the latest run with replay misses, an empty ID for a pass, or None without replay evidence."""
+    for run in completed_ci(repo, sha, token):
+        endpoint = f"repos/{repo}/actions/runs/{run['id']}"
+        jobs = gh(f"{endpoint}/jobs?filter=latest&per_page=100", "--paginate", "--slurp", token=token)
+        replay = next((job["conclusion"] for page in jobs for job in page["jobs"] if job["name"] == "replay"), None)
+        if replay == "success":
+            return ""
+        if replay == "failure":
+            artifacts = gh(f"{endpoint}/artifacts?name=replay-misses", token=token)["artifacts"]
+            if any(artifact["name"] == "replay-misses" and not artifact["expired"] for artifact in artifacts):
+                return str(run["id"])
+    return None
 
 
 def read_commit(repo: str, sha: str, token: str) -> dict[str, Any]:
@@ -459,13 +477,13 @@ def refill_commit_tasks(commit: Mapping[str, Any]) -> set[str]:
     return set(tasks)
 
 
-def retry_from_partial(repo: str, number: str, head: str, token: str) -> tuple[list[dict[str, Any]], set[str]]:
+def retry_from_partial(repo: str, number: str, head: str, token: str) -> tuple[str | None, set[str]]:
     """Reuse CI on a bot-claimed ancestor when the current head contains only partial refill commits."""
     facts, _ = pull_facts(repo, number, token)
     if not facts.open or facts.head_repo != repo or facts.base_repo != repo or facts.head_sha != head:
-        return [], set()
+        return None, set()
     if is_refill_commit(facts.head_message):
-        return [], set()
+        return None, set()
     comment = find_comment(repo, number, token)
     attempted = set(attempted_shas(comment["body"])) if comment else set()
     sha = head
@@ -477,11 +495,12 @@ def retry_from_partial(repo: str, number: str, head: str, token: str) -> tuple[l
             break
         covered.update(tasks)
         sha = commit["parents"][0]["sha"]
-        if sha in attempted:
-            runs = completed_ci(repo, sha, token)
-            if runs:
-                return runs, covered
-    return [], set()
+        run_id = replay_ci(repo, sha, token)
+        if run_id == "" or (run_id is not None and sha in attempted):
+            return run_id, covered
+        if run_id is not None:
+            break
+    return None, set()
 
 
 def resolve() -> int:
@@ -490,13 +509,19 @@ def resolve() -> int:
     if number:
         # A rerun by hand names the pull request; a check run names itself.
         sha = gh(f"repos/{repo}/pulls/{number}", token=token)["head"]["sha"]
-        runs = completed_ci(repo, sha, token)
         covered: set[str] = set()
-        if not runs and env.get("RETRY") == "true":
-            runs, covered = retry_from_partial(repo, number, sha, token)
-        if not runs:
-            raise SystemExit(f"no finished CI run on {sha} of #{number} or a verified partial refill ancestor")
-        output(pr=number, sha=sha, run_id=str(runs[0]["id"]), covered=json.dumps(sorted(covered)))
+        if env.get("RETRY") == "true":
+            run_id = replay_ci(repo, sha, token)
+            if run_id is None:
+                run_id, covered = retry_from_partial(repo, number, sha, token)
+            if run_id is None:
+                raise SystemExit(f"no finished CI with replay evidence on {sha} of #{number} or a verified ancestor")
+        else:
+            runs = completed_ci(repo, sha, token)
+            if not runs:
+                raise SystemExit(f"no finished CI run on {sha} of #{number}")
+            run_id = str(runs[0]["id"])
+        output(pr=number, sha=sha, run_id=run_id, covered=json.dumps(sorted(covered)))
         return 0
     output(pr=env["PR_NUMBER"], sha=env["RUN_SHA"], run_id=env["RUN_ID"], covered="[]")
     return 0
