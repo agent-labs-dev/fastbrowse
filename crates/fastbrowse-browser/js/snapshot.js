@@ -2141,13 +2141,27 @@
       const settled = e =>
         e.getAnimations().map(a => a.effect?.getKeyframes().at(-1)?.transform).filter(Boolean).at(-1) ??
         styleProperty(e, 'transform');
+      // A translation is in its parent's units while boxes are in the viewport's, so a scaled list or grid (a zoomed
+      // board) would otherwise compare a full slot's move against half a slot. The scale each element's parent draws
+      // it at is the product of every ancestor's.
+      const scaleAbove = e => {
+        let x = 1;
+        let y = 1;
+        for (let p = e.parentElement; p; p = p.parentElement) {
+          const m = new DOMMatrix(styleProperty(p, 'transform'));
+          x *= m.a;
+          y *= m.d;
+        }
+        return [x, y];
+      };
       const moved = (from, to) => {
         let x = 0;
         let y = 0;
         for (let e = from; e; e = e.parentElement) {
           const m = new DOMMatrix(settled(e));
-          x += m.m41;
-          y += m.m42;
+          const [sx, sy] = scaleAbove(e);
+          x += m.m41 * sx;
+          y += m.m42 * sy;
           if (e === to) break;
         }
         return [x, y];
@@ -2159,8 +2173,9 @@
         const box = boxOf(e);
         const m = new DOMMatrix(styleProperty(e, 'transform'));
         const [ox, oy] = styleProperty(e, 'transformOrigin').split(' ').map(Number.parseFloat);
-        const left = box.left - m.e - ox * (1 - m.a) + dx;
-        const top = box.top - m.f - oy * (1 - m.d) + dy;
+        const [sx, sy] = scaleAbove(e);
+        const left = box.left - sx * (m.e + ox * (1 - m.a)) + dx;
+        const top = box.top - sy * (m.f + oy * (1 - m.d)) + dy;
         return { left, top, right: left + box.width / m.a, bottom: top + box.height / m.d };
       };
       const shift = moved(held.matches(PRESSED) ? held : held.querySelector(PRESSED), held);

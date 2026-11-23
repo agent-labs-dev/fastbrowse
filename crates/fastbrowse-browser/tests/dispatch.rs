@@ -2443,6 +2443,46 @@ async fn test_a_lifted_grid_card_moves_one_column_not_one_column_per_row() {
     assert_eq!(positions, [Some(4), Some(1), Some(2), Some(3), Some(5), Some(6)]);
 }
 
+/// A list or grid drawn at half size: an item's translation is in the list's units and its box in the viewport's, so a
+/// one-slot move must still read as one slot, in a list moved by a child handle and in a wrapping grid.
+#[tokio::test]
+async fn test_a_lifted_item_in_a_scaled_list_or_grid_reports_its_new_place() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let labels = ["One", "Two", "Three", "Four", "Five", "Six"];
+    for markup in [
+        r#"'<ul id=cards style="transform:scale(.5);transform-origin:top left">' + names.map(n => `<li style="height:50px"><button aria-roledescription="draggable" aria-pressed="false">${n}</button></li>`).join('') + '</ul>'"#,
+        r#"'<div id=cards style="display:grid;grid-template-columns:100px 100px 100px;gap:10px;transform:scale(.5);transform-origin:top left">' + names.map(n => `<button aria-roledescription="draggable" aria-pressed="false" style="height:50px">${n}</button>`).join('') + '</div>'"#,
+    ] {
+        eval_active(
+            &h.page,
+            &format!("(names => {{ document.body.innerHTML = {markup}; cards.querySelector('button').setAttribute('aria-pressed', 'true'); return true; }})({labels:?})"),
+        )
+        .await;
+        let lifted = h.observe().await;
+        let positions: Vec<_> = labels.iter().map(|label| find(&lifted, label).item_position).collect();
+        assert_eq!(positions, [Some(1), Some(2), Some(3), Some(4), Some(5), Some(6)], "{markup}");
+        // The keyboard handler's result: the held item takes the next slot and its neighbour slides into the old one.
+        eval_active(
+            &h.page,
+            "(([held, next], grid) => { \
+             held.style.transform = grid ? 'translateX(110px)' : 'translateY(50px)'; \
+             next.style.transform = grid ? 'translateX(-110px)' : 'translateY(-50px)'; return true; \
+             })(cards.children, cards.tagName === 'DIV')",
+        )
+        .await;
+        let moved = h.observe().await;
+        assert_ne!(
+            fastbrowse_core::effects::state_key(&lifted),
+            fastbrowse_core::effects::state_key(&moved),
+            "{markup}"
+        );
+        let positions: Vec<_> = labels.iter().map(|label| find(&moved, label).item_position).collect();
+        assert_eq!(positions, [Some(2), Some(1), Some(3), Some(4), Some(5), Some(6)], "{markup}");
+    }
+    h.close().await;
+}
+
 /// A list item moved by transform while its keyboard handle is a child button: the item carries the transform, so its
 /// place, and with it the page state, must still change.
 #[tokio::test]
