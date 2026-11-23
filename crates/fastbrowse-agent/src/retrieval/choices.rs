@@ -197,10 +197,10 @@ fn read_request(
     // say the fact is for the work, a read made to pick took the start page's link "Learn more" as the title of the
     // page it opens (#1174).
     if shows {
-        instructions.push_str(" Select steps when the page holds a fact the task needs only to carry out its work, such as a link to follow or a code to enter, and nothing on it states what the task asks to be told.");
+        instructions.push_str(" Select steps only for information used to carry out an action, such as a link to follow or a code to enter, when it contributes no evidence toward the answer.");
         offered.insert(
             STEPS.into(),
-            "This page holds a fact the task's steps need and nothing that answers the task; keep it for the steps."
+            "This page holds a fact needed to take an action, and that fact does not support any part of the reported answer."
                 .into(),
         );
     } else {
@@ -208,7 +208,7 @@ fn read_request(
     }
     offered.insert(
         SYNTHESIS.into(),
-        "The answer must be composed from several facts, and this page holds at least one.".into(),
+        "This page gives an input needed to combine, compare or calculate the answer, even if the task asks only for the result and the input itself should not be reported.".into(),
     );
     let questions = IndexMap::from([(CHOICE.to_string(), ChoiceQuestion::new(instructions, offered).into())]);
     let capture = page.capture;
@@ -748,6 +748,19 @@ mod tests {
                 })
             })
         }
+    }
+
+    #[test]
+    fn a_read_distinguishes_partial_answer_evidence_from_a_step_input() {
+        let captured = capture(&[(BlockKind::Paragraph, "Room A holds 24 people.")]);
+        let page = Page::new(&captured);
+        let (_, questions) =
+            read_request(&page, "Which of the two rooms holds more people?", "", &[], None, true, None);
+        let Question::Choice(question) = &questions[CHOICE] else { panic!("expected a choice") };
+        assert!(question.criteria[SYNTHESIS].as_str().unwrap().contains("even if the task asks only for the result"));
+        assert!(
+            question.criteria[STEPS].as_str().unwrap().contains("does not support any part of the reported answer")
+        );
     }
 
     /// A passage judged without knowing how the run reached the page is dropped before the read that is told it.
