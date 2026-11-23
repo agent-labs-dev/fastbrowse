@@ -1921,12 +1921,6 @@ impl CdpPage {
             .await
             .ok()
             .is_some_and(|value| value == Value::Bool(true));
-        let rect_script = format!(
-            "(() => {{ const r = window.__fastbrowse?.nodes.get({})?.getBoundingClientRect(); \
-             return r ? [r.x, r.y, r.width, r.height] : null; }})()",
-            drop.2
-        );
-        let box_before = self.evaluate(session_id, &rect_script).await.ok();
         let press = json!({"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1, "buttons": 1});
         self.input(self.session.send("Input.dispatchMouseEvent", press, Some(session_id))).await?;
         let mut held = self.held(session_id, (start_x, start_y), 0);
@@ -1979,17 +1973,10 @@ impl CdpPage {
                 held.done();
                 return Ok((StepOutcome::Executed, None, None));
             }
-            if !native {
-                // A destination that slid (a sortable list moves its items as the pointer passes them) is released
-                // where it stood, which is where the item belongs. One that did not move has this point covered:
-                // release on the exposed point the hit test found, never on the covering control.
-                let slid = box_before != self.evaluate(session_id, &rect_script).await.ok();
-                if !slid {
-                    self.drag_move(session_id, x, y, 0).await?;
-                    self.release(session_id, x, y, 0).await?;
-                    held.done();
-                    return Ok((StepOutcome::Executed, None, None));
-                }
+            // A destination that slid out from under the pointer (a sortable list moves its items as the pointer passes
+            // them) is released where it stood, which is where the item belongs. One still under the pointer is
+            // released only at a point rested on and hit-tested, so a cover or a nudge never takes the release.
+            if !native && !self.box_holds_point(session_id, drop.2, at).await {
                 self.release(session_id, at.0, at.1, 0).await?;
                 held.done();
                 return Ok((StepOutcome::Executed, None, None));
@@ -1999,6 +1986,17 @@ impl CdpPage {
         self.cancel_drag(session_id, (start_x, start_y), 0).await?;
         held.done();
         Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))
+    }
+
+    /// Whether `point` lies inside the control's box now.
+    async fn box_holds_point(&self, session_id: &str, local_id: i64, point: (f64, f64)) -> bool {
+        let script = format!(
+            "(() => {{ const r = window.__fastbrowse?.nodes.get({local_id})?.getBoundingClientRect(); \
+             return !!r && {x} >= r.left && {x} <= r.right && {y} >= r.top && {y} <= r.bottom; }})()",
+            x = point.0,
+            y = point.1
+        );
+        self.evaluate(session_id, &script).await.ok() == Some(Value::Bool(true))
     }
 
     /// Dispatch a complete path on one target, retaining every point the model supplied.
