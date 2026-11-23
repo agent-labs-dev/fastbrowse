@@ -1663,6 +1663,17 @@ impl Agent {
         }
         let Some(last) = state.history.last_mut() else { return };
         let waited = last.operation == Some(Operation::Wait);
+        let sent = state.committing && last.outcome == StepOutcome::Executed;
+        if observation.dialog.is_some() {
+            if sent {
+                state.commit_behind_dialog.get_or_insert_with(|| before.document_key.clone());
+            }
+        } else if let Some(from) =
+            state.commit_behind_dialog.take().or_else(|| sent.then(|| before.document_key.clone()))
+            && observation.document_key != from
+        {
+            state.committed_documents.insert(observation.document_key.clone());
+        }
         let done = if last.operation == Some(Operation::SwitchTab) {
             // Another tab's controls were there all along: compared with the tab left, every one read as added.
             Effect {
@@ -1684,9 +1695,6 @@ impl Agent {
             // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
-            if state.committing && observation.document_key != before.document_key {
-                state.committed_documents.insert(observation.document_key.clone());
-            }
             state.replied = (state.committing || keeping || last.look.is_some())
                 && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)

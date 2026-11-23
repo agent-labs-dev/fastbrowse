@@ -11178,6 +11178,45 @@ fn a_commit_loaded_document_stays_withheld_under_a_fragment_or_after_another_tab
     assert_eq!(state.reload_target(&committed), None, "the first tab still shows the commit's document");
 }
 
+/// A page behind a dialog cannot be read, so the alert a committing GET's reply opened was observed with no document,
+/// and closing it is not a commit: the reply's document was never recorded and was offered again as a reload.
+#[test]
+fn a_commit_reply_behind_an_alert_stays_withheld_after_the_alert_closes() {
+    let mut state = run_state();
+    let settings = Observation { document_key: "settings".into(), ..at("https://example.test/settings", &[]) };
+    let reply = Observation { document_key: "unsubscribed".into(), ..at("https://example.test/unsubscribe?id=3", &[]) };
+    let alert = Observation {
+        page_key: "dialog:alert".into(),
+        document_key: String::new(),
+        dialog: Some(fastbrowse_core::page::Dialog {
+            kind: "alert".into(),
+            message: "You have been unsubscribed".into(),
+            default_prompt: None,
+        }),
+        ..reply.clone()
+    };
+    state.committing = true;
+    state.acted_from = Some(settings.clone());
+    state.history.push(executed(Some(Operation::Click), Some("Unsubscribe"), true));
+    agent().note_effect(&mut state, &alert);
+    state.committing = false;
+    state.acted_from = Some(alert.clone());
+    state.history.push(executed(Some(Operation::Dialog), None, true));
+    agent().note_effect(&mut state, &reply);
+    assert_eq!(state.reload_target(&reply), None);
+    // A confirm accepted on a form saved in place left the same document, which stays reloadable.
+    let mut state = run_state();
+    let confirm = Observation { url: settings.url.clone(), ..alert };
+    state.committing = true;
+    state.acted_from = Some(settings.clone());
+    state.history.push(executed(Some(Operation::Click), Some("Save"), true));
+    agent().note_effect(&mut state, &confirm);
+    state.acted_from = Some(confirm);
+    state.history.push(executed(Some(Operation::Dialog), None, true));
+    agent().note_effect(&mut state, &settings);
+    assert!(state.reload_target(&settings).is_some());
+}
+
 /// A commit that loaded a new document can be sent again by opening its address, as a GET that unsubscribes is, so
 /// that page does not offer itself as a reload; one saved in place keeps the offer.
 #[test]
