@@ -2036,8 +2036,11 @@ pub(super) fn pick_stale(picked: &Picked, observation: &Observation) -> Option<&
     if !fastbrowse_core::navigation::same_address(&picked.url, &observation.url) {
         return Some("address_changed");
     }
-    if picked.decision.target.is_none()
-        && (picked.page_key != observation.page_key || picked.document_key != observation.document_key)
+    // A control id holds only while its document's node survives: a reload or same-address navigation can reuse an id
+    // and its visible attributes for another control, so a replaced document drops a targeted pick too. A page_key
+    // change inside the same document (a toast closing) drops only a pick with no target to check.
+    if picked.document_key != observation.document_key
+        || (picked.decision.target.is_none() && picked.page_key != observation.page_key)
     {
         return Some("page_changed");
     }

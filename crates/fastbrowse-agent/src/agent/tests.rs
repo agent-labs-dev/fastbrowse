@@ -5197,6 +5197,24 @@ async fn test_a_pick_after_a_refusal_outlives_an_unrelated_control_and_not_its_t
 }
 
 #[test]
+fn test_a_targeted_recovered_pick_is_stale_when_the_document_is_replaced() {
+    let card = Control::new("card", "button", "Save", [Operation::Click]);
+    let original = Observation { document_key: "first".into(), ..observation(std::slice::from_ref(&card)) };
+    let picked = super::state::Picked {
+        url: original.url.clone(),
+        page_key: original.page_key.clone(),
+        document_key: original.document_key.clone(),
+        decision: code_decision(Operation::Click, Some(card)),
+        look: None,
+    };
+    assert_eq!(super::driving::pick_stale(&picked, &original), None);
+    let reloaded = Observation { document_key: "second".into(), ..original.clone() };
+    assert_eq!(super::driving::pick_stale(&picked, &reloaded), Some("page_changed"));
+    let toast_closed = Observation { page_key: "other".into(), ..original };
+    assert_eq!(super::driving::pick_stale(&picked, &toast_closed), None);
+}
+
+#[test]
 fn test_a_recovered_pick_is_stale_when_target_safety_changes() {
     let target = Control {
         href: Some("/export".into()),
