@@ -437,25 +437,26 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
         .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact_id(fact), evidence)))
         .filter(|(id, _)| !notes.superseded(id))
         .collect();
-    // Where each text was noted on each capture, in page order.
-    let mut starts: HashMap<(&str, String), BTreeSet<i64>> = HashMap::new();
+    // A draft must not shift the occurrence number of an identical published record.
+    let mut starts: HashMap<(&str, String, bool), BTreeSet<i64>> = HashMap::new();
     for (_, evidence) in &live {
-        let key = (evidence.capture_sha256.as_str(), text::squash(&evidence.quote));
+        let key =
+            (evidence.capture_sha256.as_str(), text::squash(&evidence.quote), notes.typed_by_step(evidence).is_some());
         starts.entry(key).or_default().insert(evidence.start);
     }
     let mut seen = HashSet::new();
     live.into_iter()
-        .filter(|(_, evidence)| {
+        .filter_map(|(id, evidence)| {
             let quote = text::squash(&evidence.quote);
-            let place = starts[&(evidence.capture_sha256.as_str(), quote.clone())].range(..evidence.start).count();
-            // The same text typed and published is two readings: the notes are kept apart by who wrote them. Which
-            // step typed it does not make a reading, so two fills of one value are one.
-            !deduplicate || seen.insert((quote, place, notes.typed_by_step(evidence).is_some()))
-        })
-        .map(|(id, evidence)| {
+            let typed = notes.typed_by_step(evidence).is_some();
+            let occurrence =
+                starts[&(evidence.capture_sha256.as_str(), quote.clone(), typed)].range(..evidence.start).count();
+            if deduplicate && !seen.insert((quote, occurrence, typed)) {
+                return None;
+            }
             let span = (evidence.capture_sha256.clone(), evidence.start, evidence.end);
             let (literal, page) = (evidence.rendered_text, address(&evidence.url));
-            Candidate {
+            Some(Candidate {
                 id,
                 quote: evidence.quote.clone(),
                 note: shown(notes, evidence),
@@ -464,10 +465,8 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
                 page,
                 whole_record: notes.whole_record(evidence),
                 source_kind: notes.source_kind(evidence),
-                occurrence: starts[&(evidence.capture_sha256.as_str(), text::squash(&evidence.quote))]
-                    .range(..evidence.start)
-                    .count(),
-            }
+                occurrence,
+            })
         })
         .collect()
 }
@@ -1223,7 +1222,15 @@ async fn select_records(
     let records: Vec<usize> = records
         .iter()
         .copied()
-        .filter(|note| seen.insert((groups[note].clone(), text::squash(&found[*note].quote), found[*note].occurrence)))
+        .filter(|note| {
+            let candidate = &found[*note];
+            seen.insert((
+                groups[note].clone(),
+                text::squash(&candidate.quote),
+                candidate.occurrence,
+                candidate.note.get("typed_by_step").is_some(),
+            ))
+        })
         .collect();
     let missing = |note: usize| Unworked::Notes {
         reason: format!(
@@ -2609,7 +2616,7 @@ mod tests {
         use fastbrowse_core::models::{FactReader, Held, SourceControl};
         use fastbrowse_core::page::BlockKind;
 
-        let mut draft = capture(&[(BlockKind::Paragraph, "Price: $25")]);
+        let mut draft = capture(&[(BlockKind::Paragraph, "Price: $25"), (BlockKind::Paragraph, "Price: $25")]);
         draft.blocks[0].control_context = Some(SourceControl {
             role: "editable".into(),
             label: String::new(),
@@ -2619,7 +2626,7 @@ mod tests {
         });
         let published = capture(&[(BlockKind::Paragraph, "Listing"), (BlockKind::Paragraph, "Price: $25")]);
         let mut notes = Notes::default();
-        for (captured, index) in [(&draft, 0), (&published, 1)] {
+        for (captured, index) in [(&draft, 0), (&draft, 1), (&published, 1)] {
             let page = Page::new(captured);
             let block = &captured.blocks[index];
             notes.add(Fact::read("note", evidence(&page, block, block.start, block.end), FactReader::JevChoice));
@@ -2630,6 +2637,9 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].note["typed_by_step"], 1);
         assert!(found[1].note.get("typed_by_step").is_none());
+        assert_eq!(found[1].occurrence, 0);
+        let all = candidates_from(&notes, false);
+        assert_eq!(all.iter().map(|note| note.occurrence).collect::<Vec<_>>(), [0, 0, 0]);
     }
 
     /// Two fills of one value leave one draft: the same typed reading is not counted twice for being typed again.
