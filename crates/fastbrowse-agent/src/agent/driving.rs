@@ -1275,6 +1275,10 @@ impl Agent {
             // The DOM diff of a surface whose picture changed as meant would add that nothing visible changed.
             state.acted_from = Some(observation.clone());
             state.judged_effect = drawn == Some(true);
+            // A cancelled dialog stops the save that opened it, so nothing is owed a stale-view fact for it.
+            if decision.operation == Operation::Dialog && action.accept_dialog != Some(true) {
+                state.dialog_owes_send = false;
+            }
             state.showing = executed.then(|| doing(decision.operation, label.as_deref()));
             // The address a click or navigation asked for, so reading where it landed also reads that address: a
             // site that redirects `/page/2` to `/page/2/` left the asked one unread, and a whole-list answer unverified.
