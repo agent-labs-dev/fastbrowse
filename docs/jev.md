@@ -130,6 +130,10 @@ address and the page's title: the page's own text is what would argue a harmful 
 request stays under the 32,000 bytes where OpenRouter switches to long-context mode, and none go with a screenshot,
 which is in that mode already. Those left out stay follow-ups.
 
+The questions for a control that saves a form also state what the run changed in that form, from its own steps: each field
+it filled, the value the field held before and the value typed, and the control the run clicked to open the form. Only
+the run's steps since it last opened that form count, so a form a page reuses for another record starts clean.
+
 An editable field can offer `press` beside `fill`. Jev chooses the source and first word of a chord from the task,
 using the same span choices as a fill value. The page cannot provide the chord. A chord that includes Enter or can
 submit or save is sent through the action and authorization checks before the browser receives it.
