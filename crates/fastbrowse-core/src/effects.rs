@@ -414,6 +414,7 @@ mod tests {
             document_key: String::new(),
             controls,
             viewport_text: String::new(),
+            viewport_key: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
             media: Vec::new(),

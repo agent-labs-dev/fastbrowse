@@ -228,6 +228,9 @@ struct Snapshot {
     #[serde(default)]
     inaccessible_frames: usize,
     viewport_text: String,
+    /// Stable identity of the frame's scroll positions, independent of page text.
+    #[serde(default)]
+    viewport_key: String,
     /// Characters of visible text outside the viewport.
     #[serde(default)]
     offscreen_text: String,
@@ -770,6 +773,7 @@ impl CdpPage {
             }
 
             let page_key = combine_page_keys(frames.iter().map(|(_, f)| f.raw.page_key.clone()).collect());
+            let viewport_key = combine_page_keys(frames.iter().map(|(_, f)| f.raw.viewport_key.clone()).collect());
             if bind {
                 self.set_last(ObservedState { page_key: page_key.clone(), controls: control_state, labels });
             }
@@ -849,6 +853,7 @@ impl CdpPage {
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
                 viewport_text,
+                viewport_key,
                 offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
@@ -920,6 +925,7 @@ impl CdpPage {
             document_key: String::new(),
             controls: vec![],
             viewport_text: String::new(),
+            viewport_key: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
             modal: None,

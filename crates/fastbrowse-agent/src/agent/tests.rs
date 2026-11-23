@@ -12004,8 +12004,12 @@ async fn test_a_decision_made_before_the_read_of_a_fresh_page_is_made_again_with
 /// same state every time and withdrew scrolling after the third scroll of a page whose task was to look at all of it.
 #[tokio::test]
 async fn test_a_scroll_to_a_part_never_shown_is_progress_and_scrolling_back_is_not() {
-    let seen = |text: &str| Observation { viewport_text: text.into(), ..buttons_at(FILES, &["Files"]) };
-    let (top, middle, bottom) = (seen("Previews"), seen("Credits"), seen("Footer"));
+    let seen = |text: &str, key: &str| Observation {
+        viewport_text: text.into(),
+        viewport_key: key.into(),
+        ..buttons_at(FILES, &["Files"])
+    };
+    let (top, middle, bottom) = (seen("Previews", "top"), seen("Credits", "middle"), seen("Footer", "bottom"));
     let agent = agent();
     let mut state = run_state();
     agent.settle(&mut state, &top).await.expect("settled");
@@ -12021,6 +12025,44 @@ async fn test_a_scroll_to_a_part_never_shown_is_progress_and_scrolling_back_is_n
     }
 }
 
+#[tokio::test]
+async fn a_live_viewport_text_does_not_make_returning_to_the_same_scroll_position_progress() {
+    let seen = |text: &str, key: &str| Observation {
+        viewport_text: text.into(),
+        viewport_key: key.into(),
+        ..buttons_at(FILES, &["Files"])
+    };
+    let (top, middle) = (seen("Clock 12:00", "top"), seen("Middle\nClock 12:00", "middle"));
+    let agent = agent();
+    let mut state = run_state();
+    agent.settle(&mut state, &top).await.expect("settled");
+
+    state.landing = Some(Some((Operation::Scroll, None)));
+    agent.settle(&mut state, &middle).await.expect("settled");
+    assert_eq!(state.unchanged, 0);
+
+    state.landing = Some(Some((Operation::ScrollUp, None)));
+    let top_later = seen("Clock 12:01", "top");
+    agent.settle(&mut state, &top_later).await.expect("settled");
+    assert_eq!(state.unchanged, 1, "a live clock must not renew the scroll stall budget");
+}
+
+#[tokio::test]
+async fn different_scroll_positions_on_a_textless_page_are_progress() {
+    let seen = |key: &str| Observation {
+        viewport_text: String::new(),
+        viewport_key: key.into(),
+        ..buttons_at(FILES, &["Files"])
+    };
+    let (top, middle) = (seen("top"), seen("middle"));
+    let agent = agent();
+    let mut state = run_state();
+    agent.settle(&mut state, &top).await.expect("settled");
+
+    state.landing = Some(Some((Operation::Scroll, None)));
+    agent.settle(&mut state, &middle).await.expect("settled");
+    assert_eq!(state.unchanged, 0, "a new scroll position must renew the stall budget");
+}
 #[path = "tests/citation_record_selected_results.rs"]
 mod citation_record_selected_results;
 

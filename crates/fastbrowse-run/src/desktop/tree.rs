@@ -498,6 +498,9 @@ pub fn observation(window: &Window, root: &Element, windows: &[Window]) -> Obser
         // One window is one document for as long as it is open: typing into it or its title changing is not leaving.
         document_key: window.address.clone(),
         controls,
+        // The accessibility tree reports no scroll position, and the snapshot id is new on every observation, so the
+        // visible text is the only identity a window's scrolled place has.
+        viewport_key: viewport_text.clone(),
         viewport_text,
         offscreen_text,
         visual_content: false,
