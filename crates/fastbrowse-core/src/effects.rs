@@ -278,15 +278,46 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
     if replaced && !navigated {
         parts.push("loaded a new document at this address".to_string());
     }
+    // A page that rebuilds its nodes gives every control a new id, so ids alone report a re-rendered thread as both
+    // lost and shown again, and Jev was told a reply the page still showed had been removed. The capture's
+    // `retarget_key` hashes what a control is without its node id (role, label, state, scope text, document), so a
+    // control whose id is gone still survived when a new control keeps its key. Twins pair off one for one, so a real
+    // removal among them still counts.
+    let mut lost: IndexMap<&str, Vec<&str>> = IndexMap::new();
+    if !replaced {
+        for c in before.controls.iter().filter(|c| !new.contains_key(c.id.as_str())) {
+            if let Some(key) = c.retarget_key.as_deref().filter(|key| !key.is_empty()) {
+                lost.entry(key).or_default().push(&c.id);
+            }
+        }
+    }
+    let mut rebuilt: Vec<&str> = Vec::new();
     let shown: Vec<&Control> = if replaced {
         Vec::new()
     } else {
-        new.iter().filter(|(key, _)| !old.contains_key(*key)).map(|(_, c)| *c).collect()
+        let mut shown = Vec::new();
+        for c in new.values().filter(|c| !old.contains_key(c.id.as_str())) {
+            let twin = c
+                .retarget_key
+                .as_deref()
+                .and_then(|key| lost.get_mut(key))
+                .filter(|twins| !twins.is_empty())
+                .map(|twins| twins.remove(0));
+            match twin {
+                Some(was) => rebuilt.push(was),
+                None => shown.push(*c),
+            }
+        }
+        shown
     };
     let hidden: Vec<&Control> = if replaced {
         Vec::new()
     } else {
-        before.controls.iter().filter(|c| !new.contains_key(c.id.as_str())).collect()
+        before
+            .controls
+            .iter()
+            .filter(|c| !new.contains_key(c.id.as_str()) && !rebuilt.contains(&c.id.as_str()))
+            .collect()
     };
     let stayed_whole = !navigated && !replaced && hidden.is_empty();
     // A modal hides the page under it and gives it back on closing, so what went behind one or came back from behind
@@ -447,6 +478,43 @@ mod tests {
         let sort = vec![control("close", "Close dialog", "button"), control("price", "Price", "radio")];
         let renamed = effect(&open, &Observation { modal: Some("Sort".into()), ..observation(sort) }, None, false);
         assert_eq!(renamed.summary, "showed 1 control: Price; removed 1 control: Nonstop only");
+    }
+
+    #[test]
+    fn test_a_page_that_rebuilds_its_controls_neither_loses_nor_shows_them() {
+        let keyed =
+            |id: &str, label: &str, key: &str| with(&control(id, label, "link"), |c| c.retarget_key = Some(key.into()));
+        let before = observation(vec![
+            keyed("a1", "Kal66", "k1"),
+            keyed("a2", "Glad it helps", "k2"),
+            keyed("a3", "Twin", "k3"),
+        ]);
+        let rebuilt = observation(vec![
+            keyed("b1", "Kal66", "k1"),
+            keyed("b2", "Glad it helps", "k2"),
+            keyed("b3", "Twin", "k3"),
+        ]);
+        let done = effect(&before, &rebuilt, None, false);
+        assert!(done.shown.is_empty(), "{}", done.summary);
+        assert_eq!(done.summary, "nothing visible changed");
+        // A control the rebuilt page really lacks is still removed, and a new one still shown.
+        let changed =
+            observation(vec![keyed("b1", "Kal66", "k1"), keyed("b3", "Twin", "k3"), keyed("b4", "New", "k4")]);
+        let done = effect(&before, &changed, None, false);
+        assert!(
+            done.summary.contains("showed 1 control: New") && done.summary.contains("removed 1 control: Glad it helps"),
+            "{}",
+            done.summary
+        );
+        assert!(!done.summary.contains("Kal66"), "{}", done.summary);
+        // Twins pair off one for one: two identical controls become one, so one is gone.
+        let twins = observation(vec![keyed("t1", "Like", "kk"), keyed("t2", "Like", "kk")]);
+        let one = observation(vec![keyed("u1", "Like", "kk")]);
+        assert!(effect(&twins, &one, None, false).summary.contains("removed 1 control: Like"));
+        // Without a key the id is all there is, as before.
+        let bare = observation(vec![control("c1", "Kal66", "link")]);
+        let moved = observation(vec![control("c2", "Kal66", "link")]);
+        assert!(effect(&bare, &moved, None, false).summary.contains("removed 1 control: Kal66"));
     }
 
     #[test]

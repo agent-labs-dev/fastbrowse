@@ -2288,8 +2288,24 @@
   // The open modal the rest of the page sits behind. A page marks what is under one aria-hidden or inert, so those
   // controls leave the observation while staying in the document: Google Flights' Stops filter took 145 controls
   // out and put them back on closing, and a run told each by name in every later step.
-  const modals = [...renderFact('query', document, 'dialog:modal,[aria-modal="true"]')].filter(
-    e => !e.closest('[aria-hidden="true"],[inert]') && visibilityOf(e, { checkVisibilityCSS: true }),
+  // Many dialogs never say aria-modal: they are a plain role="dialog" and make the page behind them aria-hidden or
+  // inert, usually by marking the app root beside the portal that holds them (CurseForge's "Delete media"). Such a
+  // dialog is modal because it has an aria-hidden or inert sibling, at its own level or any ancestor's, holding
+  // controls, which is what a modal does to the page. Controls it hid then left the observation with no modal to
+  // explain it, and a step was told the page was removed. A decorative aria-hidden icon holds no control.
+  const hidesPage = e => {
+    for (let n = e; n.parentElement; n = n.parentElement) {
+      for (const sibling of n.parentElement.children) {
+        if (sibling !== n && sibling.matches('[aria-hidden="true"],[inert]') && (sibling.matches(SELECTOR) || sibling.querySelector(SELECTOR))) return true;
+      }
+    }
+    return false;
+  };
+  const modals = [...renderFact('query', document, 'dialog:modal,[aria-modal],[role="dialog"],[role="alertdialog"]')].filter(
+    e =>
+      (e.matches('dialog:modal,[aria-modal="true"]') || (!e.matches('[aria-modal]') && hidesPage(e))) &&
+      !e.closest('[aria-hidden="true"],[inert]') &&
+      visibilityOf(e, { checkVisibilityCSS: true }),
   );
   // A dialog is named by aria-label or aria-labelledby, never by its content.
   const dialogName = e =>

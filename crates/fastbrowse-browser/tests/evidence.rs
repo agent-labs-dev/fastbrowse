@@ -281,6 +281,43 @@ async fn test_an_open_modal_is_named_and_the_page_behind_it_leaves() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_dialog_without_aria_modal_is_modal_when_the_page_behind_it_is_inert() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // CurseForge's "Delete media": a plain role="dialog" in a portal beside the app root, which goes inert.
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<div id="app"><a href="/a">Alpha</a><button>Edit</button></div>' +
+          '<div class="portal"><div role="dialog"><h2>Delete media</h2><button>Cancel</button><button>OK</button></div></div>';
+        document.querySelector('#app').setAttribute('aria-hidden', 'true');
+        "#,
+    )
+    .await;
+    let open = h.observe().await;
+    assert_eq!(open.modal.as_deref(), Some(""));
+    let labels: Vec<&str> = open.controls.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["Cancel", "OK"]);
+    // A dialog beside only a decorative icon, or one saying it is not modal, leaves the page behind it alone.
+    eval_active(
+        &h.session,
+        r#"
+        document.querySelector('#app').removeAttribute('aria-hidden');
+        document.querySelector('.portal').insertAdjacentHTML('beforebegin', '<svg aria-hidden="true"></svg>');
+        "#,
+    )
+    .await;
+    assert_eq!(h.observe().await.modal, None);
+    eval_active(
+        &h.session,
+        "document.querySelector('#app').setAttribute('aria-hidden', 'true'); document.querySelector('[role=dialog]').setAttribute('aria-modal', 'false')",
+    )
+    .await;
+    assert_eq!(h.observe().await.modal, None);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_drawing_below_the_fold_does_not_ask_for_a_screenshot() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
