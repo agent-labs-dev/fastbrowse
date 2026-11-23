@@ -346,11 +346,11 @@ fn form_changes(
     let mut filled: IndexMap<&str, (&str, &str)> = IndexMap::new();
     let mut opener = None;
     for entry in history.iter().rev().filter(|entry| entry.outcome == StepOutcome::Executed) {
-        if entry.document_key.as_deref().is_some_and(|key| key != document_key)
-            || entry.form_id.as_deref().is_some_and(|id| Some(id) != form_id || entry.frame_id != target.frame_id)
-        {
+        if entry.document_key.as_deref().is_some_and(|key| key != document_key) {
             continue;
         }
+        // The opener is matched by the form it opened, before the form it sits in is compared: a gallery's Edit
+        // button belongs to the gallery's own form while opening a separate editor.
         if opener.is_none()
             && entry.operation == Some(Operation::Click)
             && form_id.is_some_and(|id| {
@@ -361,6 +361,9 @@ fn form_changes(
             // A page that reuses one form for several records keeps its document and form ids, so fills from before
             // the newest opening belong to another record and would pair its old value with this one's typing.
             break;
+        }
+        if entry.form_id.as_deref().is_some_and(|id| Some(id) != form_id || entry.frame_id != target.frame_id) {
+            continue;
         }
         let Some(field) = fields.iter().find(|c| entry.control_id.as_deref() == Some(c.id.as_str())) else {
             continue;
