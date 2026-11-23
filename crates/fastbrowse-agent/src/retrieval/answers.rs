@@ -2072,6 +2072,35 @@ struct QuoteState<'a> {
     source_kind: Option<BlockKind>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     whole_element: bool,
+    /// The last step of this run that typed into the control the quote was read from, before the read: a page shows back
+    /// what the run typed into it, and a run that typed its own report into a document, then read the document, cited
+    /// that read as what the document says (#1398). Provenance is the control's identity and its page, never the words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    typed_by_step: Option<usize>,
+    /// Where the list item the quote is, or sits inside, stands among its list's items, counted from 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    list_position: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    list_size: Option<i64>,
+}
+
+const SUPPORTED: &str =
+    "Does it follow from its cited quotes, preserving which record each value belongs to and every stated value?";
+
+/// Whether a claim follows from its quotes, as these instructions put it.
+fn support_question(instructions: String) -> Question {
+    Question::Noul(NoulQuestion::new(
+        instructions,
+        Some("Every assertion being judged is supported by these quotes."),
+        Some(
+            "An assertion being judged changes a value, belongs to another record, or has no support in these quotes.",
+        ),
+    ))
+}
+
+/// What a quote's typed_by_step means, told only when one has it.
+fn typed_rule(quotes: &[Value]) -> &'static str {
+    if quotes.iter().any(|quote| quote.get("typed_by_step").is_some()) { TYPED } else { "" }
 }
 
 fn note_text(

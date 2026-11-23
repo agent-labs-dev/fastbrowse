@@ -23,8 +23,8 @@ use fastbrowse_core::models::{Artifact, ArtifactKind, Held, Link, Operation, Sou
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::json as json_document;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, FillReceiver, ItemPlace, Media,
-    Observation, Page, PageResult,
+    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, FillReceiver,
+    ItemPlace, Media, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
