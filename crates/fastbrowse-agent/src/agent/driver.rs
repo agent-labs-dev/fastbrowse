@@ -166,8 +166,8 @@ Tools:
 - click(id); type(id, text) replaces the field's text; select(id, option) picks one of the listed options exactly.
 - type_secret(id, name) types the secret with that name; you never see its value. Use only the secret names given.
 - key(id, key) presses a key or chord in the control, such as Enter, Escape, Tab or ArrowDown.
-- scroll(id, down) scrolls the control, or the page when id is null; goto(url) opens an address the task or the pages \
-gave; back() goes back.
+- scroll(id, down) scrolls the control, or the page when id is null; goto(url) opens an address; \
+back() goes back.
 - wait() waits until the page changes, for a page that is still loading or checking the browser.
 - read() records what the current page shows as evidence. The final answer is written only from pages you read, so \
 read each earlier page that shows part of the answer, while it shows it.

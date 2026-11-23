@@ -436,3 +436,21 @@ async fn test_a_plan_made_on_a_fetched_page_is_told_it_never_ran_once_a_browser_
     assert!(driver.told(1).contains("none of your last actions ran"), "{}", driver.told(1));
     assert!(!driver.told(1).contains("page changed"), "{}", driver.told(1));
 }
+
+#[tokio::test]
+async fn test_the_driver_opens_an_address_it_wrote_itself() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "goto", "url": "https://example.test/item/42"}]}),
+        give_up(),
+    ]);
+    let result = run(page, driver).await;
+    assert_ne!(result.failure_kind.as_deref(), Some("Navigate/unsupplied-address"), "{:?}", result.error);
+    assert_eq!(result.status, Status::Stuck, "{:?}", result.error);
+    assert_eq!(
+        result.steps.first().map(|step| step.operation),
+        Some(fastbrowse_core::models::Operation::Navigate),
+        "{:?}",
+        result.steps
+    );
+}

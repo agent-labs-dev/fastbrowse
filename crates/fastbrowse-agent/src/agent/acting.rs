@@ -543,8 +543,12 @@ impl Agent {
                 ..Action::new(Operation::Search)
             }),
             Operation::Navigate => {
+                // The chat driver writes the address itself, as the old chooser's known pages were written by a model
+                // too: held to that list, it was refused every address it built (pypi-newer, ruff-release). What keeps a
+                // made-up address safe is checked below for every address: no secret in it, and the navigation gate.
                 let Some(url) = decision.url.clone().filter(|url| {
-                    task_urls(&state.task, state.caller_start.as_deref(), true).contains(url)
+                    (self.chat && crate::start::accept_start(Some(url)).is_some())
+                        || task_urls(&state.task, state.caller_start.as_deref(), true).contains(url)
                         || state.reload_target(&observation.url).as_ref() == Some(url)
                         || state.pager_followed.contains(url)
                         || state.routes.contains(url)
