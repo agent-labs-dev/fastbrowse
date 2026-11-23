@@ -788,6 +788,16 @@ fn test_the_reply_to_a_sent_commit_is_a_note_a_claim_can_cite() {
     }
 }
 
+/// A notice the page already showed once and shows again after the commit is quoted at the line that was added, the
+/// last one, not the earlier element it repeats.
+#[test]
+fn test_a_repeated_notice_is_quoted_at_the_line_that_was_added() {
+    let page = capture(&[(BlockKind::Paragraph, "Saved\nEdited\nSaved")]);
+    let quotes = crate::retrieval::line_quotes(&page, &["Saved".into()]);
+    assert_eq!(quotes.len(), 1);
+    assert_eq!(quotes[0].start, "Saved\nEdited\n".chars().count() as i64 + page.blocks[0].start);
+}
+
 #[tokio::test]
 async fn a_sent_notice_capture_is_kept_for_its_citation() {
     let agent = agent();

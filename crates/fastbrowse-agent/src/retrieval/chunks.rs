@@ -38,14 +38,16 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
     }
 }
 
-/// Each of `lines` as a quote of the capture's rendered text, cut at the first line of the page that reads as it once
-/// stripped, and each line of the page quoted once. A line found only in a typed observation, a document title or a
-/// kept download is not quoted: none of them is text the page showed.
+/// Each of `lines` as a quote of the capture's rendered text, cut at the last line of the page that reads as it once
+/// stripped, and each line of the page quoted once. The last, because `added_text` names the last listed of a piece
+/// the page already showed: the first would quote an element that was there before the step. A line found only in a
+/// typed observation, a document title or a kept download is not quoted: none of them is text the page showed.
 pub(crate) fn line_quotes(capture: &Capture, lines: &[String]) -> Vec<Evidence> {
     let page = Page::new(capture);
     let mut wanted: Vec<&str> = lines.iter().map(|line| text::strip(line)).filter(|line| !line.is_empty()).collect();
     let mut quotes = Vec::new();
-    for (start, end) in super::text::splitlines(&page.chars) {
+    let spans: Vec<_> = super::text::splitlines(&page.chars).into_iter().collect();
+    for (start, end) in spans.into_iter().rev() {
         let (mut start, mut end) = (start as i64, end as i64);
         while start < end && page.chars[start as usize].is_whitespace() {
             start += 1;
@@ -65,6 +67,7 @@ pub(crate) fn line_quotes(capture: &Capture, lines: &[String]) -> Vec<Evidence> 
         wanted.remove(at);
         quotes.push(evidence(&page, block, start, end));
     }
+    quotes.reverse();
     quotes
 }
 
