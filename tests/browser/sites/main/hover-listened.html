@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><title>Tracks</title>
+<style>li { list-style: none; width: 220px; margin: 8px; padding: 8px; border: 1px solid #999; position: relative; }</style></head>
+<body>
+  <h1>Tracks</h1>
+  <ul id="items">
+    <li id="t1"><a href="#t1">Intro theme</a></li>
+    <li id="t2"><a href="#t2">Battle theme</a></li>
+    <li id="t3"><a href="#t3">Credits theme</a></li>
+  </ul>
+  <p id="status"></p>
+  <script>
+    // Every card keeps its link on screen, holds no picture, and renders its remove button from a script that
+    // listens for the pointer entering it: no stylesheet rule names the button.
+    for (const item of document.querySelectorAll('li')) {
+      item.addEventListener('mouseenter', () => {
+        const remove = document.createElement('button');
+        remove.textContent = 'Remove';
+        remove.addEventListener('click', () => {
+          item.remove();
+          document.getElementById('status').textContent = 'Removed ' + item.id;
+        });
+        item.append(remove);
+      });
+      item.addEventListener('mouseleave', () => item.querySelector('button')?.remove());
+    }
+  </script>
+</body></html>
