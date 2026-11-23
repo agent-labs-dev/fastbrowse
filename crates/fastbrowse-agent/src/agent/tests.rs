@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
-    NoulAnswer, Question,
+    NoulAnswer, NoulQuestion, Question,
 };
 use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
@@ -1871,6 +1871,59 @@ async fn test_a_commit_with_values_for_later_proceeds_only_once_the_site_has_res
     }
 }
 
+#[tokio::test]
+async fn test_a_conditional_gate_describes_press_chords_and_navigation_addresses() {
+    for (operation, action, expected, absent) in [
+        (
+            Operation::Press,
+            "press the element labelled 'Name'.\nThe exact key chord to press is 'x'.\n",
+            "exact key chord",
+            "types no text",
+        ),
+        (
+            Operation::Navigate,
+            "open the address https://example.test/next.\n",
+            "address is its only input",
+            "control it acts on",
+        ),
+    ] {
+        let jev = Arc::new(Conditioned {
+            answers: IndexMap::from([
+                ("irreversible", 0.95),
+                ("requested", 0.97),
+                ("lasting", 0.95),
+                ("conditional", 0.9),
+            ]),
+            chosen: IndexMap::from([("values", "first"), ("met", "asked")]),
+            asked: Default::default(),
+        });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.authorization = Authorization { irreversible_actions: true };
+        let target = (operation == Operation::Press).then(|| button("Name"));
+        let decision = Decision { operation_confidence: 0.86, ..code_decision(operation, target.clone()) };
+        let page = observation(target.as_slice());
+        let irreversible = NoulQuestion::new("irreversible", Some("yes"), Some("no"));
+        let lasting = NoulQuestion::new("lasting", Some("yes"), Some("no"));
+        agent
+            .gate_question(
+                &mut state,
+                &page,
+                &decision,
+                target.as_ref().map_or("address", |control| control.label.as_str()),
+                Some(irreversible),
+                action,
+                Some(lasting),
+            )
+            .await
+            .expect("the conditional action proceeds");
+        let asked = jev.asked.lock().unwrap();
+        let values = &asked[1].1["values"];
+        assert!(values.contains(expected), "{operation}: {values}");
+        assert!(!values.contains(absent), "{operation}: {values}");
+    }
+}
+
 /// A task that orders a delete after opening a dialog and cancelling it ("then delete") was refused because the
 /// condition check judged only from a page that cannot show a dialog that was opened and cancelled (#1006). Each of the
 /// check's questions now states the steps the run took, in order, and none a refused, stale or secret one.
@@ -1914,7 +1967,8 @@ async fn test_the_condition_check_is_told_the_steps_the_run_took() {
     assert!(!asked[0].1["requested"].contains("The steps this run has already taken"));
     // The values question states what a click takes from the task, and offers no option to name values it has none of.
     assert!(
-        questions["values"].contains("This action types no text. The only things it uses are the control it acts on")
+        questions["values"]
+            .contains("This action types no text. The only things it uses are the control it acts on, named above")
     );
     assert!(questions["values"].ends_with("only for once something happens?"), "{}", questions["values"]);
 }

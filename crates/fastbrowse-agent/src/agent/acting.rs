@@ -1063,7 +1063,9 @@ impl Agent {
             let commits = wanted && (!reversible || keeps);
             if commits
                 && (conditional || state.commits > 0)
-                && let Some(why) = self.condition_refusal(state, observation, decision.target.as_ref(), action).await?
+                && let Some(why) = self
+                    .condition_refusal(state, observation, decision.target.as_ref(), decision.operation, action)
+                    .await?
             {
                 self.trace_authorization(state, decision, GateReason::ConditionUnmet);
                 return self.refuse_once(state, observation, decision, label, why).await;
@@ -1129,6 +1131,7 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         target: Option<&Control>,
+        operation: Operation,
         action: &str,
     ) -> Step<Option<&'static str>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -1140,7 +1143,7 @@ impl Agent {
         let action = action.as_str();
         let questions = IndexMap::from([
             ("met".to_string(), Question::Choice(met_question(action))),
-            ("values".to_string(), Question::Choice(values_question(action))),
+            ("values".to_string(), Question::Choice(values_question(operation, action))),
             ("happened".to_string(), Question::Choice(happened_question(action))),
         ]);
         let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {

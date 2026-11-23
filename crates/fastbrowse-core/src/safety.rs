@@ -398,13 +398,34 @@ pub const LATER_VALUES: &str = "later";
 /// Asked which values a click uses, with three options, it had nothing to name: a delete the task orders after
 /// "click Reorder gallery and Cancel, then ..." read as the values given for later, 3 samples in 6 and 6 in 6 with the
 /// run's steps stated, from a click that uses no value at all (#1006). The question states what the action takes from
-/// the task, which code knows: it types no text, and uses only the control it acts on and the form values already
-/// listed. Asked as a yes or no, with that stated, Jev answered `first` 24 times in 24 over the four requests replayed.
-pub fn values_question(action: &str) -> ChoiceQuestion {
+/// the task, which code knows: each operation states its inputs, including a press chord, a navigation address or the
+/// controls and form values a submission uses. Asked as a yes or no, with that stated, Jev answered `first` 24 times in
+/// 24 over the four requests replayed.
+pub fn values_question(operation: Operation, action: &str) -> ChoiceQuestion {
+    let inputs = match operation {
+        // The wording the replays above measured, kept for the click they were made on.
+        Operation::Click => {
+            "This action types no text. The only things it uses are the control it acts on, named above, and any \
+             form values listed above that it submits."
+        }
+        Operation::Drag => {
+            "This action uses the source and destination controls named above and any form values listed above that it submits."
+        }
+        Operation::Enter => {
+            "This action presses Enter in the control named above and submits any form values listed above."
+        }
+        Operation::Press => {
+            "This action presses the exact key chord stated above in the control named above. It may type text, change a setting, or submit any form values listed above."
+        }
+        Operation::Navigate => {
+            "This action opens the address stated above. The address is its only input; it does not type text or submit form values."
+        }
+        Operation::Dialog => "This action accepts the dialog shown above. It does not type text or submit form values.",
+        _ => "This action uses the inputs stated above.",
+    };
     ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nThe agent is about to {action}This action types no text. The only things it uses are the \
-             control it acts on, named above, and any form values listed above that it submits. `task` may give \
+            "{UNTRUSTED}\nThe agent is about to {action}{inputs} `task` may give \
              values to use at first and other values to use only once something happens. Does this action use values \
              the task gives only for once something happens?"
         ),
@@ -1282,6 +1303,20 @@ mod tests {
         let done = question.criteria.get(DONE).expect("completed result option").as_str().unwrap();
         assert!(done.contains("page or recorded effects"));
         assert!(done.contains("An executed action with no effect does not show this"));
+    }
+
+    #[test]
+    fn conditional_values_questions_describe_press_chords_and_navigation_addresses() {
+        let press = values_question(
+            Operation::Press,
+            "press the element labelled 'Name'.\nThe exact key chord to press is 'x'.\n",
+        );
+        assert!(!press.instructions.contains("types no text"));
+        assert!(press.instructions.contains("exact key chord"));
+
+        let navigate = values_question(Operation::Navigate, "open the address https://example.test/next.\n");
+        assert!(!navigate.instructions.contains("control it acts on"));
+        assert!(navigate.instructions.contains("address"));
     }
 
     #[test]
