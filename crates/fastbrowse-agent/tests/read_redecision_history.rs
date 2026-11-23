@@ -67,6 +67,7 @@ impl Page for PicturedPage {
                 page_changed: true,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }
