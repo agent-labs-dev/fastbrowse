@@ -1684,6 +1684,9 @@ impl Agent {
             // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
+            if state.committing && observation.document_key != before.document_key {
+                state.committed_at.insert(observation.url.clone());
+            }
             state.replied = (state.committing || keeping || last.look.is_some())
                 && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)

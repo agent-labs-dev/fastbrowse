@@ -11107,7 +11107,7 @@ async fn test_a_plan_stops_at_the_step_limit() {
 }
 
 #[test]
-fn a_known_page_is_offered_to_navigate_to_until_the_run_is_on_it() {
+fn a_known_page_is_offered_to_navigate_to_beside_this_pages_own_as_a_reload() {
     // In a recorded first step on a package index, told only "another address" Jev searched the site for the item
     // whose page was on offer, with one known page and with two. Naming a known page as one held read 0.73, against
     // 0.66 for naming it as the address.
@@ -11120,27 +11120,53 @@ fn a_known_page_is_offered_to_navigate_to_until_the_run_is_on_it() {
     let context = agent.context(&state, &search, Vec::new(), false, false).unwrap();
     let request = crate::policy::build_request(&search, &[], &context, &Default::default(), 64);
     let Question::Choice(operations) = &request.questions["operation"] else { panic!("an operation choice") };
-    // The one address is answered without Jev, so the operation it chooses names it.
+    // The operation is chosen apart from its target, so the operation names the known page.
     let navigate = operations.criteria["navigate"].as_str().unwrap();
-    assert!(navigate.ends_with("known to hold an item the task names: https://pypi.org/project/httpx/"), "{navigate}");
+    assert!(navigate.contains("known to hold an item the task names: https://pypi.org/project/httpx/."), "{navigate}");
     let Question::Choice(targets) = &request.questions["navigate_target"] else { panic!("a navigate target") };
     assert_eq!(targets.criteria["0"], "https://pypi.org/project/httpx/");
+    // A task that asked to reload the page it was on had no operation to do it with (#1433): this page's own address
+    // is offered too, told apart by what opening it loses.
+    assert_eq!(targets.criteria["1"], "https://pypi.org/");
+    let reload = "https://pypi.org/ is this page's own address: opening it reloads the page, and values typed here and not saved are lost.";
+    assert!(navigate.ends_with(reload), "{navigate}");
+    assert!(targets.instructions.ends_with(reload), "{}", targets.instructions);
     let mut there = search.clone();
     there.url = "https://pypi.org/project/httpx/".into();
     let context = agent.context(&state, &there, Vec::new(), false, false).unwrap();
     let request = crate::policy::build_request(&there, &[], &context, &Default::default(), 64);
-    assert!(!request.questions.contains_key("navigate_target")); // With several, the known ones are named, since the operation is chosen apart from its target.
+    let Question::Choice(targets) = &request.questions["navigate_target"] else { panic!("a navigate target") };
+    assert_eq!(targets.criteria.len(), 1, "the known page is not offered on itself, except as a reload");
     state.known_pages.push("https://pypi.org/project/requests/".into());
     let context = agent.context(&state, &search, Vec::new(), false, false).unwrap();
     let request = crate::policy::build_request(&search, &[], &context, &Default::default(), 64);
     let Question::Choice(operations) = &request.questions["operation"] else { panic!("an operation choice") };
     let navigate = operations.criteria["navigate"].as_str().unwrap();
     assert!(
-        navigate.ends_with(
-            "known to hold an item the task names: https://pypi.org/project/httpx/, https://pypi.org/project/requests/"
+        navigate.contains(
+            "known to hold an item the task names: https://pypi.org/project/httpx/, https://pypi.org/project/requests/."
         ),
         "{navigate}"
     );
+}
+
+/// A commit that loaded a new document can be sent again by opening its address, as a GET that unsubscribes is, so
+/// that page does not offer itself as a reload; one saved in place keeps the offer.
+#[test]
+fn a_page_a_commit_loaded_is_not_offered_as_a_reload() {
+    let commit = |to: Observation| {
+        let mut state = run_state();
+        state.committing = true;
+        state.acted_from = Some(Observation { document_key: "form".into(), ..at("https://example.test/edit", &[]) });
+        state.history.push(executed(Some(Operation::Click), Some("Save"), true));
+        agent().note_effect(&mut state, &to);
+        state.reload_target(&to.url)
+    };
+    let saved = Observation { document_key: "form".into(), ..at("https://example.test/edit", &[]) };
+    assert_eq!(commit(saved).as_deref(), Some("https://example.test/edit"));
+    let loaded = Observation { document_key: "done".into(), ..at("https://example.test/done?id=3", &[]) };
+    assert_eq!(commit(loaded), None);
+    assert_eq!(run_state().reload_target("about:blank"), None);
 }
 
 #[test]

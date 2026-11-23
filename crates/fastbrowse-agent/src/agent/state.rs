@@ -479,6 +479,10 @@ pub(crate) struct RunState {
     /// Commits this run has carried out, each counted once the page after it did not fail. A later commit is checked
     /// against the page and the run's own steps, so one the task asks for once is not sent again (#882).
     pub commits: usize,
+    /// Addresses whose document a committing action loaded. A task that asked to reload the page it was on could not
+    /// (#1433), so every page offers its own address; one a commit loaded is held back, since a GET that commits is
+    /// sent again by reopening it.
+    pub committed_at: HashSet<String>,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
@@ -530,9 +534,10 @@ impl RunState {
         self.surface_judged.as_ref().filter(|(judged, _)| judged == page && !self.page_failed).map(|(_, odds)| *odds)
     }
 
-    /// The address of the page at `url` when a site failure that can clear stands on it: opening it again reloads it.
+    /// The address of the page at `url`, which opening again reloads, unless a commit loaded the document there: opening
+    /// that address again can send the commit again.
     pub fn reload_target(&self, url: &str) -> Option<String> {
-        self.site_failure.as_ref().filter(|failure| failure.url == url && failure.transient()).map(|f| f.url.clone())
+        (fastbrowse_core::navigation::valid_address(url) && !self.committed_at.contains(url)).then(|| url.to_owned())
     }
 
     pub fn read_note(&self) -> &'static str {
@@ -836,6 +841,7 @@ impl RunState {
             committing: false,
             dialog_form: None,
             commits: 0,
+            committed_at: HashSet::new(),
             redecided: false,
             last_page: None,
             surface_judged: None,
@@ -938,6 +944,7 @@ impl RunState {
             committing: false,
             dialog_form: None,
             commits: 0,
+            committed_at: HashSet::new(),
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),
             followed: None,
