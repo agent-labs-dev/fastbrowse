@@ -2028,7 +2028,7 @@ fn quote_positions(quotes: &[serde_json::Value], listed: usize) -> String {
                 format!(" A quote with after_step {taken} was read after all {listed} of the steps listed, so it shows the page as those steps left it.")
             } else {
                 let next = taken + 1;
-                format!(" A quote with after_step {taken} was read before step {next} of the {listed} listed, so it shows the state before step {next}, not the state after it.")
+                format!(" A quote with after_step {taken} was read before step {next} of the {listed} listed, so it shows the state before step {next}; it does not show the state after step {next} only where that step changed what the quote shows.")
             }
         })
         .collect()
@@ -5516,6 +5516,8 @@ mod tests {
         let mixed = quote_positions(&quotes(&[2, 1]), 2);
         assert!(mixed.contains("after_step 1 was read before step 2 of the 2 listed"), "{mixed}");
         assert!(mixed.contains(all), "{mixed}");
+        // A later step that changed something else leaves the quote standing, so the rule is not unconditional.
+        assert!(mixed.contains("only where that step changed what the quote shows"), "{mixed}");
         assert_eq!(quote_positions(&[json!({})], 2), "");
     }
 
