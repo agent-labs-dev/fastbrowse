@@ -1236,8 +1236,18 @@ fn coverage_question(
 ) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form. Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values.{} A claim that a requested value is not shown or does not exist answers that request; whether it holds is checked separately. Task: {} Answer: {}",
+            "{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form. Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values.{} A claim that a requested value is not shown or does not exist answers that request; whether it holds is checked separately.{} Task: {} Answer: {}",
             if screenshot == Screenshot::Attached { format!(" {SCREENSHOT_ATTACHED}") } else { String::new() },
+            // Without the steps, "delete it and confirm the deletion" read the confirmation as a fact the answer
+            // must state, though the run had clicked the confirm button (0.53 against 0.84 once stated, #1451).
+            if steps.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " The run carried out these steps: {}. An action the run took is not a fact the answer must state.",
+                    dumps(&json!(steps))
+                )
+            },
             dumps(&json!(task)),
             dumps(&json!({"columns": columns, "answer": assemble_answer(claims, notes, steps).linked_answer}))
         ),
@@ -1580,7 +1590,14 @@ async fn review_composition(
     let state_chars = text::len(&dumps(&state)) as i64;
     let fits_one = questions.values().any(|question| state_chars <= tokens.input_chars(&[question.dump_json()]));
     if require_coverage && fits_one {
-        questions.insert("coverage".into(), coverage_question(task, screenshot, columns, &claims, notes, steps));
+        // The steps go in only while the question still fits beside the report; else coverage is judged without them,
+        // as the claim checks are above, and the actions check names the steps as too large.
+        let report_chars = text::len(&dumps(&json!({"task": task, "pages_read": pages_read(notes)}))) as i64;
+        let mut coverage = coverage_question(task, screenshot, columns, &claims, notes, steps);
+        if report_chars > tokens.input_chars(&[coverage.dump_json()]) {
+            coverage = coverage_question(task, screenshot, columns, &claims, notes, &[]);
+        }
+        questions.insert("coverage".into(), coverage);
     }
     if exact && fits_one && !copied.is_empty() {
         questions.insert("exact".into(), copied_question(task, &copied));
@@ -5610,6 +5627,27 @@ mod tests {
                 "{user}"
             );
         }
+    }
+
+    #[test]
+    fn coverage_question_states_the_steps_the_run_took() {
+        let steps = [json!({"action": "click", "target": "OK (Delete media)"})];
+        let ask = |steps: &[Value]| {
+            let Question::Noul(coverage) = coverage_question(
+                "Delete it and confirm the deletion",
+                Screenshot::Absent,
+                None,
+                &[],
+                &Notes::default(),
+                steps,
+            ) else {
+                panic!("coverage is a noul question");
+            };
+            coverage.instructions
+        };
+        let with = ask(&steps);
+        assert!(with.contains("The run carried out these steps: [{\"action\": \"click\", \"target\": \"OK (Delete media)\"}]. An action the run took is not a fact the answer must state."), "{with}");
+        assert!(!ask(&[]).contains("The run carried out"));
     }
 
     #[test]
