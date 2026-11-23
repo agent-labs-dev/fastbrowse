@@ -60,7 +60,8 @@ impl Agent {
     /// A read whose Jev call runs beside `work`, which must not depend on the notes the read adds: a click's gates see
     /// only the task, the origin and the history. The read's result is applied before `work`'s is returned, so what
     /// follows sees the page as read, as it would after a read made first. None when the read needs the browser
-    /// again (an empty capture waits for the page) or would not run, and the caller reads first instead.
+    /// again (an empty capture waits for the page) or would not run, and the caller reads first instead. With `work`'s
+    /// result comes whether the read added evidence.
     pub(super) async fn read_beside<T>(
         &self,
         state: &mut RunState,
@@ -68,7 +69,7 @@ impl Agent {
         observation: &Observation,
         shows: bool,
         work: impl AsyncFnOnce(&mut RunState) -> T,
-    ) -> Step<Option<T>> {
+    ) -> Step<Option<(T, bool)>> {
         if state.page_failed || text::strip(&capture.text).is_empty() {
             return Ok(None);
         }
@@ -88,8 +89,8 @@ impl Agent {
             reached_by.as_deref(),
         );
         let (read, done) = tokio::join!(self.trace.phase("read", reading), work(state));
-        self.end_read(state, capture, observation, tries, known, read?);
-        Ok(Some(done))
+        let progressed = self.end_read(state, capture, observation, tries, known, read?);
+        Ok(Some((done, progressed)))
     }
 
     fn end_read(

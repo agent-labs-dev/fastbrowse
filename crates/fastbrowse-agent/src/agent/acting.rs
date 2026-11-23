@@ -1082,11 +1082,6 @@ impl Agent {
             if reversible || wanted {
                 state.committing = !reversible;
                 state.keeping = keeps;
-                if state.committing {
-                    // What this commits can still be redirecting or awaiting a 3-D Secure check when the run ends,
-                    // and closing the tab would abort it (#748).
-                    self.page.hand_over_tab();
-                }
                 self.trace_authorization(
                     state,
                     decision,

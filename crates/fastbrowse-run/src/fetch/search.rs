@@ -164,6 +164,7 @@ impl Page for SearchPage {
                     page_changed: false,
                     detail: Some("search results changed since observation".into()),
                     moved: false,
+                    landed: None,
                 });
             }
             let url = match action.operation {
@@ -178,6 +179,7 @@ impl Page for SearchPage {
                     page_changed: false,
                     detail: Some("Search results are fixed data. Open a result link or choose another search.".into()),
                     moved: false,
+                    landed: None,
                 });
             };
             self.results.loaded.lock().unwrap().requested = Some(url.clone());
@@ -303,6 +305,7 @@ mod tests {
                     page_changed: false,
                     detail: Some("retained navigation check".into()),
                     moved: false,
+                    landed: None,
                 })
             })
         }

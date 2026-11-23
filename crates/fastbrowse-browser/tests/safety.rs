@@ -272,6 +272,29 @@ async fn test_iframe_focus_hit_testing_and_capture_scope() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_framed_fill_and_capture_use_the_child_document() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    let obs = observe_until(&h.page, "Frame field").await;
+    let field = find(&obs, "Frame field");
+    let result = h.page.act(&fill(&field.id, "frame value"), &obs).await.expect("fill");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    let capture = h.page.capture().await.expect("capture");
+    let control = capture
+        .blocks
+        .iter()
+        .filter_map(|block| block.control_context.as_ref())
+        .find(|control| control.held.iter().any(|held| held.element == field.id))
+        .expect("captured frame field");
+    let receiver = result.landed.expect("fill receiver");
+    assert_eq!(receiver.element, field.id);
+    assert_eq!(control.document.as_deref(), Some(receiver.document.as_str()));
+    assert_ne!(receiver.document, obs.document_key);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_fill_does_not_claim_execution_when_page_rejects_value() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };

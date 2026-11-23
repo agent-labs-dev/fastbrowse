@@ -688,6 +688,18 @@ pub struct ActResult {
     /// it opened a tab. A page that moves on its own time is not.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub moved: bool,
+    /// For a fill: the control that holds the text it typed, as the observation names a control, as the browser
+    /// reports the editable focused when the typing ended. It is not always the one asked for: a page can hand focus
+    /// to another editor. None when the browser reported no such control, so nothing is claimed about where it went.
+    /// The run's own bookkeeping, held in process: never part of the protocol, so never written or read.
+    #[serde(skip)]
+    pub landed: Option<FillReceiver>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FillReceiver {
+    pub element: String,
+    pub document: String,
 }
 
 pub type PageResult<T> = Result<T, BrowserError>;

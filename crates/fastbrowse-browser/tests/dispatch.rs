@@ -764,6 +764,45 @@ async fn test_a_drag_hit_tests_the_destination_before_pressing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_default_native_drag_sources_revalidate_the_drop_target() {
+    for (kind, source_markup) in [
+        (
+            "image",
+            r#"<img id=source alt="Card A" src="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27100%27 height=%2780%27%3E%3Crect width=%27100%27 height=%2780%27 fill=%27%2389a%27/%3E%3C/svg%3E" style="position:fixed;left:20px;top:20px;width:100px;height:80px;cursor:grab">"#,
+        ),
+        (
+            "link",
+            r#"<a id=source href="/dispatch.html" aria-label="Card A" style="display:block;position:fixed;left:20px;top:20px;width:100px;height:80px;cursor:grab">Card A</a>"#,
+        ),
+    ] {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        let html = format!(
+            "{source_markup}<button id=drop style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\">Done</button>"
+        );
+        eval_active(
+            &h.page,
+            &format!(
+                "document.body.innerHTML = {}; const source = document.getElementById('source'); \
+                 const drop = document.getElementById('drop'); window.drops = []; \
+                 source.ondragstart = event => {{ event.dataTransfer.setData('text/plain', 'Card A'); drop.textContent = 'Trash'; }}; \
+                 drop.ondragover = event => event.preventDefault(); \
+                 drop.ondrop = event => {{ event.preventDefault(); window.drops.push(event.target.id); }}; true",
+                serde_json::to_string(&html).unwrap()
+            ),
+        )
+        .await;
+        let observation = h.observe().await;
+        let source = find(&observation, "Card A");
+        assert!(source.operations.contains(&Operation::Drag), "{kind}: {source:?}");
+        let result = h.page.act(&drag(source, find(&observation, "Done")), &observation).await.expect("act");
+        assert_eq!(result.outcome, StepOutcome::Stale, "{kind}: {:?}", result.detail);
+        assert_eq!(eval_active(&h.page, "window.drops").await, json!([]), "{kind}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_drag_revalidates_its_endpoints_after_scrolling_and_pointer_entry() {
     for change in ["scroll", "move", "replace", "destination"] {
         let Some(h) = harness().await else { return };
@@ -2637,4 +2676,54 @@ async fn test_a_covered_drop_target_is_not_released_on_a_nested_control() {
     assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
     assert_eq!(eval_active(&h.page, "window.presses").await, json!([]));
     h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_list_sorted_by_the_pages_pointer_script_is_reordered_by_a_drag() {
+    let Some(h) = harness().await else { return };
+    h.goto("/sortable.html").await;
+    let obs = h.observe().await;
+    // Nothing in the markup says the handles are dragged; their grab cursor does.
+    for label in ["Alpha", "Delta"] {
+        assert!(find(&obs, label).operations.contains(&Operation::Drag), "{label}: {:?}", find(&obs, label).operations);
+    }
+    let result = h.page.act(&drag(find(&obs, "Alpha"), find(&obs, "Charlie")), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(
+        eval_active(&h.page, "document.getElementById('order').textContent").await,
+        json!("Bravo, Charlie, Alpha, Delta")
+    );
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_pointer_drag_cancels_when_its_destination_is_replaced_before_release() {
+    for change in ["rename", "cover"] {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        let html = r#"<div id=source style="position:fixed;left:20px;top:20px;width:100px;height:80px;cursor:grab">Card A</div><button id=drop style="position:fixed;left:220px;top:20px;width:100px;height:80px">Done</button>"#;
+        eval_active(
+            &h.page,
+            &format!(
+                "document.body.innerHTML = {}; const drop = document.getElementById('drop'); window.drops = []; \
+                 let held = false; \
+                 document.getElementById('source').addEventListener('pointerdown', () => {{ held = true; }}); \
+                 document.addEventListener('pointermove', event => {{ if (held && event.clientX > 150 && !window.changed) {{ window.changed = true; \
+                 if ({}) drop.textContent = 'Trash'; else document.body.insertAdjacentHTML('beforeend', \
+                 '<div id=zone style=\"position:fixed;left:200px;top:0;width:160px;height:120px;z-index:10\">Trash</div>'); }} }}); \
+                 document.addEventListener('pointerup', event => {{ held = false; const hit = document.elementFromPoint(event.clientX, event.clientY); \
+                 if (hit && hit.id !== 'source') window.drops.push(hit.textContent); }}); true",
+                serde_json::to_string(html).unwrap(),
+                change == "rename",
+            ),
+        )
+        .await;
+        let observation = h.observe().await;
+        let source = find(&observation, "Card A");
+        assert!(source.operations.contains(&Operation::Drag), "{change}: {source:?}");
+        let result = h.page.act(&drag(source, find(&observation, "Done")), &observation).await.expect("act");
+        assert_eq!(result.outcome, StepOutcome::Stale, "{change}: {:?}", result.detail);
+        assert_eq!(eval_active(&h.page, "window.drops").await, json!([]), "{change}");
+        h.close().await;
+    }
 }

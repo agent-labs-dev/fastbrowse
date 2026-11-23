@@ -21,7 +21,7 @@ use super::helpers::{decision_label, describe, doing, drew_something, netloc_of,
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::seeing::{cards, covers_viewport};
 use super::state::{
-    FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
+    FailureCause, Flow, OutputIntent, Picked, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
 };
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
@@ -138,14 +138,13 @@ impl Agent {
             }
             // Jev's pick when it was asked again on this page is the decision here: asking once more would only ask
             // the same question without what went wrong.
-            let picked = state
-                .picked
-                .take()
-                .filter(|(key, ..)| *key == state_key(&observation))
-                .map(|(_, picked, look)| (picked, look))
-                .filter(|(picked, _)| {
-                    picked.target.as_ref().is_none_or(|target| observation.controls.iter().any(|c| c.id == target.id))
-                });
+            let picked = state.picked.take().and_then(|picked| match pick_stale(&picked, &observation) {
+                None => Some((picked.decision, picked.look)),
+                Some(reason) => {
+                    self.event("picked_dropped", || Map::from_iter([("reason".into(), reason.into())]));
+                    None
+                }
+            });
             if picked.is_some()
                 && let Some(replay) = state.replay.as_mut()
             {
@@ -435,17 +434,34 @@ impl Agent {
                 // A click's action is only its gates, which see the task, the origin and the history but never the
                 // notes, so it is built while the page is read.
                 let beside = matches!(decision.operation, Operation::Click | Operation::Enter);
-                let built = if beside {
+                let beside_read = if beside {
                     let building = async |state: &mut RunState| self.build(state, &observation, &decision).await;
                     self.read_beside(state, capture.clone(), &observation, shows, building).await?
                 } else {
                     None
                 };
-                match built {
-                    Some(built) => state.built = Some(built),
+                let (built, progressed) = match beside_read {
+                    Some((built, progressed)) => (Some(built), progressed),
                     None => {
-                        self.trace.phase("read", self.read(state, capture, &observation, shows)).await?;
+                        let read = self.trace.phase("read", self.read(state, capture, &observation, shows)).await?;
+                        (None, read)
                     }
+                };
+                // The decision was made before this read, so it did not see what the read took from the page: a
+                // reload chosen on a fresh load whose saved line only the read held was made twice (#1438). It is made
+                // again with the notes. Done is not, since finishing is judged against them. Nor is the first step,
+                // which has no earlier action whose result the read could show. The page then counts as read, so the
+                // second decision adds nothing more unless the page changes.
+                // A gate that already stopped the run for a person is not taken back.
+                let stopped = built.as_ref().is_some_and(|built| built.is_err());
+                if progressed && decision.operation != Operation::Done && !state.steps.is_empty() && !stopped {
+                    self.event("decision_after_read", || Map::from_iter([("step".into(), state.steps.len().into())]));
+                    state.built = None;
+                    Self::discard_decision(state);
+                    continue;
+                }
+                if built.is_some() {
+                    state.built = built;
                 }
             }
             if decision.operation == Operation::Done {
@@ -641,9 +657,17 @@ impl Agent {
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
         self.event("redecide", || Map::from_iter([("url".into(), observation.url.clone().into())]));
         state.redecided = true;
-        // Nothing was sent, so the commit the gate cleared is not one the run has made.
+        Self::discard_decision(state);
+    }
+
+    /// Nothing was sent: the commit the gate cleared is not one the run has made, and a pictured target or look left
+    /// set would be attached to the previous action by the next observation.
+    fn discard_decision(state: &mut RunState) {
         state.committing = false;
         state.keeping = false;
+        state.sighted = None;
+        state.look = None;
+        state.choices.clear();
     }
 
     /// `work`'s result, or `Redrawn` when the page redrew under it: `target`, or with none any control offered.
@@ -1045,6 +1069,7 @@ impl Agent {
                 page_changed: false,
                 detail: Some(text),
                 moved: false,
+                landed: None,
             };
         } else {
             let built = match state.built.take() {
@@ -1059,6 +1084,12 @@ impl Agent {
                 }
             };
             state.redecided = false;
+            if state.committing {
+                // What this commits can still be redirecting or awaiting a 3-D Secure check when the run ends, and
+                // closing the tab would abort it (#748). Handed over here, not when built: a read can discard the built
+                // action, and the tab would stay handed over for a commit never sent.
+                self.page.hand_over_tab();
+            }
             if action.operation == Operation::Fill
                 && action.text.as_deref().is_none_or(str::is_empty)
                 && require(decision.target.as_ref())?.value.as_deref().is_none_or(str::is_empty)
@@ -1347,6 +1378,14 @@ impl Agent {
             form,
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
+        if let (Some(entry), Some(landed)) = (state.history.last(), &act.landed)
+            && let Some(text) = &entry.text
+            && entry.changed_site()
+        {
+            // The control is the one the browser reported the text in, which a later read of that control reports.
+            let step = state.history.iter().filter(|entry| entry.changed_site()).count();
+            state.notes.remember_typing(step, &landed.document, &landed.element, text);
+        }
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {
             self.event("typed", || {
                 Map::from_iter([("step".into(), state.steps.len().into()), ("value".into(), value.into())])
@@ -1587,7 +1626,11 @@ impl Agent {
         // page to diff, kept the step, and the next click on the map was shown as made for it instead.
         let sighted = std::mem::take(&mut state.sighted);
         let keeping = std::mem::take(&mut state.keeping);
-        if let Some(last) = state.history.last_mut() {
+        // An observation with no action since the last one (a decision made again after a read) has no click to
+        // name, so it leaves the step the previous observation gave that click.
+        if (sighted.is_some() || state.acted_from.is_some())
+            && let Some(last) = state.history.last_mut()
+        {
             last.for_step = sighted.clone();
         }
         let Some(before) = state.acted_from.take() else { return };
@@ -1772,6 +1815,15 @@ impl Agent {
                     role: mask(&context.role),
                     label: mask(&context.label),
                     context: context.context.as_deref().map(mask),
+                    document: context.document.clone(),
+                    held: context
+                        .held
+                        .iter()
+                        .map(|held| fastbrowse_core::models::Held {
+                            element: held.element.clone(),
+                            value: mask(&held.value).into(),
+                        })
+                        .collect(),
                 }),
                 href: block.href.as_deref().map(mask),
                 // An address can carry a token in its query, and a link's text is page text like the rest.
@@ -2031,6 +2083,62 @@ fn judge_site(state: &mut RunState, observation: &Observation, decision: &Decisi
 /// Whether Jev's latest reading of this page judged it a sign-in wall.
 fn signing_in(state: &RunState, observation: &Observation, above: f64) -> bool {
     state.login_readings.get(&read_key(observation)).is_some_and(|probability| *probability > above)
+}
+
+/// Why Jev's pick after a refusal no longer applies to the page as it is now, or `None` when it still does. The
+/// whole-page key it was once held by dropped a pick whenever an unrelated toast closed in between, and Jev was asked
+/// afresh without the refusal and picked the refused click again.
+pub(super) fn pick_stale(picked: &Picked, observation: &Observation) -> Option<&'static str> {
+    if !fastbrowse_core::navigation::same_address(&picked.url, &observation.url) {
+        return Some("address_changed");
+    }
+    // A control id holds only while its document's node survives: a reload or same-address navigation can reuse an id
+    // and its visible attributes for another control, so a replaced document drops a targeted pick too. A page_key
+    // change inside the same document (a toast closing) drops only a pick with no target to check.
+    if picked.document_key != observation.document_key
+        || (picked.decision.target.is_none() && picked.page_key != observation.page_key)
+    {
+        return Some("page_changed");
+    }
+    let target = picked.decision.target.as_ref()?;
+    let Some(now) = observation.controls.iter().find(|c| c.id == target.id) else {
+        return Some("target_gone");
+    };
+    if !same_control(target, now) {
+        return Some("target_changed");
+    }
+    // A drag acts on its drop target too: the same source over another destination is another action.
+    if let Some(destination) = picked.decision.destination.as_ref() {
+        let Some(now) = observation.controls.iter().find(|c| c.id == destination.id) else {
+            return Some("target_gone");
+        };
+        if !same_control(destination, now) {
+            return Some("target_changed");
+        }
+    }
+    // The browser's list omits what the policy derives: a key in a field that takes a fill, leaving a focused one.
+    let offered = crate::policy::takes(now, picked.decision.operation)
+        || (picked.decision.operation == Operation::Blur && fastbrowse_core::effects::leavable(now));
+    (!offered).then_some("operation_gone")
+}
+
+/// Whether `now` is the control Jev chose as `chosen`. A pick made for a link, a field or a box in one state was
+/// carried to the same control after its href, value or checked state changed, and acted on what Jev never chose.
+/// Focus, viewport visibility and the agent's own marks (read, other site, shown by, pictured, which turn on the
+/// controls around it) change without changing what the action does.
+fn same_control(chosen: &Control, now: &Control) -> bool {
+    let fingerprint = Control {
+        id: chosen.id.clone(),
+        operations: chosen.operations.clone(),
+        focused: chosen.focused,
+        offscreen: chosen.offscreen,
+        already_read: chosen.already_read,
+        other_site: chosen.other_site,
+        shown_by: chosen.shown_by.clone(),
+        pictured: chosen.pictured,
+        ..now.clone()
+    };
+    fingerprint == *chosen
 }
 
 #[cfg(test)]

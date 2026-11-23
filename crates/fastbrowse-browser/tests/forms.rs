@@ -611,6 +611,23 @@ async fn test_a_scripted_control_clipped_to_nothing_is_not_offered() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_pointer_drag_handle_clipped_to_nothing_is_not_offered() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div aria-label=\"Hidden card\" style=\"position:absolute;width:100px;height:20px;cursor:grab;clip-path:inset(100%)\"></div>\
+         <div aria-label=\"Shown card\" style=\"width:100px;height:20px;cursor:grab\"></div>'; true",
+    )
+    .await;
+    let observation = h.observe().await;
+    h.close().await;
+    let labels: Vec<_> = observation.controls.iter().map(|c| c.label.as_str()).collect();
+    assert!(labels.contains(&"Shown card"), "{labels:?}");
+    assert!(!labels.contains(&"Hidden card"), "{labels:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_clipped_checkbox_is_offered_through_its_label() {
     let Some(h) = harness().await else { return };
     h.goto("/dispatch.html").await;

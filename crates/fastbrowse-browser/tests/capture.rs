@@ -1437,3 +1437,242 @@ async fn test_a_kept_capture_goes_to_the_sessions_artifact_sink() {
     assert!(h.sink.artifacts.lock().unwrap().contains(&kept));
     h.close().await;
 }
+
+/// A native field's value is reported with the control's identity as the observation names it, so a step that typed
+/// into a control and a read of its value name the same control without comparing words (#1398).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_field_value_names_the_control_the_observation_gives_it() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<label>Notes <textarea>first draft</textarea></label>
+        <label>Notes <textarea>second draft</textarea></label>"#,
+    )
+    .await;
+    let observed = h.observe().await;
+    let named: Vec<_> = observed.controls.iter().filter(|c| c.label == "Notes").collect();
+    assert_eq!(named.len(), 2);
+    let capture = h.page.capture().await.expect("capture");
+    for control in named {
+        let value = control.value.as_deref().expect("value");
+        let block =
+            capture.blocks.iter().find(|b| capture.block_text(b) == format!("Notes: {value}")).expect("field block");
+        let reported = block.control_context.as_ref().and_then(|context| context.held.first());
+        assert_eq!(reported.map(|held| held.element.as_str()), Some(control.id.as_str()), "{value}");
+        let document = block.control_context.as_ref().and_then(|context| context.document.as_deref());
+        assert_eq!(document, Some(observed.document_key.as_str()), "{value}");
+    }
+    h.close().await;
+}
+
+/// A fill reports the control that holds its text as the focused editable when the typing ended, the same identity
+/// and document the capture then gives that field, so a later read of it is told apart as the run's own typing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fill_reports_the_field_the_capture_names() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<label>Notes <textarea></textarea></label><label>Other <textarea></textarea></label>"#)
+        .await;
+    let observed = h.observe().await;
+    let notes = observed.controls.iter().find(|c| c.label == "Notes").expect("notes field");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(notes.id.clone()),
+        text: Some("typed words".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(notes.id.as_str()));
+    let capture = h.page.capture().await.expect("capture");
+    let block =
+        capture.blocks.iter().find(|b| capture.block_text(b) == "Notes: typed words").expect("typed field block");
+    let control = block.control_context.as_ref().expect("control");
+    assert_eq!(
+        control.held.first().map(|held| &held.element),
+        result.landed.as_ref().map(|receiver| &receiver.element)
+    );
+    assert_eq!(control.document.as_deref(), Some(observed.document_key.as_str()));
+    h.close().await;
+}
+
+/// A field's capture carries the value exactly as the page holds it, beside the block's whitespace-collapsed text, so
+/// typing "A  B" is told from a site that replaced it with "A B".
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_field_reports_its_value_uncollapsed() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<label>Notes <textarea>A  B</textarea></label>"#).await;
+    let capture = h.page.capture().await.expect("capture");
+    let block = capture.blocks.iter().find(|b| capture.block_text(b) == "Notes: A B").expect("field block");
+    assert_eq!(block.control_context.as_ref().and_then(|c| c.held.first()).map(|held| &*held.value), Some("A  B"));
+    h.close().await;
+}
+
+/// The reported control is the editable focused as the text went in: a handler that moves focus on input names no
+/// later field.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fill_reports_the_field_that_took_the_text_not_the_one_focus_moved_to() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<label>Notes <textarea id=a></textarea></label><label>Next <textarea id=b></textarea></label>"#,
+    )
+    .await;
+    eval_active(
+        &h.session,
+        "document.getElementById('a').addEventListener('input', () => document.getElementById('b').focus())",
+    )
+    .await;
+    let observed = h.observe().await;
+    let notes = observed.controls.iter().find(|c| c.label == "Notes").expect("notes field");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(notes.id.clone()),
+        text: Some("typed words".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(notes.id.as_str()));
+    h.close().await;
+}
+
+/// A field inside a same-origin frame is reported by its own identity, not as the frame element holding it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fill_in_a_same_origin_frame_reports_the_field_inside_it() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate("about:blank", None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<iframe srcdoc=\"<label>Notes <textarea></textarea></label>\"></iframe>'",
+    )
+    .await;
+    let session = &h.session;
+    wait_until(
+        || async move {
+            eval_active(
+                session,
+                "Boolean(document.querySelector('iframe')?.contentDocument?.querySelector('textarea'))",
+            )
+            .await
+                == true
+        },
+        5.0,
+    )
+    .await;
+    let observed = h.observe().await;
+    let notes = observed.controls.iter().find(|c| c.label == "Notes").expect("framed field");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(notes.id.clone()),
+        text: Some("typed words".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(notes.id.as_str()));
+    h.close().await;
+}
+
+/// A contenteditable host is a field the capture names as it names a native one: the same identity and document as the
+/// fill reports for it, and its text as the raw value, carried by the block that reads it, so a report typed into it is
+/// told as the run's own typing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fill_into_a_contenteditable_reports_the_host_the_capture_names() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<div contenteditable="true" aria-label="Report"></div>"#).await;
+    let observed = h.observe().await;
+    let report = observed.controls.iter().find(|c| c.label == "Report").expect("editable host");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(report.id.clone()),
+        text: Some("typed words".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(report.id.as_str()));
+    let capture = h.page.capture().await.expect("capture");
+    let block = capture.blocks.iter().find(|b| capture.block_text(b) == "typed words").expect("host block");
+    let control = block.control_context.as_ref().expect("control");
+    assert_eq!(control.held.len(), 1);
+    assert_eq!(Some(&control.held[0].element), result.landed.as_ref().map(|receiver| &receiver.element));
+    assert_eq!(control.document.as_deref(), Some(observed.document_key.as_str()));
+    assert_eq!(&*control.held[0].value, "typed words");
+    h.close().await;
+}
+
+/// A filled contenteditable is read once, in place, as the block holding it reads without it being an editor: a
+/// paragraph, a heading, a table row (with its header and its generated text) and a designMode body each keep their own
+/// text, and carry the host's identity and value, so a quote from the block is told as possibly typed.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_editing_host_is_read_once_in_place_with_provenance_on_its_block() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>td.price::before { content: "$"; }</style>
+<p>Summary: <span contenteditable="true" aria-label="Status">Order shipped</span></p>
+<h2>Plan <span contenteditable="true">Quarterly</span></h2>
+<table><tr><th>Item</th><th>Price</th></tr>
+<tr><td>Widget</td><td class="price" contenteditable="true">25</td></tr>
+<tr><td>Gadget</td><td class="price">30</td></tr></table>"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let held_by = |words: &str| {
+        let holding: Vec<_> = capture.blocks.iter().filter(|b| capture.block_text(b).contains(words)).collect();
+        assert_eq!(holding.len(), 1, "{words} is read once: {:?}", capture.text);
+        holding[0]
+    };
+    let paragraph = held_by("Order shipped");
+    assert_eq!(capture.block_text(paragraph), "Summary: Order shipped");
+    assert_eq!(paragraph.control_context.as_ref().expect("provenance").held[0].value.as_ref(), "Order shipped");
+    let heading = held_by("Quarterly");
+    assert_eq!(heading.kind, BlockKind::Heading);
+    assert!(heading.control_context.as_ref().is_some_and(|c| c.held.len() == 1));
+    let row = held_by("Widget");
+    assert!(capture.block_text(row).contains("| Widget | $25 |"), "{}", capture.block_text(row));
+    assert!(capture.block_text(row).contains("| Item | Price |"), "{}", capture.block_text(row));
+    assert_eq!(row.control_context.as_ref().expect("row provenance").held[0].value.as_ref(), "25");
+    assert!(held_by("Gadget").control_context.is_none(), "another row does not carry the cell's provenance");
+
+    crate::common::eval_active(
+        &h.session,
+        "document.body.innerHTML = '<p>First</p><p>Second</p>'; document.designMode = 'on'",
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let first: Vec<_> = capture.blocks.iter().filter(|b| capture.block_text(b).contains("First")).collect();
+    assert_eq!(first.len(), 1);
+    assert!(first[0].control_context.as_ref().is_some_and(|c| c.held.len() == 1), "the body is the host");
+    h.close().await;
+}
+
+/// A host hidden after a fill is not read, so the visible block that contains it does not carry its value: server
+/// text in that block is not told as typed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hidden_editing_host_gives_its_block_no_provenance() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<p>Server note <span contenteditable="true" style="display:none">typed words</span></p>"#)
+        .await;
+    let capture = h.page.capture().await.expect("capture");
+    let block = capture.blocks.iter().find(|b| capture.block_text(b).contains("Server note")).expect("block");
+    assert!(block.control_context.is_none(), "{:?}", block.control_context);
+    h.close().await;
+}
+
+/// A native date or time fill returns before the typing path, and reports its field all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_native_date_fill_reports_the_field() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<label>Day <input type="date"></label>"#).await;
+    let observed = h.observe().await;
+    let day = observed.controls.iter().find(|c| c.label == "Day").expect("date field");
+    let act = fastbrowse_core::page::Action {
+        target_id: Some(day.id.clone()),
+        text: Some("2026-11-22".into()),
+        ..fastbrowse_core::page::Action::new(fastbrowse_core::models::Operation::Fill)
+    };
+    let result = h.page.act(&act, &observed).await.expect("fill");
+    assert_eq!(result.landed.as_ref().map(|receiver| receiver.element.as_str()), Some(day.id.as_str()));
+    h.close().await;
+}

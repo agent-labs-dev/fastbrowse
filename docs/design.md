@@ -391,7 +391,10 @@ and field names, regardless of how identical surrounding text was split into sou
 claim could change a copied name and fail where the first draft had passed. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
 facts and values, not the form the task asks for, such as JSON, since code writes every answer as claims; citation
-support and browser actions have separate checks. A whole-answer check beside coverage
+support and browser actions have separate checks. A source statement that a value is absent can satisfy coverage
+when supported. An answer that says the run did not establish the value leaves that request open. A quote of text
+the run typed supports the typing itself. Claim and tally checks are told when a quote contains that text, including
+when a typed page label is supplied as tally context. A whole-answer check beside coverage
 judges the claims against the steps the run carried out on the page: an answer that says something was not done, or
 already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
 recovery to write it again. Every draft receives the steps as the run's own record; a claim about a page result still
