@@ -1,5 +1,6 @@
 //! The spans code cuts from a capture.
 
+use fastbrowse_core::citations::table_blocks;
 use fastbrowse_core::models::{Evidence, Link};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::text;
@@ -40,11 +41,15 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
 
 /// The first span of `capture` that is `quote` exactly and lies inside one block, cut as code cuts any quote. A model
 /// that saw the page cites its words; code finds them, so a claim rests on page text whatever the model wrote.
+///
+/// A quote of a table row's cells starts at its block, which the capture opens with the table's header: cut alone,
+/// `| Boston Bruins | 1990 | 44 | 24 |` said nothing of which number is wins, and the answer gave the losses.
 pub(crate) fn quoted(capture: &Capture, quote: &str) -> Option<Evidence> {
     if text::strip(quote).is_empty() {
         return None;
     }
     let page = Page::new(capture);
+    let tables = table_blocks(capture);
     let length = quote.chars().count() as i64;
     capture.text.match_indices(quote).find_map(|(at, _)| {
         let start = capture.text[..at].chars().count() as i64;
@@ -53,6 +58,10 @@ pub(crate) fn quoted(capture: &Capture, quote: &str) -> Option<Evidence> {
             .blocks
             .iter()
             .find(|block| block.kind != BlockKind::DocumentTitle && block.start <= start && end <= block.end)?;
+        let start = tables
+            .iter()
+            .find(|table| table.start == block.start && table.start < table.row && table.row <= start)
+            .map_or(start, |table| table.start);
         Some(evidence(&page, block, start, end))
     })
 }
@@ -110,5 +119,20 @@ mod tests {
         assert!(quoted(&page, "Day: Monday").is_none());
         assert!(quoted(&page, "2026\n\nDay").is_none(), "spans two blocks");
         assert!(quoted(&page, "  ").is_none());
+    }
+
+    #[test]
+    fn a_quote_of_a_table_row_carries_the_header_its_block_opens_with() {
+        let text = "| Team | Year | Wins | Losses |\n| --- | --- | --- | --- |\n| Boston Bruins | 1990 | 44 | 24 |";
+        let page: Capture = serde_json::from_value(serde_json::json!({
+            "url": "https://example.test/", "title": "t", "captured_at": "2026-11-18T00:00:00Z", "sha256": "s",
+            "text": text, "blocks": [{"source_id": "r", "frame_id": null, "kind": "table", "start": 0,
+                                      "end": text.chars().count()}]
+        }))
+        .unwrap();
+        let row = quoted(&page, "| Boston Bruins | 1990 | 44 | 24 |").expect("on the page");
+        assert_eq!((row.start, row.quote.as_str()), (0, text));
+        let header = quoted(&page, "| Team | Year |").expect("on the page");
+        assert_eq!(header.quote, "| Team | Year |", "a quote of the header itself is cut as written");
     }
 }

@@ -117,7 +117,10 @@ impl Agent {
         let known = read_sources(&state.notes);
         let facts: Vec<Fact> = found
             .into_iter()
-            .filter_map(|(quote, evidence)| Some(Fact::read(quote, evidence?, FactReader::LlmQuote).answering()))
+            // The fact is the evidence's text, which for a table row is the row under its header.
+            .filter_map(|(_, evidence)| {
+                evidence.map(|evidence| Fact::read(&evidence.quote.clone(), evidence, FactReader::LlmQuote).answering())
+            })
             .collect();
         // Several quotes are parts of one answer, written up together.
         let compose = facts.len() > 1;
