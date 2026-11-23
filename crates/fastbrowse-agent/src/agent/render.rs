@@ -84,6 +84,9 @@ pub(super) fn line(control: &Control, new: bool) -> String {
     if control.offscreen {
         states.push("offscreen".into());
     }
+    if control.already_read == Some(true) {
+        states.push("leads to a page already read".into());
+    }
     if let Some(message) = &control.validation_message {
         states.push(format!("refused: {}", q(message)));
     }

@@ -263,6 +263,9 @@ impl Agent {
             self.note_effect(state, &observation);
             self.settle(state, &observation).await?;
             self.record_page(state, &observation);
+            // The pages of a list this page links to, so finishing opens one the run left unread: without them a count
+            // over every page ended on the pages the model chose to read, one short (quotes-rowling-count).
+            state.note_pager_pages(&observation);
             let act = match self.queued(state, &observation) {
                 Some(act) => act,
                 None => self.turn(state, &observation).await?,
@@ -326,7 +329,10 @@ impl Agent {
         for notice in state.chat.notices.drain(..) {
             content += &format!("Note: {notice}\n");
         }
-        content += &render(observation, &state.chat.seen);
+        // Links to pages already read are marked, so the model sees which pages of a list it has covered.
+        let mut shown = observation.clone();
+        state.mark_links(&mut shown);
+        content += &render(&shown, &state.chat.seen);
         state.chat.seen = observation.controls.iter().map(|control| control.id.clone()).collect();
         state.chat.messages.push(Message::user(self.redact(&content)));
         let generation =
@@ -395,8 +401,17 @@ impl Agent {
                     Box::pin(self.step(state, observation, &decision(Operation::Read, None, None, None))).await?;
                     state.chat.read_on = Some(read_key(observation));
                 }
+                let followed = state.pager_followed.len();
                 let finished = self.finish(state, observation, output_schema, until).await?;
-                if finished.is_none() {
+                if finished.is_none() && state.pager_followed.len() > followed {
+                    // Finishing opened a page of the list the run left unread; called a refusal, the model left it unread.
+                    state.chat.queue.clear();
+                    state.chat.notices.push(
+                        "done was not accepted yet: the task covers every page of the list and a page of it was unread, \
+                         so it was opened below. Read it and the list's remaining pages, then call done."
+                            .into(),
+                    );
+                } else if finished.is_none() {
                     state.chat.queue.clear();
                     state.chat.notices.push(
                         "done was refused: what was read, this page included, does not show the task done. Read the page \
