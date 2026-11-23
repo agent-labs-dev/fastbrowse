@@ -356,6 +356,9 @@ fn form_changes(
             && form_id.is_some_and(|id| entry.opened_forms.iter().any(|opened| opened == id))
         {
             opener = entry.target.as_deref();
+            // A page that reuses one form for several records keeps its document and form ids, so fills from before
+            // the newest opening belong to another record and would pair its old value with this one's typing.
+            break;
         }
         let Some(label) = entry.target.as_deref().filter(|label| named.iter().any(|n| n == label)) else {
             continue;

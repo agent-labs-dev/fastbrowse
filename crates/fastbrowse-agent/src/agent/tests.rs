@@ -12135,3 +12135,27 @@ fn a_click_records_a_form_opener_only_when_the_form_appears_after_it() {
     assert_eq!(entry.opened_forms, vec!["form"]);
     assert_eq!(entry.document_key.as_deref(), Some("after"));
 }
+
+#[test]
+fn a_save_ignores_fills_from_before_the_form_was_last_opened() {
+    let field = Control { form_id: Some("form".into()), ..holding("Caption", "Second card") };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let fill = |before: &str, typed: &str| HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some(typed.into()),
+        before: Some(before.into()),
+        ..typed_into(&describe(&field))
+    };
+    let open = |card: &str| HistoryEntry {
+        opened_forms: vec!["form".into()],
+        ..executed(Some(Operation::Click), Some(card), true)
+    };
+    // The same modal, reopened for another card: its form and document ids did not change.
+    let history =
+        [open("Edit first"), fill("First old", "First new"), open("Edit second"), fill("Second old", "Second new")];
+    let (_, action, _) =
+        gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document", None);
+    assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
+    assert!(action.contains("clicking 'Edit second'"), "{action}");
+    assert!(!action.contains("First"), "{action}");
+}
