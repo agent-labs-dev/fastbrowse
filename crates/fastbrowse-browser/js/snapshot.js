@@ -2046,29 +2046,36 @@
   const recordOf = memo(element => {
     // A lone card inside a repeating one is still a record of its own: the only reply under a comment is named by
     // that reply, not by the comment it answers, so it is kept while the climb looks for the repeating card around it.
-    // Markup that declares a record (a list item, an article, a row) outranks siblings that only share a class: a
-    // comment's layout rows repeat their class inside every comment, and named the counter "Actions" instead of the
-    // comment's author. A class-styled card is the record only when no declared one repeats around it.
-    let lone = null,
-      styled = null;
+    let lone = null;
     for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
       if (!isCard(e)) continue;
-      if (cardCount(e.parentElement) > 1) {
-        if (lone) return lone;
-        if (e.matches(CARD_RECORDS)) return e;
-        styled ||= e;
-        continue;
-      }
+      if (cardCount(e.parentElement) > 1) return lone || e;
       lone ||= e;
     }
-    return styled;
+    return null;
   });
+  // The repeating card around a record, for a record that names nothing.
+  const recordAbove = card => {
+    for (let e = card.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+      if (isCard(e) && cardCount(e.parentElement) > 1) return e;
+    }
+    return null;
+  };
+  // A card names a control by a title of its own. A comment's layout rows repeat their class inside every comment and
+  // hold a bare line ("Actions") where the comment holds its author's heading, so a card with no title leaves the name
+  // to the repeating record around it; only when none has a title does the innermost record's first line name it.
+  const titleOf = (card, element, label) => {
+    const aria = (card.getAttribute('aria-label') || '').trim();
+    return aria && aria !== label ? aria : sectionOf(card, element, label, true);
+  };
   for (const c of controls) {
     if (c.context) continue;
     const element = registry.nodes.get(c.id);
     const record = recordOf(element);
     if (!record) continue;
-    const context = nameOf(record, element, c.label, true);
+    let context = '';
+    for (let card = record; card && !context; card = recordAbove(card)) context = titleOf(card, element, c.label);
+    context ||= nameOf(record, element, c.label, true);
     if (context) c.context = context;
   }
   for (const c of controls) {
