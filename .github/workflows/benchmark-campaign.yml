@@ -29,7 +29,6 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # the API returns no copy of the final page, so the page half of a task is ungraded - and no step reads that run
 # into a candidate. A failure there is reported on the run but does not block publication, so it costs a rerun only
 # if its own rows are wanted; every published group still fails the campaign.
-# The budget gates new attempts; Parallax gives no task time, step or dollar limit to an active arm.
 # Browser Use (its default model and bu-ultrafast) and Browser Harness are not run by default. Set
 # `refresh_competitors` or name them in `head_to_head_arms` to measure them in the current campaign.
 #
@@ -60,11 +59,7 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # earlier ones. `candidate_only` runs nothing and builds the candidate from the campaign's finished runs alone; its
 # `fastbrowse_ref` is the newest run's build in the campaign's Parallax run artifacts.
 #
-# `budget` is each group's approved total. It only gates whether the next run may start: a run holds its agent,
-# browser and judge reserves (1 + 1 + 1 dollars) while in flight, and starts only
-# while everything committed plus that hold fits. At Parallax's default 8 runs in flight that is at most 24 dollars
-# held, so the 300 dollar default leaves 276 for spend before a run waits, and a full campaign stops early only if
-# its actual spend passes about 297 dollars.
+# Provider keys enforce the spend limits.
 
 on:
   # The same run, started by an integration that can write the repository but not dispatch workflows (a GitHub
@@ -94,14 +89,6 @@ on:
         default: all
       repeat:
         description: Runs per task (at least 3; a published comparison rests on three)
-        required: true
-        default: "3"
-      budget:
-        description: Approved total dollars for each group; it only gates new runs, see the header
-        required: true
-        default: "300"
-      reserve:
-        description: Dollars Parallax reserves before each trial starts
         required: true
         default: "3"
       suites:
@@ -164,8 +151,6 @@ env:
   SUITES: ${{ inputs.suites || github.event.client_payload.suites || 'core dev stretch-dev' }}
   # A smoke run has one repeat whatever `repeat` says.
   REPEAT: ${{ (inputs.smoke || github.event.client_payload.smoke == true) && '1' || inputs.repeat || github.event.client_payload.repeat || '3' }}
-  BUDGET: ${{ inputs.budget || github.event.client_payload.budget || '300' }}
-  RESERVE: ${{ inputs.reserve || github.event.client_payload.reserve || '3' }}
   SMOKE: ${{ inputs.smoke || github.event.client_payload.smoke == true }}
   REFRESH: ${{ inputs.refresh_competitors || github.event.client_payload.refresh_competitors == true }}
   GROUPS_CHOSEN: ${{ inputs.groups || github.event.client_payload.groups || 'all' }}
@@ -229,24 +214,14 @@ jobs:
             jq -e --arg key "$key" '(. // {})[$key] | . == null or type == "boolean"' <<< "$PAYLOAD" > /dev/null \
               || { echo "::error::$key in client_payload must be true or false"; exit 1; }
           done
-          for key in repeat budget reserve; do
-            # A workflow_dispatch has no payload, which reads as null here.
-            jq -e --arg key "$key" '. // {} | has($key) | not' <<< "$PAYLOAD" > /dev/null && continue
-            jq -e --arg key "$key" '.[$key] | tonumber? // 0 | . > 0' <<< "$PAYLOAD" > /dev/null \
-              || { echo "::error::$key in client_payload must be above 0"; exit 1; }
-          done
+          jq -e '(. // {}) | if has("repeat") then (.repeat | tonumber? // 0 | . > 0) else true end' \
+            <<< "$PAYLOAD" > /dev/null || { echo "::error::repeat in client_payload must be above 0"; exit 1; }
           case "$REPEAT" in
             ''|*[!0-9]*) echo "repeat must be an integer, got '$REPEAT'"; exit 1 ;;
           esac
           if test "$SMOKE" != true; then
             test "$REPEAT" -ge 3 || { echo "repeat must be at least 3, got $REPEAT"; exit 1; }
           fi
-          case "$BUDGET" in
-            ''|*[!0-9.]*) echo "budget must be a number, got '$BUDGET'"; exit 1 ;;
-          esac
-          case "$RESERVE" in
-            ''|*[!0-9.]*) echo "reserve must be a number, got '$RESERVE'"; exit 1 ;;
-          esac
           case "$OFFICIAL_RUNS" in
             *[!0-9\ ]*) echo "::error::official_runs must be run ids separated by spaces"; exit 1 ;;
           esac
@@ -346,7 +321,7 @@ jobs:
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
-          # Authenticate both OpenRouter credentials, but do not compare provider credit with the approved budget.
+          # Authenticate both OpenRouter credentials before starting the trials.
           for key_name in FASTBROWSE_OPENROUTER_API_KEY PARALLAX_JUDGE_API_KEY; do
             KEY_NAME="$key_name" KEY="${!key_name}" python3 - <<'PYTHON'
           import json, os, urllib.request
@@ -583,9 +558,7 @@ jobs:
           mirror_files()
           PY
             mirror_pid=$!
-            # The foreground loop is sequential, so one journal can enforce the shared campaign limit.
-            args=(--harness "$harness" --repeats "$REPEAT" --budget "$BUDGET" --reserve "$RESERVE"
-              --budget-journal "$OUT/budget.jsonl"
+            args=(--harness "$harness" --repeats "$REPEAT"
               --retry-invalid 2 --retry-wait 60 --provenance "fastbrowse.group=$GROUP" --out "$run_out")
             test -z "${model:-}" || args+=(--model "$model")
             test -z "${{ matrix.conc }}" || args+=(--concurrency "${{ matrix.conc }}")
@@ -599,7 +572,6 @@ jobs:
             kill "$mirror_pid" 2> /dev/null || true
             wait "$mirror_pid" 2> /dev/null || true
             # The arms share one journal outside their run directories; each mirror keeps a copy as its arm ended.
-            test ! -f "$OUT/budget.jsonl" || cp "$OUT/budget.jsonl" "$mirror/budget.jsonl"
             test "$status" -eq 0 || exit "$status"
           done
       - name: Report the final progress
@@ -616,7 +588,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # Validate each run directory before publication. A stopped group remains an artifact with its budget journal.
+  # Validate each run directory before publication. A stopped group retains its results as artifacts.
   track:
     name: Validate ${{ matrix.label }} Parallax run
     needs: [resolve, campaign]
@@ -661,7 +633,6 @@ jobs:
           test "${#run_dirs[@]}" -gt 0
           for run_dir in "${run_dirs[@]}"; do
             test -f "$run_dir/results.jsonl"
-            test -f "$run_dir/budget.jsonl"
             test -f "$run_dir/provenance.json"
             test -f "$run_dir/parallax-verify.json"
           done

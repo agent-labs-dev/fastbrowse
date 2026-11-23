@@ -51,22 +51,16 @@ Do not run the full repository suite or a paid browser campaign locally.
 ## Campaign protocol
 
 The campaign workflow installs the harness checkout first, then installs the
-measured fastbrowse SHA. It runs `parallax run` with the plugin installed,
-`--budget` from the campaign input, and `--reserve` for each trial. Keep the
-pool GCP service account and the `harness_sha` and `FASTBROWSE_SHA` install
-order intact.
+measured fastbrowse SHA. It runs `parallax run` with the plugin installed.
+Keep the pool GCP service account and the `harness_sha` and `FASTBROWSE_SHA`
+install order intact.
 
 Before paid work, each workflow authenticates its OpenRouter credentials with
-`GET https://openrouter.ai/api/v1/key`. This validates the credentials but does
-not compare remaining provider credit with the approved budget. The request
-wallet still bounds committed work, and a provider cap can stop later calls
-after a campaign has started.
+`GET https://openrouter.ai/api/v1/key`. The provider keys enforce spend limits.
 
-Parallax writes `manifest.json`, `results.jsonl`, `budget.jsonl`, and trial
-artifacts. Resume a stopped run with `parallax run --resume RUN_DIR` and keep
-the same budget and reserve. Environment interruptions are retried with
-`--retry-invalid` and `--retry-wait`; an agent failure is not retried as an
-environment interruption.
+Parallax writes `manifest.json`, `results.jsonl`, and trial artifacts.
+Resume a stopped run with `parallax run --resume RUN_DIR`. Environment
+interruptions are retried with `--retry-invalid` and `--retry-wait`. Agent failures are recorded separately.
 
 After the run artifacts pass validation, each group's job summary contains
 trial tallies, costs and failed check IDs from `parallax report RUN_ID`. Task evidence and judge commentary
