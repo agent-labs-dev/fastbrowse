@@ -16,6 +16,7 @@ become code.
 """
 
 import base64
+import hashlib
 import json
 import math
 import os
@@ -45,6 +46,8 @@ EXCHANGE_FIELDS: Mapping[str, type | tuple[type, ...]] = {
     "latency": (int, float),
 }
 """The typed fields `Exchange.from_json` requires of a cassette line, besides `request`, which may be any JSON."""
+
+REFILL_SUBJECT = "chore(bench): refill cassettes for "
 
 TRAILER = "Cassette-Refill"
 """The commit trailer that marks a refill commit, valued with the head commit it refilled."""
@@ -296,7 +299,7 @@ def commit_message(tasks: Sequence[str], head_sha: str, verdict: FillVerdict, *,
     listed = ", ".join(tasks)
     trailer = f"\n\n{TRAILER}: {head_sha}\n" if last else "\n"
     return (
-        f"chore(bench): refill cassettes for {listed}\n\n"
+        f"{REFILL_SUBJECT}{listed}\n\n"
         f"The replay check missed {len(tasks)} task(s) after the last change to what the agent asks. They were filled "
         f"with `bench fill` for ${verdict.spent:.4f} of a ${verdict.budget:.2f} cap, and each replays with no miss and "
         f"passes its grade.{trailer}"
@@ -420,21 +423,82 @@ def upsert_comment(repo: str, number: str, token: str, body: str) -> None:
         gh(f"repos/{repo}/issues/{number}/comments", "-X", "POST", token=token, body={"body": body})
 
 
+def completed_ci(repo: str, sha: str, token: str) -> list[dict[str, Any]]:
+    return gh(
+        f"repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&event=pull_request&status=completed&per_page=1",
+        token=token,
+    )["workflow_runs"]
+
+
+def read_commit(repo: str, sha: str, token: str) -> dict[str, Any]:
+    pages = gh(f"repos/{repo}/commits/{sha}?per_page=100", "--paginate", "--slurp", token=token)
+    return {**pages[0], "files": [file for page in pages for file in page["files"]]}
+
+
+def refill_commit_tasks(commit: Mapping[str, Any]) -> set[str]:
+    """Identify a GitHub-signed refill by its single parent, subject and cassette-only file changes."""
+    subject = commit["commit"]["message"].split("\n", 1)[0]
+    if (
+        len(commit["parents"]) != 1
+        or not commit["commit"]["verification"]["verified"]
+        or (commit["committer"] or {}).get("login") != "web-flow"
+        or not subject.startswith(REFILL_SUBJECT)
+    ):
+        return set()
+    tasks = subject.removeprefix(REFILL_SUBJECT).split(", ")
+    if not all(TASK_ID.fullmatch(task) for task in tasks):
+        return set()
+    files = commit["files"]
+    expected = {f"bench/cassettes/{task}.jsonl" for task in tasks}
+    if (
+        len(files) != len(expected)
+        or {file["filename"] for file in files} != expected
+        or any(file["status"] not in {"added", "modified"} for file in files)
+    ):
+        return set()
+    return set(tasks)
+
+
+def retry_from_partial(repo: str, number: str, head: str, token: str) -> tuple[list[dict[str, Any]], set[str]]:
+    """Reuse CI on a bot-claimed ancestor when the current head contains only partial refill commits."""
+    facts, _ = pull_facts(repo, number, token)
+    if not facts.open or facts.head_repo != repo or facts.base_repo != repo or facts.head_sha != head:
+        return [], set()
+    if is_refill_commit(facts.head_message):
+        return [], set()
+    comment = find_comment(repo, number, token)
+    attempted = set(attempted_shas(comment["body"])) if comment else set()
+    sha = head
+    covered: set[str] = set()
+    while attempted:
+        commit = read_commit(repo, sha, token)
+        tasks = refill_commit_tasks(commit)
+        if not tasks or tasks & covered:
+            break
+        covered.update(tasks)
+        sha = commit["parents"][0]["sha"]
+        if sha in attempted:
+            runs = completed_ci(repo, sha, token)
+            if runs:
+                return runs, covered
+    return [], set()
+
+
 def resolve() -> int:
     env, repo, token = os.environ, os.environ["REPO"], os.environ["GH_TOKEN"]
     number = env["INPUT_PR"]
     if number:
         # A rerun by hand names the pull request; a check run names itself.
         sha = gh(f"repos/{repo}/pulls/{number}", token=token)["head"]["sha"]
-        runs = gh(
-            f"repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&event=pull_request&status=completed&per_page=1",
-            token=token,
-        )["workflow_runs"]
+        runs = completed_ci(repo, sha, token)
+        covered: set[str] = set()
+        if not runs and env.get("RETRY") == "true":
+            runs, covered = retry_from_partial(repo, number, sha, token)
         if not runs:
-            raise SystemExit(f"no finished CI run on {sha} of #{number}")
-        output(pr=number, sha=sha, run_id=str(runs[0]["id"]))
+            raise SystemExit(f"no finished CI run on {sha} of #{number} or a verified partial refill ancestor")
+        output(pr=number, sha=sha, run_id=str(runs[0]["id"]), covered=json.dumps(sorted(covered)))
         return 0
-    output(pr=env["PR_NUMBER"], sha=env["RUN_SHA"], run_id=env["RUN_ID"])
+    output(pr=env["PR_NUMBER"], sha=env["RUN_SHA"], run_id=env["RUN_ID"], covered="[]")
     return 0
 
 
@@ -446,6 +510,10 @@ def plan() -> int:
         summary("No pull request is attached to this check run, so there is nothing to refill.")
         return 0
     tasks = missed_tasks(Path(env["MISSES_DIR"]))
+    covered = set(json.loads(env.get("COVERED_TASKS", "[]")))
+    if tasks and not covered.issubset(tasks):
+        raise ValueError("the partial refill changed a task the selected CI run did not miss")
+    tasks = [task for task in tasks if task not in covered]
     facts, _ = pull_facts(repo, number, token)
     existing = find_comment(repo, number, token)
     attempted = attempted_shas(existing["body"]) if existing else []
@@ -505,6 +573,73 @@ def fill() -> int:
     return 0
 
 
+def recover_commit(
+    repo: str, number: str, branch: str, parent: str, message: str, additions: Sequence[Mapping[str, str]], token: str
+) -> dict[str, str] | None:
+    """Recover a commit response only when the open branch tip is exactly the batch we sent."""
+    facts, actual_branch = pull_facts(repo, number, token)
+    if (
+        not facts.open
+        or facts.head_repo != repo
+        or facts.base_repo != repo
+        or actual_branch != branch
+        or facts.head_sha == parent
+    ):
+        return None
+    commit = read_commit(repo, facts.head_sha, token)
+    if (
+        [entry["sha"] for entry in commit["parents"]] != [parent]
+        or commit["commit"]["message"].rstrip("\n") != message.rstrip("\n")
+        or not refill_commit_tasks(commit)
+    ):
+        return None
+    expected = {}
+    for addition in additions:
+        data = base64.b64decode(addition["contents"])
+        blob = f"blob {len(data)}\0".encode() + data
+        expected[addition["path"]] = hashlib.sha1(blob, usedforsecurity=False).hexdigest()
+    if {file["filename"]: file["sha"] for file in commit["files"]} != expected:
+        return None
+    return {"oid": facts.head_sha, "url": commit["html_url"]}
+
+
+def commit_batch(
+    repo: str, number: str, branch: str, parent: str, message: str, batch: Sequence[Path], token: str, commit_token: str
+) -> dict[str, str]:
+    headline, _, body = message.partition("\n\n")
+    additions = [
+        {"path": f"bench/cassettes/{path.name}", "contents": base64.b64encode(path.read_bytes()).decode()}
+        for path in batch
+    ]
+    try:
+        made = gh(
+            "graphql",
+            token=commit_token,
+            body={
+                "query": COMMIT,
+                "variables": {
+                    "input": {
+                        "branch": {"repositoryNameWithOwner": repo, "branchName": branch},
+                        "message": {"headline": headline, "body": body},
+                        "expectedHeadOid": parent,
+                        "fileChanges": {"additions": additions},
+                    },
+                },
+            },
+        )
+    except RuntimeError as error:
+        try:
+            recovered = recover_commit(repo, number, branch, parent, message, additions, token)
+        except RuntimeError as verification_error:
+            raise ValueError(f"GitHub's commit result could not be verified: {error}; {verification_error}") from error
+        if recovered is None:
+            raise ValueError(f"GitHub's commit result could not be verified: {error}") from error
+        return recovered
+    if made.get("errors"):
+        raise ValueError(f"GitHub refused the commit: {made['errors'][0]['message']}")
+    return made["data"]["createCommitOnBranch"]["commit"]
+
+
 def publish() -> int:
     env, repo = os.environ, os.environ["REPO"]
     number, sha, token = env["PR"], env["SHA"], env["GH_TOKEN"]
@@ -535,33 +670,7 @@ def publish() -> int:
             for position, batch in enumerate(batches, 1):
                 batch_tasks = [path.name.removesuffix(".jsonl") for path in batch]
                 message = commit_message(batch_tasks, sha, verdict, last=position == len(batches))
-                headline, _, body = message.partition("\n\n")
-                made = gh(
-                    "graphql",
-                    token=env["COMMIT_TOKEN"],
-                    body={
-                        "query": COMMIT,
-                        "variables": {
-                            "input": {
-                                "branch": {"repositoryNameWithOwner": repo, "branchName": branch},
-                                "message": {"headline": headline, "body": body},
-                                "expectedHeadOid": head,
-                                "fileChanges": {
-                                    "additions": [
-                                        {
-                                            "path": f"bench/cassettes/{path.name}",
-                                            "contents": base64.b64encode(path.read_bytes()).decode(),
-                                        }
-                                        for path in batch
-                                    ]
-                                },
-                            }
-                        },
-                    },
-                )
-                if made.get("errors"):
-                    raise ValueError(f"GitHub refused the commit: {made['errors'][0]['message']}")
-                commit = made["data"]["createCommitOnBranch"]["commit"]
+                commit = commit_batch(repo, number, branch, head, message, batch, token, env["COMMIT_TOKEN"])
                 head = commit["oid"]
                 links.append(f"[{head[:12]}]({commit['url']})")
             outcome = f"Committed the refilled cassettes as {', '.join(links)}; CI runs again on it."
@@ -570,7 +679,7 @@ def publish() -> int:
             outcome = (
                 f"Committed {', '.join(links)}, then stopped: {error}. The next CI run refills what is still missing."
                 if links
-                else f"Nothing was committed: {error}"
+                else f"No batch was confirmed: {error}"
             )
     existing = find_comment(repo, number, token)
     attempted = attempted_shas(existing["body"]) if existing else [sha]

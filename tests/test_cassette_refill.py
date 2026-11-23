@@ -1,5 +1,7 @@
 """The decisions of the automatic cassette refill: which tasks missed, whether to spend, whether it worked."""
 
+import base64
+import hashlib
 import json
 import math
 from dataclasses import replace
@@ -380,7 +382,13 @@ def test_what_bench_writes_beside_its_report_is_not_in_the_artifact_that_is_comm
     assert json.loads((refill.OUT / "result.json").read_text())["report"]["tasks"][0]["task"] == "mock-basket"
 
 
-def publish_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refuse_commit: int | None) -> tuple[int, list, str]:
+def publish_split(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    refuse_commit: int | None = None,
+    lose_response: int | None = None,
+    wrong_blob: bool = False,
+) -> tuple[int, list, str]:
     """`publish` of three cassettes, one per commit, with GitHub refusing commit number `refuse_commit`."""
     tasks = ["mock-basket", "mock-swatch", "mock-sign-in"]
     artifact, sha = tmp_path / "refill-result", "a" * 40
@@ -398,17 +406,40 @@ def publish_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refuse_commit
     monkeypatch.setattr(refill, "COMMIT_PAYLOAD_LIMIT", largest)
     commits: list[dict[str, Any]] = []
     posted: list[str] = []
+    head = sha
 
     def gh(*args: str, token: str, body: Any = None) -> Any:
+        nonlocal head
         if args[0] == "graphql":
             commits.append(body["variables"]["input"])
             if len(commits) == refuse_commit:
                 return {"errors": [{"message": "refused"}]}
-            oid = str(len(commits)) * 40
-            return {"data": {"createCommitOnBranch": {"commit": {"oid": oid, "url": f"c/{oid}"}}}}
+            head = str(len(commits)) * 40
+            if len(commits) == lose_response:
+                raise RuntimeError("gh api graphql failed: gh: HTTP 504")
+            return {"data": {"createCommitOnBranch": {"commit": {"oid": head, "url": f"c/{head}"}}}}
         if args[0].endswith("/pulls/7"):
             repo = {"full_name": REPO}
-            return {"state": "open", "head": {"sha": sha, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
+            return {"state": "open", "head": {"sha": head, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
+        if args[0].endswith(f"/commits/{head}?per_page=100"):
+            sent = commits[-1]
+            files = []
+            for item in sent["fileChanges"]["additions"]:
+                data = base64.b64decode(item["contents"])
+                oid = hashlib.sha1(f"blob {len(data)}\0".encode() + data, usedforsecurity=False).hexdigest()
+                files.append({"filename": item["path"], "sha": "0" * 40 if wrong_blob else oid, "status": "modified"})
+            return [
+                {
+                    "commit": {
+                        "message": sent["message"]["headline"] + "\n\n" + sent["message"]["body"],
+                        "verification": {"verified": True},
+                    },
+                    "committer": {"login": "web-flow"},
+                    "parents": [{"sha": sent["expectedHeadOid"]}],
+                    "files": files,
+                    "html_url": f"c/{head}",
+                }
+            ]
         if "/commits/" in args[0]:
             return {"commit": {"message": "fix: x"}}
         if body is not None:
@@ -445,6 +476,74 @@ def test_a_split_refill_stopped_partway_says_what_it_committed_and_leaves_the_re
     assert not refill.is_refill_commit(commits[0]["message"]["body"])
     assert "Committed [111111111111]" in comment and "refused" in comment
     assert "Nothing was committed" not in comment
+
+
+def test_a_committed_batch_whose_response_was_lost_is_reported_and_followed_by_the_remaining_batches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, commits, comment = publish_split(tmp_path, monkeypatch, lose_response=1)
+    assert code == 0
+    assert [c["expectedHeadOid"] for c in commits] == ["a" * 40, "1" * 40, "2" * 40]
+    assert all(oid[:12] in comment for oid in ("1" * 40, "2" * 40, "3" * 40))
+
+
+def test_a_moved_branch_with_another_blob_is_not_treated_as_the_expected_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, commits, comment = publish_split(tmp_path, monkeypatch, lose_response=1, wrong_blob=True)
+    assert code == 1
+    assert len(commits) == 1
+    assert "GitHub's commit result could not be verified" in comment
+    assert "[111111111111]" not in comment
+
+
+@pytest.mark.parametrize("retry, unrelated", [(True, False), (False, False), (True, True)])
+def test_manual_retry_only_reuses_ci_after_verified_cassette_commits(
+    monkeypatch: pytest.MonkeyPatch, retry: bool, unrelated: bool
+) -> None:
+    head = "b" * 40
+    monkeypatch.setenv("REPO", REPO)
+    monkeypatch.setenv("GH_TOKEN", "t")
+    monkeypatch.setenv("INPUT_PR", "7")
+    monkeypatch.setenv("RETRY", str(retry).lower())
+    outputs = {}
+
+    def gh(*args: str, token: str, body: Any = None) -> Any:
+        route = args[0]
+        if route.endswith("/pulls/7"):
+            repo = {"full_name": REPO}
+            return {"state": "open", "head": {"sha": head, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
+        if "/actions/" in route:
+            return {"workflow_runs": [{"id": 7}] if f"head_sha={SHA}" in route else []}
+        commit = {"message": f"{refill.REFILL_SUBJECT}mock-basket", "verification": {"verified": True}}
+        if route.endswith(f"/commits/{head}"):
+            return {"commit": commit}
+        if route.endswith(f"/commits/{head}?per_page=100"):
+            files = [{"filename": "bench/cassettes/mock-basket.jsonl", "status": "modified"}]
+            if unrelated:
+                files.append({"filename": "unrelated.py", "status": "modified"})
+            return [{"commit": commit, "committer": {"login": "web-flow"}, "parents": [{"sha": SHA}], "files": files}]
+        assert route.endswith("/issues/7/comments?per_page=100"), route
+        return [
+            [
+                {
+                    "user": {"login": refill.BOT},
+                    "body": f"{refill.MARKER}\n<!-- cassette-refill-attempted: {SHA} -->",
+                }
+            ]
+        ]
+
+    def output(**values: str) -> None:
+        outputs.update(values)
+
+    monkeypatch.setattr(refill, "gh", gh)
+    monkeypatch.setattr(refill, "output", output)
+    if not retry or unrelated:
+        with pytest.raises(SystemExit, match="no finished CI"):
+            refill.resolve()
+    else:
+        assert refill.resolve() == 0
+        assert outputs == {"pr": "7", "sha": head, "run_id": "7", "covered": '["mock-basket"]'}
 
 
 def test_a_cassette_over_the_request_limit_on_its_own_is_refused_by_name(tmp_path: Path) -> None:

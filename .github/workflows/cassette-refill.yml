@@ -20,7 +20,7 @@ name: Cassette refill
 #     model request is sent. Paid requests go one at a time, since a price is known only from its response, so only
 #     the last one can pass the cap; a response with no price stops the spending.
 #
-# `workflow_dispatch` (or a call from another workflow here) reruns it by hand for a pull request (`retry` lifts only the one-refill-per-head guard).
+# A manual retry can also use CI on a verified partial refill's ancestor when its head has no finished check.
 # Repository configuration: secrets OPENROUTER_API_KEY and AUR_SYNC_TOKEN (a token with contents and pull request
 # write access to this repository; a push made with the run's own token starts no checks). Without the token the fill
 # still runs and the pull request is told why nothing was committed.
@@ -36,7 +36,7 @@ on:
         required: true
         type: string
       retry:
-        description: Refill again although this head commit was already tried
+        description: Refill again after an earlier attempt, including a verified partial refill
         required: false
         type: boolean
         default: false
@@ -94,6 +94,7 @@ jobs:
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           INPUT_PR: ${{ inputs.pr }}
+          RETRY: ${{ inputs.retry }}
       - name: Download the missed task ids
         # A run with no miss uploads none, which is the answer.
         continue-on-error: true
@@ -111,6 +112,7 @@ jobs:
           PR: ${{ steps.resolve.outputs.pr }}
           SHA: ${{ steps.resolve.outputs.sha }}
           MISSES_DIR: replay-misses
+          COVERED_TASKS: ${{ steps.resolve.outputs.covered }}
           RETRY: ${{ inputs.retry }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
