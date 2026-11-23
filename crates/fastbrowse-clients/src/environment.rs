@@ -159,6 +159,9 @@ pub enum ActionPickerSource {
     Jev,
     /// The run's LLM, the ablation that measures what picking with Jev is worth.
     Llm,
+    /// The run's LLM in one conversation over the run, told what each of its actions did. Jev still answers the
+    /// authorization and reading questions code gates on.
+    Chat,
 }
 
 impl ActionPickerSource {
@@ -166,6 +169,7 @@ impl ActionPickerSource {
         match value {
             "jev" => Some(ActionPickerSource::Jev),
             "llm" => Some(ActionPickerSource::Llm),
+            "chat" => Some(ActionPickerSource::Chat),
             _ => None,
         }
     }
@@ -549,7 +553,7 @@ impl Settings {
     ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
         let jev = self.jev(http, catalog)?;
         match self.action_picker {
-            ActionPickerSource::Jev => Ok(jev),
+            ActionPickerSource::Jev | ActionPickerSource::Chat => Ok(jev),
             ActionPickerSource::Llm => {
                 let picker = LlmDecisionClient::new(self.llm(http)?, self.model());
                 Ok(Box::new(ActionPicker::new(jev, Box::new(picker))))

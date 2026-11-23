@@ -30,7 +30,7 @@ use super::seeing::cards;
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::error::AgentError;
 use crate::memory::Notes;
-use crate::policy::{Ahead, Decision, HistoryEntry, screenshot_reference};
+use crate::policy::{Ahead, Decision, Given, HistoryEntry, screenshot_reference};
 use crate::retrieval::text::{Page, SpanKind, Word, edge_options, spans, words};
 use crate::retrieval::{SCREENSHOT_PICTURED, Screenshot};
 use crate::verification::{page_state, page_verdict_state};
@@ -584,7 +584,17 @@ impl Agent {
                     let reason = format!("{} can only receive a key press in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
-                let chord = self.key(state, observation, decision, target).await?;
+                let chord = match &decision.given {
+                    // The chat driver names its key; the page's key grammar checks it, and a key it does not know is
+                    // refused back to the driver rather than pressed.
+                    Some(Given::Text(key)) => match self.page.key_error(key) {
+                        None => key.clone(),
+                        Some(error) => {
+                            return Err(Unsure::new(format!("{} is not a key: {error}", text::repr(key))).into());
+                        }
+                    },
+                    _ => self.key(state, observation, decision, target).await?,
+                };
                 self.gate_key_edit(state, observation, decision, target, &chord).await?;
                 let fact = format!("\nThe exact key chord to press is {}.\n", text::repr(&chord));
                 self.gate_irreversible_with_fact(state, observation, decision, Some(&fact)).await?;
@@ -630,7 +640,21 @@ impl Agent {
                     let reason = format!("{} can only be filled in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
-                let text = self.text(state, observation, decision, target).await?;
+                let text = match &decision.given {
+                    Some(Given::Text(text)) => {
+                        state.text_source = Some(RecipeText::Live);
+                        text.clone()
+                    }
+                    // A secret the chat driver names is resolved here, for this field's origin only: the driver never
+                    // sees its value.
+                    Some(Given::Secret(name)) => {
+                        state.text_source = Some(RecipeText::Secret(name.clone()));
+                        let origin = self.target_origin(target);
+                        self.secret(name, &origin, target.sensitive || asks_for_credentials(&self.raw_target(target)))
+                            .await?
+                    }
+                    None => self.text(state, observation, decision, target).await?,
+                };
                 // The task shows each input's value beside its name, so Jev copies or writes it like any value the
                 // task gives; typed as it was given, it is the input, and a recipe types the next run's value.
                 // Text the caller's own task also states, or that two inputs share, may not be the input's, and stays as
@@ -674,6 +698,18 @@ impl Agent {
                 // Like a typed value, an option is one the task gives: a required select the task names no option
                 // for, asked only which option it should hold, was set to one Jev had to pick anyway.
                 let instead = [(NO_VALUE, NO_VALUE_SAID), (LEAVE, LEAVE_SAID)];
+                // The chat driver names its option, which must be one the select offers.
+                if let Some(Given::Text(option)) = &decision.given {
+                    if !raw.options.contains(option) {
+                        let reason = format!("{named} offers no option {}", text::repr(option));
+                        return Err(Unsure::new(reason).into());
+                    }
+                    return Ok(Action {
+                        target_id: Some(raw.id.clone()),
+                        text: Some(option.clone()),
+                        ..Action::new(Operation::Select)
+                    });
+                }
                 match self.choose_among(state, observation, &question, &raw.options, &instead).await? {
                     Chosen::Option(option) => Ok(Action {
                         target_id: Some(raw.id.clone()),

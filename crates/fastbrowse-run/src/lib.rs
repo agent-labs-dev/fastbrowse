@@ -980,6 +980,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         Some(settings) => settings,
         None => Settings::load()?,
     };
+    let chat = settings.action_picker == fastbrowse_clients::environment::ActionPickerSource::Chat;
     let http = host.http.take().unwrap_or_else(Http::hyper);
     // The agent learns each secret, and its clients write the requests that may carry one, so they share a redactor.
     let trace = http.trace.clone().redacting(Arc::default());
@@ -1169,6 +1170,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         let agent = Agent::new(page, jev.clone(), llm.clone())
             .with_redactor(http.trace.redactor().unwrap_or_default())
             .with_config(config.clone())
+            .with_chat(chat)
             .with_secrets(host.secrets.clone())
             .with_trace(http.trace.clone())
             .with_events(Some(noting(captioned(host.on_event.clone(), &recording), &told)))

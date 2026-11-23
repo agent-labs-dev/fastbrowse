@@ -236,6 +236,22 @@ impl Agent {
             if observation.controls.iter().any(starts_download) {
                 self.downloads_forbidden(state).await?;
             }
+            // The chat driver is told of the stall and plans again from what it knows; past the budget the run ends as
+            // the failure standing in its way, or stuck.
+            if self.chat {
+                if state.recoveries > self.config.stall.max_recoveries {
+                    if let Some(failure) = state.site_failure.as_ref().or(state.start_failure.as_ref()) {
+                        return Err(failure.stop().into());
+                    }
+                    return Err(Stop::new(gives_up_as, "Chat/stall", reason).into());
+                }
+                state.chat.queue_clear();
+                state.chat.notices.push(format!(
+                    "{} actions in a row changed nothing ({reason}). Try a different control or way to the goal.",
+                    self.config.stall.unchanged_actions
+                ));
+                return Ok(());
+            }
             if state.recoveries > self.config.stall.max_recoveries {
                 // A page that reports the site failed ends as that failure, whatever the run was last unsure about: a
                 // field the task gives no value for, on a page whose own data requests failed, is not the caller's to

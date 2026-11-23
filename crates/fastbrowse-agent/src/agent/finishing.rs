@@ -224,6 +224,7 @@ impl Agent {
             plan: Vec::new(),
             read_scope: crate::policy::ReadScope::Page,
             ahead: IndexMap::new(),
+            given: None,
         };
         match Box::pin(self.step(state, observation, &decision)).await {
             Err(super::state::Flow::Unsure(unsure)) => {

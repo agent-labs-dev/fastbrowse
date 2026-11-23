@@ -342,6 +342,8 @@ pub(crate) struct RunState {
     /// The action the next step carries out, built while the page was read.
     pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,
     pub unchanged: i64,
+    /// The conversation the chat driver holds with the LLM, when it picks the run's actions.
+    pub(super) chat: super::driver::Chat,
     /// What a fill or select has written, by page address, so only a field's first new value counts as progress by
     /// itself. A submit that loads the same address again is still the same form: a new document there does not make
     /// its fields new.
@@ -882,6 +884,7 @@ impl RunState {
             start_failure: None,
             http_seen: HashSet::new(),
             hint: None,
+            chat: Default::default(),
             picked: None,
             built: None,
             unchanged: 0,

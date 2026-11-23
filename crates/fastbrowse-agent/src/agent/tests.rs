@@ -301,6 +301,7 @@ pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> De
         destination: None,
         offered: Vec::new(),
         ahead: IndexMap::new(),
+        given: None,
     }
 }
 

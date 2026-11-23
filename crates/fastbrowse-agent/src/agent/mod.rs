@@ -7,11 +7,13 @@
 
 mod acting;
 mod batching;
+mod driver;
 mod driving;
 mod finishing;
 pub mod helpers;
 mod reading;
 mod recovery;
+mod render;
 mod replay;
 mod search;
 mod seeing;
@@ -133,6 +135,8 @@ pub struct Agent {
     /// The run's secrets, shared with its trace.
     redactor: Arc<Mutex<Redactor>>,
     seen: Mutex<Seen>,
+    /// The LLM picks each action in one conversation over the run ([`driver`]), instead of Jev per step.
+    chat: bool,
 }
 
 impl Agent {
@@ -150,7 +154,14 @@ impl Agent {
             trace: Trace::disabled().redacting(Arc::clone(&redactor)),
             redactor,
             seen: Mutex::new(Seen::default()),
+            chat: false,
         }
+    }
+
+    /// Have the LLM pick each action in one conversation over the run, as FASTBROWSE_ACTION_PICKER=chat asks.
+    pub fn with_chat(mut self, chat: bool) -> Agent {
+        self.chat = chat;
+        self
     }
 
     /// Run with `config`, its limits brought within the decision model's.

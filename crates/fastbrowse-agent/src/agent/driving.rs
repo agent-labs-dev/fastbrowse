@@ -69,6 +69,9 @@ impl Agent {
         until: Option<&fastbrowse_core::models::UntilCheck>,
     ) -> Step<fastbrowse_core::models::RunResult> {
         state.extraction_pending = output_schema.is_some();
+        if self.chat {
+            return self.chat_loop(state, output_schema, until).await;
+        }
         let mut list_walk: Option<super::batching::ListWalk> = None;
         loop {
             state.ledger.check(0.0)?;
@@ -603,6 +606,7 @@ impl Agent {
                 ahead: planned.ahead.clone(),
                 plan: Vec::new(),
                 read_scope: crate::policy::ReadScope::Page,
+                given: None,
             };
             self.event("plan_step", || Map::from_iter([("target".into(), self.redact(&planned.target.label).into())]));
             match Box::pin(self.step(state, &observation, &decision)).await {

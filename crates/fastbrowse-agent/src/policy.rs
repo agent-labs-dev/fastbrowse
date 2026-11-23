@@ -738,6 +738,16 @@ pub struct Decision {
     /// The task step Jev said an action on a pictured control is for, kept for its history entry.
     #[serde(skip)]
     pub step: Option<String>,
+    /// The value the chat driver gave for a fill, select or key press, which the action uses instead of asking for one.
+    #[serde(skip)]
+    pub given: Option<Given>,
+}
+
+/// A value the chat driver supplies with its action: text it wrote, or a secret it names and never sees.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Given {
+    Text(String),
+    Secret(String),
 }
 
 /// A list read keeps page judgments while leaving target selection to an ordinary decision.
@@ -1793,6 +1803,7 @@ async fn evaluate(
         offered: Vec::new(),
         ahead,
         step: chosen_step(&evaluation, &request.steps),
+        given: None,
     })
 }
 
