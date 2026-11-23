@@ -12000,6 +12000,27 @@ async fn test_a_decision_made_before_the_read_of_a_fresh_page_is_made_again_with
     assert_eq!(decisions[..3], [0, 1, 1], "{decisions:?}");
 }
 
+/// #1137: scrolling a long page changes what the viewport shows and none of its controls, so the page state key saw the
+/// same state every time and withdrew scrolling after the third scroll of a page whose task was to look at all of it.
+#[tokio::test]
+async fn test_a_scroll_to_a_part_never_shown_is_progress_and_scrolling_back_is_not() {
+    let seen = |text: &str| Observation { viewport_text: text.into(), ..buttons_at(FILES, &["Files"]) };
+    let (top, middle, bottom) = (seen("Previews"), seen("Credits"), seen("Footer"));
+    let agent = agent();
+    let mut state = run_state();
+    agent.settle(&mut state, &top).await.expect("settled");
+    for (operation, landed, unchanged) in [
+        (Operation::Scroll, &middle, 0),
+        (Operation::Scroll, &bottom, 0),
+        (Operation::ScrollUp, &middle, 1),
+        (Operation::ScrollUp, &top, 2),
+    ] {
+        state.landing = Some(Some((operation, None)));
+        agent.settle(&mut state, landed).await.expect("settled");
+        assert_eq!(state.unchanged, unchanged, "{operation:?}");
+    }
+}
+
 #[path = "tests/citation_record_selected_results.rs"]
 mod citation_record_selected_results;
 
