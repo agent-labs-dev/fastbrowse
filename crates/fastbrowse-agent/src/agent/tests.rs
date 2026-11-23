@@ -1912,6 +1912,11 @@ async fn test_the_condition_check_is_told_the_steps_the_run_took() {
             .contains("has the run done what the task asks first, and, if the task waits for the site")
     );
     assert!(!asked[0].1["requested"].contains("The steps this run has already taken"));
+    // The values question states what a click takes from the task, and offers no option to name values it has none of.
+    assert!(
+        questions["values"].contains("This action types no text. The only things it uses are the control it acts on")
+    );
+    assert!(questions["values"].ends_with("only for once something happens?"), "{}", questions["values"]);
 }
 
 /// The page can only take a commit's authorization away: whether the task asked for it is judged without the page,
