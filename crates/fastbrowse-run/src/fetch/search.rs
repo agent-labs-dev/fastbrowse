@@ -11,6 +11,7 @@ use fastbrowse_core::page::{
     ActResult, Action, BrowserError, CaptchaSolve, Capture, Control, Observation, Page, PageResult, SearchOutcome,
     Unread,
 };
+use indexmap::IndexMap;
 
 use super::{BlockKind, FetchedPage, Found, capture, eligible};
 
@@ -226,8 +227,8 @@ impl Page for SearchPage {
     fn reveal<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<()>> {
         self.view().reveal(id)
     }
-    fn edges<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
-        self.view().edges(id)
+    fn edges<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        self.view().edges(ids)
     }
     fn click_viewport<'a>(&'a self, x: f64, y: f64, within: Option<&'a str>) -> BoxFuture<'a, PageResult<ActResult>> {
         self.view().click_viewport(x, y, within)
@@ -319,15 +320,19 @@ mod tests {
                 Ok(())
             })
         }
-        fn edges<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
+        fn edges<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
             Box::pin(async move {
-                assert_eq!(id, "drawing-pad");
-                Ok(self.surface_revealed.load(Ordering::Relaxed).then_some(Edges {
-                    left: 0.1,
-                    top: 0.1,
-                    right: 0.5,
-                    bottom: 0.5,
-                }))
+                assert_eq!(ids, ["drawing-pad".to_string()]);
+                Ok(self
+                    .surface_revealed
+                    .load(Ordering::Relaxed)
+                    .then(|| {
+                        IndexMap::from([(
+                            "drawing-pad".to_string(),
+                            Edges { left: 0.1, top: 0.1, right: 0.5, bottom: 0.5 },
+                        )])
+                    })
+                    .unwrap_or_default())
             })
         }
         fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
@@ -363,7 +368,7 @@ mod tests {
         );
         page.reveal("drawing-pad").await.unwrap();
         assert!(inner.surface_revealed.load(Ordering::Relaxed));
-        assert!(page.edges("drawing-pad").await.unwrap().is_some());
+        assert!(page.edges(&["drawing-pad".to_string()]).await.unwrap().contains_key("drawing-pad"));
     }
 
     #[tokio::test]

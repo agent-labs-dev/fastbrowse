@@ -25,8 +25,9 @@
 <div class="top-banner"><a class="top-banner-link" href="#promotion" aria-label="promotional banner"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='728' height='90'%3E%3Crect width='728' height='90' fill='%23d64'/%3E%3C/svg%3E" alt="promotional banner"></a></div>
 <main>
   <h1>Shortest Path Forever</h1>
-  <ul class="tabs"><li><a href="#description">Description</a></li><li><a class="current" href="#comments">Comments (6)</a></li></ul>
+  <ul class="tabs"><li><a href="#description">Description</a></li><li><a class="current" href="#comments">Comments (7)</a></li></ul>
   <section class="comments" id="comments">
+    <h2>Comments</h2>
     <ul class="comments-list" id="thread"></ul>
   </section>
 </main>
@@ -35,8 +36,9 @@
   const comments = [
     { id: 8688520, author: 'IronmanBG', when: '7 hours ago', text: 'Is there a way to stop the arrow from pointing through walls in Blackrock Depths?', replies: [] },
     { id: 8687397, author: 'Nivlemoth_Nathrezim', when: '7 hours ago', text: 'The route sends me over the mountain in Alterac instead of through the tunnel. Can it prefer roads?', replies: [] },
-    { id: 8685241, author: 'tgkGate', when: '1 day ago', text: 'Love it. Could the map pin show the next waypoint too, not just the final one? I keep losing the pin when the path bends.', replies: [{ author: 'cjber', when: '1 day ago', text: 'Thanks, noted for the next release.' }] },
+    { id: 8685241, author: 'tgkGate', when: '1 day ago', text: 'Love it. Could the map pin show the next waypoint too, not just the final one? I keep losing the pin when the path bends.', replies: [{ author: 'Nivlemoth_Nathrezim', when: '1 day ago', text: 'Same here, the pin vanishes on every bend.' }, { author: 'cjber', when: '1 day ago', text: 'Thanks, noted for the next release.' }] },
     { id: 8684002, author: 'Serzath', when: '2 days ago', text: 'Works great with Questie.', replies: [] },
+    { id: 8683117, author: 'IronmanBG', when: '7 hours ago', text: 'The arrow also points straight across the lake when I am on a boat.', replies: [] },
   ];
   const el = (tag, props = {}, ...children) => {
     const e = Object.assign(document.createElement(tag), props);

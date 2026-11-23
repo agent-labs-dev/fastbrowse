@@ -81,7 +81,8 @@ impl Agent {
             .into());
         };
         // A surface inside a cross-origin frame has no box in the top viewport; the screenshot still shows where it is.
-        let target_box = self.page.edges(&target.id).await?.map_or_else(
+        let edges = self.page.edges(std::slice::from_ref(&target.id)).await?.shift_remove(&target.id);
+        let target_box = edges.map_or_else(
             || "unknown: find the target in the screenshot".to_owned(),
             |edges| {
                 json!({"left": edges.left, "top": edges.top, "right": edges.right, "bottom": edges.bottom}).to_string()
@@ -170,7 +171,8 @@ impl Agent {
         // The target is measured before the screenshot, so a viewport resized after it shows as a moved target: a
         // cloud browser's viewport grew from 524 to 568 px between the screenshot and a later measure, and the click
         // landed below the pin Jev had boxed.
-        let placed = if on_target { self.page.edges(&target.id).await? } else { None };
+        let ids = [target.id.clone()];
+        let placed = if on_target { self.page.edges(&ids).await?.swap_remove(&target.id) } else { None };
         let Some(png) = self.viewport().await? else { return Ok(None) };
         let reference = screenshot_reference(&png);
         seen["viewport_screenshot"] = reference.clone().into();
@@ -217,7 +219,7 @@ impl Agent {
         // after any question; a point inside it keeps its meaning while the surface stays where it was. A covered
         // control's point is on its cover, which only the pixels show.
         let unmoved = if on_target {
-            self.page.edges(&target.id).await? == placed
+            self.page.edges(&ids).await?.swap_remove(&target.id) == placed
         } else {
             self.viewport().await?.is_some_and(|current| current == png)
         };
@@ -407,6 +409,20 @@ const OUTLINE: image::Rgba<u8> = image::Rgba([255, 0, 255, 255]);
 pub(super) fn cards(viewport: &[u8], edges: &IndexMap<String, Edges>) -> IndexMap<String, Vec<u8>> {
     let Some(image) = rgba(viewport) else { return IndexMap::new() };
     edges.iter().filter_map(|(id, edges)| Some((id.clone(), cut(&image, edges, true)?))).collect()
+}
+
+/// `viewport`, a PNG, with each of `edges` outlined in `OUTLINE`, or None when it cannot be read. A markdown editor
+/// above a live preview of its own text was read as a page under an overlay, and Jev pressed Escape and scrolled where
+/// the step was to fill the editor (#1427): the outline says which drawn box is the field the elements list.
+pub(super) fn outlined(viewport: &[u8], edges: &IndexMap<String, Edges>) -> Option<Vec<u8>> {
+    let mut image = rgba(viewport)?;
+    let size = (image.width(), image.height());
+    for edges in edges.values() {
+        outline(&mut image, edges, (0, 0), size);
+    }
+    let mut png = Vec::new();
+    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    Some(png)
 }
 
 /// The card of a place Jev's box found, cut as `cards` cuts one but with no outline: the box is Jev's estimate, not the

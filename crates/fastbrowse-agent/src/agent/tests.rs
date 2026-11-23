@@ -699,6 +699,35 @@ fn test_an_action_after_the_typing_may_have_sent_it() {
     assert!(unsent_fact(&[typed_into("Reference"), failed], &page).is_some());
 }
 
+/// Two threads to reply in: the first reply's "Your reply was posted." still showed beside the second thread's open
+/// reply box, and Jev judged both replies posted. The page now says which step put that text there, while it shows.
+#[test]
+fn test_text_an_earlier_commit_put_on_the_page_is_named_with_that_step() {
+    let url = "https://example.test/";
+    let posted = HistoryEntry {
+        put: Some((url.into(), vec!["Thanks.".into(), "Your reply was posted.".into()])),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post (Ada)"), StepOutcome::Executed, true)
+    };
+    let reply = HistoryEntry::new(Some(Operation::Click), Some("Reply (Grace)"), StepOutcome::Executed, true);
+    let page = Observation {
+        viewport_text: "Ada\nThanks.".into(),
+        offscreen_text: "Your reply was posted.".into(),
+        ..observation(&[])
+    };
+    let fact = super::helpers::earlier_text_fact(&[posted.clone(), reply.clone()], &page).expect("a fact");
+    assert_eq!(
+        fact,
+        "The text \"Thanks.\", \"Your reply was posted.\" appeared when the run clicked 'Post (Ada)'; it tells of that step, not of any later one."
+    );
+    // The step that just put it there says so in its own effect, text the page no longer shows is not named, and text
+    // put on another page is not this page's.
+    assert_eq!(super::helpers::earlier_text_fact(std::slice::from_ref(&posted), &page), None);
+    let cleared = Observation { viewport_text: "Ada".into(), ..observation(&[]) };
+    assert_eq!(super::helpers::earlier_text_fact(&[posted.clone(), reply.clone()], &cleared), None);
+    let elsewhere = Observation { url: "https://example.test/other".into(), ..page };
+    assert_eq!(super::helpers::earlier_text_fact(&[posted, reply], &elsewhere), None);
+}
+
 fn buttons_at(url: &str, labels: &[&str]) -> Observation {
     Observation { url: url.into(), ..observation(&labels.iter().map(|label| button(label)).collect::<Vec<_>>()) }
 }
@@ -1542,9 +1571,14 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         assert_eq!(gates[0]["step"], 0);
         assert!(gates[0].get("target").is_none());
         assert!(gates[0].get("task").is_none());
-        // A refusal stops the run for confirmation rather than going round recovery.
+        // A refusal stops the run for confirmation rather than going round recovery, and says which step waits and how
+        // to let the run take it: told only that it "needs confirmation", a caller asked a person to post (#1413).
         if let Err(flow) = gated {
-            assert!(matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation), "{case}");
+            let Flow::Stop(stop) = flow else { panic!("{case}: not stopped") };
+            assert_eq!(stop.status, Status::NeedsConfirmation, "{case}");
+            let said = if authorized { super::acting::NOT_ASKED } else { super::acting::NOT_AUTHORIZED };
+            assert_eq!(stop.error.as_deref(), Some(format!("click 'Finish' {said}").as_str()), "{case}");
+            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused), "{case}");
         }
     }
 }
@@ -1785,7 +1819,8 @@ async fn gate_post_after_commits(
     let mut state = run_state();
     state.task = "Open the newest review. If nobody has answered it yet, write 'Thank you' and post it.".into();
     state.authorization = Authorization { irreversible_actions: true };
-    state.commits = commits;
+    state.history = vec![HistoryEntry::new(Some(Operation::Click), Some("Post"), StepOutcome::Executed, true); commits];
+    state.commits = (0..commits).collect();
     let post = button("Post");
     let mut page = observation(std::slice::from_ref(&post));
     page.viewport_text = "Newest review: great product. Signed in with hunter2.".into();
@@ -1824,7 +1859,7 @@ async fn test_a_commit_the_task_makes_conditional_proceeds_only_when_the_page_sh
         if let Err(flow) = gated {
             let Flow::Unsure(unsure) = flow else { panic!("{case}: refused for another step, not stopped") };
             assert!(unsure.reason.contains("depends on a condition the task sets"), "{case}: {}", unsure.reason);
-            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Failed), "{case}");
+            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused), "{case}");
         }
     }
 }
@@ -1849,6 +1884,26 @@ async fn test_a_commit_after_the_runs_first_is_checked_against_the_steps_already
             assert!(unsure.reason.contains("already been done by this run"), "{case}: {}", unsure.reason);
         }
     }
+}
+
+/// An authorized one-reply run posted its reply, then was held at a click the task never asked for and stopped at
+/// `needs_confirmation`, its answer listing the reply boxes as if unsent though both posts were live (#1317). Once the
+/// run has sent something, a held step is refused, not stopped at, when Jev judges the task carried out; before any
+/// commit it still stops, and says which step waits and why.
+#[tokio::test]
+async fn test_a_step_held_after_the_run_has_sent_its_post_is_refused_when_the_task_is_done() {
+    let done = [("requested", 0.1), ("conditional", 0.1), ("carried", 0.9), ("refused", 0.0)];
+    let (gated, jev, state) = gate_post_after_commits(1, &done, &[]).await;
+    let Err(Flow::Unsure(unsure)) = gated else { panic!("the held step stopped the run: {gated:?}") };
+    assert!(unsure.reason.contains(super::acting::DONE_WITHOUT), "{}", unsure.reason);
+    assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused));
+    assert!(jev.asked.lock().unwrap().iter().any(|(_, questions)| questions.contains_key("carried")));
+    let (gated, jev, state) = gate_post_after_commits(0, &done, &[]).await;
+    let Err(Flow::Stop(stop)) = gated else { panic!("a held step before any commit did not stop: {gated:?}") };
+    assert_eq!(stop.status, Status::NeedsConfirmation);
+    assert!(stop.error.as_deref().is_some_and(|error| error.contains(super::acting::NOT_ASKED)), "{stop:?}");
+    assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused));
+    assert!(!jev.asked.lock().unwrap().iter().any(|(_, questions)| questions.contains_key("carried")));
 }
 
 /// A task can give values to use at first and others only once the site does something ("if the site rejects
@@ -2015,7 +2070,7 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     let mut state = run_state();
     state.task = "Reply under the comment by Syrberus with 'Thanks for the log', then click Post once.".into();
     state.authorization = Authorization { irreversible_actions: true };
-    state.commits = 1;
+    state.commits = vec![0];
     let in_form = |control: Control, form: &str| Control { form_id: Some(form.into()), ..control };
     let comment = in_form(Control::new("c", "textbox", "Comment text area", [Operation::Fill]), "top");
     let top = in_form(Control { id: "top-post".into(), ..button("Post") }, "top");
@@ -2186,7 +2241,7 @@ async fn test_a_task_that_rules_out_only_other_changes_makes_the_requested_one()
                 [(Operation::Click, &checkbox), (Operation::Fill, &reply), (Operation::Select, &size)]
             {
                 let decision = code_decision(operation, Some(control.clone()));
-                let gated = agent.gate_edit(&mut state, &page, &decision, control).await;
+                let gated = agent.gate_edit(&mut state, &page, &decision, control, None).await;
                 let case = format!("authorized {authorized}, requested {requested}: {operation} {}", control.role);
                 assert_eq!(gated.is_ok(), allowed, "{case}: {gated:?}");
                 if let Err(Flow::Unsure(unsure)) = gated {
@@ -2306,6 +2361,48 @@ async fn test_a_requested_press_states_what_the_page_calls_the_control() {
         "{}",
         asked[0].1
     );
+}
+
+/// Asked whether the task asks to fill the element labelled "Description", Jev put the requested replacement at 0.11
+/// (#1004): a fill that the task rules other changes out around is asked about with the text the field holds and the
+/// text it writes, a secret by its name.
+#[tokio::test]
+async fn test_a_requested_fill_is_asked_about_its_text() {
+    let mut field = Control::new("d", "textbox", "Description", [Operation::Fill]);
+    field.value = Some("# Forever\nOld key: hunter2".into());
+    let page = observation(std::slice::from_ref(&field));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("api_key", "hunter2", None);
+    let mut state = run_state();
+    state.task = "Replace the description with the text below. Change nothing else.".into();
+    let decision = code_decision(Operation::Fill, Some(field.clone()));
+    let gated = agent.gate_edit(&mut state, &page, &decision, &field, Some("# Forever\nKey: hunter2")).await;
+    assert!(gated.is_ok(), "{gated:?}");
+    let asked = jev.0.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    // What the field holds now too: from the new text alone Jev could not tell what a fill removes (#1432).
+    assert!(asked[0].1.contains("The field holds '# Forever\\nOld key: [secret:api_key]' now."), "{}", asked[0].1);
+    assert!(asked[0].1.contains("The field would then hold '# Forever\\nKey: [secret:api_key]'."), "{}", asked[0].1);
+    assert!(!asked[0].1.contains("hunter2"), "{}", asked[0].1);
+}
+
+/// A sensitive field's value is never put in Jev's question, though the question shows what a fill replaces.
+#[tokio::test]
+async fn test_a_requested_fill_of_a_sensitive_field_keeps_its_value_out() {
+    let mut field = Control::new("k", "textbox", "API key", [Operation::Fill]);
+    field.value = Some("sk-live-1234".into());
+    field.sensitive = true;
+    let page = observation(std::slice::from_ref(&field));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Put new-key in the API key field. Change nothing else.".into();
+    let decision = code_decision(Operation::Fill, Some(field.clone()));
+    let gated = agent.gate_edit(&mut state, &page, &decision, &field, Some("new-key")).await;
+    assert!(gated.is_ok(), "{gated:?}");
+    let asked = jev.0.lock().unwrap();
+    assert!(!asked[0].1.contains("sk-live-1234") && !asked[0].1.contains("The field holds"), "{}", asked[0].1);
 }
 
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
@@ -2669,6 +2766,10 @@ async fn test_a_done_with_no_step_taken_on_a_task_that_asks_for_one_checks_the_t
             .any(|q| q.contains("asks for a step, other than finding, reading or reporting something, that has not")),
         "{asked:?}"
     );
+    // Both questions say a page to open or reload is a step: a run judged carried out the save before a reload the
+    // task listed (#1431).
+    let opening = asked.iter().filter(|q| q.contains(super::acting::OPENING_IS_A_STEP)).count();
+    assert_eq!(opening, 2, "{asked:?}");
 }
 
 /// Asked to start a demo and report the text it loads, a run's click on Start was covered, and it read the page's
@@ -2724,6 +2825,42 @@ async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opene
     let opened = &sent[0]["recent_actions"][0];
     assert_eq!(opened["operation"], "navigate");
     assert!(opened["target"].as_str().is_some_and(|target| target.starts_with("https://example.test/reset?token=")));
+}
+
+/// A reply posted on a signed-in page was missing after a reload, because the site served the copy from before the
+/// post for a minute, and the carried-out check scored the step 0.22. It is told each commit the run sent and the text
+/// the page showed in answer to it, which moved its score where a claim about the site did not; with no commit, nothing.
+#[tokio::test]
+async fn test_the_done_check_is_told_each_commit_the_run_sent_and_what_the_page_then_showed() {
+    let post = |put: &[&str]| HistoryEntry {
+        put: Some(("https://example.test/".into(), put.iter().map(|piece| piece.to_string()).collect())),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post (cjber / Author)"), StepOutcome::Executed, true)
+    };
+    for (history, commits, expected) in [
+        (
+            vec![post(&["Your reply was posted."])],
+            vec![0],
+            vec![
+                "The run's click 'Post (cjber / Author)' was sent, and the page then showed the text 'Your reply was posted.'.",
+            ],
+        ),
+        (vec![post(&[])], vec![0], vec!["The run's click 'Post (cjber / Author)' was sent."]),
+        (vec![post(&["Your reply was posted."])], Vec::new(), Vec::new()),
+    ] {
+        let mut state = run_state();
+        state.task = "Reply to the comment with: Glad it helps!".into();
+        state.history = history;
+        state.commits = commits;
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+        agent.actions_done(&mut state, &observation(&[])).await.expect("the done check answers");
+        let sent = jev.3.lock().unwrap();
+        let told: Vec<&str> = sent[0]["page_facts"]
+            .as_array()
+            .map(|facts| facts.iter().filter_map(|fact| fact.as_str()).filter(|f| f.contains("was sent")).collect())
+            .unwrap_or_default();
+        assert_eq!(told, expected, "{}", sent[0]);
+    }
 }
 
 /// Answers the opening at `landed` whatever address it was sent to, as a server that redirects does, and shows a page
@@ -2899,7 +3036,11 @@ async fn test_the_done_check_is_told_the_run_attaches_its_screenshot() {
         let asked = jev.5.lock().unwrap();
         let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
         assert_eq!(
-            carried.contains(&format!("been carried out? {}", crate::retrieval::SCREENSHOT_PICTURED)),
+            carried.contains(&format!(
+                "{} {}",
+                super::acting::OPENING_IS_A_STEP,
+                crate::retrieval::SCREENSHOT_PICTURED
+            )),
             told,
             "{intent:?}: {carried}"
         );
@@ -3789,7 +3930,7 @@ fn test_the_value_questions_say_which_record_a_field_sits_in() {
 /// A task to write a three-line list of three items it names had one item copied into the document: asked whether the
 /// task states the field's value word for word, Jev said it does, since the items are there, though not as the lines
 /// asked for. Told to type a quoted list and then say which item it lists second, it began the copy at that item
-/// (#1187). The value questions say the copy is the exact text to type, a value the task asks to be written is
+/// (#1187). The value questions say the copy is the field's whole text, a value the task asks to be written is
 /// written, and the value is never the answer to the task's question.
 #[test]
 fn test_the_value_questions_say_a_copy_is_the_exact_text_to_type() {
@@ -3807,8 +3948,11 @@ fn test_the_value_questions_say_a_copy_is_the_exact_text_to_type() {
         .collect();
     let source = choices.iter().find(|choice| choice.criteria.contains_key("write")).expect("the source question");
     let said = |key: &str| source.criteria[key].as_str().unwrap_or_default().to_string();
-    assert!(said("task").contains("states the exact text to type, word for word"), "{}", said("task"));
-    assert!(said("write").contains("or text it asks to be written or composed"), "{}", said("write"));
+    assert!(said("task").contains("states word for word the whole text this field should hold"), "{}", said("task"));
+    assert!(said("write").contains("text it asks to be written or composed"), "{}", said("write"));
+    // A task that adds to a field's text, keeping the rest, is written from it, not typed as the part it states (#1427).
+    assert!(said("task").ends_with("and none of the field's current text is to be kept."), "{}", said("task"));
+    assert!(said("write").contains("the field's current text kept with the changes the task asks for"));
     let words: Vec<_> = choices.iter().filter(|choice| choice.instructions.contains("which of its words")).collect();
     assert_eq!(words.len(), 2, "the beginning and the end are asked");
     for question in words {
@@ -4382,9 +4526,9 @@ impl Page for Screenshots {
         Box::pin(async move { Ok(clicked) })
     }
 
-    fn edges<'a>(&'a self, _: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
+    fn edges<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
         let edges = *self.5.lock().unwrap();
-        Box::pin(async move { Ok(edges) })
+        Box::pin(async move { Ok(ids.iter().filter_map(|id| Some((id.clone(), edges?))).collect()) })
     }
 
     fn pictures<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
@@ -5215,7 +5359,7 @@ impl LLMClient for DateWriter {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
-            let data = schema.validate_json(r#"{"value":"2026-11-04"}"#).map_err(LLMError::schema)?;
+            let data = schema.validate_json(r#"{"value":"2026-11-04","changes":[]}"#).map_err(LLMError::schema)?;
             let cost = CostLine {
                 purpose: Some(purpose),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
@@ -7062,6 +7206,23 @@ fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
     assert_eq!(offered.controls[0].focused, Some(true));
     assert!(offered.controls[0].operations.contains(&Operation::Fill));
     assert!(context.problem.as_deref().unwrap().contains("not offered this time"));
+}
+
+#[test]
+fn test_withholding_a_stalled_fill_keeps_the_disabled_save_shown() {
+    // A fill left Save disabled and changed nothing; the re-ask hid Save again with the fill, so Jev was told nothing
+    // about why the edit had not taken (#1415).
+    let mut offered = reference("Alpha-17", true);
+    offered.controls.push(Control { disabled: Some(true), ..Control::new("save", "button", "Save", []) });
+    let mut context = crate::policy::StepContext::new("set the reference and save it");
+    super::recovery::withhold(
+        &mut offered,
+        &mut context,
+        "nothing changed",
+        &super::recovery::Idle::performed(Some((Operation::Fill, Some("Reference".into())))),
+    );
+    let save = offered.controls.iter().find(|control| control.label == "Save").expect("the disabled Save stays shown");
+    assert!(save.operations.is_empty());
 }
 
 const ENTRY: &str = "https://shop.test/entry";
@@ -10757,6 +10918,25 @@ fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
     assert!(!answer.contains("first draft") && !answer.contains("never typed"), "{answer}");
     assert!(!answer.contains(super::finishing::COMMITTED), "{answer}");
     assert!(!answer.contains("Markdown"), "{answer}");
+    // Once the run has sent something, the answer says what it sent, and no longer that every field still holds what
+    // was typed (#1317).
+    let mut history = history;
+    history.push(HistoryEntry {
+        commit: Some(crate::policy::Commit::Taken),
+        ..HistoryEntry::new(
+            Some(Operation::Click),
+            Some("Post (Nivlemoth_Nathrezim / 7 hours ago)"),
+            StepOutcome::Executed,
+            true,
+        )
+    });
+    let answer = super::finishing::changed_fields(&history).expect("the commit is reported");
+    assert!(answer.starts_with(super::finishing::COMMITTED), "{answer}");
+    assert!(answer.contains("- click 'Post (Nivlemoth_Nathrezim / 7 hours ago)'"), "{answer}");
+    assert!(
+        answer.contains(super::finishing::CHANGED_SINCE) && !answer.contains(super::finishing::CHANGED),
+        "{answer}"
+    );
 }
 
 /// A run posted a reply under each of two comments, clicking Post after typing each, then stopped for confirmation on a
@@ -11538,6 +11718,27 @@ async fn test_a_press_copied_from_a_task_that_names_no_key_is_not_made() {
     let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(editor))).await;
     let Err(Flow::Unsure(unsure)) = result else { panic!("words that are no key were pressed: {result:?}") };
     assert!(unsure.reason.contains("no key"), "{}", unsure.reason);
+}
+
+/// A press on a text field copies its chord from the task, asked as a key chord: asked what should be typed into the
+/// field, Jev copied the description the task gave to type, which is no key (#1004).
+#[tokio::test]
+async fn test_a_press_on_a_text_field_is_asked_for_a_key_chord_not_text() {
+    let editor = Control {
+        value: Some("Old description".into()),
+        ..Control::new("d", "textbox", "Description", [Operation::Fill, Operation::Press])
+    };
+    let page = observation(std::slice::from_ref(&editor));
+    let jev = Arc::new(FirstChoice::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Replace the description with Hello world, then press ctrl+End in it.".into();
+    state.edits = Some(Edits::Allowed);
+    let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(editor))).await;
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key chord should be pressed in 'Description'?")), "{asked:?}");
+    assert!(asked.iter().any(|q| q.contains("names the key chord to press in 'Description'")), "{asked:?}");
+    assert!(!asked.iter().any(|q| q.contains("typed into") || q.contains("The field holds")), "{asked:?}");
 }
 
 #[tokio::test]
@@ -12523,4 +12724,31 @@ fn a_form_opened_in_another_frame_is_recorded_though_one_with_its_id_exists_else
 
     let entry = state.history.last().expect("the click history");
     assert_eq!(entry.opened_forms, vec![(Some("second".to_string()), "form".to_string())]);
+}
+
+/// A markdown editor above a live preview of its text read to Jev as a page under an overlay, and it pressed Escape
+/// instead of filling the editor (#1427): the step screenshot outlines each field it can fill, and only those.
+#[tokio::test]
+async fn test_the_step_screenshot_outlines_each_field_jev_can_fill() {
+    let page = Arc::new(Screenshots(
+        Default::default(),
+        false,
+        Default::default(),
+        false,
+        None,
+        std::sync::Mutex::new(Some(Edges { left: 0.25, right: 0.75, top: 0.25, bottom: 0.75 })),
+        false,
+        false,
+    ));
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None, zoomed: None });
+    let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
+    let editor = Control { operations: [Operation::Fill].into(), ..button("Description") };
+    let seen = Observation { visual_content: true, ..observation(&[editor]) };
+    let (viewport, _) = agent.step_images(&seen, false).await.expect("the viewport");
+    let image = image::load_from_memory(&viewport.expect("a screenshot")).unwrap().to_rgba8();
+    let magenta = image.pixels().filter(|pixel| pixel.0[..3] == [255, 0, 255]).count();
+    assert!(magenta > 0, "the editor is outlined");
+    let seen = Observation { visual_content: true, ..observation(&[button("Save")]) };
+    let (viewport, _) = agent.step_images(&seen, false).await.expect("the viewport");
+    assert_eq!(viewport, Some(png(1280, 900)), "no field, no outline");
 }

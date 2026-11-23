@@ -60,8 +60,11 @@ pub(crate) mod keys {
     }
 }
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after the recent history shows it executed; what the page already showed before it is not the\nanswer, however close it looks.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nWhat the task writes in or to a record it names, such as a reply to a comment, goes in a field in that record's context; while none is offered, open one there rather than fill a field outside it.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after the recent history shows it executed; what the page already showed before it is not the\nanswer, however close it looks.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nEach option is the element in state.elements with its id, whose `context` is the card, row or section it belongs\nto. When the task names one, choose by context; a link in one record's context opens it and shows no more of the\nlist.";
+/// Asked only where a fill's field is chosen: the other target questions pick controls, not where text goes. A reply
+/// task filled the page's new-comment box, which sits among the comments and inside none of them (#1476).
+const FILL_TARGET_RULES: &str = "A field whose context is not the record the task names is not that record's field: when the task names a record and no offered field is in its context, choose not_here.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could carrying out any part of the task or current subgoal that is still needed, or reading what it needs, act on or rely on the element in each question?\nUse recent actions to judge which task steps are already complete.\nJudge by its label, role, context and href. An already_read link leads to a page this run has read;\nconsider whether visiting it again would help the task. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
 
@@ -109,7 +112,12 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::DoubleClick => "Double-click an element to open it, such as a file, folder or list item.",
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
         Operation::Drag => "Drag a control onto a destination, or draw a pointer gesture on a drawn surface.",
-        Operation::Fill => "Put the value the task needs into an editable field, typing or replacing its text.",
+        // Jev held off filling a field whose text the task adds to, scrolling to its end first, since fill read as
+        // typing or replacing only (#1427), or takes from, scrolling to bring the words into view (#1429). The written
+        // value replaces the field's whole text, keeping what it holds, and is written from its value.
+        Operation::Fill => {
+            "Set an editable field's whole text to what the task needs: type it, replace it, or keep the text it holds and add to it or take from it. The new text is written from the field's value, so the part to change need not be in view."
+        }
         Operation::Press => "Press the key or key chord the task gives in an editable field.",
         Operation::Blur => {
             "Move keyboard focus out of the focused editable field without activating or submitting anything, so the page runs what it does when a field is left."
@@ -228,6 +236,10 @@ pub struct HistoryEntry {
     /// Form instances that appeared after this action, kept private so an unrelated click is not called the opener.
     #[serde(skip)]
     pub opened_forms: Vec<(Option<String>, String)>,
+    /// The address a commit stayed on and the text it added there, such as a posted reply and the "Your reply was
+    /// posted." notice. Kept out of what models are shown: it states which text on a later page this step put there.
+    #[serde(skip)]
+    pub put: Option<(String, Vec<String>)>,
 }
 
 /// The scope of a form or field group. A local form id can be reused in other frames or documents.
@@ -391,6 +403,7 @@ impl HistoryEntry {
             form_id: None,
             frame_id: None,
             opened_forms: Vec::new(),
+            put: None,
         }
     }
 
@@ -819,7 +832,9 @@ pub async fn decide(
     let mut tokens = 0;
     // A target is picked from at most `options` groups of at most `group_size`, so no more can be offered at once.
     let max_offered = fitting.group_size() * options;
-    let mut shortlist_tried = context.list_read != ListRead::Continue && controls.len() > max_offered;
+    // Only a control with an operation is offered: a disabled one is listed but takes no place in the choice (#1415).
+    let offerable = controls.iter().filter(|control| control.actionable()).count();
+    let mut shortlist_tried = context.list_read != ListRead::Continue && offerable > max_offered;
     if shortlist_tried {
         let shortlisted = shortlist(jev, &observation, &controls, &context, fitting, ledger, trace).await?;
         if let Some((kept, paid, used)) = shortlisted {
@@ -1040,9 +1055,12 @@ fn trim(
 /// Protected controls, then the first others up to `limit` in all: document order when no relevance score is known.
 fn protected_first(controls: &[Control], limit: usize) -> HashSet<usize> {
     let mut keep: HashSet<usize> = (0..controls.len()).filter(|i| protected(&controls[*i])).collect();
-    let room = limit.saturating_sub(keep.len());
-    let others: Vec<usize> = (0..controls.len()).filter(|i| !keep.contains(i)).take(room).collect();
+    let room = limit.saturating_sub(keep.iter().filter(|i| controls[**i].actionable()).count());
+    let others: Vec<usize> =
+        (0..controls.len()).filter(|i| !keep.contains(i) && controls[*i].actionable()).take(room).collect();
     keep.extend(others);
+    // A disabled control takes no place among the offered, so it stays with whatever is kept.
+    keep.extend((0..controls.len()).filter(|i| !controls[*i].actionable()));
     keep
 }
 
@@ -1108,7 +1126,10 @@ async fn shortlist(
 ) -> Result<Option<Shortlist>> {
     let config = fitting.config;
     let protected_set: HashSet<usize> = (0..controls.len()).filter(|i| protected(&controls[*i])).collect();
-    let candidates: Vec<usize> = (0..controls.len()).filter(|i| !protected_set.contains(i)).collect();
+    // A disabled control is never picked, so its relevance is not paid for: it is kept unasked, beside the protected.
+    let inert: HashSet<usize> = (0..controls.len()).filter(|i| !controls[*i].actionable()).collect();
+    let candidates: Vec<usize> =
+        (0..controls.len()).filter(|i| !protected_set.contains(i) && !inert.contains(i)).collect();
     let state = json!({
         "rules": told_sites(&RELEVANCE, controls),
         "task": context.task,
@@ -1178,11 +1199,13 @@ async fn shortlist(
     });
     let kept = |prefix: usize| {
         let mut indices = protected_set.clone();
+        indices.extend(inert.iter().copied());
         indices.extend(ranked[..prefix].iter().copied());
         keep_indices(controls, &indices)
     };
     let max_offered = fitting.group_size() * fitting.options;
-    let (mut low, mut high) = (0, ranked.len().min(max_offered.saturating_sub(protected_set.len())));
+    let protected_offered = protected_set.iter().filter(|i| controls[**i].actionable()).count();
+    let (mut low, mut high) = (0, ranked.len().min(max_offered.saturating_sub(protected_offered)));
     while low < high {
         let middle = (low + high).div_ceil(2);
         if fitting.request_fits(&build_request(observation, &kept(middle), context, config, fitting.options)) {
@@ -1303,7 +1326,7 @@ pub fn build_request(
         &observation.url,
         context.start_url.as_deref(),
         context.start_landing_url.as_deref(),
-        observation.controls.is_empty() || context.problem.is_some(),
+        !observation.controls.iter().any(Control::actionable) || context.problem.is_some(),
     );
     for known in &context.known_pages {
         if !urls.contains(known) && !fastbrowse_core::navigation::same_address(known, &observation.url) {
@@ -1335,7 +1358,10 @@ pub fn build_request(
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            told_sites(&action_rules, controls),
+            {
+                let rules = told_sites(&action_rules, controls);
+                if context.screenshot.is_some() { format!("{rules}\n{FIELDS_OUTLINED}") } else { rules }
+            },
             offered.iter().map(|op| {
                 // The operation is chosen apart from its target, and a choice of one address is answered without Jev
                 // at all, so the operation names where navigate goes: told only "another address", Jev searched the
@@ -1351,9 +1377,10 @@ pub fn build_request(
                             known.join(", ")
                         )
                     }
-                    (Operation::Scroll, _) if indexed.contains_key(op) => {
-                        "Scroll the chosen vertical area down, or horizontal area right, to reveal more content.".into()
-                    }
+                    // Asked to remove words from the end of a long description, Jev scrolled the editor and the page
+                    // six times to bring them into view and never filled it, though the field's value held them; told
+                    // so here and in fill's criterion, it filled 6 times in 6 (#1429).
+                    (Operation::Scroll, _) if indexed.contains_key(op) => SCROLL_AREA.into(),
                     (Operation::ScrollUp, _) if indexed.contains_key(op) => {
                         "Scroll the chosen vertical area up, or horizontal area left, to reveal content in that direction."
                             .into()
@@ -1870,6 +1897,16 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext)
     Value::Object(state)
 }
 
+/// The scroll operation's criterion when the page offers areas to scroll: a field's text is its value, never a reason to
+/// scroll it (#1429).
+const SCROLL_AREA: &str = "Scroll the chosen vertical area down, or horizontal area right, to reveal more content. Each element's value already gives its whole text, so a field need not be scrolled to edit or read it.";
+
+/// Said to the operation question with every step screenshot, which `step_images` marks so: without the marks Jev took a
+/// markdown editor's live preview for an overlay over it and pressed Escape instead of filling the editor (#1427). Said
+/// in the state beside the screenshot instead, Jev filled once in six replays; in the instructions, six times in six.
+const FIELDS_OUTLINED: &str =
+    "In `viewport_screenshot`, each element whose operations include fill is outlined in magenta.";
+
 /// Jev reads an image wherever its reference appears, even inside page text, so the reference is one no page could
 /// contain by chance: the image's own digest.
 pub(crate) fn screenshot_reference(png: &[u8]) -> String {
@@ -1966,7 +2003,8 @@ fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
     if control.offscreen {
         element.insert("offscreen".into(), true.into());
     }
-    for (key, marked) in [("required", control.required), ("invalid", control.invalid)] {
+    for (key, marked) in [("required", control.required), ("invalid", control.invalid), ("disabled", control.disabled)]
+    {
         if marked == Some(true) {
             element.insert(key.into(), true.into());
         }
@@ -2028,7 +2066,14 @@ fn target_question(
     // context and operations the shared state carries for the operation question. Repeated in every option, they
     // added 45% to a step request's bytes and 18% to its cost (#1286).
     let shown = candidates.iter().any(|c| looks.contains_key(&c.id));
-    let rules = if shown { json!([rules, LOOKS_LIKE]) } else { json!(rules) };
+    let mut rules = vec![rules];
+    if operation == Operation::Fill {
+        rules.push(FILL_TARGET_RULES);
+    }
+    if shown {
+        rules.push(LOOKS_LIKE);
+    }
+    let rules = if rules.len() == 1 { json!(rules[0]) } else { json!(rules) };
     choice(
         dumps(&json!({"rules": rules, "operation": operation.as_str()})),
         candidates.iter().map(|c| {
@@ -2302,6 +2347,29 @@ mod tests {
 
     fn link(id: &str) -> Control {
         Control { href: Some(format!("/{id}")), ..Control::new(id, "link", id, [Operation::Click]) }
+    }
+
+    #[test]
+    fn test_a_record_the_task_names_owns_the_field_a_reply_goes_in() {
+        let page = observation(vec![field("box", None), button(1)]);
+        let request = build_request(
+            &page,
+            &page.controls,
+            &StepContext::new("reply to Kal66"),
+            &Config::default(),
+            MAX_CHOICE_OPTIONS,
+        );
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        let ask = "goes in a field in that record's context; while none is offered, open one there rather than fill a field outside it.";
+        assert!(operation.instructions.contains(ask), "{}", operation.instructions);
+        // Before the sentence that stops a repeated step, so it reads with the fill rules.
+        assert!(operation.instructions.find(ask) < operation.instructions.find("Do not repeat satisfied steps"));
+        // The rule is for choosing where text goes; a click target is not told it.
+        let rule = "is not that record's field: when the task names a record and no offered field is in its context, choose not_here.";
+        let Question::Choice(fill) = &request.questions["fill_target"] else { panic!("a choice") };
+        assert!(fill.instructions.contains(rule), "{}", fill.instructions);
+        let Question::Choice(click) = &request.questions["click_target"] else { panic!("a choice") };
+        assert!(!click.instructions.contains(rule));
     }
 
     #[test]
@@ -2769,6 +2837,34 @@ mod tests {
     }
 
     #[test]
+    fn test_disabled_controls_take_no_offer_place_and_no_relevance_question() {
+        // Two options of two controls offer four at most. Disabled controls offer no operation, so they neither start
+        // a shortlist nor are asked about, and they stay in the elements Jev reads (#1415).
+        let config = Config { observation: ObservationLimits { group_size: 2 }, ..Config::default() };
+        let disabled = |i: usize| Control {
+            disabled: Some(true),
+            ..Control::new(&format!("d{i}"), "button", &format!("Off {i}"), [])
+        };
+        let trace = Trace::disabled();
+        let context = StepContext::new("press button 3");
+        let jev = Fake { options: 2, ..fake(&[("operation", "click")], "Button 3") };
+        let few = observation((0..3).map(button).chain((0..3).map(disabled)).collect());
+        block_on(decide(&jev, &few, &context, &config, None, &trace)).unwrap();
+        assert!(relevance_requests(&jev).is_empty(), "three offerable controls fit unshortlisted");
+        let jev = Fake { options: 2, ..fake(&[("operation", "click")], "Button 3") };
+        let many = observation((0..5).map(button).chain((0..2).map(disabled)).collect());
+        block_on(decide(&jev, &many, &context, &config, None, &trace)).unwrap();
+        let asked: Vec<String> =
+            relevance_requests(&jev).iter().flat_map(|r| r.values()).map(Question::dump_json).collect();
+        assert!(!asked.is_empty() && asked.iter().all(|q| !q.contains("Off ")), "{asked:?}");
+        let states = jev.states.lock().unwrap();
+        let chosen = states.last().expect("the action request");
+        let labels: Vec<&str> =
+            chosen["elements"].as_array().unwrap().iter().filter_map(|e| e["label"].as_str()).collect();
+        assert!(labels.contains(&"Off 0") && labels.contains(&"Off 1"), "{labels:?}");
+    }
+
+    #[test]
     fn task_relevance_survives_a_scroll_but_changed_controls_are_judged_again() {
         let config = Config { observation: ObservationLimits { group_size: 2 }, ..Config::default() };
         let jev = Fake { options: 2, ..fake(&[("operation", "click")], "Button 0") };
@@ -3206,6 +3302,10 @@ mod tests {
         assert!(!element(&button(1)).contains_key("item_position"));
         assert!(!element(&button(2)).contains_key("required"));
         assert!(!element(&button(2)).contains_key("invalid"));
+        let mut save = button(3);
+        save.disabled = Some(true);
+        assert_eq!(element(&save)["disabled"], true);
+        assert!(!element(&button(2)).contains_key("disabled"));
     }
 
     #[test]
@@ -3296,6 +3396,28 @@ mod tests {
         let reference = format!("screenshot-{}", sha256_hex(b"png"));
         assert_eq!(request.state["viewport_screenshot"], json!(reference));
         assert_eq!(request.images, Images::from([(reference, b"png".to_vec())]));
+        // The screenshot outlines each fillable field, and Jev is told so only beside it (#1427).
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert!(operation.instructions.ends_with(FIELDS_OUTLINED));
+        context.screenshot = None;
+        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert!(!operation.instructions.contains(FIELDS_OUTLINED));
+    }
+
+    /// Asked to take words from the end of a long field, Jev scrolled to bring them into view instead of filling it
+    /// (#1429): fill and scroll both say the field's value is its whole text.
+    #[test]
+    fn test_fill_and_scroll_say_a_fields_value_is_its_whole_text() {
+        let area = Control::new("area", "region", "Vertical scroll area: textarea", [Operation::Scroll]);
+        let field = Control::new("field", "textbox", "Description", [Operation::Fill]);
+        let page = observation(vec![area.clone(), field.clone()]);
+        let request =
+            build_request(&page, &[area, field], &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert!(operation.criteria["fill"].as_str().unwrap().ends_with("so the part to change need not be in view."));
+        assert_eq!(operation.criteria["scroll"], json!(SCROLL_AREA));
+        assert!(SCROLL_AREA.ends_with("so a field need not be scrolled to edit or read it."));
     }
 
     #[test]

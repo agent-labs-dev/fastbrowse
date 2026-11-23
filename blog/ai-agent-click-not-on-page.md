@@ -25,7 +25,7 @@ A read decision can cover a whole list through its observed next-page links. Eac
 
 ## The authorization gate
 
-Jev judges model-selected clicks, drags and key chords, navigation to a supplied address, and acceptance of confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. A refusal is recorded as a failed step with a reason.
+Jev judges model-selected clicks, drags and key chords, navigation to a supplied address, and acceptance of confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. A refusal is recorded as a `refused` step with a reason.
 
 Code permits an action when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked for it. When confirmation is required, the run stops at `needs_confirmation` with exit code 3. In a browser that stays open, such as a running Chrome reached over its DevTools port or through the extension, a run stopped at `needs_confirmation` leaves its tab on the step it stopped at. The judge can be wrong, so read the step before you authorize it.
 

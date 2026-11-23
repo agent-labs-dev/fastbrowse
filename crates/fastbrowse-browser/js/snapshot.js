@@ -597,6 +597,13 @@
               e.getAttribute('aria-selected'),
             ]),
           );
+        // A fill whose only visible effect is enabling Save changed the page: a Wait that ignored it waited out its
+        // whole budget for a change that had already happened (#1415).
+        if (
+          (e.matches('button,input,select,textarea,fieldset') || e.hasAttribute('aria-disabled')) &&
+          e.checkVisibility({checkVisibilityCSS: true})
+        )
+          hashText(JSON.stringify([e.matches(':disabled'), e.getAttribute('aria-disabled') === 'true']));
         // A role key can change only the widget's announced value, without editing text or an input field.
         if (
           (e.matches('input[type="range"],input[type="number"]') || ['slider', 'spinbutton'].includes(e.getAttribute('role'))) &&
@@ -925,7 +932,7 @@
       return false;
     if (!choice) return true;
     const r = boxOf(e);
-    return r.width > 0 && r.height > 0 && !e.matches(':disabled') && !e.closest('[aria-disabled="true"]');
+    return r.width > 0 && r.height > 0;
   });
   registry.visible = visible;
   // Styled checkboxes and radios often hide the native input. Its visible label is the click
@@ -1420,13 +1427,13 @@
     return null;
   };
   for (const e of walk(document)) {
-    if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) continue;
+    if (!safe(e) || !visible(e) || e.closest('[inert]')) continue;
     const source = sourceOf(e);
-    if (
-      source !== e &&
-      (visible(source) || source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))
-    )
-      continue;
+    if (source !== e && (visible(source) || source.closest('[inert]'))) continue;
+    // A disabled control stays in the observation, marked and offered nothing: left out, a Save the page keeps
+    // disabled after a fill read the same as a page with no Save, and a run on the CurseForge description editor ended
+    // stuck without knowing its edit had not taken (#1415).
+    const disabled = [e, source].some(n => n.matches(':disabled') || !!n.closest('[aria-disabled="true"]'));
     const r = boxOf(e),
       x = r.x + r.width / 2,
       y = r.y + r.height / 2,
@@ -1576,6 +1583,12 @@
         !activation && !['textbox', 'searchbox'].includes(rname) &&
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
       base.operations.push('press');
+    if (disabled) {
+      base.disabled = true;
+      base.operations = [];
+      // Not a page to follow either: a disabled Next on the last page was still offered as the way on.
+      delete base.next_page;
+    }
     controls.push(base);
   }
 
@@ -1656,15 +1669,22 @@
   const repeated = new Set();
   const controlByElement = new Map();
   const labelsByRole = new Map();
-  const nameOf = (scope, element, label, nearest, own = null) => {
+  const nameOf = (scope, element, label, nearest, own = null, furniture = repeated) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    return firstLine(linesOf(scope, element, label, own).join('\n'));
+    // A line kept though other controls share it, as a commenter's name link is under each of their comments, does
+    // not name the card alone: an "Edit" link in one card of several would name that card "Edit" and drop the
+    // product it edits. The card's lines run on to its first one no control shares, so "Edit" and "Delete" links
+    // ahead of a product's name keep it beside them.
+    const lines = linesOf(scope, element, label, own, furniture);
+    const named = lines.findIndex(line => !repeated.has(line));
+    return (named < 0 ? lines.slice(0, 2) : lines.slice(0, named + 1)).join(' / ');
   };
-  // The lines of `scope` that can name `element`, in reading order.
-  const linesOf = (scope, element, label, own = null) => {
+  // The lines of `scope` that can name `element`, in reading order. `furniture` holds the repeated controls' labels
+  // that read the same in every repeat, so name none of them.
+  const linesOf = (scope, element, label, own = null, furniture = repeated) => {
     // A line that is another control of the same kind names that control, not the section: a calendar's day cells were
     // named "31" and "7" after their neighbours in the same week row, so a picker showing November was offered with
     // contexts that pointed at other days. A card's title keeps its line, since the control it names there is another
@@ -1679,7 +1699,7 @@
     // control's and its peers' labels names nothing but them.
     const onlyPeers = line => line.split(' ').every(word => word === label || peer(word));
     const lines = renderedLines(scope)
-      .filter(line => !peer(line) && !onlyPeers(line) && !own?.has(line));
+      .filter(line => !furniture.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
     return lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line).trim()).filter(Boolean);
   };
   const scopeOf = (element, holding) => {
@@ -1695,10 +1715,11 @@
     }
     return scope;
   };
-  const contextOf = (element, holding, label, nearest = true) => {
+  const contextOf = (element, holding, label, nearest = true, furniture = repeated) => {
     const scope = scopeOf(element, holding);
-    return scope ? nameOf(scope, element, label, nearest) : '';
+    return scope ? nameOf(scope, element, label, nearest, null, furniture) : '';
   };
+  const shownLines = memo(scope => new Set(renderedLines(scope)));
   // Content a stylesheet shows only under the pointer (`.card:hover .caption`) is out of reach of every other
   // operation. An element whose hover rule would reveal something now hidden is offered as a hover target.
   const docs = [];
@@ -1834,8 +1855,12 @@
   // from assistive technology is decoration, not a picture: GitHub's license badge (a law icon beside
   // "BSD-3-Clause") was offered as a hover target on every repository card, and the run hovered one instead of
   // opening the repository. Only the outermost such card is offered.
-  const holding = new Set();
-  for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
+  // A disabled control is shown, not handled, so a card holding only one is still a card whose controls hover reveals.
+  const inert = new Set(controls.filter(c => c.disabled).map(c => registry.nodes.get(c.id)));
+  for (const e of offered) {
+    if (inert.has(e)) continue;
+    for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
+  }
   // Looked up per hovered card: a scan of every control for each card was quadratic on a long feed.
   for (const c of controls) {
     const element = registry.nodes.get(c.id);
@@ -1894,21 +1919,27 @@
     for (const twin of twins) {
       for (let e = twin.parentElement; e; e = e.parentElement) holding.set(e, (holding.get(e) || 0) + 1);
     }
-    const nearest = group.map(c => contextOf(registry.nodes.get(c.id), holding, c.label));
+    // A repeated control's label names none of the twins only where every twin's card shows it, as a datepicker's
+    // Prev does. A commenter with two comments on a page has their name link twice, and dropping it as one of the
+    // page's repeated labels named their Reply button, reply box and Post by the comment's age alone ("2 days ago"),
+    // which a task that names the commenter cannot be matched against (#1411).
+    const scopes = twins.map(twin => scopeOf(twin, holding));
+    const shown = scopes.map(scope => (scope ? shownLines(scope) : new Set()));
+    const furniture = new Set([...shown[0]].filter(line => repeated.has(line) && shown.every(lines => lines.has(line))));
+    const nearest = group.map(c => contextOf(registry.nodes.get(c.id), holding, c.label, true, furniture));
     group.forEach((c, i) => {
       // Cards that each end in an "Options" heading share their nearest title, which would name every twin
       // alike; a twin whose nearest title another twin shares is named by its card's first title instead.
       const shared = nearest.indexOf(nearest[i]) !== nearest.lastIndexOf(nearest[i]);
-      const context = shared ? contextOf(registry.nodes.get(c.id), holding, c.label, false) : nearest[i];
+      const context = shared ? contextOf(registry.nodes.get(c.id), holding, c.label, false, furniture) : nearest[i];
       if (context) c.context = context;
     });
     // Two comments by one author posted at the same time begin with the same lines, so their Reply buttons were named
     // alike and a reply went under the wrong comment (#881). A twin whose context another twin shares adds the first
     // line of its own card that none of those twins' cards shows, its own text.
     const lines = group.map((c, i) => {
-      const scope = scopeOf(twins[i], holding);
-      regions.set(c.id, scope || twins[i]);
-      return scope ? linesOf(scope, twins[i], c.label) : [];
+      regions.set(c.id, scopes[i] || twins[i]);
+      return scopes[i] ? linesOf(scopes[i], twins[i], c.label, null, furniture) : [];
     });
     const told = group.map((c, i) => {
       const alike = group.map((d, j) => j).filter(j => j !== i && c.context && group[j].context === c.context);
@@ -2060,6 +2091,41 @@
   // is attached here on its own, without the twin-avoidance `contextOf` needs to keep a card from naming its neighbour.
   // Each ancestor is asked only for titles outside the one below it, whose own were already turned down; a title
   // inside the control is its own content, never the section it sits in.
+  // A comments section's own "Comment text area" sits before the list of comments and inside none of them, yet got
+  // only the section's heading, the same context every comment's own Reply has, so a task to reply to one comment
+  // filled the page's new-comment box (#1476). The DOM states whether a control is in a record: a record is what
+  // `scopeOf` already stops at (an article or list item), and a section lists records when at least two hold a control.
+  // A record also holds text of its own beside its controls: an editor's toolbar is a list whose items each hold one
+  // button and nothing else, and counted as records it named the editor's Save "outside every item listed".
+  const RECORD = 'article,li,[role="listitem"]';
+  // Built on first use: most captures name every control without asking whether a section lists records.
+  let controlNodes = null;
+  let recordsHoldingControls = null;
+  const holdingControls = record => {
+    if (!recordsHoldingControls) {
+      controlNodes = new Set(controls.map(c => registry.nodes.get(c.id)));
+      recordsHoldingControls = new Set();
+      for (const e of controlNodes) for (let r = e?.closest(RECORD); r; r = r.parentElement?.closest(RECORD)) recordsHoldingControls.add(r);
+    }
+    return recordsHoldingControls.has(record);
+  };
+  const holdsOwnText = memo(record => {
+    const texts = record.ownerDocument.createTreeWalker(record, NodeFilter.SHOW_TEXT);
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      if (!node.data.trim()) continue;
+      let inControl = false;
+      for (let e = node.parentElement; e && !inControl; e = e === record ? null : e.parentElement) inControl = controlNodes.has(e);
+      if (!inControl) return true;
+    }
+    return false;
+  });
+  const recordCount = memo(section =>
+    [...descendants(section, RECORD)].filter(r => holdingControls(r) && holdsOwnText(r)).length);
+  const listsRecordsOutside = (section, element) => {
+    if (recordCount(section) < 2) return false;
+    for (let e = element; e && e !== section; e = e.parentElement) if (e.matches(RECORD)) return false;
+    return true;
+  };
   const nearestHeading = (element, label) => {
     for (let inner = element, e = element.parentElement; e && e !== e.ownerDocument.body; inner = e, e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
@@ -2073,7 +2139,8 @@
         first ||= text;
         if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
       }
-      if (before || first) return before || first;
+      const name = before || first;
+      if (name) return listsRecordsOutside(e, element) ? `${name}, outside every item listed under ${name}` : name;
     }
     return '';
   };

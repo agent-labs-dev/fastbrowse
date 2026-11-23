@@ -36,6 +36,8 @@ pub struct Effect {
     /// The ids of the controls the step showed on the page it stayed on. A step that loaded another document or
     /// address showed none: every control there is new, and the step's link to them is the address it went to.
     pub shown: Vec<String>,
+    /// The text the step added to the page, piece by piece, as `summary` quotes it.
+    pub put: Vec<String>,
 }
 
 /// Whether a field can be left: an editable control the browser reports holds keyboard focus. Focus a browser never
@@ -60,6 +62,10 @@ pub fn state_key(observation: &Observation) -> String {
             // Reordering a list changes where its items sit though no control changes, so a place is part of the state.
             if let Some(place) = c.item_position {
                 key.as_array_mut().expect("an array").push(json!({"place": place}));
+            }
+            // A page whose Save became usable offers something it did not; one that never disables keys as before.
+            if c.disabled == Some(true) {
+                key.as_array_mut().expect("an array").push("disabled".into());
             }
             dumps(&key)
         })
@@ -229,6 +235,8 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
             ("checked", Shown::of_flag(was.checked), Shown::of_flag(now.checked)),
             ("selected", Shown::of_flag(was.selected), Shown::of_flag(now.selected)),
             ("expanded", Shown::of_flag(was.expanded), Shown::of_flag(now.expanded)),
+            // How the page took an edit: a field that reads back right while Save stays disabled was not taken.
+            ("disabled", Shown::Flag(was.disabled == Some(true)), Shown::Flag(now.disabled == Some(true))),
         ];
         for (name, a, b) in attributes {
             let differs = if name == "label" { plain(&was.label) != plain(&now.label) } else { a != b };
@@ -240,8 +248,8 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
                     short(&a),
                     short(&b)
                 ));
-                // A menu opening or closing is not a value set.
-                setting = setting || name != "expanded";
+                // A menu opening or closing, or a control enabling, is not a value set.
+                setting = setting || !matches!(name, "expanded" | "disabled");
             }
         }
         // A flag the page stopped reporting holds nothing it can be said to hold.
@@ -362,10 +370,11 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
     let changed = !parts.is_empty() || before.viewport_text != after.viewport_text;
     // Named after `changed` is settled, so text that moved outside the viewport still counts as no visible change.
     // Another document or address is all new, and the page text shows it.
+    let mut put = Vec::new();
     if text_too && !navigated && !replaced {
-        let added = added_text(before, after);
-        if !added.is_empty() {
-            let quoted: Vec<String> = added.iter().map(|piece| format!("{piece:?}")).collect();
+        put = added_text(before, after);
+        if !put.is_empty() {
+            let quoted: Vec<String> = put.iter().map(|piece| format!("{piece:?}")).collect();
             parts.push(format!("added the text: {}", quoted.join(", ")));
         }
     }
@@ -383,6 +392,7 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
         added: stayed_whole && (content_changed || !shown.is_empty()),
         changed,
         shown: if navigated || replaced { Vec::new() } else { shown.iter().map(|c| c.id.clone()).collect() },
+        put,
     }
 }
 
@@ -446,6 +456,27 @@ mod tests {
         let mut c = c.clone();
         change(&mut c);
         c
+    }
+
+    #[test]
+    fn a_fill_that_enables_save_says_so_and_one_that_leaves_it_disabled_does_not() {
+        let field = Control::new("d", "textbox", "Description", [Operation::Fill]);
+        let mut save = Control::new("s", "button", "Save", []);
+        save.disabled = Some(true);
+        let before = observation(vec![field.clone(), save.clone()]);
+        let filled = with(&field, |c| c.value = Some("new".into()));
+        let enabled = with(&save, |c| {
+            c.disabled = None;
+            c.operations = [Operation::Click].into();
+        });
+        let took = effect(&before, &observation(vec![filled.clone(), enabled]), None, false);
+        assert!(took.summary.contains("Save disabled: True -> False"), "{}", took.summary);
+        let refused = effect(&before, &observation(vec![filled.clone(), save.clone()]), None, false);
+        assert!(!refused.summary.contains("Save"), "{}", refused.summary);
+        // Enabling offers an action the page did not, so the page is in another state.
+        let still = observation(vec![filled.clone(), save]);
+        let usable = observation(vec![filled, with(&before.controls[1], |c| c.disabled = None)]);
+        assert_ne!(state_key(&still), state_key(&usable));
     }
 
     #[test]

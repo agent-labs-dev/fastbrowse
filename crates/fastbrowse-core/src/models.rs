@@ -151,6 +151,9 @@ str_enum! {
         /// The page changed between observation and dispatch; nothing was dispatched.
         Stale = "stale",
         Failed = "failed",
+        /// The run did not take the action: its authorization gate refused it or holds it for confirmation, as the
+        /// step's note says; nothing was dispatched.
+        Refused = "refused",
     }
 }
 

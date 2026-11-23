@@ -596,15 +596,20 @@ pub(super) const COMMITTED: &str =
 /// Said of a commit the run sent and then ended before the next page showed whether it was taken.
 pub(super) const UNSEEN: &str = "the run ended before the page showed whether it was taken";
 
+/// Said instead of [`CHANGED`] once a run has sent something: a commit can have sent what was typed, or not.
+pub(super) const CHANGED_SINCE: &str =
+    "It also changed fields on the page; any those steps did not send may still hold what it entered:";
+
 /// What a clicked option, box or switch is said to have left when the page changed without any field reporting a
 /// new value, checked or selected state, as a select that shows its choice only in its label does.
 pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports what it now holds";
 
 /// What a run's executed steps did to the page: each commit it sent, as [`COMMITTED`] says it, with what it entered in
-/// the commit's own form, then the fields left changed, the latest change to each, as [`CHANGED`] says it: text typed
-/// or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field it changed, as
-/// the page read it after the click. A commit sends only its own form, as the page reports it, so a field of another
-/// form stays among the changed fields. Without a form, only the committing control's own change is sent.
+/// the commit's own form, then the fields left changed, the latest change to each, said as [`CHANGED`] or, once it sent
+/// something, [`CHANGED_SINCE`]: text typed or an option chosen, quoted as recorded (a secret by its marker), and what a
+/// click left in each field it changed, as the page read it after the click. A commit sends only its own form, as the
+/// page reports it, so a field of another form stays among the changed fields. Without a form, only the committing
+/// control's own change is sent.
 pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
     // Each field's latest value, with its form and the step that directly targeted it.
     let mut changed = IndexMap::new();
@@ -648,9 +653,11 @@ pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<
         committed.push(line);
     }
     let committed = (!committed.is_empty()).then(|| format!("{COMMITTED}\n{}", committed.join("\n")));
+    let sent = committed.is_some();
     let changed = (!changed.is_empty()).then(|| {
         let lines: Vec<String> = changed.iter().map(|((_, field), (_, left))| format!("- {field}: {left}")).collect();
-        format!("{CHANGED}\n{}", lines.join("\n"))
+        let said = if sent { CHANGED_SINCE } else { CHANGED };
+        format!("{said}\n{}", lines.join("\n"))
     });
     match (committed, changed) {
         (Some(committed), Some(changed)) => Some(format!("{committed}\n\n{changed}")),

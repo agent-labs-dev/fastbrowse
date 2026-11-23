@@ -10,7 +10,7 @@ When a field value or key chord is copied, Jev selects its source and first word
 each choice shows a candidate span from that first word to the candidate end, with one more
 answer: the value does not begin at that word. Jev then picks the first word again without it. The beginning is checked
 the same way against copies that end where the value ends, and an end Jev rejects there is picked again.
-Code copies the selected span unchanged. A task-provided key chord is copied only from the task, never from page text. Controls with standard ARIA keyboard interactions also offer their role's keys for Jev to choose.
+Code copies the selected span unchanged. A task-provided key chord is copied only from the task, never from page text, and Jev is asked for the chord to press, not for text to type into the field. Controls with standard ARIA keyboard interactions also offer their role's keys for Jev to choose.
 Earlier typing is shown as history, without assuming
 rejection or requiring a different value when the page changed the field.
 
@@ -39,7 +39,9 @@ is not reported as waiting for confirmation. The irreversibility and task-author
 A submission of a form that holds more than one password field changes an account's credentials whatever
 the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at
 `needs_confirmation`, and an authorized one proceeds only when Jev judges the task asked for it. A refusal
-is recorded as a failed step with a reason. The classifier can be wrong, so this gate is not a guarantee
+is recorded as a `refused` step with a reason. Once the run has carried out an irreversible step, a held one
+does not stop it when Jev judges from the run's steps and the page that the task is already done: that step is
+refused and the run picks again, so a run whose post went through does not end `needs_confirmation`. The classifier can be wrong, so this gate is not a guarantee
 that every externally visible change is detected.
 
 These questions are asked with the task and the page's origin only, never the page's content, so a page
@@ -69,7 +71,9 @@ whatever the page shows, is refused once, and so is one the question goes unansw
 only in some state of the page ("do not click Upload while the preview shows confidential data"), a request of its
 own with the masked page asks whether the page shows that state, and the action goes ahead only on Jev's answer that
 it does not. Whether the task forbids anything is judged first, so a task that forbids nothing adds no question to
-its gates. Authorization does not lift any of these rules: it lets a run commit what
+its gates. When the task asks for some changes and rules out the rest, Jev is asked whether the task asks for each one, and a
+fill is asked about with the text it would write, a secret by its name.
+Authorization does not lift any of these rules: it lets a run commit what
 the task asks for, never what the task forbids.
 
 Unmarked password fields leave the current-or-replacement role to Jev using the task and page context.
@@ -167,6 +171,11 @@ The optional `invalid` flag reports `aria-invalid` or a failed native constraint
 in form validation. It describes the current field, without claiming that a submission occurred. A field
 that fails a native constraint also carries `validation_message`, the browser's own words for why, which
 Jev sees with the field: a refused submit shows that reason only in a browser bubble, not in page text.
+A control the page disables (`disabled`, or inside `aria-disabled="true"`) stays in the observation with
+`disabled: true` and no operations, so Jev sees a Save that an edit did not enable and cannot choose it. A step
+that enables or disables a control says so in its effect, and the page state counts it; a control it enables is
+reported as changed, not as newly shown. The stall rule's re-ask and replay leave a disabled control in place
+without counting it among the controls offered.
 Jev can choose `blur` for an editable field observed as focused, leaving that field without pressing
 another control or submitting its form. The field must still be the same node and hold focus when the
 action runs. A replacement field is not retried. Page change and blur handlers run as they do when the
@@ -212,8 +221,8 @@ The ledger reserves the documented search price before dispatch and records the 
 price when the receipt is unavailable. No key leaves search unavailable.
 
 Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
-offered as what it has. A disabled control (`disabled`, `aria-disabled="true"` or `inert` on the element) is not
-offered, as a browser capture leaves it out, so a disabled next link is no next page. A step only a browser can
+offered as what it has. A disabled control (`disabled` or `aria-disabled="true"` on the element) is kept offering
+nothing, as a browser capture keeps it, and an `inert` one is left out, so a disabled next link is no next page. A step only a browser can
 take starts one on the same page, and the run carries on with
 what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
 build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a

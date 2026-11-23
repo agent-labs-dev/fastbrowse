@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 use super::finishing::UNREPORTED;
 use super::helpers::{decision_label, describe, doing, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
-use super::seeing::{cards, covers_viewport};
+use super::seeing::{cards, covers_viewport, outlined};
 use super::state::{
     FailureCause, Flow, OutputIntent, Picked, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
 };
@@ -288,7 +288,7 @@ impl Agent {
                 && observation.dialog.is_none()
                 && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed);
             if taken {
-                state.commits += 1;
+                state.commits.push(state.history.len() - 1);
             }
             if observation.dialog.is_none() {
                 state.dialog_form = None;
@@ -304,12 +304,13 @@ impl Agent {
             if bot_check || walled {
                 // A wall offering nothing to act on cannot be signed into, so it is waited on as a bot check is: for as
                 // long as the browser's CAPTCHA solver works on it or its document is still loading, and no longer.
-                if (bot_check || raw.controls.is_empty())
+                let offers_nothing = !raw.controls.iter().any(Control::actionable);
+                if (bot_check || offers_nothing)
                     && self.outwait(&raw, browsing_deadline(&state.ledger, state.compose)).await?
                 {
                     continue;
                 }
-                if bot_check && raw.controls.is_empty() && self.reload_challenge(state, &raw).await? {
+                if bot_check && offers_nothing && self.reload_challenge(state, &raw).await? {
                     continue;
                 }
                 // A bot check that does not clear ends the route, not the run.
@@ -1379,6 +1380,7 @@ impl Agent {
             text: typed,
             before,
             effect: effect_now,
+            put: None,
             look: state.look.take(),
             setting: setting.then_some(true),
             set,
@@ -1703,6 +1705,7 @@ impl Agent {
                 added: false,
                 changed: false,
                 shown: Vec::new(),
+                put: Vec::new(),
             }
         } else if (state.committing || keeping || sighted.is_some() || last.look.is_some())
             && last.outcome == StepOutcome::Executed
@@ -1715,8 +1718,11 @@ impl Agent {
             // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
-            state.replied = (state.committing || keeping || last.look.is_some())
-                && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
+            // A send that lands on another page is answered by that page: a contact form's "Your message has been
+            // sent." is the only record that the send went through, so the whole new text is the step's reply.
+            let put = fastbrowse_core::effects::added_text(&before, observation);
+            state.replied = (state.committing || keeping || last.look.is_some()) && !put.is_empty();
+            last.put = (!put.is_empty()).then(|| (observation.url.clone(), put));
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)
@@ -1927,10 +1933,20 @@ impl Agent {
         // took the step's request over Jev's body limit (#1301). Only the box decides this: a small control's card is
         // widened to Jev's smallest image and can be the size of a small viewport, yet its outline still marks it. A
         // question sent no screenshot, as the gate is, still gets the card.
-        if pixels {
-            looks.retain(|id, _| !edges.get(id).is_some_and(covers_viewport));
+        if !pixels {
+            return Ok((None, looks));
         }
-        Ok((pixels.then_some(png), looks))
+        looks.retain(|id, _| !edges.get(id).is_some_and(covers_viewport));
+        let fields: Vec<String> = controls
+            .iter()
+            .filter(|control| control.operations.contains(&Operation::Fill))
+            .map(|control| control.id.clone())
+            .collect();
+        let places = if fields.is_empty() { IndexMap::new() } else { self.page.edges(&fields).await? };
+        // Jev is told every field in the screenshot is outlined, so one the outline could not be drawn on, as a PNG
+        // that does not decode, is not sent as if it were.
+        let png = if places.is_empty() { Some(png) } else { outlined(&png, &places) };
+        Ok((png, looks))
     }
 
     /// The viewport for Jev, on a route that takes images and only within the sizes it accepts.
@@ -2007,11 +2023,51 @@ impl Agent {
         page_changed: Option<bool>,
         decided_by: Decider,
     ) -> Step {
+        let step = (operation, reason, target, confidence, page_changed, decided_by);
+        self.record_undone(state, observation, StepOutcome::Failed, step).await
+    }
+
+    /// Record a step the authorization gate did not take. Recorded as failed with no failure named, a Post held for
+    /// confirmation read as a failure the caller could not get past, and it asked a person to post by hand (#1413).
+    pub(super) async fn record_refusal(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        reason: &str,
+        label: &str,
+    ) -> Step {
+        let decided_by = if decision.replayed { Decider::Recipe } else { Decider::Jev };
+        let step = (
+            decision.operation,
+            reason,
+            Some(self.redact(label)),
+            Some(decision.confidence()),
+            Some(false),
+            decided_by,
+        );
+        self.record_undone(state, observation, StepOutcome::Refused, step).await
+    }
+
+    async fn record_undone(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        outcome: StepOutcome,
+        (operation, reason, target, confidence, page_changed, decided_by): (
+            Operation,
+            &str,
+            Option<String>,
+            Option<f64>,
+            Option<bool>,
+            Decider,
+        ),
+    ) -> Step {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation,
             decided_by,
-            outcome: StepOutcome::Failed,
+            outcome,
             failure: None,
             url: observation.url.clone(),
             target,

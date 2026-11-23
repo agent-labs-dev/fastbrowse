@@ -2,11 +2,15 @@
 //! extension, Chrome starts this crate's `fastbrowse native-host`, and the run reaches the browser only through the
 //! host's socket. Skips when Chrome for Testing is not installed (branded Chrome ignores `--load-extension`).
 
+#[path = "../../fastbrowse-browser/tests/console_support/mod.rs"]
+mod console_support;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use fastbrowse_browser::extension::SCHEME;
@@ -63,6 +67,72 @@ fn serve_form() -> u16 {
     port
 }
 
+/// The author console's pages from `tests/browser/sites/main`, served only to a browser signed in: without the session
+/// cookie `/login` sets, every page but the sign-in form redirects to it, as the real console does. Returns the port and
+/// a count of the requests turned away.
+fn serve_console() -> (u16, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let refused = Arc::new(AtomicUsize::new(0));
+    let counted = refused.clone();
+    let sites = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/browser/sites/main");
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let (counted, sites) = (counted.clone(), sites.clone());
+            // One thread per connection: a socket Chrome opens and never sends on must not hold up the page loads
+            // and the Save behind it.
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut request = String::new();
+                let _ = reader.read_line(&mut request);
+                let (mut signed_in, mut length) = (false, 0usize);
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    if let Some((name, value)) = line.split_once(':') {
+                        let name = name.trim().to_ascii_lowercase();
+                        signed_in |= name == "cookie" && value.split(';').any(|c| c.trim() == "session=signed-in");
+                        if name == "content-length" {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    line.clear();
+                }
+                let mut body = vec![0; length];
+                let _ = std::io::Read::read_exact(&mut reader, &mut body);
+                let mut parts = request.split_whitespace();
+                let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
+                let path = path.split(['?', '#']).next().unwrap_or("/");
+                let reply = |status: &str, headers: &str, body: &[u8]| {
+                    let head = format!(
+                        "HTTP/1.1 {status}\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    [head.as_bytes(), body].concat()
+                };
+                let response = if path == "/login" {
+                    reply(
+                        "200 OK",
+                        "set-cookie: session=signed-in; Path=/\r\ncontent-type: text/html\r\n",
+                        b"<title>Signed in</title>Signed in",
+                    )
+                } else if !signed_in && path != "/signin.html" {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    reply("302 Found", "location: /signin.html\r\n", b"")
+                } else if method == "POST" {
+                    reply("204 No Content", "", b"")
+                } else {
+                    match std::fs::read(sites.join(path.trim_start_matches('/'))) {
+                        Ok(page) => reply("200 OK", "content-type: text/html\r\n", &page),
+                        Err(_) => reply("404 Not Found", "", b""),
+                    }
+                };
+                let _ = stream.write_all(&response);
+            });
+        }
+    });
+    (port, refused)
+}
+
 /// Chrome with the extension loaded and the host registered in its throwaway profile; killed on drop.
 struct Browser {
     child: Child,
@@ -82,7 +152,11 @@ impl Browser {
     fn launch(chrome: &Path, root: &Path, extension: &Path) -> Browser {
         let profile = root.join("profile");
         // A socket path has a 108-byte limit, which a target directory can pass: the host listens somewhere short.
-        let hosts = std::env::temp_dir().join(format!("fbx-{}", std::process::id()));
+        // Tests in this binary launch browsers at once, so each gets its own: a shared one handed a run another
+        // browser's host.
+        static LAUNCHED: AtomicUsize = AtomicUsize::new(0);
+        let launch = LAUNCHED.fetch_add(1, Ordering::SeqCst);
+        let hosts = std::env::temp_dir().join(format!("fbx-{}-{launch}", std::process::id()));
         let manifests = profile.join("NativeMessagingHosts");
         std::fs::create_dir_all(&manifests).expect("profile");
         // The host serves only when registered, so the registry lists the binary under test.
@@ -148,14 +222,30 @@ impl Browser {
             .collect()
     }
 
+    /// The titles of the pages open in the browser.
+    fn titles(&self) -> Vec<String> {
+        let listed: serde_json::Value = serde_json::from_str(&self.devtools("/json/list")).expect("target list");
+        listed
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|t| t["type"] == "page")
+            .map(|t| t["title"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+
     /// One plain HTTP GET to the browser's DevTools port. Chrome keeps the connection open, so the body is read by
     /// its length.
     fn devtools(&self, path: &str) -> String {
+        self.devtools_with("GET", path)
+    }
+
+    fn devtools_with(&self, method: &str, path: &str) -> String {
         let active = std::fs::read_to_string(self.root.join("profile/DevToolsActivePort")).expect("DevToolsActivePort");
         let port = active.lines().next().expect("port line");
         let mut stream = std::net::TcpStream::connect(format!("127.0.0.1:{port}")).expect("DevTools port");
         stream.set_read_timeout(Some(Duration::from_secs(10))).expect("read timeout");
-        write!(stream, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").expect("request");
+        write!(stream, "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").expect("request");
         let mut reader = BufReader::new(stream);
         let mut length = 0;
         let mut line = String::new();
@@ -351,6 +441,48 @@ async fn a_run_drives_a_tab_through_the_extension() {
     let session = BrowserSession::new(connection, sink, options);
     let error = session.open().await.expect_err("a file run must stop without interception");
     assert!(error.to_string().contains("fastbrowse extension path"), "{error}");
+    drop(browser);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The author console journeys (#1414), through the extension in a browser the user is already signed in to: the same
+/// steps `fastbrowse-browser/tests/console.rs` runs over CDP, so a fix to either is proven on both.
+#[tokio::test(flavor = "current_thread")]
+async fn the_author_console_journeys_run_signed_in_through_the_extension() {
+    let Some(chrome) = chrome_for_testing() else {
+        eprintln!("Chrome for Testing is not installed; skipping the author console journeys");
+        return;
+    };
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("extension-console-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("root");
+    let extension = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fastbrowse-browser/extension");
+    let browser = Browser::launch(&chrome, &root, &extension);
+    let record = browser.record().await;
+    let (port, refused) = serve_console();
+    let base = format!("http://127.0.0.1:{port}");
+    // A browser that never signed in is turned away, so the run below reached the pages on the user's session.
+    let mut probe = std::net::TcpStream::connect(("127.0.0.1", port)).expect("console server");
+    write!(probe, "GET /description-editor.html HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").expect("request");
+    let mut status = String::new();
+    BufReader::new(probe).read_line(&mut status).expect("status line");
+    assert!(status.contains("302"), "{status}");
+    refused.store(0, Ordering::SeqCst);
+    // The user signs in in a tab of their own before the run, which then finds the session in their profile.
+    browser.devtools_with("PUT", &format!("/json/new?{base}/login"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // The title shows only once the page has committed, after the cookie it set is stored.
+    while !browser.titles().iter().any(|title| title == "Signed in") {
+        assert!(Instant::now() < deadline, "the sign-in never finished");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let (session, page) = open(&record, "author console", &root.join("run")).await;
+    console_support::description(&page, &session, &base).await;
+    console_support::reply(&page, &session, &base).await;
+    console_support::gallery(&page, &session, &base).await;
+    assert_eq!(refused.load(Ordering::SeqCst), 0, "a run page was sent to sign in");
+    session.close().await.expect("close");
     drop(browser);
     let _ = std::fs::remove_dir_all(&root);
 }

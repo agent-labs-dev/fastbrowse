@@ -115,6 +115,10 @@ pub struct Control {
     pub sensitive: bool,
     #[serde(default, deserialize_with = "lax::boolean")]
     pub offscreen: bool,
+    /// A control the page has disabled (`disabled`, or inside `aria-disabled="true"`). It offers no operation until
+    /// the page enables it, and is shown so a Save that stays disabled after an edit is not read as no Save (#1415).
+    #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
     /// A field the page marks required (`required` or `aria-required`).
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub required: Option<bool>,
@@ -167,6 +171,13 @@ pub struct Control {
 }
 
 impl Control {
+    /// Whether the control offers any operation. A disabled control offers none: it is shown to Jev but never picked,
+    /// so whatever asks "is there anything to act on" or counts what can be offered asks this, not whether it is
+    /// listed (#1415).
+    pub fn actionable(&self) -> bool {
+        !self.operations.is_empty()
+    }
+
     /// A control with every optional field at its default.
     pub fn new(id: &str, role: &str, label: &str, operations: impl IntoIterator<Item = Operation>) -> Control {
         Control {
@@ -194,6 +205,7 @@ impl Control {
             expanded: None,
             sensitive: false,
             offscreen: false,
+            disabled: None,
             required: None,
             invalid: None,
             validation_message: None,
@@ -851,10 +863,10 @@ pub trait Page: Send + Sync {
         Box::pin(async { Ok(IndexMap::new()) })
     }
 
-    /// Where control `id` of the last observation sits, as `pictures` measures a card. None out of view, gone, or in
-    /// another frame.
-    fn edges<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
-        Box::pin(async { Ok(None) })
+    /// Where each control among `ids` of the last observation sits, as `pictures` measures a card. One out of view,
+    /// gone, or in another frame has none.
+    fn edges<'a>(&'a self, _ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        Box::pin(async { Ok(IndexMap::new()) })
     }
 
     /// Scroll control `id` of the last observation into view if it is not already in full view, as an action on it

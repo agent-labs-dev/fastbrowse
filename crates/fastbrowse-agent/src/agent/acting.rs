@@ -6,7 +6,7 @@ use std::ops::Range;
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, Images, NoulQuestion, Question};
 use fastbrowse_core::keys::press_keys;
-use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
@@ -25,7 +25,10 @@ use serde_json::{Map, Value as JsonValue, json};
 
 use super::Agent;
 use super::driving::require;
-use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
+use super::helpers::{
+    caller_link, describe, dialog_question, earlier_text_fact, empty_fields_fact, navigation_question, sent_facts,
+    unsent_fact,
+};
 use super::seeing::cards;
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::error::AgentError;
@@ -84,6 +87,11 @@ const NO_VALUE_SAID: &str = "The task asks for this field's value, and nothing g
 const LEAVE_SAID: &str = "The task asks nothing of this field, so it is left as it is.";
 
 /// Said to the question of whether the task's steps were carried out, when no step of the run has acted on a page.
+/// What the "other than finding, reading or reporting" steps leave in. A task to save a description, then reload the
+/// page and confirm it, was judged carried out after the save, the reload taken as part of confirming (#1431).
+pub(super) const OPENING_IS_A_STEP: &str =
+    "Going to a page, or reloading one, is a step to carry out even when it is there to read.";
+
 pub(super) const NOTHING_ACTED: &str =
     "This run has taken no step on any page, only looked at and read them, so what they show was there before it.";
 
@@ -236,8 +244,8 @@ type Asked<'a> = (&'a str, String, IndexMap<String, JsonValue>);
 /// What Jev is asked about a field: where its value comes from, where among `begins` it begins and where among `ends`
 /// it ends.
 fn value_questions<'a>(
+    (entry, target): (Entry, &Control),
     state: &RunState,
-    target: &Control,
     (text, holder): (&str, &str),
     label: &str,
     (begins, ends): (&[Word], &[Word]),
@@ -249,16 +257,18 @@ fn value_questions<'a>(
         sources.shift_remove(IN_TASK);
     }
     let holds = holding(target)
+        .filter(|_| entry == Entry::Typed)
         .map(|now| format!(" The field holds {now} now, and typing replaces all of it."))
         .unwrap_or_default();
     let source_question =
         if source_question.is_empty() { source_question } else { format!("{source_question}{holds}") };
-    let tried = field_history(state, target);
+    let tried = field_history(entry, state, target);
     let mut asked = vec![("source", source_question, sources)];
     if !begins.is_empty() && !ends.is_empty() {
         let several = several_values(target);
-        asked.push(("first", word_question((holder, label), "begins", &several, &tried), word_options(text, begins)));
-        asked.push(("last", word_question((holder, label), "ends", &several, &tried), word_options(text, ends)));
+        let question = |end| word_question(entry, (holder, label), end, &several, &tried);
+        asked.push(("first", question("begins"), word_options(text, begins)));
+        asked.push(("last", question("ends"), word_options(text, ends)));
     }
     asked
 }
@@ -269,14 +279,36 @@ fn value_questions<'a>(
 /// Asked only where a value begins, Jev began a document's text at the answer to the task's own question: told to type
 /// a quoted list and then say which item it lists second, it began at the second item 3 times in 3 (#1187). Told that
 /// the value is text given to be entered, it began at the quote's first word 5 times in 5.
-fn word_question((holder, label): (&str, &str), end: &str, several: &str, tried: &str) -> String {
-    format!(
-        "If {holder} states the value for {label}, which of its words {end} the value? The value is text {holder} gives to be entered, not the answer to a question the task asks. When it gives this field several values, {several} A search takes what is looked for, not the request around it.{tried}"
-    )
+fn word_question(entry: Entry, (holder, label): (&str, &str), end: &str, several: &str, tried: &str) -> String {
+    match entry {
+        Entry::Typed => format!(
+            "If {holder} states the value for {label}, which of its words {end} the value? The value is text {holder} gives to be entered, not the answer to a question the task asks. When it gives this field several values, {several} A search takes what is looked for, not the request around it.{tried}"
+        ),
+        Entry::Pressed => format!(
+            "If {holder} names the key chord to press in {label}, which of its words {end} the chord? {KEY_CHORD_SAID}"
+        ),
+    }
 }
 
+/// What a value copied from the task's words is for: text a fill types, or a key chord a press sends.
+///
+/// A press on a description editor was asked what should be typed into it, and copied the description the task gave
+/// to be typed, which is no key (#1004).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Entry {
+    Typed,
+    Pressed,
+}
+
+/// What a key chord is, said wherever one is copied from the task.
+const KEY_CHORD_SAID: &str = "A key chord is one key, named as a W3C UI Events key value such as Enter or End, after any of Alt, Control, Meta and Shift joined by +. It is pressed, not typed: text the task gives to type into the field is not a key chord.";
+
 /// What a field already had, as the question of where its value begins or ends says it.
-fn field_history(state: &RunState, target: &Control) -> String {
+fn field_history(entry: Entry, state: &RunState, target: &Control) -> String {
+    // What was typed and what the field holds say nothing of which key to press.
+    if entry == Entry::Pressed {
+        return String::new();
+    }
     let tried = typed_into(state, target);
     let tried = if tried.is_empty() {
         String::new()
@@ -458,6 +490,15 @@ pub(super) fn gate_questions(
     (irreversible, action, lasting)
 }
 
+/// Why a held step is not taken once the run's steps carry out its task: no step is left that needs it.
+pub(super) const DONE_WITHOUT: &str =
+    "needs confirmation, and is not taken: the steps this run carried out already do what the task asks.";
+/// What a step held for confirmation in an unauthorized run says: which step, and how a caller lets the run take it.
+/// Told only that a Post "needs confirmation", a caller could not tell how to go on and asked a person to post (#1413).
+pub(super) const NOT_AUTHORIZED: &str = "needs confirmation: this run is not authorized to take actions that cannot be undone, so it stopped before taking it. Run the task again with authorization to let it.";
+/// What a step held for confirmation in an authorized run says: authorization covers only what the task asks for.
+pub(super) const NOT_ASKED: &str = "needs confirmation: it cannot be undone and the task, as judged, does not ask for it, so the run stopped before taking it.";
+
 /// The finish check's answer about the steps the task asks to be carried out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Carried {
@@ -514,8 +555,8 @@ impl Agent {
                 let Value { task, label, group, sources, source_question, .. } = self.value(state, control);
                 if group.len() <= max {
                     for (name, question, criteria) in value_questions(
+                        (Entry::Typed, control),
                         state,
-                        control,
                         (&task, "the task"),
                         &label,
                         (&group, &group),
@@ -573,7 +614,7 @@ impl Agent {
             }
             Operation::Click | Operation::RightClick | Operation::DoubleClick | Operation::Enter => {
                 if let Some(target) = target {
-                    self.gate_edit(state, observation, decision, target).await?;
+                    self.gate_edit(state, observation, decision, target, None).await?;
                 }
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
@@ -624,13 +665,32 @@ impl Agent {
             }
             Operation::Fill => {
                 let target = require(target)?;
-                self.gate_edit(state, observation, decision, target).await?;
+                // An edit the task may ask for is judged with the text it writes, so that is worked out first; one the
+                // task rules out is refused before anything is asked about its value.
+                let requested_only =
+                    changes_a_value(Operation::Fill, target) && self.edits(state).await? == Edits::RequestedOnly;
+                if !requested_only {
+                    self.gate_edit(state, observation, decision, target, None).await?;
+                }
                 // A fetched page takes no typing, so its value is worked out, and a secret asked for, in the browser.
                 if self.page.over_http() {
                     let reason = format!("{} can only be filled in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
-                let text = self.text(state, observation, decision, target).await?;
+                // Working out the text can stop the run, for a required value or a password the task lacks; an edit
+                // the task never asked for is refused first, or the run stopped asking for input it did not need.
+                let text = match self.text(state, observation, decision, target).await {
+                    Ok(text) => text,
+                    Err(stop) => {
+                        if requested_only {
+                            self.gate_edit(state, observation, decision, target, None).await?;
+                        }
+                        return Err(stop);
+                    }
+                };
+                if requested_only {
+                    self.gate_edit(state, observation, decision, target, Some(&text)).await?;
+                }
                 // The task shows each input's value beside its name, so Jev copies or writes it like any value the
                 // task gives; typed as it was given, it is the input, and a recipe types the next run's value.
                 // Text the caller's own task also states, or that two inputs share, may not be the input's, and stays as
@@ -652,7 +712,7 @@ impl Agent {
             }
             Operation::Select => {
                 let target = require(target)?;
-                self.gate_edit(state, observation, decision, target).await?;
+                self.gate_edit(state, observation, decision, target, None).await?;
                 let raw = self.raw_target(target);
                 if raw.options.is_empty() {
                     // A fetched page does not list a select's options, and a live one can fill it once another field is set.
@@ -824,12 +884,17 @@ impl Agent {
     ///
     /// An unsaved toggle is reversible, so the irreversible gate lets it through. Authorization does not lift this
     /// either, for the reason it does not lift the download rule.
+    ///
+    /// `typed` is the text a fill writes. Asked only whether the task asks to fill the element labelled
+    /// "Description", Jev put the requested replacement of an add-on's description at 0.11 and the run stopped stuck
+    /// (#1004): one field can take an asked-for value or a wrong one, and only the text tells them apart.
     pub(super) async fn gate_edit(
         &self,
         state: &mut RunState,
         observation: &Observation,
         decision: &Decision,
         control: &Control,
+        typed: Option<&str>,
     ) -> Step {
         if !changes_a_value(decision.operation, control) {
             return Ok(());
@@ -840,7 +905,21 @@ impl Agent {
         }
         let mut questions = IndexMap::new();
         if edits == Edits::RequestedOnly {
-            let action = control_action(decision.operation, control, None, &observation.controls);
+            let mut action = control_action(decision.operation, control, None, &observation.controls);
+            if let Some(typed) = typed {
+                // Shown only the text a fill would leave, Jev put removing the line a task named from a long
+                // description at 0.10 to 0.13, unable to tell what the fill took out; told what the field holds now
+                // too, 0.74 to 0.82, while a fill that wiped the field stayed refused (#1432).
+                // The observation masks a long value; the raw capture holds what a fill would replace, and a sensitive
+                // field's value is never shown.
+                let raw = self.raw_target(control);
+                if let Some(current) = raw.value.as_deref().filter(|current| !current.is_empty() && !control.sensitive)
+                {
+                    action.push_str(&format!("The field holds {} now.\n", text::repr(&self.redact(current))));
+                }
+                // A secret is named, never shown: the redactor puts its name where its value would be.
+                action.push_str(&format!("The field would then hold {}.\n", text::repr(&self.redact(typed))));
+            }
             questions.insert("requested".to_string(), Question::Noul(requested_question(&action)));
         }
         self.gate_asked_edit(state, observation, decision, control, edits, questions).await
@@ -1157,7 +1236,7 @@ impl Agent {
             let conditional = conditional.is_none_or(|p| p > EVEN_ODDS);
             let commits = wanted && (!reversible || keeps);
             if commits
-                && (conditional || state.commits > 0)
+                && (conditional || !state.commits.is_empty())
                 && let Some(why) = self
                     .condition_refusal(state, observation, decision.target.as_ref(), decision.operation, action)
                     .await?
@@ -1190,25 +1269,19 @@ impl Agent {
         // Once the run has made a commit the task asked for, stopping for confirmation reports that work as not done,
         // and a caller trusting the status sends it again: a run that had posted its replies stopped this way on one
         // more Post click (#1317). The extra action is refused instead, so Jev sees it failed and can finish.
-        if state.commits > 0 {
-            self.trace_authorization(state, decision, GateReason::UnrequestedChange);
-            let why = "would commit what the task does not ask for, after this run made the commits it does ask for";
-            return self.refuse_once(state, observation, decision, label, why).await;
-        }
         self.trace_authorization(state, decision, GateReason::ConfirmationRequired);
-        let reason = format!("{} {} needs confirmation", decision.operation, text::repr(label));
-        let confidence = Some(decision.confidence());
-        self.record_failure(
-            state,
-            observation,
-            decision.operation,
-            &self.redact(&reason),
-            Some(self.redact(label)),
-            confidence,
-            Some(false),
-            if decision.replayed { Decider::Recipe } else { Decider::Jev },
-        )
-        .await?;
+        let held = format!("{} {}", decision.operation, text::repr(label));
+        // After its posts went through, a run held at one more click the task never asked for stopped as if nothing
+        // had been sent, and a caller trusting that would post again (#1317). Once the run has sent something, Jev
+        // judges from its steps and the page whether the task is carried out; if it is, the held step is refused and
+        // the run picks again, so it can finish.
+        if !state.commits.is_empty() && self.actions_done(state, observation).await? == Carried::Done {
+            let reason = self.redact(&format!("{held} {DONE_WITHOUT}"));
+            self.record_refusal(state, observation, decision, &reason, label).await?;
+            return Err(Unsure::new(reason).into());
+        }
+        let reason = format!("{held} {}", if authorized { NOT_ASKED } else { NOT_AUTHORIZED });
+        self.record_refusal(state, observation, decision, &self.redact(&reason), label).await?;
         Err(Stop::new(Status::NeedsConfirmation, "Confirm/irreversible", reason).into())
     }
 
@@ -1333,6 +1406,7 @@ impl Agent {
             "tabs": observation.tabs.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
             "notes": self.decision_notes(state),
             "recent_actions": recent_actions,
+            "page_facts": earlier_text_fact(&state.history, observation).into_iter().collect::<Vec<_>>(),
         });
         self.mask_strings(&mut page);
         page["task"] = self.caller_task(state).into();
@@ -1361,17 +1435,7 @@ impl Agent {
     ) -> Step {
         let reason = format!("{} {} {why}", decision.operation, text::repr(label));
         let redacted = self.redact(&reason);
-        self.record_failure(
-            state,
-            observation,
-            decision.operation,
-            &redacted,
-            Some(self.redact(label)),
-            Some(decision.confidence()),
-            Some(false),
-            if decision.replayed { Decider::Recipe } else { Decider::Jev },
-        )
-        .await?;
+        self.record_refusal(state, observation, decision, &redacted, label).await?;
         Err(Unsure::new(redacted).into())
     }
 
@@ -1503,13 +1567,23 @@ impl Agent {
             let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
-        let Value { task, read, label, group, mut sources, source_question } = self.value(state, target);
-        if task_only {
+        let Value { task, read, label, group, mut sources, mut source_question } = self.value(state, target);
+        let entry = if task_only { Entry::Pressed } else { Entry::Typed };
+        if entry == Entry::Pressed {
             sources.retain(|source, _| source == IN_TASK);
+            sources.insert(IN_TASK.into(), "The task names the key chord to press, word for word.".into());
+            source_question = format!("Which key chord should be pressed in {label}? {KEY_CHORD_SAID}");
         }
-        let (begins, ends) = self.located(state, observation, &task, &label, group).await?;
-        let mut asked =
-            value_questions(state, target, (&task, "the task"), &label, (&begins, &ends), source_question, sources);
+        let (begins, ends) = self.located(entry, state, observation, &task, &label, group).await?;
+        let mut asked = value_questions(
+            (entry, target),
+            state,
+            (&task, "the task"),
+            &label,
+            (&begins, &ends),
+            source_question,
+            sources,
+        );
         let picks = match ahead_picks(decision, &asked) {
             Some(picks) => picks,
             None if asked[0].2.contains_key(IN_READ) => {
@@ -1535,20 +1609,24 @@ impl Agent {
             if let Some(limit) = target.max_length {
                 field += &format!(", which holds at most {limit} characters");
             }
+            let holds = target.value.as_deref().filter(|value| !target.sensitive && !value.trim().is_empty());
             let written = write_value(
                 &*self.llm,
                 &self.model_task(state),
                 &field,
                 target.input_type.as_deref(),
                 &typed_into(state, target),
-                holding(target).as_deref(),
+                holds,
                 &crate::dates::dated(observation.captured_at, &state.dates),
                 &state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
                 Some(&state.ledger),
             )
             .await?;
             state.ledger.record([written.cost])?;
-            return match written.data.value.filter(|value| !value.trim().is_empty()) {
+            // Changes apply to the text the writer was shown, which is none for a field whose value it never saw.
+            let shown = holds.unwrap_or_default();
+            let changed = !written.data.changes.is_empty();
+            return match written.data.text(shown).filter(|value| !value.trim().is_empty()) {
                 Some(value) => {
                     // Words the task gives as they were typed are the task's value, however Jev got to them, so a
                     // recipe can type them again. Anything composed stays live.
@@ -1557,6 +1635,16 @@ impl Agent {
                     }
                     Ok(value)
                 }
+                // Changes the writer named that do not each match one passage of the field are not a value the task
+                // left out: marked missing, a description edit whose passage was quoted inexactly ended needs_input.
+                None if changed => Err(Unsure {
+                    reason: format!(
+                        "the changes written for {} do not each match one passage of what it holds",
+                        text::repr(&label)
+                    ),
+                    gives_up_as: Status::Stuck,
+                }
+                .into()),
                 None => Err(self.missing(state, observation, target)),
             };
         }
@@ -1575,7 +1663,7 @@ impl Agent {
         match source.as_str() {
             IN_TASK => {
                 let value = self
-                    .copy_words(state, observation, target, (&task, "the task", &label), (begins, ends), &picks)
+                    .copy_words(entry, state, observation, target, (&task, "the task", &label), (begins, ends), &picks)
                     .await?
                     .ok_or_else(|| self.missing(state, observation, target))?;
                 let value: String = task.chars().skip(value.start).take(value.len()).collect();
@@ -1679,7 +1767,15 @@ impl Agent {
             match self.read_boundaries(state, observation, target, (read, label), window, split || multiple).await {
                 Ok((begins, ends, picks)) if !split => {
                     return Ok(self
-                        .copy_words(state, observation, target, (read, "what was read", label), (begins, ends), &picks)
+                        .copy_words(
+                            Entry::Typed,
+                            state,
+                            observation,
+                            target,
+                            (read, "what was read", label),
+                            (begins, ends),
+                            &picks,
+                        )
                         .await?
                         .into_iter()
                         .collect());
@@ -1744,15 +1840,15 @@ impl Agent {
         window: &[Word],
         optional: bool,
     ) -> Step<(Vec<Word>, Vec<Word>, IndexMap<String, String>)> {
-        let (begins, ends) = self.located(state, observation, read, label, window.to_vec()).await?;
+        let (begins, ends) = self.located(Entry::Typed, state, observation, read, label, window.to_vec()).await?;
         let mut asked = Vec::new();
         let several = several_values(target);
-        let tried = field_history(state, target);
+        let tried = field_history(Entry::Typed, state, target);
         for (key, boundary, words) in [("first", "begins", &begins), ("last", "ends", &ends)] {
             if words.is_empty() {
                 continue;
             }
-            let mut question = word_question(("what was read", label), boundary, &several, &tried);
+            let mut question = word_question(Entry::Typed, ("what was read", label), boundary, &several, &tried);
             let mut options = word_options(read, words);
             if optional {
                 question.push_str(" Select none if no word in this passage is the requested boundary.");
@@ -1767,6 +1863,7 @@ impl Agent {
 
     async fn copy_words(
         &self,
+        entry: Entry,
         state: &mut RunState,
         observation: &Observation,
         target: &Control,
@@ -1825,14 +1922,19 @@ impl Agent {
         let run_task = self.model_task(state);
         let several = several_values(target);
         let exact = |bound: &str, options: &[(String, String)], elsewhere: &str| {
-            let question = format!(
-                "Which exact text belongs in {label}? Each choice is a candidate span copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
-            );
+            let question = match entry {
+                Entry::Typed => format!(
+                    "Which exact text belongs in {label}? Each choice is a candidate span copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
+                ),
+                Entry::Pressed => format!(
+                    "Which exact text names the key chord to press in {label}? Each choice is a candidate span copied from {holder}, {bound}. Choose only the chord, without surrounding task instructions. {KEY_CHORD_SAID}"
+                ),
+            };
             let (question, mut options) = self.offered_copies(&run_task, question, options);
             options.insert(ELSEWHERE.into(), JsonValue::from(elsewhere));
             (question, options)
         };
-        let tried = field_history(state, target);
+        let tried = field_history(entry, state, target);
         let (mut first, mut last, mut begins, mut ends) = (first.clone(), last.clone(), begins, ends);
         // Each copy offered for one end runs from the other end as picked, so when that end is wrong every
         // copy is: on a chat box told "Reply with only the word pong. Then send it. ...", a beginning picked
@@ -1864,7 +1966,7 @@ impl Agent {
                 if picked == ELSEWHERE {
                     begins.retain(|word| word.index != first.index);
                     let Some(picked) =
-                        self.repick(state, observation, (task, holder, label, &tried), target, &begins).await?
+                        self.repick(entry, state, observation, (task, holder, label, &tried), target, &begins).await?
                     else {
                         return Ok(None);
                     };
@@ -1911,9 +2013,14 @@ impl Agent {
         // Words keep only their letters and digits, so punctuation the value starts or ends with, such as
         // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave, where the
         // choice of that end did not already settle it.
-        let question = format!(
-            "Which exact text belongs in {label}? Each choice is the complete value copied from {holder}; choose whether the punctuation next to it is part of the value."
-        );
+        let question = match entry {
+            Entry::Typed => format!(
+                "Which exact text belongs in {label}? Each choice is the complete value copied from {holder}; choose whether the punctuation next to it is part of the value."
+            ),
+            Entry::Pressed => format!(
+                "Which exact text names the key chord to press in {label}? Each choice is the complete chord copied from {holder}; choose whether the punctuation next to it is part of the chord."
+            ),
+        };
         let edges = edge_options(&chars, (first, last), (0, 0), target.max_length, max);
         let edges =
             edges.into_iter().filter(|(edge, _)| if *edge == "lead" { lead.is_none() } else { trail.is_none() });
@@ -1933,6 +2040,7 @@ impl Agent {
     /// before. With no word left, the source does not state the value.
     async fn repick(
         &self,
+        entry: Entry,
         state: &mut RunState,
         observation: &Observation,
         (text, holder, label, tried): (&str, &str, &str, &str),
@@ -1942,7 +2050,7 @@ impl Agent {
         if words.is_empty() {
             return Ok(None);
         }
-        let question = word_question((holder, label), "begins", &several_values(target), tried);
+        let question = word_question(entry, (holder, label), "begins", &several_values(target), tried);
         let picks =
             self.ask_choices(state, Some(observation), vec![("first", question, word_options(text, words))]).await?;
         let picked = picks.get("first").and_then(|index| index.parse::<usize>().ok());
@@ -1999,6 +2107,7 @@ impl Agent {
     /// value longer than one part is still found whole. A part without one boundary may still hold the other.
     async fn located(
         &self,
+        entry: Entry,
         state: &mut RunState,
         observation: &Observation,
         task: &str,
@@ -2037,10 +2146,21 @@ impl Agent {
                         (n.to_string(), JsonValue::from(shown))
                     })
                     .collect();
-                criteria.insert(NO_VALUE.into(), JsonValue::from("None of these parts states the field's value."));
-                let question = format!(
-                    "Which part of this source holds the word the value for {label} {key} at, if any does? The value may run on into other parts."
-                );
+                let (none, question) = match entry {
+                    Entry::Typed => (
+                        "None of these parts states the field's value.",
+                        format!(
+                            "Which part of this source holds the word the value for {label} {key} at, if any does? The value may run on into other parts."
+                        ),
+                    ),
+                    Entry::Pressed => (
+                        "None of these parts names the key chord to press.",
+                        format!(
+                            "Which part of this source holds the word the key chord to press in {label} {key} at, if any does? The chord may run on into other parts. {KEY_CHORD_SAID}"
+                        ),
+                    ),
+                };
+                criteria.insert(NO_VALUE.into(), JsonValue::from(none));
                 asked.push((key, question, criteria));
                 cut.push((key, parts));
             }
@@ -2104,13 +2224,17 @@ impl Agent {
         // write choice names that case too: on a field that already held the lines, with the items in the task and in
         // what was read, the task choice won 0.88 to 0.09 and its span loop could only end on one of the items, where
         // saying the items set out as lines are written took the write choice 6 times in 6 (#1189).
+        // Both say the value is the field's whole text: told the task states the text "as part of something longer", a
+        // task to add a line to a description, keeping the rest, took the task choice 0.7 to 0.22 and typed "1.15."
+        // over the whole description; said so, the write choice won 0.96 or more in each replay, and a task to replace
+        // the text outright kept the task choice (#1427).
         sources.insert(
             IN_TASK.into(),
-            "The task states the exact text to type, word for word, whole or as part of something longer.".into(),
+            "The task states word for word the whole text this field should hold, alone or as part of something longer, and none of the field's current text is to be kept.".into(),
         );
         sources.insert(
             WRITTEN.into(),
-            "The task asks for text it does not state word for word, such as a search query for what it looks for, or text it asks to be written or composed, including items it names set out as the lines, sentences or list it asks for, so it is written from the task.".into(),
+            "The task asks for text it does not state word for word, such as a search query for what it looks for, text it asks to be written or composed, including items it names set out as the lines, sentences or list it asks for, or the field's current text kept with the changes the task asks for, so it is written from the task.".into(),
         );
         if !read.is_empty() {
             sources.insert(IN_READ.into(), JsonValue::from(format!("{READ_SOURCE}{shown}")));
@@ -2551,7 +2675,9 @@ impl Agent {
         // question held a screenshot of the release page undone on the release page itself, and a run that had read
         // every value ended stuck. It is part of the question because it is code's own fact about the run, not page
         // content.
-        let mut question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?".to_string();
+        let mut question = format!(
+            "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out? {OPENING_IS_A_STEP}"
+        );
         if self.screenshot(state.output_intent) == Screenshot::Attached {
             question.push_str(&format!(" {SCREENSHOT_PICTURED}"));
         }
@@ -2584,11 +2710,16 @@ impl Agent {
         let untouched = (!state.history.iter().any(HistoryEntry::acted)).then(|| NOTHING_ACTED.to_string());
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
+            .chain(earlier_text_fact(&state.history, observation))
             .chain(state.to_carry_out.then(|| empty_fields_fact(&state.missing, observation)).flatten())
+            .chain(sent_facts(&state.history, &state.commits))
             .chain(untouched)
             .collect();
         if !facts.is_empty() {
-            context.insert("page_facts".into(), facts.into());
+            // The text an earlier step put on the page is quoted from it, and may echo a secret the page shows.
+            let mut facts = JsonValue::from(facts);
+            self.mask_strings(&mut facts);
+            context.insert("page_facts".into(), facts);
         }
         // A drawn surface shows what was done to it only as pixels: the popup a click on an OpenLayers map opened read
         // as one bare line of page text, and the step was judged never carried out. A pictured control is named in
@@ -2652,7 +2783,9 @@ impl Agent {
                 .ask_choice(
                     state,
                     observation,
-                    "Which sentence or clause of the task asks for a step, other than finding, reading or reporting something, that has not been carried out? Choose the task's own wording.",
+                    &format!(
+                        "Which sentence or clause of the task asks for a step, other than finding, reading or reporting something, that has not been carried out? {OPENING_IS_A_STEP} Choose the task's own wording."
+                    ),
                     criteria,
                 )
                 .await?;
@@ -2798,4 +2931,21 @@ fn steps_taken(history: &[HistoryEntry]) -> String {
         return String::new();
     }
     format!("The steps this run has already taken, in order:\n{}", steps.concat())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Entry, KEY_CHORD_SAID, word_question};
+
+    /// A press asked where its value begins was asked about text to type, and copied the description the task gave
+    /// to be typed (#1004): its question names a key chord and nothing typed.
+    #[test]
+    fn a_press_is_asked_for_a_key_chord_and_never_for_text_to_enter() {
+        let pressed = word_question(Entry::Pressed, ("the task", "'Description'"), "begins", "", "");
+        assert!(pressed.contains("names the key chord to press in 'Description'"));
+        assert!(pressed.ends_with(KEY_CHORD_SAID));
+        assert!(!pressed.contains("entered") && !pressed.contains("typed into"));
+        let typed = word_question(Entry::Typed, ("the task", "'Description'"), "begins", "", "");
+        assert!(typed.contains("text the task gives to be entered") && !typed.contains("key chord"));
+    }
 }

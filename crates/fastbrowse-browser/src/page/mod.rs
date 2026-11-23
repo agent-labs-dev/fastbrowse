@@ -159,6 +159,7 @@ struct SnapshotControl {
     sensitive: bool,
     #[serde(default)]
     offscreen: bool,
+    disabled: Option<bool>,
     required: Option<bool>,
     invalid: Option<bool>,
     validation_message: Option<String>,
@@ -539,6 +540,7 @@ fn control_from_raw(
         expanded: c.expanded,
         sensitive: c.sensitive,
         offscreen: c.offscreen,
+        disabled: c.disabled,
         required: c.required,
         invalid: c.invalid,
         validation_message: c.validation_message.clone(),
@@ -2078,8 +2080,8 @@ impl Page for CdpPage {
         Box::pin(async move { seam(CdpPage::pictures(self, ids).await) })
     }
 
-    fn edges<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
-        Box::pin(async move { seam(CdpPage::edges(self, id).await) })
+    fn edges<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        Box::pin(async move { seam(CdpPage::edges(self, ids).await) })
     }
 
     fn reveal<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<()>> {

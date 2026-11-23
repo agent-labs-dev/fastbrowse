@@ -45,6 +45,8 @@ class Control(Frozen):
     expanded: bool | None = None
     sensitive: bool = False
     offscreen: bool = False
+    disabled: bool | None = Field(default=None, exclude_if=lambda disabled: disabled is None)
+    """A control the page has disabled: it offers no operation until the page enables it."""
     required: bool | None = None
     """A field the page marks required (`required` or `aria-required`)."""
     invalid: bool | None = None

@@ -36,7 +36,7 @@ use fastbrowse_core::models::{
     Evidence, FailureKind, Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact,
     StepOutcome, UntilCheck, Wall, WallKind,
 };
-use fastbrowse_core::page::{BrowserError, Observation, Page, Unread};
+use fastbrowse_core::page::{BrowserError, Control, Observation, Page, Unread};
 use fastbrowse_core::safety::{
     CredentialField, Redactor, asks_for_credentials, credential_field, origin_of, secret_allowed, wall_kind,
 };
@@ -365,9 +365,16 @@ impl Agent {
         Ok(self.with_changes(result, changed))
     }
 
-    /// `result` with the fields its run changed named first in its answer when the run ended without finishing (#939).
-    /// Every result leaves the run here, once its status is final, so no path that builds one can drop them.
+    /// `result` with what its run sent and the fields it changed named first in its answer when the run ended without
+    /// finishing (#939, #1317), and the step held for confirmation after them: a caller shown only the changed fields
+    /// could not tell which step was waiting or how to let the run take it (#1413). Every result leaves the run here,
+    /// once its status is final, so no path that builds one can drop them.
     fn with_changes(&self, mut result: RunResult, changed: Option<String>) -> RunResult {
+        let held = result.error.clone().filter(|_| result.status == Status::NeedsConfirmation);
+        let changed = match (changed, held) {
+            (Some(changed), Some(held)) => Some(format!("{changed}\n{held}")),
+            (changed, held) => changed.or(held),
+        };
         if result.status != Status::Complete
             && let Some(changed) = changed
         {
@@ -944,7 +951,7 @@ impl Agent {
         // access check, and naming it `sign_in` sends a caller to a password that cannot pass it.
         let kind = match kind {
             Some(kind) => kind,
-            None if raw.as_ref().is_some_and(|raw| raw.controls.is_empty()) => WallKind::BotCheck,
+            None if raw.as_ref().is_some_and(|raw| !raw.controls.iter().any(Control::actionable)) => WallKind::BotCheck,
             None => wall_kind(&credentials),
         };
         Some(Wall { kind, origin, fields, seen_at_ms: now_ms() })
@@ -1041,7 +1048,10 @@ impl Agent {
         check_login: bool,
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
-        let mut page_facts = Self::page_facts(state, observation, self.page.unread());
+        // Facts quote page lines, as the text an earlier step put on the page, so a secret the page echoes is masked
+        // here like the rest of the page.
+        let mut page_facts: Vec<String> =
+            Self::page_facts(state, observation, self.page.unread()).iter().map(|fact| self.mask(fact)).collect();
         let page_origin = origin_of(&observation.url);
         let credential_origins: BTreeSet<_> = observation
             .controls
@@ -1226,7 +1236,7 @@ impl Agent {
         // that no browser can open, done and read led again. The cost is a browser opened for a page whose scripts
         // add nothing: on a task its markup answers, done stayed Jev's pick either way.
         match unread {
-            _ if !observation.controls.is_empty() => {}
+            _ if observation.controls.iter().any(Control::actionable) => {}
             None => facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into()),
             Some(unread) => facts.push(unread_fact(unread)),
         }
@@ -1241,6 +1251,7 @@ impl Agent {
             );
         }
         facts.extend(helpers::unsent_fact(&state.history, observation));
+        facts.extend(helpers::earlier_text_fact(&state.history, observation));
         if state.to_carry_out {
             facts.extend(helpers::empty_fields_fact(&state.missing, observation));
         }

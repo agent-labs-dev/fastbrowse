@@ -480,9 +480,10 @@ pub(crate) struct RunState {
     pub committing: bool,
     /// A dialog has no target control, so its acceptance needs the form of the action that opened it.
     pub dialog_form: Option<Form>,
-    /// Commits this run has carried out, each counted once the page after it did not fail. A later commit is checked
-    /// against the page and the run's own steps, so one the task asks for once is not sent again (#882).
-    pub commits: usize,
+    /// The commits this run has carried out, each the index of its step in `history`, kept once the page after it did
+    /// not fail. A later commit is checked against the page and the run's own steps, so one
+    /// the task asks for once is not sent again (#882), and a run that stops says what it sent (#1317).
+    pub commits: Vec<usize>,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
@@ -839,7 +840,7 @@ impl RunState {
             unchanged: 0,
             committing: false,
             dialog_form: None,
-            commits: 0,
+            commits: Vec::new(),
             redecided: false,
             last_page: None,
             surface_judged: None,
@@ -942,7 +943,7 @@ impl RunState {
             fetched: HashSet::new(),
             committing: false,
             dialog_form: None,
-            commits: 0,
+            commits: Vec::new(),
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),
             followed: None,

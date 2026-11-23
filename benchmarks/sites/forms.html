@@ -10,7 +10,7 @@ input[type="checkbox"], input[type="radio"] { display: inline-block; width: 16px
 </head>
 <body>
 <!-- Forms that submit, block on required fields and hold date pickers, and a script-built group of fields
-     with no form element at all. Size it with ?n=. -->
+     with no form element at all, whose Reset and Save search are disabled. Size it with ?n=. -->
 <main id="main"></main>
 <script>
 const n = Number(new URLSearchParams(location.search).get('n') || 4);
@@ -30,6 +30,8 @@ for (let i = 0; i < n; i++) {
     <h2>Filter ${i}</h2>
     <input aria-label="Minimum price" type="number"><input aria-label="Maximum price" type="number">
     <div role="button" tabindex="0">Apply</div>
+    <button type="button" disabled>Reset</button>
+    <div role="button" tabindex="0" aria-disabled="true">Save search</div>
   </div>`);
 }
 document.getElementById('main').innerHTML = parts.join('');

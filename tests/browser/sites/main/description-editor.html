@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Description - Shortest Path Forever - CurseForge Authors</title>
+<!-- The CurseForge author console's description page, rebuilt from its own components: a react-mde editor
+     (a toolbar and textarea.mde-text with no accessible name, under a "Description *" caption that is not its
+     label) above a live rendered preview of the same markdown, badge images included, an editor-type select, and
+     Discard changes and Save, both disabled until the text differs from what is stored. The textarea is a React controlled input: the page
+     keeps the text in its own state, writes it back on every render, and learns of an edit only through React's
+     value tracker, so a script that assigns `.value` and dispatches `input` changes nothing the page will save. -->
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  main { max-width: 900px; margin: 0 auto; padding: 0 16px; }
+  .mde-header { display: flex; justify-content: space-between; border: 1px solid #ccc; border-bottom: 0; }
+  .mde-header-group { display: flex; list-style: none; margin: 0; padding: 4px; gap: 4px; }
+  .mde-header-item button { width: 28px; height: 28px; }
+  .mde-text { width: 100%; height: 160px; box-sizing: border-box; font-family: monospace; }
+  .mde-preview { border: 1px solid #ccc; max-height: 360px; overflow: auto; padding: 8px; }
+  .mde-preview img { height: 28px; }
+  .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin: 12px 0; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .notification { position: fixed; bottom: 16px; right: 16px; background: #222; color: #fff; padding: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <nav aria-label="Project"><a href="#overview">Overview</a> <a class="current" href="#description">Description</a>
+    <a href="#files">Files</a> <a href="#images">Images</a></nav>
+  <h1>Shortest Path Forever</h1>
+  <div class="caption">Description <span aria-hidden="true">*</span></div>
+  <label>Editor type <select id="editor-type"><option>Markdown</option><option>WYSIWYG</option></select></label>
+  <div id="root"></div>
+</main>
+<script>
+  const STORED = [
+    '# Shortest Path Forever',
+    '',
+    'Shortest Path Forever draws the quickest walking route to your next quest objective, around walls, water and',
+    'cliffs, and updates it as you move.',
+    '',
+    '## Features',
+    '',
+    '- An arrow that follows roads and tunnels instead of a straight line',
+    '- Waypoints on the world map and minimap',
+    '- Flight paths and boats counted in the route when they are faster',
+    '',
+    '## Settings',
+    '',
+    'Type /spf to open the settings panel. Every option takes effect at once.',
+    '',
+    '[![Join me on Discord](badge.svg)](https://discord.example/spf) [![Sponsor me](badge.svg)](https://sponsor.example/spf)',
+  ].join('\n');
+  const BADGE = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="28">'
+    + '<rect width="180" height="28" rx="4" fill="#7289da"/><text x="90" y="19" font-size="13" text-anchor="middle"'
+    + ' fill="#fff">badge</text></svg>');
+  // The console renders the markdown live under the editor; headings, list items, paragraphs and linked images are
+  // enough of it.
+  const rendered = markdown => markdown.split('\n\n').map(block => {
+    const heading = block.match(/^(#+) (.*)$/);
+    if (heading) return el('h' + (heading[1].length + 1), { textContent: heading[2] });
+    if (block.startsWith('- ')) return el('ul', {}, ...block.split('\n').map(line => el('li', { textContent: line.slice(2) })));
+    const badges = [...block.matchAll(/\[!\[([^\]]*)\]\([^)]*\)\]\(([^)]*)\)/g)];
+    if (badges.length) return el('p', {}, ...badges.map(([, alt, href]) => el('a', { href }, el('img', { alt, src: BADGE }))));
+    return el('p', { textContent: block });
+  });
+
+  // React's value tracker, as react-dom installs it on a controlled input: the instance's `value` setter records what
+  // a script assigned, and an `input` event reaches onChange only when the node's real value differs from it.
+  const track = node => {
+    const proto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+    let current = node.value;
+    Object.defineProperty(node, 'value', {
+      configurable: true,
+      get() { return proto.get.call(this); },
+      set(value) { current = '' + value; proto.set.call(this, value); },
+    });
+    return () => {
+      const actual = proto.get.call(node);
+      if (actual === current) return false;
+      current = actual;
+      return true;
+    };
+  };
+
+  const state = { stored: STORED, value: STORED, saving: false, notice: '' };
+  const setState = change => { Object.assign(state, change); render(); };
+  const el = (tag, props = {}, ...children) => {
+    const e = Object.assign(document.createElement(tag), props);
+    for (const c of children) if (c) e.append(c);
+    return e;
+  };
+
+  const root = document.getElementById('root');
+  const tool = (label, wrap) => el('li', { className: 'mde-header-item' },
+    el('button', { type: 'button', ariaLabel: label, textContent: label[0], onclick: () => {
+      const { selectionStart: start, selectionEnd: end } = textarea;
+      setState({ value: state.value.slice(0, start) + wrap(state.value.slice(start, end)) + state.value.slice(end) });
+    } }));
+  const toolbar = el('ul', { className: 'mde-header-group' },
+    tool('Add bold text', s => `**${s}**`), tool('Add italic text', s => `*${s}*`),
+    tool('Add header text', s => `### ${s}`), tool('Insert a link', s => `[${s}](url)`));
+  const textarea = el('textarea', { className: 'mde-text' });
+  const changed = track(textarea);
+  textarea.addEventListener('input', () => { if (changed()) setState({ value: textarea.value }); });
+  const shown = el('div', { className: 'mde-preview' });
+  const discard = el('button', { type: 'button', textContent: 'Discard changes',
+    onclick: () => setState({ value: state.stored }) });
+  const save = el('button', { type: 'button', className: 'btn-primary', textContent: 'Save', onclick: async () => {
+    setState({ saving: true });
+    await fetch('/description', { method: 'POST', body: state.value });
+    setState({ stored: state.value, saving: false, notice: 'Description saved.' });
+  } });
+  const notice = el('div', { className: 'notification', role: 'status' });
+  root.append(el('div', { className: 'react-mde' }, el('div', { className: 'mde-header' }, toolbar), textarea, shown),
+    el('div', { className: 'form-actions' }, discard, save), notice);
+
+  function render() {
+    // A controlled input: whatever the node holds, the render writes the state back.
+    textarea.value = state.value;
+    shown.replaceChildren(...rendered(state.value));
+    const dirty = state.value !== state.stored;
+    discard.disabled = !dirty || state.saving;
+    save.disabled = !dirty || state.saving;
+    notice.textContent = state.notice;
+    notice.hidden = !state.notice;
+  }
+  render();
+</script>
+</body>
+</html>

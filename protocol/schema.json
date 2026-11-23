@@ -2044,7 +2044,8 @@
         "executed",
         "covered",
         "stale",
-        "failed"
+        "failed",
+        "refused"
       ],
       "title": "StepOutcome",
       "type": "string"
