@@ -2044,8 +2044,13 @@
   // card), even when it is the card's only control. Card counts are kept per parent: a sibling scan per control was
   // quadratic on a long list.
   const recordOf = memo(element => {
+    // A lone card inside a repeating one is still a record of its own: the only reply under a comment is named by
+    // that reply, not by the comment it answers, so it is kept while the climb looks for the repeating card around it.
+    let lone = null;
     for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
-      if (isCard(e) && cardCount(e.parentElement) > 1) return e;
+      if (!isCard(e)) continue;
+      if (cardCount(e.parentElement) > 1) return lone || e;
+      lone ||= e;
     }
     return null;
   });
