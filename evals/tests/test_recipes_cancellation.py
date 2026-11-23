@@ -11,8 +11,13 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("interrupt", [signal.SIGINT, signal.SIGTERM])
-def test_interrupting_the_benchmark_stops_its_browser_process(tmp_path: Path, interrupt: signal.Signals) -> None:
+@pytest.mark.parametrize(
+    ("interrupt", "ignore_sigint"),
+    [(signal.SIGINT, False), (signal.SIGTERM, False), (signal.SIGINT, True)],
+)
+def test_interrupting_the_benchmark_stops_its_browser_process(
+    tmp_path: Path, interrupt: signal.Signals, ignore_sigint: bool
+) -> None:
     started = tmp_path / "started"
     stopped = tmp_path / "stopped"
     binary = tmp_path / "fastbrowse"
@@ -30,19 +35,25 @@ def test_interrupting_the_benchmark_stops_its_browser_process(tmp_path: Path, in
         "    time.sleep(0.01)\n"
     )
     binary.chmod(0o755)
-    benchmark = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            "import sys; from pathlib import Path; "
-            "from fastbrowse_evals.recipes import TASKS, run; "
-            "run(sys.argv[1], ['--cloud'], TASKS[0], Path(sys.argv[2]), 60)",
-            str(binary),
-            str(tmp_path),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    # Ignored signals survive exec, so a launcher can start Python without its default SIGINT handler.
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN) if ignore_sigint else None
+    try:
+        benchmark = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys; from pathlib import Path; "
+                "from fastbrowse_evals.recipes import TASKS, run; "
+                "run(sys.argv[1], ['--cloud'], TASKS[0], Path(sys.argv[2]), 60)",
+                str(binary),
+                str(tmp_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
     try:
         deadline = time.monotonic() + 10
         while not started.exists() and time.monotonic() < deadline:
