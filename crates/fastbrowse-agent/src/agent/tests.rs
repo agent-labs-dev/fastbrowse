@@ -12,16 +12,17 @@ use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
     Artifact, ArtifactKind, Authorization, BudgetResource, BudgetStop, CostBasis, CostComponent, CostLine, Decider,
-    Event, EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
+    Event, EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, RunResult, Status, StepOutcome,
+    StepResult,
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Failure, Media, Observation, Page,
     PageResult, Unread,
 };
-use fastbrowse_core::py::dump::Dump;
+use fastbrowse_core::py::{dump::Dump, sha256_hex};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::acting::{Carried, IN_RECORD, gate_questions};
 use super::driving::edit_progress;
@@ -40,6 +41,18 @@ struct NoPage;
 impl Page for NoPage {
     fn artifacts(&self) -> Vec<Artifact> {
         Vec::new()
+    }
+
+    fn keep_capture<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        let artifact = Artifact {
+            kind: ArtifactKind::Capture,
+            name: name.into(),
+            mime_type: "text/plain; charset=utf-8".into(),
+            size_bytes: text.len() as i64,
+            sha256: sha256_hex(text.as_bytes()),
+            uri: format!("memory://{name}"),
+        };
+        Box::pin(async move { Ok(Some(artifact)) })
     }
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
@@ -776,6 +789,79 @@ async fn test_a_kept_change_answered_with_new_text_is_progress_and_saving_again_
         agent.settle(&mut state, &saved).await.expect("settled");
         assert_eq!(state.unchanged, unchanged);
     }
+}
+
+/// #1483: a CurseForge save's "Changes saved successfully" lived only in the step's effect, so the answer that the
+/// site said it saved failed its citation check. A sent commit's reply is quoted from the page; an unsent step's is not.
+#[test]
+fn test_the_reply_to_a_sent_commit_is_a_note_a_claim_can_cite() {
+    let editor = buttons_at(FILES, &["Save"]);
+    let saved = Observation { viewport_text: "Changes saved successfully".into(), ..editor.clone() };
+    let page =
+        capture(&[(BlockKind::Heading, "Description"), (BlockKind::Paragraph, "Edited\nChanges saved successfully")]);
+    for (sent, quoted) in [(true, vec!["Changes saved successfully"]), (false, vec![])] {
+        let mut state = run_state();
+        state.acted_from = Some(editor.clone());
+        state.keeping = sent;
+        state.history.push(executed(Some(Operation::Click), Some("Save"), true));
+        agent().note_effect(&mut state, &saved);
+        let shown = std::mem::take(&mut state.sent_text);
+        state.record_sent_notice(&page, &shown);
+        let quotes: Vec<String> = state.notes.evidence().values().map(|evidence| evidence.quote.clone()).collect();
+        assert_eq!(quotes, quoted, "sent: {sent}");
+        assert!(
+            state
+                .notes
+                .evidence()
+                .values()
+                .all(|evidence| evidence.rendered_text && evidence.capture_sha256 == page.sha256)
+        );
+    }
+}
+
+/// A notice the page already showed once and shows again after the commit is quoted at the line that was added, the
+/// last one, not the earlier element it repeats.
+#[test]
+fn test_a_repeated_notice_is_quoted_at_the_line_that_was_added() {
+    let page = capture(&[(BlockKind::Paragraph, "Saved\nEdited\nSaved")]);
+    let shown = |text: &str, added| fastbrowse_core::effects::ShownPiece { text: text.into(), added };
+    let quotes =
+        crate::retrieval::line_quotes(&page, &[shown("Saved", false), shown("Edited", false), shown("Saved", true)]);
+    assert_eq!(quotes.len(), 1);
+    assert_eq!(quotes[0].start, "Saved\nEdited\n".chars().count() as i64 + page.blocks[0].start);
+}
+
+#[tokio::test]
+async fn a_sent_notice_capture_is_kept_for_its_citation() {
+    let agent = agent();
+    let page = capture(&[(BlockKind::Paragraph, "Changes saved successfully")]);
+    let mut state = run_state();
+    let shown = [fastbrowse_core::effects::ShownPiece { text: "Changes saved successfully".into(), added: true }];
+    agent.record_sent_notice(&mut state, &page, &shown);
+    let mut result = RunResult {
+        status: Status::Complete,
+        budget: None,
+        answer: None,
+        data: Value::Null,
+        evidence: vec![state.notes.evidence().values().next().expect("sent notice evidence").clone()],
+        steps: Vec::new(),
+        cost: super::breakdown(Vec::new()),
+        artifacts: Vec::new(),
+        citations: Vec::new(),
+        error: None,
+        failure_kind: None,
+        final_url: None,
+        final_frame: None,
+        recordings: Vec::new(),
+        wall: None,
+        browser: None,
+    };
+
+    agent.keep_captures(&mut result).await;
+
+    let uri = result.evidence[0].capture_artifact.as_deref().expect("sent notice capture artifact");
+    let artifact = result.artifacts.iter().find(|artifact| artifact.uri == uri).expect("named capture artifact");
+    assert_eq!(artifact.sha256, result.evidence[0].capture_sha256);
 }
 
 #[tokio::test]

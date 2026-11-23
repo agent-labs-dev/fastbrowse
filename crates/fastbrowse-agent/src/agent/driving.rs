@@ -112,6 +112,13 @@ impl Agent {
                 continue;
             }
             self.note_effect(state, &observation);
+            let shown = std::mem::take(&mut state.sent_text);
+            if shown.iter().any(|piece| piece.added) {
+                // A failed capture loses only the quotes: the step's effect still records what the page added.
+                if let Ok(capture) = self.capture().await {
+                    self.record_sent_notice(state, &capture, &shown);
+                }
+            }
             self.settle(state, &observation).await?;
             let origin = origin_of(&raw.url);
             let page = (raw.url.clone(), raw.document_key.clone());
@@ -1693,6 +1700,19 @@ impl Agent {
         }
     }
 
+    /// A sent notice's capture is kept as a read's is: cited but never kept, a result quoting the notice carried no
+    /// capture artifact to verify the quote against.
+    pub(super) fn record_sent_notice(
+        &self,
+        state: &mut RunState,
+        capture: &Capture,
+        shown: &[fastbrowse_core::effects::ShownPiece],
+    ) {
+        if state.record_sent_notice(capture, shown) {
+            self.seen().read_captures.entry(capture.sha256.clone()).or_insert_with(|| capture.text.clone());
+        }
+    }
+
     /// Record on the last action what it did, which the next choice and recovery both read.
     /// What a lasting or committing step sent, kept until a loaded page shows it, and the fills it used up.
     fn note_sent(state: &mut RunState, before: &Observation, observation: &Observation, keeping: bool) {
@@ -1810,6 +1830,7 @@ impl Agent {
             last.for_step = sighted.clone();
         }
         Self::settle_kept(state, observation);
+        state.sent_text.clear();
         let Some(before) = state.acted_from.take() else { return };
         if std::mem::take(&mut state.judged_effect) {
             // Its effect is stated already, but what it sent still needs checking: a switch saved by its click, or a
@@ -1883,9 +1904,14 @@ impl Agent {
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
             // A send that lands on another page is answered by that page: a contact form's "Your message has been
             // sent." is the only record that the send went through, so the whole new text is the step's reply.
+            let shown = fastbrowse_core::effects::shown_text(&before, observation);
+            state.replied =
+                (state.committing || keeping || last.look.is_some()) && shown.iter().any(|piece| piece.added);
             let put = fastbrowse_core::effects::added_text(&before, observation);
-            state.replied = (state.committing || keeping || last.look.is_some()) && !put.is_empty();
             last.put = (!put.is_empty()).then(|| (observation.url.clone(), put));
+            if state.committing || keeping {
+                state.sent_text = shown;
+            }
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)

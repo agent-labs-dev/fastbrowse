@@ -21,6 +21,7 @@ pub use answers::{Claim, ComposedAnswer, assemble_answer, compose, draft_answer,
 pub(crate) use answers::{cited_quote, latest_reads, noted_evidence};
 pub use choices::read_candidates;
 pub(crate) use choices::{PageRead, read_page, whole_page_facts};
+pub(crate) use chunks::line_quotes;
 pub use chunks::page_quotes;
 pub use fields::{
     Annotation, Candidate, ScalarField, UnsupportedField, choose_candidate, copy_field, field_candidates,
