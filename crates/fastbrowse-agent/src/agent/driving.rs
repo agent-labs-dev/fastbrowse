@@ -1,5 +1,6 @@
 //! The loop and its step: observe, judge what the last action did, decide, gate and act.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::time::Instant;
 
@@ -21,7 +22,8 @@ use super::helpers::{decision_label, describe, doing, drew_something, netloc_of,
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::seeing::{cards, covers_viewport, outlined};
 use super::state::{
-    FailureCause, Flow, OutputIntent, Picked, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
+    FailureCause, Flow, Kept, OutputIntent, Picked, RunState, SiteFailure, Step, Stop, Typed, Unsure, Written,
+    read_key, tab_key,
 };
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
@@ -1280,7 +1282,16 @@ impl Agent {
                 state.hint = Some(self.redact(&hint));
             }
             // The DOM diff of a surface whose picture changed as meant would add that nothing visible changed.
-            state.acted_from = (drawn != Some(true)).then(|| observation.clone());
+            state.acted_from = Some(observation.clone());
+            state.judged_effect = drawn == Some(true);
+            // Cancelling a confirm, prompt or before-unload stops the save that opened it, so nothing is owed a
+            // stale-view fact for it. An alert only reports a save that already happened, whatever is chosen.
+            if decision.operation == Operation::Dialog
+                && action.accept_dialog != Some(true)
+                && observation.dialog.as_ref().is_some_and(|dialog| dialog.kind != "alert")
+            {
+                state.dialog_owes_send = false;
+            }
             state.showing = executed.then(|| doing(decision.operation, label.as_deref()));
             // The address a click or navigation asked for, so reading where it landed also reads that address: a
             // site that redirects `/page/2` to `/page/2/` left the asked one unread, and a whole-list answer unverified.
@@ -1312,7 +1323,7 @@ impl Agent {
                 if done.changed {
                     uncover(&mut state.idle, observation, &landed, &mut done.summary);
                 }
-                state.acted_from = None;
+                state.judged_effect = true;
                 let showing = state.showing.take();
                 state.note_shown(observation, &landed, &done.shown, showing);
                 state.settle_change(&landed);
@@ -1499,6 +1510,7 @@ impl Agent {
             Ok(None) | Err(_) => observation.url.clone(),
         };
         state.acted_from = None;
+        state.judged_effect = false;
         state.followed = None;
         self.event("hung_page_reload", || Map::from_iter([("url".into(), url.clone().into())]));
         let effect = "The page stopped answering and was reopened.".to_string();
@@ -1630,7 +1642,111 @@ impl Agent {
         Ok(())
     }
 
+    /// A load since a change ends the page's not having been loaded. A page loaded again at the same address can
+    /// still lack what was typed, as CurseForge serves its copy from before a post for about a minute, so with
+    /// typed values to check the fact stays, worded for a loaded page; any other load ends it.
+    /// A loaded copy that shows every value has nothing left to check, on this step or any later one: kept, a later
+    /// step that hid one (collapsing the replies) was told the page still came from before the send. Leaving the
+    /// page's address ends the check too, so a route left and returned to is not told it again.
+    /// Run on every observation, not only after an action: a document that arrives while the run reads is a load
+    /// too, and no later step compares against the one before it.
+    fn settle_kept(state: &mut RunState, observation: &Observation) {
+        if observation.dialog.is_some() {
+            return;
+        }
+        let Some(kept) = state.kept.as_mut() else { return };
+        let loads = observation.document_key != kept.document;
+        if kept.url != observation.url
+            || ((kept.loaded || loads) && super::helpers::kept_absent(kept, observation).is_empty())
+        {
+            state.kept = None;
+        } else if loads {
+            kept.loaded = true;
+            kept.document = observation.document_key.clone();
+        }
+    }
+
     /// Record on the last action what it did, which the next choice and recovery both read.
+    /// What a lasting or committing step sent, kept until a loaded page shows it, and the fills it used up.
+    fn note_sent(state: &mut RunState, before: &Observation, observation: &Observation, keeping: bool) {
+        // A step taken in a dialog was sent from the page that opened it: compared with the dialog's empty document,
+        // a confirmed save read as a load, ended the facts it owed and dropped the fills it carried.
+        let opener = before.dialog.as_ref().and(state.behind_dialog.as_ref()).map(|(opener, _)| opener.clone());
+        // An alert is closed by a step that is neither committing nor lasting, but the save that opened it is still
+        // owed its stale-view fact: the dialog check returned before recording it.
+        let owed = before.dialog.is_some() && std::mem::take(&mut state.dialog_owes_send);
+        let before = opener.as_ref().unwrap_or(before);
+        let sending = state.committing || keeping || owed;
+        let open = observation.dialog.is_some();
+        let history_len = state.history.len();
+        let typed = if sending {
+            let page = super::helpers::page_text(before);
+            super::helpers::typed_before_send(&state.history, state.last_send, &state.sent_fills, before)
+                .into_iter()
+                .map(|(field, value)| {
+                    let (page, prior) =
+                        state.filled_before.get(&field).map_or((&page, None), |(text, prior)| (text, prior.as_deref()));
+                    let replaced = super::helpers::replaced_text(prior, value.as_deref());
+                    let page = super::helpers::without(page, replaced.as_deref());
+                    let before = value.as_deref().map_or(0, |value| super::helpers::occurrences(&page, value));
+                    (field, value, before, replaced)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Fills on a page the run has left went with it: a search typed before following a result was checked for on
+        // the thread a reply was later posted to.
+        if !open && (observation.document_key != before.document_key || observation.url != before.url) {
+            state.last_send = history_len;
+            state.sent_fills.clear();
+            state.filled_before.clear();
+        }
+        let Some(last) = state.history.last() else { return };
+        let sent = state.committing && last.outcome == StepOutcome::Executed;
+        note_commit(&mut state.behind_dialog, &mut state.committed_documents, before, observation, sent);
+        // A reversible save classified as lasting is owed the fact too, but only an irreversible one is a commit.
+        if open && sending && last.outcome == StepOutcome::Executed {
+            state.dialog_owes_send = true;
+        }
+        if !sending
+            || last.outcome != StepOutcome::Executed
+            || last.operation == Some(Operation::SwitchTab)
+            || observation.dialog.is_some()
+        {
+            return;
+        }
+        let described = super::helpers::step_words(last.operation, last.target.as_deref());
+        if observation.document_key != before.document_key {
+            // This send loaded its own page, so an earlier send's kept values were not loaded after it. A lasting save that loads a
+            // new document is the same: recorded as kept and not loaded, it was told the page had not been
+            // loaded since the save it had just loaded.
+            state.kept = None;
+        } else {
+            // A send after a load, or on another route of the same document, starts the fact over: what the
+            // earlier send typed is not this one's to check. A field sent again holds only its newer value.
+            let kept = state.kept.get_or_insert_with(Kept::default);
+            if kept.loaded || kept.url != observation.url {
+                *kept = Kept::default();
+            }
+            kept.url = observation.url.clone();
+            kept.document = observation.document_key.clone();
+            kept.steps.push(described);
+            kept.typed.retain(|earlier| typed.iter().all(|(sent, ..)| *sent != earlier.field));
+            // Only the fields this send carried are used up: advancing past every fill dropped a title typed
+            // before a separate comment form was posted, and the title's later save was never checked.
+            for (field, ..) in &typed {
+                state.sent_fills.insert(field.clone(), history_len);
+                state.filled_before.remove(field);
+            }
+            kept.typed.extend(
+                typed.into_iter().filter_map(|(field, value, before, replaced)| {
+                    Some(Typed { value: value?, field, before, replaced })
+                }),
+            );
+        }
+    }
+
     pub(super) fn note_effect(&self, state: &mut RunState, observation: &Observation) {
         if let Some(status) = observation.response_status {
             if status < 400 && state.start_failure.as_ref().is_some_and(|failure| failure.url == observation.url) {
@@ -1666,7 +1782,26 @@ impl Agent {
         {
             last.for_step = sighted.clone();
         }
+        Self::settle_kept(state, observation);
         let Some(before) = state.acted_from.take() else { return };
+        if std::mem::take(&mut state.judged_effect) {
+            // Its effect is stated already, but what it sent still needs checking: a switch saved by its click, or a
+            // control judged by its pixels, left the next decision without the fact that the page may not show it.
+            Self::note_sent(state, &before, observation, keeping);
+            return;
+        }
+        // The page as it was before a field's first fill since the last send or page left, where the values a send
+        // carried start: counted after, a later fill saw the draft an earlier one left in a rich-text editor.
+        if let Some(last) = state.history.last()
+            && last.operation == Some(Operation::Fill)
+            && last.outcome == StepOutcome::Executed
+            && let Some(field) = &last.target
+        {
+            state.filled_before.entry(field.clone()).or_insert_with(|| {
+                let prior = before.controls.iter().find(|c| super::helpers::describe(c) == *field);
+                (super::helpers::page_text(&before), prior.and_then(|c| c.value.clone()))
+            });
+        }
         state.settle_change(observation);
         let landed = read_key(observation);
         if landed != read_key(&before)
@@ -1694,6 +1829,7 @@ impl Agent {
             }
             state.arrived_by = Some((landed, href));
         }
+        Self::note_sent(state, &before, observation, keeping);
         let Some(last) = state.history.last_mut() else { return };
         let waited = last.operation == Some(Operation::Wait);
         let mut done = if last.operation == Some(Operation::SwitchTab) {
@@ -2243,6 +2379,27 @@ fn same_control(chosen: &Control, now: &Control) -> bool {
         ..now.clone()
     };
     fingerprint == *chosen
+}
+
+/// Remember the document a committing step loaded, so it is never offered as a reload that would send the commit again.
+/// The opener is kept whether or not it committed: a confirm opened by a reversible click and accepted to save in place
+/// was compared with the dialog's empty document and held the unchanged editor as reloaded.
+pub(super) fn note_commit(
+    behind_dialog: &mut Option<(Observation, bool)>,
+    committed_documents: &mut HashSet<String>,
+    before: &Observation,
+    observation: &Observation,
+    sent: bool,
+) {
+    if observation.dialog.is_some() {
+        let (_, committed) = behind_dialog.get_or_insert_with(|| (before.clone(), false));
+        *committed |= sent;
+    } else {
+        let committed = behind_dialog.take().is_some_and(|(_, committed)| committed) || sent;
+        if committed && observation.document_key != before.document_key {
+            committed_documents.insert(observation.document_key.clone());
+        }
+    }
 }
 
 #[cfg(test)]

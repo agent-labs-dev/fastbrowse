@@ -289,6 +289,35 @@ pub(crate) struct Picked {
     pub look: Option<Look>,
 }
 
+/// What a run has changed on a page that the site keeps, without a document loading since.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Kept {
+    /// The address of the page the changes were made on.
+    pub url: String,
+    /// Each executed step Jev judged lasting or committing, in order, as the step's words: "click 'Apply'".
+    pub steps: Vec<String>,
+    /// What the run typed into the forms those steps sent: a secret is left out.
+    pub typed: Vec<Typed>,
+    /// Whether the page has been loaded again at `url` since: a site can serve its copy from before a send for a
+    /// while, so a loaded page can still lack what was typed.
+    pub loaded: bool,
+    /// The document the page showed at the last observation: a load is a change from it, whichever step or read
+    /// the run was taking when the document arrived.
+    pub document: String,
+}
+
+/// A value a send carried, and how often the page showed it before it was typed: a short reply such as "Thanks"
+/// already on the page in an older reply was taken as the new one showing, so only appearing more often shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Typed {
+    pub field: String,
+    pub value: String,
+    pub before: usize,
+    /// The text the field held before the run filled it, flattened, when the fill replaced it rather than added to
+    /// it: its showings are no copy of the value, before the send or after.
+    pub replaced: Option<String>,
+}
+
 pub(crate) struct RunState {
     pub task: String,
     /// The recipe this run replays, while it has steps left to offer.
@@ -393,6 +422,9 @@ pub(crate) struct RunState {
     pub idle: Vec<Idle>,
     /// The page the last action was taken on, until the next observation says what it did.
     pub acted_from: Option<Observation>,
+    /// The last action's effect was judged already, by its pixels or by the setting it changed, so the next observation
+    /// is not diffed against `acted_from` for it; what the action sent is still recorded from there.
+    pub judged_effect: bool,
     /// Jev's word, comparing the viewport before and after a click placed by sight, that the click changed what the
     /// page shows as the step meant. Pixels a drawn surface redraws change no element, so the DOM cannot say.
     pub drawn_changed: Option<bool>,
@@ -484,6 +516,29 @@ pub(crate) struct RunState {
     /// not fail. A later commit is checked against the page and the run's own steps, so one
     /// the task asks for once is not sent again (#882), and a run that stops says what it sent (#1317).
     pub commits: Vec<usize>,
+    /// Documents a committing action loaded, by `document_key`. A task that asked to reload the page it was on could
+    /// not (#1433), so every page offers its own address; one showing a document a commit loaded is held back, since
+    /// a GET that commits is sent again by reopening it. Kept by document, not address: a fragment link left the
+    /// document under a new address that was offered, and the same address loaded afresh in another tab lifted the
+    /// hold on the committing tab.
+    pub committed_documents: HashSet<String>,
+    /// The page the step that opened the current dialog was sent from, and whether any step since it committed. A page
+    /// behind a dialog cannot be read, so the dialog is observed with no `document_key`, and the step that closes an
+    /// alert is not itself committing: a GET that unsubscribed and then said so in an alert lost its hold once the
+    /// alert closed, and was offered again as a reload; a confirmed save read as a load and lost its pending fills.
+    pub behind_dialog: Option<(Observation, bool)>,
+    /// A committing or lasting step opened a dialog, so the step that closes it still owes the page's stale-view fact.
+    pub dialog_owes_send: bool,
+    /// Every change the run made that the site keeps, since the last document loaded: the page may not show them yet.
+    pub kept: Option<Kept>,
+    /// The history length when the run last left a page, so a send's typed values start after it.
+    pub last_send: usize,
+    /// The history length at the send that last carried each field, so a send checks only fills made after it.
+    pub sent_fills: HashMap<String, usize>,
+    /// Each field's page text from before its first fill since the last send, where a sent value's earlier showings
+    /// are counted, with the value the field held then. Counted at the send, a rich-text draft is page text itself, so
+    /// a saved reply replacing it added no occurrence and read as missing.
+    pub filled_before: HashMap<String, (String, Option<String>)>,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
@@ -535,9 +590,16 @@ impl RunState {
         self.surface_judged.as_ref().filter(|(judged, _)| judged == page && !self.page_failed).map(|(_, odds)| *odds)
     }
 
-    /// The address of the page at `url` when a site failure that can clear stands on it: opening it again reloads it.
-    pub fn reload_target(&self, url: &str) -> Option<String> {
-        self.site_failure.as_ref().filter(|failure| failure.url == url && failure.transient()).map(|f| f.url.clone())
+    /// The address of `page`, which opening again reloads, unless a commit loaded the document it shows: opening that
+    /// address again can send the commit again. An address with a secret blanked out is not the page's own: a
+    /// browser's address is percent-encoded, so the mark is only ever the redactor's, and opening it opens another
+    /// page, while the real address would put the secret in a model's action.
+    pub fn reload_target(&self, page: &Observation) -> Option<String> {
+        let url = &page.url;
+        (fastbrowse_core::navigation::valid_address(url)
+            && !url.contains(fastbrowse_core::safety::MASK)
+            && !self.committed_documents.contains(&page.document_key))
+        .then(|| url.to_owned())
     }
 
     pub fn read_note(&self) -> &'static str {
@@ -833,6 +895,7 @@ impl RunState {
             landing: None,
             idle: Vec::new(),
             acted_from: None,
+            judged_effect: false,
             drawn_changed: None,
             sighted: None,
             followed: None,
@@ -841,6 +904,13 @@ impl RunState {
             committing: false,
             dialog_form: None,
             commits: Vec::new(),
+            committed_documents: HashSet::new(),
+            behind_dialog: None,
+            dialog_owes_send: false,
+            kept: None,
+            last_send: 0,
+            sent_fills: HashMap::new(),
+            filled_before: HashMap::new(),
             redecided: false,
             last_page: None,
             surface_judged: None,
@@ -906,6 +976,7 @@ impl RunState {
             landing: None,
             idle: Vec::new(),
             acted_from: None,
+            judged_effect: false,
             drawn_changed: None,
             sighted: None,
             keeping: false,
@@ -944,6 +1015,13 @@ impl RunState {
             committing: false,
             dialog_form: None,
             commits: Vec::new(),
+            committed_documents: HashSet::new(),
+            behind_dialog: None,
+            dialog_owes_send: false,
+            kept: None,
+            last_send: 0,
+            sent_fills: HashMap::new(),
+            filled_before: HashMap::new(),
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),
             followed: None,

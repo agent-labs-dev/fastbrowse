@@ -572,7 +572,7 @@ pub struct StepContext {
     /// What code knows about this page that bears on reading it, such as that it changed after it was read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub page_facts: Vec<String>,
-    /// The page's own address when a site failure that can clear stands on it, offered to navigate to as a reload.
+    /// The page's own address, offered to navigate to as a reload, unless a commit loaded the document at it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reload: Option<String>,
     /// The viewport as a PNG, given to a route that takes images.
@@ -1341,6 +1341,12 @@ pub fn build_request(
             *operation == Operation::Navigate && fastbrowse_core::navigation::same_address(url, withheld)
         })
     });
+    // A task can ask to reload the page it is on, and a site failure can clear on a reload: navigate's own filter
+    // drops the current address, so this page's own is told apart and offered with what opening it loses.
+    let reload_note = context.reload.as_ref().filter(|url| urls.contains(url)).map(|url| {
+        format!(" {url} is this page's own address: opening it reloads the page, and values typed here and not saved are lost.")
+    });
+    let reload_note = reload_note.as_deref().unwrap_or("");
     let offered = if context.list_read == ListRead::Continue {
         Vec::new()
     } else {
@@ -1372,7 +1378,7 @@ pub fn build_request(
                 let label = match (op, urls.as_slice()) {
                     (Operation::Navigate, _) if !known.is_empty() => {
                         format!(
-                            "{} Pages known to hold an item the task names: {}",
+                            "{} Pages known to hold an item the task names: {}.{reload_note}",
                             operation_label(*op),
                             known.join(", ")
                         )
@@ -1385,7 +1391,10 @@ pub fn build_request(
                         "Scroll the chosen vertical area up, or horizontal area left, to reveal content in that direction."
                             .into()
                     }
-                    (Operation::Navigate, [only]) => format!("{} The address: {only}", operation_label(*op)),
+                    (Operation::Navigate, [only]) => {
+                        format!("{} The address: {only}.{reload_note}", operation_label(*op))
+                    }
+                    (Operation::Navigate, _) => format!("{}{reload_note}", operation_label(*op)),
                     // Only a page with a control whose role defines keys is told so, so a page of plain fields asks
                     // what it always has.
                     (Operation::Press, _)
@@ -1465,7 +1474,7 @@ pub fn build_request(
     let mut navigation_groups: Vec<Vec<String>> = Vec::new();
     if offered.contains(&Operation::Navigate) {
         let instructions = format!(
-            "{UNTRUSTED}\nChoose the address that advances what the task still needs: one the caller supplied, a page a site the task names is known to serve for an item the task names, which holds that item directly where a search of the site would only lead to it, or this page's own address to reload it after a site failure. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations."
+            "{UNTRUSTED}\nChoose the address that advances what the task still needs: one the caller supplied, a page a site the task names is known to serve for an item the task names, which holds that item directly where a search of the site would only lead to it, or this page's own address to reload it, when the task asks for that or a site failure may clear. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations.{reload_note}"
         );
         if urls.len() > limit {
             navigation_groups = chunks(&urls, size);

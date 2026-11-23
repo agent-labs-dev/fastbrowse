@@ -1116,7 +1116,7 @@ impl Agent {
                 .into_iter()
                 .collect(),
             page_facts,
-            reload: state.reload_target(&observation.url),
+            reload: state.reload_target(observation),
             screenshot: None,
             looks: IndexMap::new(),
             ahead: self.ahead(state, observation),
@@ -1252,6 +1252,9 @@ impl Agent {
         }
         facts.extend(helpers::unsent_fact(&state.history, observation));
         facts.extend(helpers::earlier_text_fact(&state.history, observation));
+        if let Some(kept) = &state.kept {
+            facts.extend(helpers::kept_fact(kept, observation, state.reload_target(observation).is_some()));
+        }
         if state.to_carry_out {
             facts.extend(helpers::empty_fields_fact(&state.missing, observation));
         }
@@ -1272,7 +1275,7 @@ impl Agent {
                     failure.message()
                 )
             };
-            if failure.url == observation.url {
+            if failure.url == observation.url && state.reload_target(observation).is_some() {
                 fact += " This page's own address is offered to navigate to, which reloads it; a retry control the page offers, or another route, may also get past the failure.";
             }
             facts.push(fact);
