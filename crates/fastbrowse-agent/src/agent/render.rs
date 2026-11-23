@@ -23,10 +23,20 @@ pub(super) fn render(observation: &Observation, seen: &HashSet<String>) -> Strin
             out += &format!("  tab {} {} {}{active}\n", tab.id, q(&tab.title), tab.url);
         }
     }
-    out += "Controls:\n";
-    for control in &observation.controls {
-        out += &line(control, !seen.is_empty() && !seen.contains(&control.id));
+    // A popup a page appends to `<body>` comes last in reading order, under the section that ends the page: listed
+    // among the page's controls, a datepicker's popup read as the inline calendar beside it (#1538).
+    let mut layers: Vec<u32> = observation.controls.iter().filter_map(|control| control.layer).collect();
+    layers.sort_unstable();
+    layers.dedup();
+    for (heading, layer) in std::iter::once(("Controls:".to_string(), None))
+        .chain(layers.into_iter().map(|layer| ("Controls in a layer drawn over the page:".to_string(), Some(layer))))
+    {
+        out += &heading;
         out.push('\n');
+        for control in observation.controls.iter().filter(|control| control.layer == layer) {
+            out += &line(control, !seen.is_empty() && !seen.contains(&control.id));
+            out.push('\n');
+        }
     }
     out += "Visible text:\n";
     out += &observation.viewport_text;
@@ -115,6 +125,22 @@ mod tests {
         let next = Control::new("9", "link", "Next", [Operation::Click]);
         assert_eq!(line(&date, false), r#"[7] textbox "Date" = "11/23/2026" can fill"#);
         assert_eq!(line(&next, true), r#"*[9] link "Next" can click"#);
+    }
+
+    #[test]
+    fn a_layers_controls_are_listed_under_their_own_heading() {
+        let field = Control::new("1", "textbox", "Date", [Operation::Click]);
+        let day = Control { layer: Some(1), ..Control::new("2", "link", "4", [Operation::Click]) };
+        let observation: Observation = serde_json::from_value(serde_json::json!({
+            "url": "https://example.test/", "title": "t", "page_key": "k", "document_key": "d",
+            "captured_at": "2026-11-18T00:00:00Z", "viewport_text": "", "tabs": [],
+            "controls": [day, field]
+        }))
+        .unwrap();
+        let text = render(&observation, &HashSet::new());
+        let page = text.find(r#"[1] textbox "Date""#).unwrap();
+        let layer = text.find("Controls in a layer drawn over the page:\n[2] link \"4\"").unwrap();
+        assert!(page < layer, "{text}");
     }
 
     #[test]

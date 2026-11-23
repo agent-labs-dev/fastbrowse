@@ -97,6 +97,7 @@
       }
       case 'text': return target?.innerText;
       case 'query': return target.querySelectorAll(args);
+      case 'stack': return target.elementsFromPoint(args[0], args[1]);
       case 'state': return target.matches(args);
       case 'active': return target.activeElement;
       case 'selected': return [...target.selectedOptions];
@@ -107,7 +108,7 @@
   const renderValue = (kind, value) =>
     kind === 'box' || kind === 'textBox'
       ? [value.x, value.y, value.width, value.height, value.left, value.top, value.right, value.bottom]
-      : kind === 'query' ? [...value] : value;
+      : kind === 'query' || kind === 'stack' ? [...value] : value;
   const sameRenderValue = (left, right) =>
     Array.isArray(left) ? Array.isArray(right) && left.length === right.length &&
       left.every((value, i) => Object.is(value, right[i])) : Object.is(left, right);
@@ -116,7 +117,7 @@
     if (kind === 'box' || kind === 'textBox')
       return boxFields.every(
         (field, i) => Object.is(value[i], current[field]));
-    if (kind === 'query') return value.length === current.length && value.every((node, i) => node === current[i]);
+    if (kind === 'query' || kind === 'stack') return value.length === current.length && value.every((node, i) => node === current[i]);
     return sameRenderValue(value, current);
   };
   const renderFact = (kind, target, args = null) => {
@@ -2170,6 +2171,39 @@
     const orientation = e?.getAttribute('aria-orientation') ?? owner?.getAttribute('aria-orientation');
     if (orientation === 'vertical' || orientation === 'horizontal')
       c.context = [c.context, `orientation: ${orientation}`].filter(Boolean).join('; ');
+  }
+
+  // A popup a page appends to <body> (a datepicker, a menu, a combobox's list) is drawn beside the control that opened
+  // it but comes last in reading order, under whatever section ends the page: a driver read a datepicker popup's
+  // December as the inline calendar's below it (#1538). A layer is an element taken out of flow (absolute or fixed),
+  // positioned against the page rather than inside a component (a card's badge is positioned against its card), and
+  // drawn over something that is not its own ancestor, as a hit test at the centre of its visible part shows.
+  const drawnOver = e => {
+    const box = boxOf(e);
+    const view = e.ownerDocument.defaultView;
+    const left = Math.max(box.left, 0), right = Math.min(box.right, view.innerWidth);
+    const top = Math.max(box.top, 0), bottom = Math.min(box.bottom, view.innerHeight);
+    if (right <= left || bottom <= top) return false;
+    const stack = renderFact('stack', e.ownerDocument, [(left + right) / 2, (top + bottom) / 2]);
+    const own = stack.findIndex(hit => e.contains(hit));
+    return own >= 0 && stack.slice(own).some(hit => !e.contains(hit) && !hit.contains(e));
+  };
+  const layerOf = memo(e => {
+    if (!e || e === e.ownerDocument.body || e === e.ownerDocument.documentElement) return null;
+    const position = styleProperty(e, 'position');
+    if (position === 'absolute' || position === 'fixed') {
+      const against = nativeProperty(e, 'offsetParent');
+      if ((!against || against === e.ownerDocument.body || against === e.ownerDocument.documentElement) && drawnOver(e))
+        return e;
+    }
+    return layerOf(e.parentElement ?? e.getRootNode().host);
+  });
+  const layers = [];
+  for (const c of controls) {
+    const layer = layerOf(registry.nodes.get(c.id));
+    if (!layer) continue;
+    if (!layers.includes(layer)) layers.push(layer);
+    c.layer = layers.indexOf(layer) + 1;
   }
 
   // "First" and "last" are places in a list, which a label does not state. The page's own `aria-posinset` and

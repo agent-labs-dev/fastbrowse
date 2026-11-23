@@ -49,6 +49,23 @@ async fn test_a_readonly_field_says_so_and_keeps_its_click() {
     h.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_popup_drawn_over_the_page_is_a_layer_and_a_cards_badge_is_not() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<section><h2>Inline</h2><p style=\"height:300px\">calendar text</p></section>\
+        <div class=card style=\"position:relative\"><button style=\"position:absolute;top:0;left:0\">Badge</button>\
+        <p>card text under the badge</p></div>\
+        <div id=popup style=\"position:absolute;top:20px;left:20px;z-index:5;background:white\"><a href=\"#\">Next</a>\
+        <a href=\"#\">4</a></div>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    assert_eq!(find(&observation, "Next").layer, Some(1));
+    assert_eq!(find(&observation, "4").layer, Some(1));
+    assert_eq!(find(&observation, "Badge").layer, None);
+    h.close().await;
+}
+
 /// test_forms.py's `form`: a two-field form, then `script`.
 async fn form(h: &Harness, script: &str) {
     h.goto("/dispatch.html").await;

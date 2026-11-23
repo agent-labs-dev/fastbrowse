@@ -121,6 +121,10 @@ pub struct Control {
     /// A field the page marks readonly (`readonly` or `aria-readonly`): it takes a click but not typing.
     #[serde(default, deserialize_with = "lax::boolean", skip_serializing_if = "std::ops::Not::not")]
     pub read_only: bool,
+    /// The layer the control is drawn in, numbered from 1 per observation: an element out of flow, positioned against
+    /// the page and drawn over it, as a popup a page appends to `<body>` is. None for a control in the page itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<u32>,
     /// A field marked invalid by ARIA or a failed native constraint, without implying submission.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub invalid: Option<bool>,
@@ -191,6 +195,7 @@ impl Control {
             input_name: None,
             max_length: None,
             read_only: false,
+            layer: None,
             autocomplete: None,
             submit_semantics: None,
             checked: None,

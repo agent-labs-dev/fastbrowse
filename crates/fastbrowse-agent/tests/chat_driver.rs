@@ -173,15 +173,15 @@ async fn run(page: Arc<DatePage>, driver: Arc<Driver>) -> RunResult {
 }
 
 fn give_up() -> Value {
-    json!({"actions": [{"tool": "give_up", "status": "stuck", "reason": "test over"}]})
+    json!({"next": "", "actions": [{"tool": "give_up", "status": "stuck", "reason": "test over"}]})
 }
 
 #[tokio::test]
 async fn test_a_plan_stops_at_the_page_change_and_the_next_turn_sees_the_popups_controls_as_new() {
     let page = Arc::new(DatePage::default());
     let driver = Driver::new([
-        json!({"actions": [{"tool": "click", "id": "date"}, {"tool": "click", "id": "inline-next"}]}),
-        json!({"actions": [{"tool": "click", "id": "popup-next"}]}),
+        json!({"next": "", "actions": [{"tool": "click", "id": "date"}, {"tool": "click", "id": "inline-next"}]}),
+        json!({"next": "", "actions": [{"tool": "click", "id": "popup-next"}]}),
         give_up(),
     ]);
     let result = run(page.clone(), driver.clone()).await;
@@ -201,7 +201,10 @@ async fn test_a_plan_stops_at_the_page_change_and_the_next_turn_sees_the_popups_
 #[tokio::test]
 async fn test_typed_text_reaches_the_field_as_the_driver_wrote_it() {
     let page = Arc::new(DatePage::default());
-    let driver = Driver::new([json!({"actions": [{"tool": "type", "id": "date", "text": "12/01/2026"}]}), give_up()]);
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "type", "id": "date", "text": "12/01/2026"}]}),
+        give_up(),
+    ]);
     run(page.clone(), driver).await;
     let acted = page.acted.lock().unwrap();
     let fill =
@@ -212,7 +215,7 @@ async fn test_typed_text_reaches_the_field_as_the_driver_wrote_it() {
 #[tokio::test]
 async fn test_an_id_not_on_the_page_is_told_back_and_not_acted_on() {
     let page = Arc::new(DatePage::default());
-    let driver = Driver::new([json!({"actions": [{"tool": "click", "id": "popup-next"}]}), give_up()]);
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "click", "id": "popup-next"}]}), give_up()]);
     run(page.clone(), driver.clone()).await;
     assert!(page.acted.lock().unwrap().is_empty());
     assert!(driver.told(1).contains("there is no control [popup-next]"), "{}", driver.told(1));
@@ -220,7 +223,9 @@ async fn test_an_id_not_on_the_page_is_told_back_and_not_acted_on() {
 
 #[tokio::test]
 async fn test_a_give_up_ends_the_run_as_its_status() {
-    let driver = Driver::new([json!({"actions": [{"tool": "give_up", "status": "needs_login", "reason": "a wall"}]})]);
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "give_up", "status": "needs_login", "reason": "a wall"}]}),
+    ]);
     let result = run(Arc::new(DatePage::default()), driver).await;
     assert_eq!(result.status, Status::NeedsLogin);
 }
@@ -228,7 +233,7 @@ async fn test_a_give_up_ends_the_run_as_its_status() {
 #[tokio::test]
 async fn test_actions_that_change_nothing_end_the_run_stuck() {
     let page = Arc::new(DatePage::default());
-    let clicks = (0..40).map(|_| json!({"actions": [{"tool": "click", "id": "inline-next"}]}));
+    let clicks = (0..40).map(|_| json!({"next": "", "actions": [{"tool": "click", "id": "inline-next"}]}));
     let result = run(page, Driver::new(clicks)).await;
     assert_eq!(result.status, Status::Stuck, "{:?}", result.error);
 }

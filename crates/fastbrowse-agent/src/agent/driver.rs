@@ -84,6 +84,10 @@ impl GiveUp {
 
 #[derive(Debug, Deserialize)]
 struct Turn {
+    /// What the last actions changed and what the model does next. Asked for before the actions: told only to act, the
+    /// model clicked a datepicker's field again after its own Next had moved the popup to December, and asked first to
+    /// say what changed it named the popup and picked its date (#1538).
+    next: String,
     actions: Vec<Act>,
 }
 
@@ -91,9 +95,11 @@ struct Turn {
 pub(super) const SYSTEM: &str = "You operate a web browser to complete the user's task. Each turn you are told what \
 your previous actions did, then the current page: its title and address, one line per control as \
 `[id] role \"label\" = \"value\" (states) can <operations>`, then its visible text. An id starting with `*` was not on \
-the page you last saw: it is what your last action opened or loaded.
+the page you last saw: it is what your last action opened or loaded. Controls in a layer drawn over the page, such \
+as a popup, menu or calendar a control opened, are listed under their own heading.
 
-Answer with the actions to take, in order. They run one after another and stop at the first that changes the page, \
+Answer first with `next`: in one or two sentences, what your last actions changed on the page and what you will do \
+next and why. Then the actions to take, in order. They run one after another and stop at the first that changes the page, \
 so plan several only when each acts on a control already listed (filling a form's fields, then submitting it). \
 Act only on ids listed in the current page. Check what each action did in the next turn before relying on it.
 
@@ -161,8 +167,11 @@ impl ResponseSchema for Actions {
         ];
         json!({
             "type": "object",
-            "properties": {"actions": {"type": "array", "minItems": 1, "items": {"anyOf": tools}}},
-            "required": ["actions"],
+            "properties": {
+                "next": {"type": "string"},
+                "actions": {"type": "array", "minItems": 1, "items": {"anyOf": tools}},
+            },
+            "required": ["next", "actions"],
             "additionalProperties": false,
         })
     }
@@ -424,7 +433,7 @@ mod tests {
 
     #[test]
     fn actions_parse_by_tool() {
-        let text = r#"{"actions":[{"tool":"click","id":"4"},{"tool":"type","id":"5","text":"x"},
+        let text = r#"{"next":"","actions":[{"tool":"click","id":"4"},{"tool":"type","id":"5","text":"x"},
             {"tool":"key","id":null,"key":"Enter"},{"tool":"give_up","status":"needs_login","reason":"wall"}]}"#;
         let value = Actions.validate_json(text).unwrap();
         let turn: Turn = serde_json::from_value(value).unwrap();
@@ -435,7 +444,7 @@ mod tests {
 
     #[test]
     fn an_empty_turn_is_refused() {
-        assert!(Actions.validate_json(r#"{"actions":[]}"#).is_err());
+        assert!(Actions.validate_json(r#"{"next":"","actions":[]}"#).is_err());
     }
 
     #[test]
