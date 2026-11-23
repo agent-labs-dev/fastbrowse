@@ -179,8 +179,27 @@ const EDITS_FORBIDDEN: &str =
 
 /// Offer covered actions again once a performed action changed the page, since it may have removed what covered them. A
 /// change the browser made while refusing one, as leaving the field a cover came from, removed no cover.
-pub(super) fn uncover(idle: &mut Vec<Idle>) {
-    idle.retain(|idle| idle.outcome != StepOutcome::Covered);
+pub(super) fn uncover(idle: &mut Vec<Idle>, before: &Observation, after: &Observation, summary: &mut String) {
+    let mut available = Vec::new();
+    idle.retain(|idle| {
+        if idle.outcome != StepOutcome::Covered {
+            return true;
+        }
+        if before.url == after.url
+            && before.document_key == after.document_key
+            && let Some((operation, Some(label))) = &idle.action
+            && after.controls.iter().any(|control| takes(control, *operation) && describe(control) == *label)
+        {
+            available.push(format!("{operation} {}", text::repr(label)));
+        }
+        false
+    });
+    if !available.is_empty() {
+        summary.push_str(&format!(
+            "; Previously covered and offered again: {}. These actions did not execute. If the task requires them, carry them out before any later step that needs them.",
+            available.join(", ")
+        ));
+    }
 }
 
 /// `decision`'s action, withheld from the ask that follows it.

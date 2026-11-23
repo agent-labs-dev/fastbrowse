@@ -7333,6 +7333,8 @@ async fn test_a_covered_link_is_offered_again_once_close_removes_its_cover() {
     assert_eq!(state.unchanged, 2);
     let (offered, problem, _) = next_ask(&agent, &state).await;
     assert!(offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
+    let effect = state.history.last().unwrap().effect.as_deref().unwrap();
+    assert!(effect.contains("Previously covered and offered again: click 'Contact us'"), "{effect}");
     // Close did change the page; nothing tells Jev otherwise.
     assert!(!problem.as_deref().unwrap_or_default().contains("changed nothing"), "{problem:?}");
 }
