@@ -11805,5 +11805,91 @@ async fn test_a_fill_is_recorded_where_the_browser_reports_it_landed() {
     assert_eq!(typed_by(&unreported, "https://example.test/", "doc-1", "field", "2026-11-04"), None);
 }
 
+/// A page whose every capture holds a line the last one did not, as a document reloaded after each step does.
+struct Reloaded(Picker, std::sync::atomic::AtomicUsize);
+
+impl Page for Reloaded {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        self.0.observe()
+    }
+
+    fn document_changed<'a>(&'a self, seen: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        self.0.document_changed(seen)
+    }
+
+    fn navigate<'a>(&'a self, url: &'a str, referrer: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.0.navigate(url, referrer)
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        let n = self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move { Ok(capture(&[(BlockKind::Paragraph, &format!("Saved line {n}"))])) })
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, seen: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.0.act(action, seen)
+    }
+
+    fn redrawn<'a>(&'a self, seen: &'a Observation, wait: f64, to: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        self.0.redrawn(seen, wait, to)
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        self.0.screenshot()
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        self.0.address()
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        self.0.response_status()
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+/// A decision made on a page an earlier step loaded, before the read of that page, did not see what the read took from
+/// it: a reload was chosen twice because the saved line only the read held was not in the notes (#1438). When the
+/// read adds evidence the step is decided again, with those notes, and never twice for a read that added nothing.
+#[tokio::test]
+async fn test_a_decision_made_before_the_read_of_a_fresh_page_is_made_again_with_its_notes() {
+    let jev = Arc::new(Unsure(
+        ScriptedJev::new(crate::scripted::steps("click One way; click Round trip").unwrap()),
+        0.9,
+        Default::default(),
+    ));
+    let page = Arc::new(Reloaded(Picker::new(), Default::default()));
+    let agent = Agent::new(page, jev.clone(), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_steps: Some(3), ..Limits::default() }),
+        ..Default::default()
+    };
+    let _ = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    let decisions: Vec<usize> = jev
+        .2
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|state| state.get("recent_actions").is_some())
+        .map(|state| state["recent_actions"].as_array().map_or(0, Vec::len))
+        .collect();
+    // The first step is decided once; the next is decided again after its read, with the same earlier actions.
+    assert_eq!(decisions[..3], [0, 1, 1], "{decisions:?}");
+}
+
 #[path = "tests/citation_record_selected_results.rs"]
 mod citation_record_selected_results;
