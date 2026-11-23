@@ -5620,6 +5620,22 @@ fn test_a_page_with_unrun_scripts_and_no_controls_is_not_said_to_lead_nowhere() 
     assert!(fact(unread(true, 1, true), &[button("Next")]).is_empty());
 }
 
+#[test]
+fn test_model_reported_site_failure_is_history_in_the_next_decision() {
+    let mut state = run_state();
+    let page = observation(&[button("Retry")]);
+    state.site_failure = Some(SiteFailure { url: page.url.clone(), cause: FailureCause::Reported, since: 0 });
+    let facts = Agent::page_facts(&state, &page, None).join(" ");
+    assert!(facts.contains("An earlier decision judged"), "{facts}");
+    assert!(facts.contains("Judge the currently observed page"), "{facts}");
+    assert!(facts.contains("reloads it"), "{facts}");
+
+    state.site_failure = Some(SiteFailure::http(&page.url, 503, 0));
+    let facts = Agent::page_facts(&state, &page, None).join(" ");
+    assert!(facts.contains("HTTP 503"), "{facts}");
+    assert!(!facts.contains("An earlier decision judged"), "{facts}");
+}
+
 #[tokio::test]
 async fn test_a_page_that_reports_a_failure_ends_as_it_even_when_a_value_is_missing() {
     // USITC's DataWeb said "Http failure response for ...: 0 Unknown Error" on the page the task needed, and the run
