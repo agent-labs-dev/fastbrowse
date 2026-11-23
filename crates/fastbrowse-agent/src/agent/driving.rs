@@ -21,7 +21,7 @@ use super::helpers::{decision_label, describe, doing, drew_something, netloc_of,
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::seeing::{cards, covers_viewport};
 use super::state::{
-    FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
+    FailureCause, Flow, OutputIntent, Picked, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
 };
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
@@ -138,14 +138,13 @@ impl Agent {
             }
             // Jev's pick when it was asked again on this page is the decision here: asking once more would only ask
             // the same question without what went wrong.
-            let picked = state
-                .picked
-                .take()
-                .filter(|(key, ..)| *key == state_key(&observation))
-                .map(|(_, picked, look)| (picked, look))
-                .filter(|(picked, _)| {
-                    picked.target.as_ref().is_none_or(|target| observation.controls.iter().any(|c| c.id == target.id))
-                });
+            let picked = state.picked.take().and_then(|picked| match pick_stale(&picked, &observation) {
+                None => Some((picked.decision, picked.look)),
+                Some(reason) => {
+                    self.event("picked_dropped", || Map::from_iter([("reason".into(), reason.into())]));
+                    None
+                }
+            });
             if picked.is_some()
                 && let Some(replay) = state.replay.as_mut()
             {
@@ -2046,6 +2045,62 @@ fn judge_site(state: &mut RunState, observation: &Observation, decision: &Decisi
 /// Whether Jev's latest reading of this page judged it a sign-in wall.
 fn signing_in(state: &RunState, observation: &Observation, above: f64) -> bool {
     state.login_readings.get(&read_key(observation)).is_some_and(|probability| *probability > above)
+}
+
+/// Why Jev's pick after a refusal no longer applies to the page as it is now, or `None` when it still does. The
+/// whole-page key it was once held by dropped a pick whenever an unrelated toast closed in between, and Jev was asked
+/// afresh without the refusal and picked the refused click again.
+pub(super) fn pick_stale(picked: &Picked, observation: &Observation) -> Option<&'static str> {
+    if !fastbrowse_core::navigation::same_address(&picked.url, &observation.url) {
+        return Some("address_changed");
+    }
+    // A control id holds only while its document's node survives: a reload or same-address navigation can reuse an id
+    // and its visible attributes for another control, so a replaced document drops a targeted pick too. A page_key
+    // change inside the same document (a toast closing) drops only a pick with no target to check.
+    if picked.document_key != observation.document_key
+        || (picked.decision.target.is_none() && picked.page_key != observation.page_key)
+    {
+        return Some("page_changed");
+    }
+    let target = picked.decision.target.as_ref()?;
+    let Some(now) = observation.controls.iter().find(|c| c.id == target.id) else {
+        return Some("target_gone");
+    };
+    if !same_control(target, now) {
+        return Some("target_changed");
+    }
+    // A drag acts on its drop target too: the same source over another destination is another action.
+    if let Some(destination) = picked.decision.destination.as_ref() {
+        let Some(now) = observation.controls.iter().find(|c| c.id == destination.id) else {
+            return Some("target_gone");
+        };
+        if !same_control(destination, now) {
+            return Some("target_changed");
+        }
+    }
+    // The browser's list omits what the policy derives: a key in a field that takes a fill, leaving a focused one.
+    let offered = crate::policy::takes(now, picked.decision.operation)
+        || (picked.decision.operation == Operation::Blur && fastbrowse_core::effects::leavable(now));
+    (!offered).then_some("operation_gone")
+}
+
+/// Whether `now` is the control Jev chose as `chosen`. A pick made for a link, a field or a box in one state was
+/// carried to the same control after its href, value or checked state changed, and acted on what Jev never chose.
+/// Focus, viewport visibility and the agent's own marks (read, other site, shown by, pictured, which turn on the
+/// controls around it) change without changing what the action does.
+fn same_control(chosen: &Control, now: &Control) -> bool {
+    let fingerprint = Control {
+        id: chosen.id.clone(),
+        operations: chosen.operations.clone(),
+        focused: chosen.focused,
+        offscreen: chosen.offscreen,
+        already_read: chosen.already_read,
+        other_site: chosen.other_site,
+        shown_by: chosen.shown_by.clone(),
+        pictured: chosen.pictured,
+        ..now.clone()
+    };
+    fingerprint == *chosen
 }
 
 #[cfg(test)]

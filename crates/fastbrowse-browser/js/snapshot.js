@@ -896,7 +896,7 @@
       (!visibilityOf(e, { checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
       leaving(e) ||
       (choice && !shownThrough(e)) ||
-      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e)))
+      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e) || draggedByPointer(e)))
     )
       return false;
     if (!choice) return true;
@@ -1188,7 +1188,7 @@
       return false;
     // A listener can sit on a container to hear its children's clicks, as React's does on its root, so one holding a
     // pressable element leaves the click to it.
-    return declared || ![...descendants(e, '*')].some(c => pressable(c) && visible(c));
+    return declared || ![...descendants(e, '*')].some(c => (pressable(c) || draggedByPointer(c)) && visible(c));
   });
   // A script can make a focusable label its menu trigger without a role, href or pointer cursor. Its label may
   // be wrapped in a child, and hidden menu links must not hide the trigger that reveals them. A container holding
@@ -1203,6 +1203,15 @@
   // Types whose value is a calendar date, not free text: the field writer must produce the type's ISO shape
   // and the native value setter, not typed keystrokes, is what a picker widget actually commits.
   const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
+
+  // A sortable list driven by the page's own pointer script (a grip handle, no `draggable`, no `ondrop`, React's
+  // listeners on the root) states nothing in markup, but its stylesheet gives the element the `grab` or `move` cursor:
+  // the page's own statement that the pointer drags it, read like a `:hover` rule. The cursor inherits, so only the
+  // element it starts on counts, as with `pressable`.
+  const DRAG_CURSORS = ['grab', 'move'];
+  const draggedByPointer = memo(e =>
+    DRAG_CURSORS.includes(styleProperty(e, 'cursor')) &&
+    (!e.parentElement || styleProperty(e.parentElement, 'cursor') !== styleProperty(e, 'cursor')));
 
   const roleOf = e => {
     if (sourceOf(e) !== e) return nativeProperty(sourceOf(e), 'type') === 'file' ? 'textbox' : nativeProperty(sourceOf(e), 'type');
@@ -1227,7 +1236,7 @@
     // A bare draggable element or a declared drop target has no ARIA role of its own, yet it is a real
     // element to act on. Name it generic rather than null so the control walk does not drop it before the
     // drag it offers can be seen.
-    if (e.getAttribute('draggable') === 'true' || e.hasAttribute('ondrop')) return 'generic';
+    if (e.getAttribute('draggable') === 'true' || e.hasAttribute('ondrop') || draggedByPointer(e)) return 'generic';
     // A focusable label is pressed through the page's own listener, as a button is.
     if (focusableText(e)) return 'button';
     return pressable(e) ? 'button' : null;
@@ -1286,7 +1295,7 @@
     const elements = indexedElements(root);
     walkedRoots.push([root, elements]);
     for (const e of elements) {
-      if (listedControl(e) || pressable(e) || focusableText(e)) yield e;
+      if (listedControl(e) || pressable(e) || focusableText(e) || draggedByPointer(e)) yield e;
       if (e.shadowRoot) yield* walk(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
         const inner = childDocument(e);
@@ -1319,7 +1328,8 @@
     for (const e of registry.selfUpdating) if (scope.contains(e)) text = text.replace(innerTextOf(e) || '', '');
     return digest(text.slice(0, GUARD_TEXT_CHARS));
   });
-  registry.guard = (e, id) => {
+  // `stable` blanks the control's own current state, for `retargetKey` below.
+  registry.guard = (e, id, stable = false) => {
     if (!e?.isConnected || !visible(e)) return null;
     const axis = registry.scrollAxes?.get(id);
     if (axis) return [identity(e), 'scroll', axis,
@@ -1328,22 +1338,23 @@
     const source = sourceOf(e);
     if (source !== e && (source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
+    const own = value => (stable ? null : value);
     // An absent aria-disabled and "false" both mean enabled. Google Flights adds the "false" as it hydrates, and
     // the raw attribute turned the run's first click stale.
     return [
       identity(e),
       roleOf(e),
       labelOf(e) || fallbackLabel(e),
-      reveal(source),
-      nativeProperty(source, 'checked') ?? null,
-      chosen(e),
+      own(reveal(source)),
+      own(nativeProperty(source, 'checked') ?? null),
+      own(chosen(e)),
       nativeProperty(e, 'readOnly') ?? null,
       e.matches(':disabled'),
       e.getAttribute('aria-disabled') === 'true',
-      e.getAttribute('aria-expanded'),
-      e.getAttribute('aria-checked'),
-      e.getAttribute('aria-pressed'),
-      e.getAttribute('aria-selected'),
+      own(e.getAttribute('aria-expanded')),
+      own(e.getAttribute('aria-checked')),
+      own(e.getAttribute('aria-pressed')),
+      own(e.getAttribute('aria-selected')),
       e.getAttribute('href'),
       scope ? scopeDigest(scope) : '',
       e.ownerDocument.location.origin,
@@ -1358,6 +1369,11 @@
     const guard = registry.guard(e, id);
     return guard && digest(JSON.stringify(guard));
   };
+  // What a control is apart from its node ids and its own current state. A redraw that also fills a field or checks a
+  // box changes that state, and keying on it left the replacement unpaired: two rebuilt "Name" fields, one just
+  // filled, were reported as one removed and one shown, never as the value set. A retargeted action still compares the
+  // whole control, state included, before it follows the key.
+  registry.retargetKey = (e, id) => registry.guard(e, id, true)?.slice(1, -1) ?? null;
 
   const DRAWN_KINDS = { IMG: 'image', CANVAS: 'canvas', VIDEO: 'video' };
   const controls = [];
@@ -1472,8 +1488,11 @@
     // asked whether the task needed a click inside it, and stop when it judged so. An image the page itself gives a
     // widget role is that one control: Leaflet's marker, role button, marked drawn drew the step to it as the surface
     // that held the red circle beside it. An element that names itself draggable is a drag source for the page's own
-    // drag and drop, dragged onto a drop zone: drawn on, a drag would stay inside it and no zone would be reached.
-    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && e.getAttribute('draggable') !== 'true') base.drawn = true;
+    // drag and drop, dragged onto a drop zone: drawn on, a drag would stay inside it and no zone would be reached. An
+    // image the page gives a grab cursor is the same handle for its own pointer script (a sortable card's picture); a
+    // canvas with that cursor is a surface panned in place, so it stays drawn.
+    const handle = e.getAttribute('draggable') === 'true' || (e.tagName === 'IMG' && draggedByPointer(e));
+    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && !handle) base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
@@ -1505,9 +1524,10 @@
         ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow')) : null;
       base.value = reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
-      // Only an element that names itself draggable, or a drawn surface to draw on, is offered as a drag source:
-      // `draggable` reports true for every <a> and <img> by default, which would offer the whole page as draggable.
-      if (e.getAttribute('draggable') === 'true' || base.drawn) base.operations.push('drag');
+      // Only an element that names itself draggable, a drawn surface to draw on, or one the page gives a grab cursor
+      // is offered as a drag source: `draggable` reports true for every <a> and <img> by default, which would offer
+      // the whole page as draggable.
+      if (e.getAttribute('draggable') === 'true' || base.drawn || draggedByPointer(e)) base.operations.push('drag');
     }
     // Focus determines whether the widget can receive keys.
     if (!base.operations.includes('fill') && e.tagName !== 'SELECT' && nativeProperty(source, 'type') !== 'file' &&
@@ -2243,9 +2263,10 @@
   for (const c of controls) {
     const guard = registry.guard(registry.nodes.get(c.id), c.id);
     guards[c.id] = guard && digest(JSON.stringify(guard));
-    // A redraw changes the node ids at either end of the guard. Everything between them, including the receiving
-    // document's timeOrigin and form semantics, must survive before an action can follow it.
-    retarget_keys[c.id] = guard && digest(JSON.stringify(guard.slice(1, -1)));
+    // A redraw changes the node ids at either end of the guard. Everything between them but the control's own state,
+    // including the receiving document's timeOrigin and form semantics, must survive before an action can follow it.
+    const retarget = registry.retargetKey(registry.nodes.get(c.id), c.id);
+    retarget_keys[c.id] = retarget && digest(JSON.stringify(retarget));
   }
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
   if (mode !== 'glance') registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
@@ -2275,11 +2296,47 @@
   // The open modal the rest of the page sits behind. A page marks what is under one aria-hidden or inert, so those
   // controls leave the observation while staying in the document: Google Flights' Stops filter took 145 controls
   // out and put them back on closing, and a run told each by name in every later step.
-  const modals = [...renderFact('query', document, 'dialog:modal,[aria-modal="true"]')].filter(
-    e => !e.closest('[aria-hidden="true"],[inert]') && visibilityOf(e, { checkVisibilityCSS: true }),
-  );
-  // A dialog is named by aria-label or aria-labelledby, never by its content.
-  const dialogName = e =>
+  // Most modals never say aria-modal and need no dialog role: MUI, Radix, react-aria and Headless UI mark the page
+  // behind a modal aria-hidden or inert instead ("aria-hide others"). A modal is what leaves every other control on
+  // the page hidden from use, so an element is one when the controls the capture collected, which are exactly the
+  // ones not hidden, all lie inside it, and some control sits in hidden content outside it. A page that hid
+  // interactive content from assistive tech while it stayed usable would break ARIA, and the test says nothing
+  // about how the page looks. CurseForge's "Delete media" dialog and its gallery edit drawer (a role="presentation"
+  // root, no dialog role) are both this shape; unrecognised, the controls they hid were reported as removed. A
+  // carousel's aria-hidden clones are not: the page's other controls stay outside the visible slide. The candidate is
+  // the sibling of the outermost hidden content, so a dialog and its backdrop controls count as inside. The check is
+  // one containment test per collected control. A role="dialog" that says aria-modal="false" stays non-modal.
+  const hiddenSelector = '[aria-hidden="true"],[inert]';
+  // A control is drawn or not by its own rendering: a wrapper with no box (display:contents) still draws its controls,
+  // and a rendered wrapper can hold only a display:none or fully transparent panel.
+  const holdsDrawnControl = e =>
+    [e, ...e.querySelectorAll(SELECTOR)].some(c => c.matches(SELECTOR) && visibilityOf(c, { checkOpacity: true, checkVisibilityCSS: true }));
+  // Element.contains stops at a shadow root, but the capture walks open ones, so containment climbs through each host.
+  const containsAcrossShadow = (root, e) => {
+    for (let n = e; n; n = n.getRootNode().host) if (root.contains(n)) return true;
+    return false;
+  };
+  const dialogSelector = '[role="dialog"],[role="alertdialog"]';
+  const found = new Set(renderFact('query', document, 'dialog:modal,[aria-modal="true"]'));
+  const usable = controls
+    .filter(c => !registry.scrollAxes?.has(c.id))
+    .map(c => registry.nodes.get(c.id))
+    .filter(Boolean);
+  for (const hidden of renderFact('query', document, hiddenSelector)) {
+    // The page behind a modal is still drawn; a menu or template kept aria-hidden while dormant holds no drawn
+    // control, and would otherwise make the whole usable page look like a modal sitting over it.
+    if (hidden.parentElement?.closest(hiddenSelector) || !holdsDrawnControl(hidden)) continue;
+    for (const sibling of hidden.parentElement?.children || []) {
+      if (sibling === hidden || sibling.matches(hiddenSelector) || !usable.length || !usable.every(e => containsAcrossShadow(sibling, e))) continue;
+      const dialog = sibling.matches(dialogSelector) ? sibling : sibling.querySelector(dialogSelector);
+      if (dialog?.getAttribute('aria-modal') !== 'false') found.add(sibling);
+    }
+  }
+  const modals = [...found]
+    .filter(e => !e.closest(hiddenSelector) && visibilityOf(e, { checkVisibilityCSS: true }))
+    .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  // A dialog is named by aria-label or aria-labelledby, never by its content, on the modal or on the dialog inside it.
+  const ariaName = e =>
     (
       e.getAttribute('aria-label') ||
       (e.getAttribute('aria-labelledby') || '')
@@ -2289,6 +2346,7 @@
     )
       .replace(/\s+/g, ' ')
       .trim();
+  const dialogName = e => ariaName(e) || (e.querySelector(dialogSelector) ? ariaName(e.querySelector(dialogSelector)) : '');
   const modal = modals.length ? dialogName(modals.at(-1)) : null;
 
   // The read number names a transport baseline, and the read is kept to answer "unchanged" while the page stays.
