@@ -1,5 +1,7 @@
 //! What an action visibly did, told back to the policy so that a no-op cannot pass for progress.
 
+use std::collections::VecDeque;
+
 use indexmap::IndexMap;
 use serde_json::json;
 
@@ -54,6 +56,10 @@ pub fn state_key(observation: &Observation) -> String {
             let mut key = json!([c.role, c.label, c.context, c.value, c.checked, c.selected, c.expanded]);
             if leavable(c) {
                 key.as_array_mut().expect("an array").push(true.into());
+            }
+            // Reordering a list changes where its items sit though no control changes, so a place is part of the state.
+            if let Some(place) = c.item_position {
+                key.as_array_mut().expect("an array").push(json!({"place": place}));
             }
             dumps(&key)
         })
@@ -199,14 +205,24 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
     for control in old.values() {
         by_name.entry((control.role.as_str(), text::strip(&control.label))).or_default().push(control);
     }
+    // A rebuilt control has a new id, and twins that share a name (two "Name" fields) are paired by what the control
+    // is, its `retarget_key`, in document order, so a value set during the redraw is still reported.
+    let mut by_retarget: IndexMap<&str, VecDeque<&Control>> = IndexMap::new();
+    for control in old.values().filter(|c| !new.contains_key(c.id.as_str())) {
+        if let Some(key) = control.retarget_key.as_deref() {
+            by_retarget.entry(key).or_default().push_back(control);
+        }
+    }
     for (key, now) in &new {
-        let was = match old.get(key) {
-            Some(was) => *was,
-            None => match by_name.get(&(now.role.as_str(), text::strip(&now.label))).map(Vec::as_slice) {
-                Some([namesake]) if !new.contains_key(namesake.id.as_str()) => *namesake,
-                _ => continue,
-            },
-        };
+        let paired = old.get(key).copied().or_else(|| {
+            now.retarget_key.as_deref().and_then(|k| by_retarget.get_mut(k)).and_then(VecDeque::pop_front).or_else(
+                || match by_name.get(&(now.role.as_str(), text::strip(&now.label))).map(Vec::as_slice) {
+                    Some([namesake]) if !new.contains_key(namesake.id.as_str()) => Some(*namesake),
+                    _ => None,
+                },
+            )
+        });
+        let Some(was) = paired else { continue };
         let attributes = [
             ("label", Shown::Text(was.label.clone()), Shown::Text(now.label.clone())),
             ("value", Shown::of_text(&was.value), Shown::of_text(&now.value)),
@@ -278,15 +294,46 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
     if replaced && !navigated {
         parts.push("loaded a new document at this address".to_string());
     }
+    // A page that rebuilds its nodes gives every control a new id, so ids alone report a re-rendered thread as both
+    // lost and shown again, and Jev was told a reply the page still showed had been removed. The capture's
+    // `retarget_key` pairs replacement attributes and hashes what a control is without its node id or mutable state,
+    // so a control whose id is gone still survived when a new control keeps its key. Twins pair off one for one, so a
+    // real removal among them still counts.
+    let mut lost: IndexMap<&str, Vec<&str>> = IndexMap::new();
+    if !replaced {
+        for c in before.controls.iter().filter(|c| !new.contains_key(c.id.as_str())) {
+            if let Some(key) = c.retarget_key.as_deref().filter(|key| !key.is_empty()) {
+                lost.entry(key).or_default().push(&c.id);
+            }
+        }
+    }
+    let mut rebuilt: Vec<&str> = Vec::new();
     let shown: Vec<&Control> = if replaced {
         Vec::new()
     } else {
-        new.iter().filter(|(key, _)| !old.contains_key(*key)).map(|(_, c)| *c).collect()
+        let mut shown = Vec::new();
+        for c in new.values().filter(|c| !old.contains_key(c.id.as_str())) {
+            let twin = c
+                .retarget_key
+                .as_deref()
+                .and_then(|key| lost.get_mut(key))
+                .filter(|twins| !twins.is_empty())
+                .map(|twins| twins.remove(0));
+            match twin {
+                Some(was) => rebuilt.push(was),
+                None => shown.push(*c),
+            }
+        }
+        shown
     };
     let hidden: Vec<&Control> = if replaced {
         Vec::new()
     } else {
-        before.controls.iter().filter(|c| !new.contains_key(c.id.as_str())).collect()
+        before
+            .controls
+            .iter()
+            .filter(|c| !new.contains_key(c.id.as_str()) && !rebuilt.contains(&c.id.as_str()))
+            .collect()
     };
     let stayed_whole = !navigated && !replaced && hidden.is_empty();
     // A modal hides the page under it and gives it back on closing, so what went behind one or came back from behind
@@ -367,6 +414,7 @@ mod tests {
             document_key: String::new(),
             controls,
             viewport_text: String::new(),
+            viewport_key: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
             media: Vec::new(),
@@ -447,6 +495,62 @@ mod tests {
         let sort = vec![control("close", "Close dialog", "button"), control("price", "Price", "radio")];
         let renamed = effect(&open, &Observation { modal: Some("Sort".into()), ..observation(sort) }, None, false);
         assert_eq!(renamed.summary, "showed 1 control: Price; removed 1 control: Nonstop only");
+    }
+
+    #[test]
+    fn test_a_page_that_rebuilds_its_controls_neither_loses_nor_shows_them() {
+        let keyed =
+            |id: &str, label: &str, key: &str| with(&control(id, label, "link"), |c| c.retarget_key = Some(key.into()));
+        let before = observation(vec![
+            keyed("a1", "Kal66", "k1"),
+            keyed("a2", "Glad it helps", "k2"),
+            keyed("a3", "Twin", "k3"),
+        ]);
+        let rebuilt = observation(vec![
+            keyed("b1", "Kal66", "k1"),
+            keyed("b2", "Glad it helps", "k2"),
+            keyed("b3", "Twin", "k3"),
+        ]);
+        let done = effect(&before, &rebuilt, None, false);
+        assert!(done.shown.is_empty(), "{}", done.summary);
+        assert_eq!(done.summary, "nothing visible changed");
+        // A control the rebuilt page really lacks is still removed, and a new one still shown.
+        let changed =
+            observation(vec![keyed("b1", "Kal66", "k1"), keyed("b3", "Twin", "k3"), keyed("b4", "New", "k4")]);
+        let done = effect(&before, &changed, None, false);
+        assert!(
+            done.summary.contains("showed 1 control: New") && done.summary.contains("removed 1 control: Glad it helps"),
+            "{}",
+            done.summary
+        );
+        assert!(!done.summary.contains("Kal66"), "{}", done.summary);
+        // Twins pair off one for one: two identical controls become one, so one is gone.
+        let twins = observation(vec![keyed("t1", "Like", "kk"), keyed("t2", "Like", "kk")]);
+        let one = observation(vec![keyed("u1", "Like", "kk")]);
+        assert!(effect(&twins, &one, None, false).summary.contains("removed 1 control: Like"));
+        // Without a key the id is all there is, as before.
+        let bare = observation(vec![control("c1", "Kal66", "link")]);
+        let moved = observation(vec![control("c2", "Kal66", "link")]);
+        assert!(effect(&bare, &moved, None, false).summary.contains("removed 1 control: Kal66"));
+    }
+
+    #[test]
+    fn test_duplicate_rebuilt_fields_pair_when_identity_key_is_stable() {
+        let field = |id: &str, value: Option<&str>, key: &str| {
+            with(&control(id, "Name", "textbox"), |c| {
+                c.value = value.map(str::to_string);
+                c.retarget_key = Some(key.into());
+            })
+        };
+        let before = observation(vec![field("old-1", None, "same-1"), field("old-2", None, "same-2")]);
+        let after = observation(vec![field("new-1", Some("Ada"), "same-1"), field("new-2", None, "same-2")]);
+
+        let done = effect(&before, &after, None, false);
+
+        assert_eq!(done.set, [("new-1".into(), Setting::Value(Some("Ada".into())))]);
+        assert!(done.summary.contains("Name value: empty -> Ada"), "{}", done.summary);
+        assert!(done.shown.is_empty(), "{}", done.summary);
+        assert!(!done.summary.contains("removed"), "{}", done.summary);
     }
 
     #[test]

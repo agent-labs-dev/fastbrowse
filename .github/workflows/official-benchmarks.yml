@@ -8,7 +8,7 @@ name: Official benchmarks
 # workflow spends money and is never triggered by a push or a pull request.
 #
 # A successful non-smoke job leaves two artifacts. `official-<suite>` is the encrypted private run. `official-run-<suite>`
-# contains only the manifest, provenance, results and budget journal needed by benchmark-campaign.yml. Publication reads
+# contains only the manifest, provenance and results needed by benchmark-campaign.yml. Publication reads
 # that run through the same TrialResult-to-Row mapping as internal campaigns and chooses the public group from the
 # official task source recorded in the selection.
 #
@@ -45,16 +45,8 @@ on:
         description: Runs per task (at least 1)
         required: true
         default: "3"
-      budget:
-        description: Approved total dollars for each suite; it gates new trials
-        required: true
-        default: "600"
-      reserve:
-        description: Dollars Parallax reserves before each trial starts
-        required: true
-        default: "3"
       concurrency:
-        description: Task workers per suite, sharing one Parallax budget ledger
+        description: Task workers per suite
         required: true
         default: "8"
       smoke:
@@ -83,8 +75,6 @@ env:
   UV_PYTHON: "3.13"
   SMOKE: ${{ inputs.smoke || inputs.task_ids != '' }}
   REPEAT: ${{ (inputs.smoke || inputs.task_ids != '') && '1' || inputs.repeat }}
-  BUDGET: ${{ inputs.budget }}
-  RESERVE: ${{ inputs.reserve }}
   WORKERS: ${{ inputs.concurrency }}
 
 jobs:
@@ -114,9 +104,6 @@ jobs:
           done
           test "$REPEAT" -ge 1 || { echo "::error::repeat must be at least 1"; exit 1; }
           test "$WORKERS" -ge 1 || { echo "::error::concurrency must be at least 1"; exit 1; }
-          for pair in "budget:$BUDGET" "reserve:$RESERVE"; do
-            case "${pair#*:}" in ''|*[!0-9.]*) echo "::error::${pair%%:*} must be a number"; exit 1 ;; esac
-          done
       - name: Resolve the pins
         id: pins
         env:
@@ -167,7 +154,7 @@ jobs:
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
-          # Authenticate both OpenRouter credentials, but do not compare provider credit with the approved budget.
+          # Authenticate both OpenRouter credentials before starting the trials.
           for key_name in FASTBROWSE_OPENROUTER_API_KEY PARALLAX_JUDGE_API_KEY; do
             KEY_NAME="$key_name" KEY="${!key_name}" python3 - <<'PY'
           import json, os, urllib.request
@@ -372,8 +359,6 @@ jobs:
             --harness fastbrowse \
             --repeats "$REPEAT" \
             --concurrency "$WORKERS" \
-            --budget "$BUDGET" \
-            --reserve "$RESERVE" \
             --retry-invalid 2 \
             --retry-wait 60 \
             --provenance "fastbrowse.group=$SUITE" \
@@ -392,7 +377,7 @@ jobs:
         run: |
           public="$RUNNER_TEMP/public-runs/$SUITE"
           mkdir -p "$public"
-          for name in manifest.json provenance.json results.jsonl budget.jsonl parallax-verify.json; do
+          for name in manifest.json provenance.json results.jsonl parallax-verify.json; do
             test -f "$PRIVATE_RUN/$name" && cp "$PRIVATE_RUN/$name" "$public/$name"
           done
           test -f "$public/manifest.json" || { echo "::error::Parallax did not leave a manifest"; exit 1; }

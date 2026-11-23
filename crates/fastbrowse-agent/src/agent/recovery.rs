@@ -1,7 +1,7 @@
 //! The stall rule's other half: Jev is asked again, told what went wrong, with the action that moved nothing left out
 //! of its options, until the rule's budget runs out and the run ends.
 
-use fastbrowse_core::effects::{leavable, state_key};
+use fastbrowse_core::effects::leavable;
 use fastbrowse_core::models::{Operation, Status, StepOutcome};
 use fastbrowse_core::page::{Control, Observation};
 use fastbrowse_core::py::text;
@@ -10,7 +10,7 @@ use serde_json::{Map, json};
 
 use super::Agent;
 use super::helpers::{decision_label, describe};
-use super::state::{Edits, RunState, Step, Stop};
+use super::state::{Edits, Picked, RunState, Step, Stop};
 use crate::policy::{Decision, Look, StepContext, decide, takes};
 use crate::start::{accept_start, propose_route, recovery_pages};
 
@@ -31,6 +31,8 @@ pub(super) const DRAWN_UNREAD: &str = "This page shows a canvas, picture or vide
 pub(crate) struct Idle {
     pub action: Withheld,
     pub outcome: StepOutcome,
+    /// The observed target of a covered action, distinct from any later control with the same label.
+    pub covered_target_id: Option<String>,
     /// Why a failed action was not performed, in the words of the browser or app that refused it. Told only that a
     /// click on a row out of view "did not move the task on", a desktop run pressed OK next and submitted the
     /// dialog's default row; deskpilot had said to scroll the row into view (#1403).
@@ -39,7 +41,7 @@ pub(crate) struct Idle {
 
 impl Idle {
     pub(super) fn performed(action: Withheld) -> Idle {
-        Idle { action, outcome: StepOutcome::Executed, refused: None }
+        Idle { action, outcome: StepOutcome::Executed, covered_target_id: None, refused: None }
     }
 
     /// What is true of the action, stated after its name when an ask leaves it out.
@@ -179,8 +181,33 @@ const EDITS_FORBIDDEN: &str =
 
 /// Offer covered actions again once a performed action changed the page, since it may have removed what covered them. A
 /// change the browser made while refusing one, as leaving the field a cover came from, removed no cover.
-pub(super) fn uncover(idle: &mut Vec<Idle>) {
-    idle.retain(|idle| idle.outcome != StepOutcome::Covered);
+pub(super) fn uncover(idle: &mut Vec<Idle>, before: &Observation, after: &Observation, summary: &mut String) {
+    // Closing a route-backed overlay can change the URL while keeping the same document and control.
+    let same_page =
+        before.document_key == after.document_key && (!before.document_key.is_empty() || before.url == after.url);
+    let mut available = Vec::new();
+    idle.retain(|idle| {
+        if idle.outcome != StepOutcome::Covered {
+            return true;
+        }
+        if same_page
+            && let Some((operation, Some(label))) = &idle.action
+            && let Some(id) = &idle.covered_target_id
+            && after
+                .controls
+                .iter()
+                .any(|control| control.id == *id && takes(control, *operation) && describe(control) == *label)
+        {
+            available.push(format!("{operation} {}", text::repr(label)));
+        }
+        false
+    });
+    if !available.is_empty() {
+        summary.push_str(&format!(
+            "; Previously covered, with the target still on the page: {}. These actions did not execute. If the task requires them, carry them out before any later step that needs them.",
+            available.join(", ")
+        ));
+    }
 }
 
 /// `decision`'s action, withheld from the ask that follows it.
@@ -376,7 +403,13 @@ impl Agent {
             ])
         });
         let look = Look::of(&decision, &context.looks);
-        state.picked = Some((state_key(observation), decision, look));
+        state.picked = Some(Picked {
+            url: observation.url.clone(),
+            page_key: observation.page_key.clone(),
+            document_key: observation.document_key.clone(),
+            decision,
+            look,
+        });
         Ok(())
     }
 }

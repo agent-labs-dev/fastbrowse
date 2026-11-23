@@ -62,6 +62,7 @@ fn moved(why: &str) -> ActResult {
         page_changed: false,
         detail: Some(why.into()),
         moved: false,
+        landed: None,
     }
 }
 

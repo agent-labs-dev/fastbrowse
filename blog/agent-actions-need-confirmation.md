@@ -3,9 +3,9 @@ title: When a browser agent should stop, not act
 description: fastbrowse stops before actions classified as irreversible, ending needs_confirmation with exit 3. What that default protects, and when to use --authorize.
 topic: How the agent acts
 published: 2026-11-14
-updated: 2026-11-22
+updated: 2026-11-23
 verifiedAgainst: v0.12.0
-verifiedOn: 2026-11-22
+verifiedOn: 2026-11-23
 ---
 
 A browser agent needs to distinguish a price lookup from a purchase. fastbrowse stops before actions classified as irreversible, such as submitting an order, paying, deleting data or sending a message, unless the run is authorized. It can still fill fields and make reversible changes. Classification can miss a change, so state read-only constraints in your task and check important actions yourself.
@@ -26,7 +26,7 @@ Only `complete` exits 0. The full table, including the statuses that stop before
 
 ## Opting in, one run at a time
 
-`--authorize` lets a run submit, pay, delete or send when Jev judges that the task asks for the action. It does not override a task that says to change nothing, not to download, or not to take an action, such as "do not click Upload", so a task carrying its own constraint is still refused. After a run makes a requested commit, it refuses an extra unrequested commit and gives Jev a chance to choose another step or finish.
+`--authorize` lets a run submit, pay, delete or send when Jev judges that the task asks for the action. It does not override a task that says to change nothing, not to download, or not to take an action, such as "do not click Upload", so a task carrying its own constraint is still refused. When a commit depends on an earlier step, Jev checks the page and action outcomes to see whether that step happened. After a run makes a requested commit, it refuses an extra unrequested commit and gives Jev a chance to choose another step or finish.
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce

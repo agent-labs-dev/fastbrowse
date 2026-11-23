@@ -282,6 +282,15 @@ impl Drop for KnownAsked {
     }
 }
 
+/// Jev's recovery pick, tied to the page state that was shown when it was made.
+pub(crate) struct Picked {
+    pub url: String,
+    pub page_key: String,
+    pub document_key: String,
+    pub decision: Decision,
+    pub look: Option<Look>,
+}
+
 pub(crate) struct RunState {
     pub task: String,
     /// The recipe this run replays, while it has steps left to offer.
@@ -329,9 +338,9 @@ pub(crate) struct RunState {
     pub start_failure: Option<SiteFailure>,
     pub http_seen: HashSet<(String, String, i64)>,
     pub hint: Option<String>,
-    /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
-    /// next decision there, with the card of the target it chose.
-    pub picked: Option<(String, Decision, Option<Look>)>,
+    /// Jev's pick when asked again after a stall, kept only for the page state and target it was asked about, with the
+    /// card of the target it chose.
+    pub picked: Option<Picked>,
     /// The action the next step carries out, built while the page was read.
     pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,
     pub unchanged: i64,
@@ -365,6 +374,10 @@ pub(crate) struct RunState {
     /// clocks, counters) is a new page state on every return and made a loop of switches look like progress (#1219).
     /// The tab, not its document: a tab that reloads itself keeps its id and changes its document.
     pub shown: HashMap<String, usize>,
+    /// Every viewport position a page has shown, by address and the browser's stable scroll identity. `reached` keys a
+    /// page state by its controls, which a scroll leaves as they were, so it cannot tell new and repeated positions
+    /// apart (#1137).
+    pub viewed: HashSet<String>,
     /// Addresses actually observed, including pages reached through ordinary links. Recovery proposes unseen routes.
     pub visited_addresses: HashSet<String>,
     /// Reads that added evidence, counted over the run.
@@ -909,6 +922,7 @@ impl RunState {
             login_readings: HashMap::new(),
             reached: HashMap::new(),
             shown: HashMap::new(),
+            viewed: HashSet::new(),
             visited_addresses: HashSet::new(),
             evidence_reads: 0,
             returned_at: 0,

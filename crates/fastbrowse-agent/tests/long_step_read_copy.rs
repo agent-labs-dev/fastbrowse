@@ -52,6 +52,7 @@ impl Page for MessagePage {
                 page_changed: true,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }

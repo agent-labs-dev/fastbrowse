@@ -86,8 +86,25 @@ def test_each_task_is_scored_on_the_newest_campaign_run_that_measured_it_three_t
         0: [{**r, "task_version": 0} for r in measured("99999999", "b", False)],  # b before its task changed
     }
     titles = {4: "release-9.9.9", 3: "release-1.0.0", 2: "release-1.0.0", 1: "release-1.0.0", 0: "release-1.0.0"}
-    runs = [{"databaseId": i, "displayTitle": f"Benchmark campaign {name}"} for i, name in titles.items()]
-    monkeypatch.setattr(gate, "_runs", lambda *_: runs)
+    titles = {**dict.fromkeys(range(200, 100, -1), "unrelated"), **titles}
+    runs = [
+        {"id": i, "display_title": f"Benchmark campaign {name}", "created_at": f"2026-11-{i % 30 + 1:02d}T00:00:00Z"}
+        for i, name in titles.items()
+    ]
+    # A later page with the wrong order still supplies each task's newest qualifying evidence.
+    runs[-4:] = reversed(runs[-4:])
+
+    def list_campaigns(*args: str) -> str:
+        assert args == (
+            "api",
+            "repos/o/r/actions/workflows/benchmark-campaign.yml/runs?per_page=100",
+            "--paginate",
+            "--jq",
+            '.workflow_runs[] | select(.status == "completed") | {id, display_title, created_at}',
+        )
+        return "\n".join(json.dumps(run) for run in runs)
+
+    monkeypatch.setattr(gate, "_gh", list_campaigns)
     monkeypatch.setattr(gate, "run_rows", lambda _, run_id: ledgers[run_id])
     rows, used = gate.campaign_rows("o/r", "release-1.0.0")
     assert {(r["task"], r["run"]["git_sha"], r["passed"]) for r in rows} == {
@@ -387,7 +404,7 @@ def test_candidate_intake_requires_successful_producer_stage(monkeypatch):
 
     raw = official_raw()
     campaign = raw["campaign_id"]
-    monkeypatch.setattr(gate, "_runs", lambda *_: [{"displayTitle": f"Benchmark campaign {campaign}", "databaseId": 1}])
+    monkeypatch.setattr(gate, "completed_campaign_run_ids", lambda *_: [1])
 
     def gh(*args):
         if args[-1].endswith("/jobs?per_page=100"):
@@ -406,7 +423,7 @@ def test_complete_candidate_intake_requires_original_official_receipts(monkeypat
 
     raw = official_raw()
     campaign = raw["campaign_id"]
-    monkeypatch.setattr(gate, "_runs", lambda *_: [{"displayTitle": f"Benchmark campaign {campaign}", "databaseId": 1}])
+    monkeypatch.setattr(gate, "completed_campaign_run_ids", lambda *_: [1])
     monkeypatch.setattr(gate, "_tree", lambda *_: "tree")
     monkeypatch.setattr(gate, "_fixture_receipt", lambda *_: raw["fixture"])
 
@@ -434,7 +451,7 @@ def test_candidate_uses_the_checked_fixture_after_new_same_tree_dispatch(monkeyp
     raw = official_raw()
     campaign = raw["campaign_id"]
     original = raw["fixture"]["run_id"]
-    monkeypatch.setattr(gate, "_runs", lambda *_: [{"displayTitle": f"Benchmark campaign {campaign}", "databaseId": 1}])
+    monkeypatch.setattr(gate, "completed_campaign_run_ids", lambda *_: [1])
     monkeypatch.setattr(gate, "_tree", lambda *_: "tree")
     checked = {**raw["fixture"], "run_id": original + 1}
     monkeypatch.setattr(gate, "_fixture_receipt", lambda *_: checked)

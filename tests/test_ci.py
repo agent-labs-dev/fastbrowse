@@ -91,16 +91,18 @@ def test_every_file_a_rust_crate_embeds_rebuilds_the_binaries() -> None:
     [
         ("null", True),
         ("{}", True),
-        ('{"repeat": "3", "budget": 50}', True),
+        ('{"repeat": "3"}', True),
         ('{"repeat": 0}', False),
-        ('{"budget": ""}', False),
-        ('{"budget": 0}', False),
+        ('{"repeat": ""}', False),
+        ('{"repeat": null}', False),
+        ('{"budget": 50}', False),
+        ('{"reserve": 3}', False),
     ],
 )
-def test_a_campaign_refuses_a_bad_payload_and_runs_with_none(payload: str, passes: bool) -> None:
+def test_a_campaign_validates_repeat_and_rejects_removed_spend_inputs(payload: str, passes: bool) -> None:
     workflow = Path(".github/workflows/benchmark-campaign.yml").read_text()
-    start = workflow.index("for key in repeat budget")
-    check = workflow[start : workflow.index("done\n", start) + 4]
+    start = workflow.index('jq -e \'(. // {}) | (has("budget")')
+    check = workflow[start : workflow.index('case "$REPEAT"', start)]
     result = subprocess.run(["bash", "-c", check], env={**os.environ, "PAYLOAD": payload}, capture_output=True)
     assert (result.returncode == 0) is passes
 

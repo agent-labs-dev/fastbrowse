@@ -60,7 +60,7 @@ pub(crate) mod keys {
     }
 }
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after that action is among the recent actions; what the page already showed before it is not the\nanswer, however close it looks.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after the recent history shows it executed; what the page already showed before it is not the\nanswer, however close it looks.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nEach option is the element in state.elements with its id, whose `context` is the card, row or section it belongs\nto. When the task names one, choose by context; a link in one record's context opens it and shows no more of the\nlist.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could carrying out any part of the task or current subgoal that is still needed, or reading what it needs, act on or rely on the element in each question?\nUse recent actions to judge which task steps are already complete.\nJudge by its label, role, context and href. An already_read link leads to a page this run has read;\nconsider whether visiting it again would help the task. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
@@ -90,6 +90,9 @@ pub const GROUP: &str = "Too many elements to list at once. Choose the group tha
 
 /// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
 const PRESS_ROLE_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, or the key or key chord the task gives in an editable field.";
+
+/// The Press operation where a control with no role keys, such as a sortable card, takes a press: Space picks it up, the arrows move it, Space drops it.
+const PRESS_STANDARD_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, a standard navigation or editing key (arrows, Home, End, Space, Delete) that moves a caret or picks up, moves and drops an item, or the key or key chord the task gives.";
 
 pub fn operation_label(operation: Operation) -> &'static str {
     match operation {
@@ -124,7 +127,7 @@ pub fn operation_label(operation: Operation) -> &'static str {
             "Wait without acting while the page changes by itself, as a clock or a live status line does."
         }
         Operation::Read => {
-            "Read this page's content, the whole page including text outside the viewport, to extract information the task needs. What an action the task asks for will show is not on the page until that action is among the recent actions."
+            "Read this page's content, the whole page including text outside the viewport, to extract information the task needs. What an action the task asks for will show is not on the page until the recent history shows it executed."
         }
         // The action condition stops done before the task's own click on Leaflet's quick-start page, whose standalone
         // popup is open on load: done 0.30 to 0.15 and click 0.32 to 0.62 on the captured first step, with the
@@ -132,7 +135,7 @@ pub fn operation_label(operation: Operation) -> &'static str {
         // Defined only for a written answer, done lost to a link on the very page a task asked to open: on PyPI's
         // httpx page Jev split 0.51 done against 0.42 for the Homepage link and sometimes left for GitHub (#964).
         Operation::Done => {
-            "The task is done: what it asks is carried out. A task that asks for an action first, such as a click, is not carried out until that action is among the recent actions, whatever the page already shows. A task that only asks to open or reach a page is carried out once the current page is that page. When it asks for a written answer, notes.selected_answer gives every requested fact and value, with no unrelated text or unresolved requirement; a value present only in retained_notes is not in that answer. When composition_pending or structured_output_pending is true, the retained sources cover every requested item and the answer or structured result will be generated and checked before delivery."
+            "The task is done: what it asks is carried out. A task that asks for an action first, such as a click, is not carried out until the recent history shows it executed, whatever the page already shows. A task that only asks to open or reach a page is carried out once the current page is that page. When it asks for a written answer, notes.selected_answer gives every requested fact and value, with no unrelated text or unresolved requirement; a value present only in retained_notes is not in that answer. When composition_pending or structured_output_pending is true, the retained sources cover every requested item and the answer or structured result will be generated and checked before delivery."
         }
     }
 }
@@ -158,6 +161,9 @@ pub struct HistoryEntry {
     pub operation: Option<Operation>,
     #[serde(deserialize_with = "lax::nullable")]
     pub target: Option<String>,
+    /// The named control the drag was dispatched to. The effect records what the page showed afterward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     pub outcome: StepOutcome,
     #[serde(deserialize_with = "lax::boolean")]
     pub page_changed: bool,
@@ -183,6 +189,10 @@ pub struct HistoryEntry {
     /// holding after the click. Kept out of what models are shown: it is the run's own record of what it changed.
     #[serde(skip)]
     pub set: Vec<FieldChange>,
+    /// What a fill or select replaced: the value the field held when the step began, masked. Kept out of what models
+    /// are shown; a save's authorization questions state it beside the value typed.
+    #[serde(skip)]
+    pub before: Option<String>,
     /// The task step a click placed inside a drawn surface was made for. Kept apart from `target`, which actions are
     /// withheld and counted by.
     #[serde(skip)]
@@ -208,6 +218,21 @@ pub struct HistoryEntry {
     /// coverage check is told of.
     #[serde(skip)]
     pub committed: bool,
+    /// The document that supplied the action, kept private so form changes cannot cross document instances.
+    #[serde(skip)]
+    pub document_key: Option<String>,
+    /// The id of the control the action targeted, which a field is matched by when its label changes as it is typed in.
+    #[serde(skip)]
+    pub control_id: Option<String>,
+    /// The form instance the action targeted, kept private so same-label fields cannot cross form instances.
+    #[serde(skip)]
+    pub form_id: Option<String>,
+    #[serde(skip)]
+    /// The frame `form_id` is local to: two frames can each hold a form with the same id.
+    pub frame_id: Option<String>,
+    /// Form instances that appeared after this action, kept private so an unrelated click is not called the opener.
+    #[serde(skip)]
+    pub opened_forms: Vec<(Option<String>, String)>,
 }
 
 /// The scope of a form or field group. A local form id can be reused in other frames or documents.
@@ -249,9 +274,10 @@ pub enum Commit {
 /// The form a step submitted, and what its other fields held as it went.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Submitted {
-    /// The document the form was in: form ids are numbered per document, so the same id on another page is another form.
+    /// The top-level document containing the form.
     document: (String, String),
     frame_id: Option<String>,
+    frame_document_key: Option<String>,
     form_id: String,
     held: Vec<String>,
 }
@@ -281,6 +307,7 @@ impl Submitted {
         Some(Submitted {
             document: (observation.url.clone(), observation.document_key.clone()),
             frame_id: target.frame_id.clone(),
+            frame_document_key: target.frame_document_key.clone(),
             form_id,
             held,
         })
@@ -288,11 +315,34 @@ impl Submitted {
 
     /// Which form this was beside the one `target` submits, and what it held.
     fn told(&self, target: Option<&Control>, observation: &Observation) -> String {
-        let same = (&observation.url, &observation.document_key) == (&self.document.0, &self.document.1)
-            && target.is_some_and(|t| (&t.frame_id, t.form_id.as_ref()) == (&self.frame_id, Some(&self.form_id)));
-        let which = match same {
-            true => "the same form the action now asked about submits",
-            false => "a different form from the one the action now asked about submits",
+        // Back can reload the same form with fresh ids. Calling it different led to a duplicate submission.
+        let same_document = !observation.document_key.is_empty() && observation.document_key == self.document.1;
+        let which = if same_document {
+            match target.and_then(|target| target.form_id.as_ref().map(|id| (target, id))) {
+                Some((target, id)) if target.frame_id == self.frame_id => {
+                    let frame_reloaded = self.frame_id.is_some()
+                        && match (&self.frame_document_key, &target.frame_document_key) {
+                            (Some(previous), Some(current)) => previous != current,
+                            // Older observations lack the receiving document, so a changed id could be a reload.
+                            _ => id != &self.form_id,
+                        };
+                    if frame_reloaded {
+                        "an earlier form whose relationship to the current form is unknown"
+                    } else if id == &self.form_id {
+                        "the same form the action now asked about submits"
+                    } else {
+                        "a different form from the one the action now asked about submits"
+                    }
+                }
+                Some(_) => "a different form from the one the action now asked about submits",
+                None => "a form from this document",
+            }
+        } else if observation.url != self.document.0 {
+            "a form submitted from another address"
+        } else if observation.document_key.is_empty() || self.document.1.is_empty() {
+            "a form submitted at this address; its relation to the current form is unknown"
+        } else {
+            "a form from an earlier document at this address; its relation to the current form is unknown"
         };
         // The observation can omit fields in the submitted form, so no recorded values is not proof of emptiness.
         match self.held.is_empty() {
@@ -325,6 +375,7 @@ impl HistoryEntry {
         HistoryEntry {
             operation,
             target: target.map(str::to_string),
+            destination: None,
             outcome,
             page_changed,
             note: None,
@@ -334,12 +385,18 @@ impl HistoryEntry {
             setting: None,
             added: false,
             set: Vec::new(),
+            before: None,
             for_step: None,
             look: None,
             submitted: None,
             commit: None,
             form: None,
             committed: false,
+            document_key: None,
+            control_id: None,
+            form_id: None,
+            frame_id: None,
+            opened_forms: Vec::new(),
         }
     }
 
@@ -407,6 +464,10 @@ impl HistoryEntry {
             true => format!("{instructions}\n{}", Self::LOOKS),
             false => instructions.to_string(),
         }
+    }
+
+    pub(crate) fn has_unperformed_actions(history: &[HistoryEntry]) -> bool {
+        history.iter().any(|entry| entry.acts() && entry.outcome != StepOutcome::Executed)
     }
 
     /// The images `seen` refers to.
@@ -1282,12 +1343,18 @@ pub fn build_request(
         offered_operations(observation, &indexed, context, &urls)
     };
     let mut questions: IndexMap<String, Question> = IndexMap::new();
-    let target_rules = told_sites(&TARGET, controls);
+    let mut target_rules = told_sites(&TARGET, controls);
+    let mut action_rules = HistoryEntry::told(&NEXT_ACTION, &context.history);
+    if HistoryEntry::has_unperformed_actions(&context.history) {
+        // History includes attempts as well as executions. A covered action can still be needed when the cover goes.
+        action_rules.push_str("\nUse the outcome of each recorded action. A covered or stale action did not execute, and a failed action does not establish that its task step was carried out. Reconsider a task-required action once its obstruction is gone, before advancing to a later requested step.\nWhen a required action was covered and its target is available now, the next operation is the one that carries out that unfinished action.");
+        target_rules.push_str("\nIf a covered action the task still requires can now execute, choose its target before a control for a later task step.");
+    }
     let target_rules = target_rules.as_str();
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            told_sites(&HistoryEntry::told(&NEXT_ACTION, &context.history), controls),
+            told_sites(&action_rules, controls),
             offered.iter().map(|op| {
                 // The operation is chosen apart from its target, and a choice of one address is answered without Jev
                 // at all, so the operation names where navigate goes: told only "another address", Jev searched the
@@ -1313,6 +1380,13 @@ pub fn build_request(
                     (Operation::Navigate, [only]) => format!("{} The address: {only}", operation_label(*op)),
                     // Only a page with a control whose role defines keys is told so, so a page of plain fields asks
                     // what it always has.
+                    (Operation::Press, _)
+                        if indexed.get(op).is_some_and(|controls| {
+                            controls.iter().any(|c| !c.operations.contains(&Operation::Fill) && role_keys(&c.role).is_empty())
+                        }) =>
+                    {
+                        PRESS_STANDARD_KEYS.into()
+                    }
                     (Operation::Press, _)
                         if indexed
                             .get(op)
@@ -1895,6 +1969,10 @@ fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
         ("input_name", control.input_name.clone().map(Value::from)),
         ("autocomplete", control.autocomplete.clone().map(Value::from)),
         ("validation_message", control.validation_message.clone().map(Value::from)),
+        ("role_description", control.role_description.clone().map(Value::from)),
+        ("description", control.description.clone().map(Value::from)),
+        ("item_position", control.item_position.map(Value::from)),
+        ("item_count", control.item_count.map(Value::from)),
     ];
     for (key, value) in optional {
         if let Some(value) = value {
@@ -2103,6 +2181,27 @@ mod tests {
             "viewport_text": "", "tabs": [],
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn submitted_form_relationship_is_unknown_after_iframe_reload() {
+        let mut target = button(0);
+        target.frame_id = Some("frame".into());
+        target.form_id = Some("first-document:1".into());
+        target.frame_document_key = Some("first-document".into());
+        let mut outer = observation(vec![target.clone()]);
+        outer.document_key = "outer-document".into();
+        let submitted = Submitted::of(Operation::Click, &target, &outer).unwrap();
+
+        assert!(submitted.told(Some(&target), &outer).contains("the same form"));
+        target.form_id = Some("first-document:2".into());
+        assert!(submitted.told(Some(&target), &outer).contains("a different form"));
+
+        target.form_id = Some("second-document:1".into());
+        target.frame_document_key = Some("second-document".into());
+        outer.controls = vec![target.clone()];
+        let evidence = submitted.told(Some(&target), &outer);
+        assert!(evidence.contains("unknown"), "{evidence}");
     }
 
     /// Picks `pick` for every choice it names, else the first option; scores relevance high for `relevant` labels
@@ -2457,6 +2556,13 @@ mod tests {
         assert!(!takes(&native_select, Operation::Press));
         let unfocusable = Control::new("cell", "gridcell", "Cell", [Operation::Click]);
         assert!(!takes(&unfocusable, Operation::Press));
+        // A card that takes a press without a role's keys is told the standard keys exist; a page of fields is not.
+        let card = Control::new("card", "button", "One", [Operation::Click, Operation::Press]);
+        let sortable = vec![card, field("name", None)];
+        let page = observation(sortable.clone());
+        let request = build_request(&page, &sortable, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert_eq!(operation.criteria["press"], json!(PRESS_STANDARD_KEYS));
         let plain = vec![field("name", None), button(1)];
         let page = observation(plain.clone());
         let request = build_request(&page, &plain, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
@@ -3050,6 +3156,25 @@ mod tests {
         assert!(operation_label(Operation::Read).contains("the whole page including text outside the viewport"));
     }
 
+    #[test]
+    fn action_questions_distinguish_attempted_steps_from_executed_steps() {
+        let page = observation(vec![button(1), button(2)]);
+        let mut context = StepContext::new("Open the menu before continuing");
+        context.history.push(HistoryEntry::new(Some(Operation::Click), Some("Menu"), StepOutcome::Covered, false));
+        let request = build_request(&page, &page.controls, &context, &Config::default(), 100);
+        let Question::Choice(operation) = &request.questions[keys::OPERATION] else {
+            panic!("expected an operation choice");
+        };
+        assert!(operation.instructions.contains("A covered or stale action did not execute"));
+        let Question::Choice(target) = &request.questions["click_target"] else {
+            panic!("expected a click target choice");
+        };
+        assert!(target.instructions.contains("choose its target before a control for a later task step"));
+        for operation in [Operation::Read, Operation::Done] {
+            assert!(operation_label(operation).contains("the recent history shows it executed"));
+        }
+    }
+
     /// On the httpx page a task asked it to open, Jev clicked on to GitHub about half the time, told what done means
     /// only for a written answer (#964).
     #[test]
@@ -3087,6 +3212,17 @@ mod tests {
         assert_eq!(element(&field)["required"], true);
         assert_eq!(element(&field)["invalid"], true);
         assert_eq!(element(&field)["validation_message"], "Please fill in this field.");
+        let mut card = Control::new("card", "button", "One", [Operation::Click, Operation::Press]);
+        card.role_description = Some("draggable".into());
+        card.description = Some("Press the space bar to pick up.".into());
+        assert_eq!(element(&card)["role_description"], "draggable");
+        assert_eq!(element(&card)["description"], "Press the space bar to pick up.");
+        assert!(!element(&button(1)).contains_key("description"));
+        card.item_position = Some(6);
+        card.item_count = Some(6);
+        assert_eq!(element(&card)["item_position"], 6);
+        assert_eq!(element(&card)["item_count"], 6);
+        assert!(!element(&button(1)).contains_key("item_position"));
         assert!(!element(&button(2)).contains_key("required"));
         assert!(!element(&button(2)).contains_key("invalid"));
     }

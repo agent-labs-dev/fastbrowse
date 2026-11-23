@@ -17,17 +17,17 @@
       r => !cursorHost(r.target) && !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(cursorHost)),
     );
   const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
-  // Whether `read`, this document's `getEventListeners` (`listeners` below), finds a pointer listener on `e`.
-  const hears = (read, e) => {
+  // Whether `read`, this document's `getEventListeners` (`listeners` below), finds a listener for one of `types` on `e`.
+  const hears = (read, e, types = POINTER) => {
     let listeners = null;
     try {
       listeners = read?.(e);
     } catch {}
-    return Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+    return Boolean(listeners) && types.some(type => Array.isArray(listeners[type]) && listeners[type].length);
   };
   // A parent document's look asks this one, a frame inside it, about this document's elements (`readerOf` below). It
   // returns before anything else here runs, and hands out only that answer, never the function.
-  if (mode === 'reader') return 'listeners' in own ? (own.reader ||= e => hears(own.listeners, e)) : null;
+  if (mode === 'reader') return 'listeners' in own ? (own.reader ||= (e, types) => hears(own.listeners, e, types)) : null;
   // Reading a cross-origin frame's document can throw.
   const childDocument = frame => {
     try {
@@ -455,11 +455,14 @@
   }
   if ((mode === 'snapshot' || mode === 'glance') && !('listeners' in own))
     throw new Error(own.unread);
+  // What a script listens for to show something while the pointer is over an element.
+  const HOVER = ['mouseenter', 'mouseover', 'pointerenter', 'pointerover'];
   let listenerStates = new Map();
+  let hoverStates = new Map();
   // The function answers only for elements of the realm it was read in, and a same-origin frame's document has a realm
   // of its own: read from the parent, a frame's listened span was no control (#1312). So a frame's elements are asked of
   // that document's own function, through its `reader` mode, which throws `own.unread` there until it has read its own.
-  const readers = new Map([[document, e => hears(own.listeners, e)]]);
+  const readers = new Map([[document, (e, types) => hears(own.listeners, e, types)]]);
   const readerOf = doc => {
     if (!readers.has(doc)) {
       const reader = doc.defaultView?.__fastbrowseScripts?.[own.key]?.('reader');
@@ -469,11 +472,30 @@
     return readers.get(doc);
   };
   // The root element and the body hear clicks on the whole page, as the document does, so neither counts.
-  const listened = e => {
+  const listened = (e, types = POINTER, states = listenerStates) => {
     if (e === e.ownerDocument.documentElement || e === e.ownerDocument.body) return false;
-    if (listenerStates?.has(e)) return listenerStates.get(e);
-    const value = readerOf(e.ownerDocument)(e);
-    listenerStates?.set(e, value);
+    if (states?.has(e)) return states.get(e);
+    const value = readerOf(e.ownerDocument)(e, types);
+    states?.set(e, value);
+    return value;
+  };
+  // React 17+ attaches no listener to an element: its root hears every hover and calls the handler the element's
+  // current props name, which it keeps on a `__reactProps$<id>` expando (`__reactEventHandlers$<id>` before 17). Chrome's
+  // reader sees only the root, so the props are the one place the page says which element reveals something on hover.
+  // The expando is React's own record of the handlers it will call, not a guess at the page's markup.
+  const REACT_HOVER = [
+    'onMouseEnter', 'onMouseOver', 'onPointerEnter', 'onPointerOver',
+    'onMouseEnterCapture', 'onMouseOverCapture', 'onPointerEnterCapture', 'onPointerOverCapture',
+  ];
+  const reactHover = e => {
+    const key = Object.keys(e).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
+    const props = key && e[key];
+    return Boolean(props) && REACT_HOVER.some(name => typeof props[name] === 'function');
+  };
+  const hoverListened = e => {
+    if (hoverStates?.has(e)) return hoverStates.get(e);
+    const value = listened(e, HOVER, hoverStates) || reactHover(e);
+    hoverStates?.set(e, value);
     return value;
   };
   // Text the page rewrites by itself, such as a player's clock or a countdown, says nothing about which item a control
@@ -643,6 +665,7 @@
     !kept.undefinedElements?.some(e => e.isConnected && e.matches(':defined')) &&
     // Adding, removing or aborting a native listener writes no DOM node or attribute.
     kept.listenerStates?.every(([e, value]) => listened(e) === value) &&
+    kept.hoverStates?.every(([e, value]) => hoverListened(e) === value) &&
     kept.inputs.every(([kind, target, args, value]) =>
       sameRenderFact(kind, value, readRenderFact(kind, target, args)));
   if (still)
@@ -675,6 +698,7 @@
   registry.nativeQueueMicrotask(() => {
     reading = false;
     listenerStates = null;
+    hoverStates = null;
     for (const cache of caches) cache.clear();
     caches.length = 0;
   });
@@ -1328,7 +1352,8 @@
     for (const e of registry.selfUpdating) if (scope.contains(e)) text = text.replace(innerTextOf(e) || '', '');
     return digest(text.slice(0, GUARD_TEXT_CHARS));
   });
-  registry.guard = (e, id) => {
+  // `stable` blanks the control's own current state, for `retargetKey` below.
+  registry.guard = (e, id, stable = false) => {
     if (!e?.isConnected || !visible(e)) return null;
     const axis = registry.scrollAxes?.get(id);
     if (axis) return [identity(e), 'scroll', axis,
@@ -1337,22 +1362,23 @@
     const source = sourceOf(e);
     if (source !== e && (source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
+    const own = value => (stable ? null : value);
     // An absent aria-disabled and "false" both mean enabled. Google Flights adds the "false" as it hydrates, and
     // the raw attribute turned the run's first click stale.
     return [
       identity(e),
       roleOf(e),
       labelOf(e) || fallbackLabel(e),
-      reveal(source),
-      nativeProperty(source, 'checked') ?? null,
-      chosen(e),
+      own(reveal(source)),
+      own(nativeProperty(source, 'checked') ?? null),
+      own(chosen(e)),
       nativeProperty(e, 'readOnly') ?? null,
       e.matches(':disabled'),
       e.getAttribute('aria-disabled') === 'true',
-      e.getAttribute('aria-expanded'),
-      e.getAttribute('aria-checked'),
-      e.getAttribute('aria-pressed'),
-      e.getAttribute('aria-selected'),
+      own(e.getAttribute('aria-expanded')),
+      own(e.getAttribute('aria-checked')),
+      own(e.getAttribute('aria-pressed')),
+      own(e.getAttribute('aria-selected')),
       e.getAttribute('href'),
       scope ? scopeDigest(scope) : '',
       e.ownerDocument.location.origin,
@@ -1367,6 +1393,11 @@
     const guard = registry.guard(e, id);
     return guard && digest(JSON.stringify(guard));
   };
+  // What a control is apart from its node ids and its own current state. A redraw that also fills a field or checks a
+  // box changes that state, and keying on it left the replacement unpaired: two rebuilt "Name" fields, one just
+  // filled, were reported as one removed and one shown, never as the value set. A retargeted action still compares the
+  // whole control, state included, before it follows the key.
+  registry.retargetKey = (e, id) => registry.guard(e, id, true)?.slice(1, -1) ?? null;
 
   const DRAWN_KINDS = { IMG: 'image', CANVAS: 'canvas', VIDEO: 'video' };
   const controls = [];
@@ -1440,6 +1471,10 @@
       form_id: fieldScope(source),
       submit_semantics: submitSemantics(e),
     };
+    // An inlined iframe can reload while the document producing this snapshot stays put.
+    if (base.form_id !== null && e.ownerDocument !== document) {
+      base.frame_document_key = String(e.ownerDocument.defaultView.performance.timeOrigin);
+    }
     if (rname === 'link' && nativeProperty(e, 'href')) {
       const u = new URL(nativeProperty(e, 'href'), location.href);
       // Another origin's link keeps its whole address, as capture.js writes it: a recipe or a follow joins the href
@@ -1487,6 +1522,13 @@
     const handle = e.getAttribute('draggable') === 'true' || (e.tagName === 'IMG' && draggedByPointer(e));
     if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && !handle) base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
+    // What the page says the control is and how it is operated, in its own words: a dnd-kit card is a "button" whose
+    // `aria-roledescription` is "draggable" and whose described-by text says Space picks it up and the arrows move it.
+    // Without both, Jev saw a plain button and clicked it.
+    const roleDescription = (e.getAttribute('aria-roledescription') || '').replace(/\s+/g, ' ').trim();
+    if (roleDescription) base.role_description = roleDescription;
+    const description = describedBy(e);
+    if (description && description !== base.label) base.description = description;
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
     if (nativeProperty(source, 'required') || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
@@ -1519,12 +1561,19 @@
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
       // Only an element that names itself draggable, a drawn surface to draw on, or one the page gives a grab cursor
       // is offered as a drag source: `draggable` reports true for every <a> and <img> by default, which would offer
-      // the whole page as draggable.
-      if (e.getAttribute('draggable') === 'true' || base.drawn || draggedByPointer(e)) base.operations.push('drag');
+      // the whole page as draggable. A custom widget names itself with an `aria-roledescription` (a sortable card,
+      // which its pointer sensor also takes by drag), as a press is offered it; Jev reads the description and decides
+      // whether to drag or press.
+      if (e.getAttribute('draggable') === 'true' || base.drawn || draggedByPointer(e) ||
+          e.hasAttribute('aria-roledescription')) base.operations.push('drag');
     }
-    // Focus determines whether the widget can receive keys.
+    // Focus determines whether the widget can receive keys. A button, link, checkbox or switch answers Enter and
+    // Space by activating, which a click already does, unless its page says it is something else: an
+    // `aria-roledescription` (a sortable card is a "button" that Space picks up and the arrows move). Focus alone
+    // does not say so: every button just clicked is focused, and each would add a press question to every step.
+    const activation = ['button', 'link', 'checkbox', 'switch'].includes(rname) && !e.hasAttribute('aria-roledescription');
     if (!base.operations.includes('fill') && e.tagName !== 'SELECT' && nativeProperty(source, 'type') !== 'file' &&
-        !['button', 'link', 'checkbox', 'switch', 'textbox', 'searchbox'].includes(rname) &&
+        !activation && !['textbox', 'searchbox'].includes(rname) &&
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
       base.operations.push('press');
     controls.push(base);
@@ -1787,12 +1836,30 @@
   // opening the repository. Only the outermost such card is offered.
   const holding = new Set();
   for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
+  // Looked up per hovered card: a scan of every control for each card was quadratic on a long feed.
+  for (const c of controls) {
+    const element = registry.nodes.get(c.id);
+    if (!controlByElement.has(element)) controlByElement.set(element, c);
+  }
   for (const doc of docs) {
     let host = null;
     for (const e of indexedElements(doc.body)) {
       if (host?.contains(e)) continue;
-      if (offered.has(e) || holding.has(e) || !isCard(e)) continue;
-      if (![...descendants(e, VISUAL)].some(v => !decorative(v))) continue;
+      if (offered.has(e)) {
+        // A card that is itself a clickable control still reveals its buttons only under the pointer: the control
+        // gains Hover beside Click, as one choice rather than a second control for the same element.
+        if (hoverListened(e)) {
+          const own = controlByElement.get(e);
+          if (own && !own.operations.includes('hover')) own.operations.push('hover');
+        }
+        continue;
+      }
+      if (!isCard(e)) continue;
+      // A card whose script listens for the pointer entering it shows something under it, whatever else it holds:
+      // a gallery card keeps a drag handle on screen and renders its delete button only while hovered.
+      if (!hoverListened(e)) {
+        if (holding.has(e) || ![...descendants(e, VISUAL)].some(v => !decorative(v))) continue;
+      }
       const y = pointerBox(e);
       if (y === null) continue;
       offerHover(e, y);
@@ -2083,6 +2150,112 @@
       c.context = [c.context, `orientation: ${orientation}`].filter(Boolean).join('; ');
   }
 
+  // "First" and "last" are places in a list, which a label does not state. The page's own `aria-posinset` and
+  // `aria-setsize` say it where present; otherwise the place among the visible items of the nearest list container.
+  // A custom widget's items name themselves with an `aria-roledescription` (a sortable card, a slide) and sit in a plain
+  // container, whatever the page calls them or in which language. A tree's child group is its own set.
+  const SORTABLE = '[aria-roledescription]';
+  const LIST_ITEM = 'li,[role="listitem"],[role="option"],[role="row"],[role="treeitem"]';
+  const SET_ITEM = `${LIST_ITEM},${SORTABLE}`;
+  const SET_LIST = 'ul,ol,[role="list"],[role="listbox"],[role="grid"],[role="tree"],[role="tree"] [role="group"]';
+  // A list item that holds a described control is the member, not the control inside it.
+  const PRESSED = `${SORTABLE}[aria-pressed="true"]`;
+  const setOwner = i => (i.matches(SORTABLE) && !i.matches(LIST_ITEM) ? i.parentElement : i.parentElement?.closest(SET_LIST));
+  for (const c of controls) {
+    const e = registry.nodes.get(c.id);
+    const item = e?.closest(`[aria-posinset],${LIST_ITEM}`) ?? e?.closest(SORTABLE);
+    if (!item) continue;
+    const list = setOwner(item);
+    const members = list
+      ? [...list.querySelectorAll(SET_ITEM)].filter(i => setOwner(i) === list && visible(i))
+      : [];
+    // A picked-up sortable card moves by transform while the DOM keeps its order, and the library states its order
+    // nowhere else a page reliably carries (its live announcement is prose in the page's language), so the order a
+    // person sees is the one stated: otherwise every arrow press leaves the page looking unchanged. Neighbours are read
+    // at the slots the layout gave them, since they slide to new ones over an animation. The held item is drawn at its
+    // own slot moved by every translation between the pressed handle and the item, wherever the page put it.
+    // Rows and columns are told apart by centres, since the edges of two cells that touch are read from different
+    // sources (a box, a transform string) and do not compare exactly. The item has passed a neighbour in a row before
+    // its own, or a neighbour beside it in its row on the side it moved to; where it covers a neighbour's centre, it has
+    // passed that neighbour once its edge leading on the axis it travelled reaches that centre, so a tall card seated by
+    // the edge it leads with counts, and a wrapping grid's slots run in rows.
+    const held = members.find(i => i.matches(PRESSED) || i.querySelector(PRESSED));
+    let siblings = members;
+    if (held) {
+      // A library slides the lifted item to its new place over a transition, and the page is read while it runs: the
+      // place it holds is where the transition ends, not the frame it is passing through.
+      const settled = e =>
+        e.getAnimations().map(a => a.effect?.getKeyframes().at(-1)?.transform).filter(Boolean).at(-1) ??
+        styleProperty(e, 'transform');
+      // A translation is in its parent's units while boxes are in the viewport's, so a scaled list or grid (a zoomed
+      // board) would otherwise compare a full slot's move against half a slot. The scale each element's parent draws
+      // it at is the product of every ancestor's.
+      const scaleAbove = e => {
+        let x = 1;
+        let y = 1;
+        for (let p = e.parentElement; p; p = p.parentElement) {
+          const m = new DOMMatrix(styleProperty(p, 'transform'));
+          x *= m.a;
+          y *= m.d;
+        }
+        return [x, y];
+      };
+      const moved = (from, to) => {
+        let x = 0;
+        let y = 0;
+        for (let e = from; e; e = e.parentElement) {
+          const m = new DOMMatrix(settled(e));
+          const [sx, sy] = scaleAbove(e);
+          x += m.m41 * sx;
+          y += m.m42 * sy;
+          if (e === to) break;
+        }
+        return [x, y];
+      };
+      // The box the layout gave an item, before its own transform: a library may also scale a lifted card to the
+      // slot it hovers, and a scale about the transform origin moves every edge, so the scale is undone as well as the
+      // translation. Sortable libraries scale and translate; they do not rotate.
+      const slot = (e, [dx, dy] = [0, 0]) => {
+        const box = boxOf(e);
+        const m = new DOMMatrix(styleProperty(e, 'transform'));
+        const [ox, oy] = styleProperty(e, 'transformOrigin').split(' ').map(Number.parseFloat);
+        const [sx, sy] = scaleAbove(e);
+        const left = box.left - sx * (m.e + ox * (1 - m.a)) + dx;
+        const top = box.top - sy * (m.f + oy * (1 - m.d)) + dy;
+        return { left, top, right: left + box.width / m.a, bottom: top + box.height / m.d };
+      };
+      const shift = moved(held.matches(PRESSED) ? held : held.querySelector(PRESSED), held);
+      const vertical = Math.abs(shift[1]) >= Math.abs(shift[0]);
+      const drawn = slot(held, shift);
+      const mid = box => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
+      const above = (a, b) => mid(a).y < b.top && mid(b).y > a.bottom;
+      const side = (a, b) => (mid(a).x < b.left ? -1 : mid(a).x > b.right ? 1 : 0);
+      const reaches = (j, forward) =>
+        vertical ? (forward ? drawn.bottom >= mid(j).y : drawn.top <= mid(j).y)
+          : forward ? drawn.right >= mid(j).x : drawn.left <= mid(j).x;
+      const passed = (j, forward) =>
+        forward
+          ? above(j, drawn) || (!above(drawn, j) && (side(j, drawn) < 0 || (side(j, drawn) === 0 && reaches(j, true))))
+          : above(drawn, j) || (!above(j, drawn) && (side(j, drawn) > 0 || (side(j, drawn) === 0 && reaches(j, false))));
+      const at = members.indexOf(held);
+      const after = members.filter((i, k) => k > at && passed(slot(i), true)).length;
+      const before = members.filter((i, k) => k < at && passed(slot(i), false)).length;
+      siblings = members.filter(i => i !== held);
+      siblings.splice(at + after - before, 0, held);
+    }
+    const declared = Number.parseInt(item.getAttribute('aria-posinset'), 10);
+    // `aria-setsize="-1"` says the list's size is unknown (a virtualised feed); counting the rendered items instead
+    // would state a size the page says it does not know.
+    const declaredSize = item.getAttribute('aria-setsize');
+    const size = declaredSize === null ? siblings.length : Number.parseInt(declaredSize, 10);
+    const position = declared > 0 ? declared : siblings.indexOf(item) + 1;
+    const count = size > 0 ? size : 0;
+    if (position > 0 && count > 1 && position <= count) {
+      c.item_position = position;
+      c.item_count = count;
+    }
+  }
+
   // A wheel at the viewport centre misses panels and horizontal lists. Index the browser's actual scroll owners,
   // separately for each overflowing axis, so the chosen target determines which content moves.
   registry.scrollIds ||= new WeakMap();
@@ -2256,9 +2429,10 @@
   for (const c of controls) {
     const guard = registry.guard(registry.nodes.get(c.id), c.id);
     guards[c.id] = guard && digest(JSON.stringify(guard));
-    // A redraw changes the node ids at either end of the guard. Everything between them, including the receiving
-    // document's timeOrigin and form semantics, must survive before an action can follow it.
-    retarget_keys[c.id] = guard && digest(JSON.stringify(guard.slice(1, -1)));
+    // A redraw changes the node ids at either end of the guard. Everything between them but the control's own state,
+    // including the receiving document's timeOrigin and form semantics, must survive before an action can follow it.
+    const retarget = registry.retargetKey(registry.nodes.get(c.id), c.id);
+    retarget_keys[c.id] = retarget && digest(JSON.stringify(retarget));
   }
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
   if (mode !== 'glance') registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
@@ -2267,6 +2441,27 @@
     .map(e => [identity(e), reveal(e), nativeProperty(e, 'checked'), chosen(e), nativeProperty(e, 'disabled'), nativeProperty(e, 'readOnly')]);
   // Compare meaning and identity for the page_key fingerprint; geometry is re-resolved just before input.
   const semantics = controls.map(({ distance, ...c }) => c);
+  // A scroll can land on a new part without changing text, while live text can change on the same part. Keep this
+  // identity to let the agent distinguish those cases without treating page content as geometry.
+  // A scroll area is named by its label and its place among areas of that label, never by its registry id: a page
+  // that replaces the container while rendering would otherwise turn a place already shown into a new one.
+  const seen_areas = new Map();
+  const scroll_positions = controls
+    .filter(c => registry.scrollAxes?.has(c.id))
+    .map(c => {
+      const e = registry.nodes.get(c.id);
+      const nth = seen_areas.get(c.label) ?? 0;
+      seen_areas.set(c.label, nth + 1);
+      return [c.label, nth, ...renderFact('scrollPosition', e)];
+    });
+  const viewport_key = digest(JSON.stringify([
+    location.href,
+    scrollX,
+    scrollY,
+    innerWidth,
+    innerHeight,
+    scroll_positions,
+  ]));
   const page_key = digest(JSON.stringify([
     location.href,
     scrollX,
@@ -2288,11 +2483,47 @@
   // The open modal the rest of the page sits behind. A page marks what is under one aria-hidden or inert, so those
   // controls leave the observation while staying in the document: Google Flights' Stops filter took 145 controls
   // out and put them back on closing, and a run told each by name in every later step.
-  const modals = [...renderFact('query', document, 'dialog:modal,[aria-modal="true"]')].filter(
-    e => !e.closest('[aria-hidden="true"],[inert]') && visibilityOf(e, { checkVisibilityCSS: true }),
-  );
-  // A dialog is named by aria-label or aria-labelledby, never by its content.
-  const dialogName = e =>
+  // Most modals never say aria-modal and need no dialog role: MUI, Radix, react-aria and Headless UI mark the page
+  // behind a modal aria-hidden or inert instead ("aria-hide others"). A modal is what leaves every other control on
+  // the page hidden from use, so an element is one when the controls the capture collected, which are exactly the
+  // ones not hidden, all lie inside it, and some control sits in hidden content outside it. A page that hid
+  // interactive content from assistive tech while it stayed usable would break ARIA, and the test says nothing
+  // about how the page looks. CurseForge's "Delete media" dialog and its gallery edit drawer (a role="presentation"
+  // root, no dialog role) are both this shape; unrecognised, the controls they hid were reported as removed. A
+  // carousel's aria-hidden clones are not: the page's other controls stay outside the visible slide. The candidate is
+  // the sibling of the outermost hidden content, so a dialog and its backdrop controls count as inside. The check is
+  // one containment test per collected control. A role="dialog" that says aria-modal="false" stays non-modal.
+  const hiddenSelector = '[aria-hidden="true"],[inert]';
+  // A control is drawn or not by its own rendering: a wrapper with no box (display:contents) still draws its controls,
+  // and a rendered wrapper can hold only a display:none or fully transparent panel.
+  const holdsDrawnControl = e =>
+    [e, ...e.querySelectorAll(SELECTOR)].some(c => c.matches(SELECTOR) && visibilityOf(c, { checkOpacity: true, checkVisibilityCSS: true }));
+  // Element.contains stops at a shadow root, but the capture walks open ones, so containment climbs through each host.
+  const containsAcrossShadow = (root, e) => {
+    for (let n = e; n; n = n.getRootNode().host) if (root.contains(n)) return true;
+    return false;
+  };
+  const dialogSelector = '[role="dialog"],[role="alertdialog"]';
+  const found = new Set(renderFact('query', document, 'dialog:modal,[aria-modal="true"]'));
+  const usable = controls
+    .filter(c => !registry.scrollAxes?.has(c.id))
+    .map(c => registry.nodes.get(c.id))
+    .filter(Boolean);
+  for (const hidden of renderFact('query', document, hiddenSelector)) {
+    // The page behind a modal is still drawn; a menu or template kept aria-hidden while dormant holds no drawn
+    // control, and would otherwise make the whole usable page look like a modal sitting over it.
+    if (hidden.parentElement?.closest(hiddenSelector) || !holdsDrawnControl(hidden)) continue;
+    for (const sibling of hidden.parentElement?.children || []) {
+      if (sibling === hidden || sibling.matches(hiddenSelector) || !usable.length || !usable.every(e => containsAcrossShadow(sibling, e))) continue;
+      const dialog = sibling.matches(dialogSelector) ? sibling : sibling.querySelector(dialogSelector);
+      if (dialog?.getAttribute('aria-modal') !== 'false') found.add(sibling);
+    }
+  }
+  const modals = [...found]
+    .filter(e => !e.closest(hiddenSelector) && visibilityOf(e, { checkVisibilityCSS: true }))
+    .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  // A dialog is named by aria-label or aria-labelledby, never by its content, on the modal or on the dialog inside it.
+  const ariaName = e =>
     (
       e.getAttribute('aria-label') ||
       (e.getAttribute('aria-labelledby') || '')
@@ -2302,6 +2533,7 @@
     )
       .replace(/\s+/g, ' ')
       .trim();
+  const dialogName = e => ariaName(e) || (e.querySelector(dialogSelector) ? ariaName(e.querySelector(dialogSelector)) : '');
   const modal = modals.length ? dialogName(modals.at(-1)) : null;
 
   // The read number names a transport baseline, and the read is kept to answer "unchanged" while the page stays.
@@ -2323,6 +2555,7 @@
     frames: walkedFrames,
     undefinedElements: walkedRoots.flatMap(([root]) => own.queryTrees.get(root).undefinedElements),
     listenerStates: [...listenerStates],
+    hoverStates: [...hoverStates],
     listenerAPI: Boolean(own.listeners),
     inputs: renderInputs,
     url: location.href,
@@ -2334,6 +2567,7 @@
     url: location.href,
     title: document.title,
     viewport_text,
+    viewport_key,
     offscreen_text,
     visual_content,
     media,

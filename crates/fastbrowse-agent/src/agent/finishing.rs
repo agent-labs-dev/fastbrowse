@@ -354,12 +354,13 @@ impl Agent {
             Some(reviewed.answer)
         } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
             let (notes, task, ledger) = (state.notes.clone(), self.model_task(state), state.ledger.clone());
+            let steps = state.executed_steps();
             let kept = state.committed_steps();
             let reviewed = match self
                 .trace
                 .phase(
                     "coverage",
-                    draft_reviewed(&*self.jev, &task, self.screenshot(intent), &notes, Some(&ledger), &kept),
+                    draft_reviewed(&*self.jev, &task, self.screenshot(intent), &notes, Some(&ledger), &steps, &kept),
                 )
                 .await?
             {
@@ -367,7 +368,6 @@ impl Agent {
                 // The picks hold the answer among other page text, which only a writer can narrow: it writes the
                 // answer from them now, and their claim check holds it to their quotes.
                 Some(Draft::Write(feedback)) => {
-                    let steps = state.executed_steps();
                     let written = compose_reviewed(
                         &*self.jev,
                         &*self.llm,

@@ -46,7 +46,7 @@ use serde_json::{Map, Value, json};
 
 use acting::Carried;
 use finishing::outcome_notes;
-use state::{Flow, RunState, Stop};
+use state::{FailureCause, Flow, RunState, Stop};
 
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
@@ -1251,10 +1251,18 @@ impl Agent {
         }
         if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.transient()) {
             let stood = state.steps.len().saturating_sub(failure.since);
-            let mut fact = format!(
-                "The site failed: {} It has stood for {stood} steps. A failure is not the task's answer, and neither is an empty result shown beside it.",
-                failure.message()
-            );
+            let mut fact = if failure.cause == FailureCause::Reported {
+                // Repeating a model judgment as a current page fact can keep it alive after the requested content loads.
+                format!(
+                    "An earlier decision judged that {} That judgment first occurred {stood} steps ago. Judge the currently observed page from its own content.",
+                    failure.message()
+                )
+            } else {
+                format!(
+                    "The site failed: {} It has stood for {stood} steps. A failure is not the task's answer, and neither is an empty result shown beside it.",
+                    failure.message()
+                )
+            };
             if failure.url == observation.url {
                 fact += " This page's own address is offered to navigate to, which reloads it; a retry control the page offers, or another route, may also get past the failure.";
             }

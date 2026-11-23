@@ -60,6 +60,7 @@ impl Page for Editor {
                 page_changed: true,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }

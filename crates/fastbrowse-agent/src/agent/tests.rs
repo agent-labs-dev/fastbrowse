@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
-    NoulAnswer, Question,
+    NoulAnswer, NoulQuestion, Question,
 };
 use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
@@ -23,7 +23,7 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::json;
 
-use super::acting::{Carried, IN_RECORD};
+use super::acting::{Carried, IN_RECORD, gate_questions};
 use super::driving::edit_progress;
 use super::helpers::{describe, doing, read_sources, unsent_fact};
 use super::state::Written;
@@ -421,6 +421,7 @@ async fn test_a_wait_is_told_how_far_a_playing_clock_moved() {
         state.idle.push(super::recovery::Idle {
             action: Some((Operation::Click, Some("Next".into()))),
             outcome: StepOutcome::Covered,
+            covered_target_id: None,
             refused: None,
         });
         state.history.push(executed(Some(operation), Some("Theme"), false));
@@ -494,6 +495,23 @@ async fn test_a_click_recorded_only_by_its_reply_is_told_the_text_it_added() {
     agent().note_effect(&mut state, &popup);
     assert_eq!(state.history[0].for_step.as_deref(), Some(step));
     assert!(state.sighted.is_none());
+}
+
+#[test]
+fn a_discarded_pictured_decision_does_not_attach_to_the_previous_action() {
+    let agent = agent();
+    let mut state = run_state();
+    state.history.push(executed(Some(Operation::Click), Some("Open map"), true));
+    state.sighted = Some("Click the pictured marker".into());
+    state.look = Some(crate::policy::Look { before: vec![1], after: None });
+
+    // A read can discard the pictured decision before its step, so its metadata must not reach the prior history entry.
+    agent.redecide(&mut state, &observation(&[button("marker")]));
+    agent.note_effect(&mut state, &observation(&[button("marker")]));
+
+    assert_eq!(state.history[0].for_step, None);
+    assert!(state.sighted.is_none());
+    assert!(state.look.is_none());
 }
 
 /// A decision to write `value` into a field that currently holds `holds`, and the action doing it.
@@ -647,7 +665,11 @@ const FILES: &str = "https://addons.example.test/project/files";
 const DOWNLOAD: &str = "https://addons.example.test/project/download/1";
 
 fn typed_into(label: &str) -> HistoryEntry {
-    HistoryEntry::new(Some(Operation::Fill), Some(label), StepOutcome::Executed, false)
+    HistoryEntry {
+        // The id `holding` gives its control.
+        control_id: Some("f".into()),
+        ..HistoryEntry::new(Some(Operation::Fill), Some(label), StepOutcome::Executed, false)
+    }
 }
 
 fn holding(label: &str, value: &str) -> Control {
@@ -1854,6 +1876,109 @@ async fn test_a_commit_with_values_for_later_proceeds_only_once_the_site_has_res
     }
 }
 
+#[tokio::test]
+async fn test_a_conditional_gate_describes_press_chords_and_navigation_addresses() {
+    for (operation, action, expected, absent) in [
+        (
+            Operation::Press,
+            "press the element labelled 'Name'.\nThe exact key chord to press is 'x'.\n",
+            "exact key chord",
+            "types no text",
+        ),
+        (
+            Operation::Navigate,
+            "open the address https://example.test/next.\n",
+            "address is its only input",
+            "control it acts on",
+        ),
+    ] {
+        let jev = Arc::new(Conditioned {
+            answers: IndexMap::from([
+                ("irreversible", 0.95),
+                ("requested", 0.97),
+                ("lasting", 0.95),
+                ("conditional", 0.9),
+            ]),
+            chosen: IndexMap::from([("values", "first"), ("met", "asked")]),
+            asked: Default::default(),
+        });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.authorization = Authorization { irreversible_actions: true };
+        let target = (operation == Operation::Press).then(|| button("Name"));
+        let decision = Decision { operation_confidence: 0.86, ..code_decision(operation, target.clone()) };
+        let page = observation(target.as_slice());
+        let irreversible = NoulQuestion::new("irreversible", Some("yes"), Some("no"));
+        let lasting = NoulQuestion::new("lasting", Some("yes"), Some("no"));
+        agent
+            .gate_question(
+                &mut state,
+                &page,
+                &decision,
+                target.as_ref().map_or("address", |control| control.label.as_str()),
+                Some(irreversible),
+                action,
+                Some(lasting),
+            )
+            .await
+            .expect("the conditional action proceeds");
+        let asked = jev.asked.lock().unwrap();
+        let values = &asked[1].1["values"];
+        assert!(values.contains(expected), "{operation}: {values}");
+        assert!(!values.contains(absent), "{operation}: {values}");
+    }
+}
+
+/// A task that orders a delete after opening a dialog and cancelling it ("then delete") was refused because the
+/// condition check judged only from a page that cannot show a dialog that was opened and cancelled (#1006). Each of the
+/// check's questions now states the steps the run took, in order, and none a refused, stale or secret one.
+#[tokio::test]
+async fn test_the_condition_check_is_told_the_steps_the_run_took() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([("irreversible", 0.95), ("requested", 0.97), ("lasting", 0.95), ("conditional", 0.9)]),
+        chosen: IndexMap::from([("values", "first"), ("met", "asked")]),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Click Reorder, then click Cancel there. Then delete the image titled Old.".into();
+    state.authorization = Authorization { irreversible_actions: true };
+    let stale = HistoryEntry { outcome: StepOutcome::Stale, ..executed(Some(Operation::Click), Some("Old"), false) };
+    let secret = HistoryEntry { text: Some("<secret>".into()), ..executed(Some(Operation::Fill), Some("Key"), true) };
+    let note = HistoryEntry { text: Some("a title".into()), ..executed(Some(Operation::Fill), Some("Title"), true) };
+    state.history.extend([
+        executed(Some(Operation::Click), Some("Reorder (Media)"), true),
+        executed(Some(Operation::Click), Some("Cancel (Reorder Media)"), true),
+        stale,
+        secret,
+        note,
+        executed(Some(Operation::Back), None, true),
+    ]);
+    let delete = button("delete");
+    let page = observation(std::slice::from_ref(&delete));
+    let decision = Decision { operation_confidence: 0.86, ..code_decision(Operation::Click, Some(delete)) };
+    agent.gate_irreversible(&mut state, &page, &decision).await.expect("the delete goes ahead");
+    let asked = jev.asked.lock().unwrap();
+    let (_, questions) = &asked[1];
+    let facts = "The steps this run has already taken, in order:\n- click 'Reorder (Media)'\n- click 'Cancel (Reorder Media)'\n\
+                 - fill 'Key'\n- fill 'Title' with 'a title'\n- back\n";
+    for key in ["met", "values", "happened"] {
+        assert!(questions[key].contains(facts), "{key}: {}", questions[key]);
+    }
+    // The facts stand before the question, which the task's later steps do not turn into a wait for a response.
+    assert!(
+        questions["happened"]
+            .contains("has the run done what the task asks first, and, if the task waits for the site")
+    );
+    assert!(!asked[0].1["requested"].contains("The steps this run has already taken"));
+    // The values question states what a click takes from the task, and offers no option to name values it has none of.
+    assert!(
+        questions["values"]
+            .contains("This action types no text. The only things it uses are the control it acts on, named above")
+    );
+    assert!(questions["values"].ends_with("only for once something happens?"), "{}", questions["values"]);
+}
+
 /// The page can only take a commit's authorization away: whether the task asked for it is judged without the page,
 /// and the page, dialog included, is shown masked only to the check that can refuse it, which never asks `requested`.
 #[tokio::test]
@@ -1898,9 +2023,9 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     text.value = Some("Thanks for the log".into());
     let post = in_form(button("Post"), "reply");
     let controls = [comment, top.clone(), text, post.clone()];
-    let page = observation(&controls);
+    let page = Observation { document_key: "first-document".into(), ..observation(&controls) };
     assert_eq!(crate::policy::Submitted::of(Operation::Fill, &controls[2], &page), None, "a fill submits nothing");
-    // Form ids are numbered per document: the same id on another page is another form.
+    // A new document at the same address may have reloaded the same form.
     let elsewhere = Observation { document_key: "later-document".into(), ..page.clone() };
     for (target, seen) in [(&top, &page), (&post, &page), (&post, &elsewhere)] {
         state.history.push(HistoryEntry {
@@ -1920,10 +2045,26 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
         actions[1]["form"],
         "the same form the action now asked about submits; in it, 'Comment text area' holds 'Thanks for the log'"
     );
-    assert!(actions[2]["form"].as_str().is_some_and(|form| form.starts_with("a different form")), "{actions}");
+    assert!(
+        actions[2]["form"]
+            .as_str()
+            .is_some_and(|form| form.starts_with("a form from an earlier document at this address")),
+        "{actions}"
+    );
     let mut password = in_form(Control::new("p", "textbox", "Password", [Operation::Fill]), "top");
     (password.sensitive, password.value) = (true, Some("hunter2".into()));
-    let signed = observation(&[password, top.clone()]);
+    let signed = Observation { document_key: "signed-document".into(), ..observation(&[password, top.clone()]) };
+    let submitted = crate::policy::Submitted::of(Operation::Click, &controls[3], &page).unwrap();
+    let entry = HistoryEntry { submitted: Some(submitted), ..executed(Some(Operation::Click), Some("Post"), false) };
+    let routed = Observation { url: format!("{}#reply", page.url), ..page.clone() };
+    assert!(entry.shown_beside(Some(&controls[3]), &routed)["form"].as_str().unwrap().starts_with("the same form"));
+    let unidentified = Observation { document_key: String::new(), ..page.clone() };
+    assert!(
+        entry.shown_beside(Some(&controls[3]), &unidentified)["form"]
+            .as_str()
+            .unwrap()
+            .starts_with("a form submitted at this address; its relation to the current form is unknown")
+    );
     let masked = crate::policy::Submitted::of(Operation::Click, &top, &signed).expect("a submission");
     let told = HistoryEntry { submitted: Some(masked), ..executed(Some(Operation::Click), Some("Post"), false) }
         .shown_beside(Some(&top), &signed);
@@ -2143,6 +2284,30 @@ async fn test_a_press_is_asked_whether_it_changes_a_value_not_whether_it_commits
     assert!(question.contains("neither does committing what the fields already hold"), "{question}");
 }
 
+/// A card whose role is "button" is a draggable: the page says so, and the press is asked about with that.
+#[tokio::test]
+async fn test_a_requested_press_states_what_the_page_calls_the_control() {
+    let mut card = Control::new("c", "button", "Card", [Operation::Press]);
+    card.role_description = Some("draggable".into());
+    card.description = Some("Press the space bar to pick up the item.".into());
+    let page = observation(std::slice::from_ref(&card));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Reorder the cards. Change nothing else.".into();
+    let decision = code_decision(Operation::Press, Some(card.clone()));
+    let gated = agent.gate_key_edit(&mut state, &page, &decision, &card, "Space").await;
+    assert!(gated.is_ok(), "{gated:?}");
+    let asked = jev.0.lock().unwrap();
+    assert!(
+        asked[0]
+            .1
+            .contains("The page describes it as 'draggable', and says: 'Press the space bar to pick up the item.'"),
+        "{}",
+        asked[0].1
+    );
+}
+
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
 /// of checkboxes would otherwise end the run stuck.
 #[test]
@@ -2205,6 +2370,7 @@ fn test_an_action_refused_is_left_out_with_the_refusal_its_page_gave() {
     state.idle.push(super::recovery::Idle {
         action: Some((Operation::Click, Some(super::helpers::describe(&page.controls[0])))),
         outcome: StepOutcome::Failed,
+        covered_target_id: None,
         refused: Some(refusal.into()),
     });
     let mut offered = page.clone();
@@ -2259,8 +2425,20 @@ impl Page for FinishPage {
         Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Record B: 34")])) })
     }
 
-    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
-        unreachable!("the finish-path test does not act")
+    fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        assert_eq!(action.operation, Operation::Drag);
+        let destination_exists =
+            action.destination_id.as_ref().is_none_or(|id| self.0.controls.iter().any(|control| &control.id == id));
+        Box::pin(async move {
+            Ok(ActResult {
+                outcome: if destination_exists { StepOutcome::Executed } else { StepOutcome::Stale },
+                failure: None,
+                page_changed: destination_exists,
+                detail: None,
+                moved: false,
+                landed: None,
+            })
+        })
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -2354,6 +2532,40 @@ impl DecisionClient for DoneCheckJev {
 
     fn profile(&self) -> DecisionProfile {
         ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn completion_is_told_the_destination_of_an_executed_drag_between_controls() {
+    let source = Control::new("item", "button", "Item", [Operation::Drag]);
+    let destination = Control { context: Some("Project".into()), ..button("Archive") };
+    let observed = observation(&[source.clone(), destination.clone()]);
+
+    for (destination_id, outcome, receipt) in [
+        (Some("archive"), "executed", Some("Archive (Project)")),
+        (Some("archive"), "stale", None),
+        (None, "executed", None),
+    ] {
+        let mut state = run_state();
+        let mut decision = code_decision(Operation::Drag, Some(source.clone()));
+        decision.destination = Some(destination.clone());
+        let live = if outcome == "stale" { observation(std::slice::from_ref(&source)) } else { observed.clone() };
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(live)), jev.clone(), Arc::new(ScriptedLLM));
+        state.built = Some(Ok(super::driving::Watched::Done(Action {
+            target_id: Some(source.id.clone()),
+            destination_id: destination_id.map(str::to_string),
+            ..Action::new(Operation::Drag)
+        })));
+
+        agent.step(&mut state, &observed, &decision).await.unwrap();
+        agent.actions_done(&mut state, &observed).await.unwrap();
+
+        let requests = jev.3.lock().unwrap();
+        let entry = &requests[0]["recent_actions"][0];
+        assert_eq!(entry["target"], "Item");
+        assert_eq!(entry["outcome"], outcome);
+        assert_eq!(entry.get("destination").and_then(serde_json::Value::as_str), receipt);
     }
 }
 
@@ -4098,6 +4310,7 @@ impl Page for Screenshots {
                     page_changed: false,
                     detail: None,
                     moved: false,
+                    landed: None,
                 })
             });
         }
@@ -4111,6 +4324,7 @@ impl Page for Screenshots {
                 page_changed: false,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }
@@ -4141,6 +4355,7 @@ impl Page for Screenshots {
                 page_changed: false,
                 detail: None,
                 moved: false,
+                landed: None,
             };
             return Box::pin(async move { Ok(refused) });
         }
@@ -4162,6 +4377,7 @@ impl Page for Screenshots {
             page_changed: self.6,
             detail: None,
             moved: false,
+            landed: None,
         };
         Box::pin(async move { Ok(clicked) })
     }
@@ -5151,9 +5367,121 @@ async fn test_jev_asked_again_is_shown_the_cards_of_pictured_controls() {
     let page = observation(&[apply.clone(), next]);
     let withheld = super::recovery::withheld(&code_decision(Operation::Click, Some(apply)));
     agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.expect("recovered");
-    let (_, picked, look) = state.picked.expect("Jev's pick is the next decision");
-    assert_eq!(picked.target.map(|c| c.label).as_deref(), Some("Next"));
-    assert!(look.is_some_and(|look| !look.before.is_empty() && look.after.is_none()));
+    let picked = state.picked.expect("Jev's pick is the next decision");
+    assert_eq!(picked.decision.target.map(|c| c.label).as_deref(), Some("Next"));
+    assert!(picked.look.is_some_and(|look| !look.before.is_empty() && look.after.is_none()));
+}
+
+/// After a refusal Jev's pick (hover on the card) was dropped because an "Edit successful" toast closed before the
+/// next step, so Jev was asked afresh without the refusal and picked the refused click again (#1471). The pick holds
+/// while its address and target are as they were, and is dropped, with the reason, only when they are not.
+#[tokio::test]
+async fn test_a_pick_after_a_refusal_outlives_an_unrelated_control_and_not_its_target() {
+    let card = Control::new("card", "button", "Card", [Operation::Hover]);
+    let toast = button("Edit successful");
+    let picked = code_decision(Operation::Hover, Some(card.clone()));
+    let url = "https://example.test/";
+    let stale = |page: &Observation| {
+        super::driving::pick_stale(
+            &super::state::Picked {
+                url: url.into(),
+                page_key: "k".into(),
+                document_key: String::new(),
+                decision: picked.clone(),
+                look: None,
+            },
+            page,
+        )
+    };
+
+    assert_eq!(stale(&observation(&[card.clone(), toast.clone()])), None);
+    assert_eq!(stale(&observation(std::slice::from_ref(&card))), None);
+    assert_eq!(stale(&observation(std::slice::from_ref(&toast))), Some("target_gone"));
+    assert_eq!(stale(&at("https://example.test/other", std::slice::from_ref(&card))), Some("address_changed"));
+    let renamed = Control::new("card", "button", "Other card", [Operation::Hover]);
+    assert_eq!(stale(&observation(&[renamed])), Some("target_changed"));
+    let no_hover = Control::new("card", "button", "Card", [Operation::Click]);
+    assert_eq!(stale(&observation(&[no_hover])), Some("operation_gone"));
+    let done = super::state::Picked {
+        url: url.into(),
+        page_key: "k".into(),
+        document_key: String::new(),
+        decision: code_decision(Operation::Done, None),
+        look: None,
+    };
+    assert_eq!(super::driving::pick_stale(&done, &observation(&[toast])), None);
+}
+
+#[test]
+fn test_a_targeted_recovered_pick_is_stale_when_the_document_is_replaced() {
+    let card = Control::new("card", "button", "Save", [Operation::Click]);
+    let original = Observation { document_key: "first".into(), ..observation(std::slice::from_ref(&card)) };
+    let picked = super::state::Picked {
+        url: original.url.clone(),
+        page_key: original.page_key.clone(),
+        document_key: original.document_key.clone(),
+        decision: code_decision(Operation::Click, Some(card)),
+        look: None,
+    };
+    assert_eq!(super::driving::pick_stale(&picked, &original), None);
+    let reloaded = Observation { document_key: "second".into(), ..original.clone() };
+    assert_eq!(super::driving::pick_stale(&picked, &reloaded), Some("page_changed"));
+    let toast_closed = Observation { page_key: "other".into(), ..original };
+    assert_eq!(super::driving::pick_stale(&picked, &toast_closed), None);
+}
+
+#[test]
+fn test_a_recovered_pick_is_stale_when_target_safety_changes() {
+    let target = Control {
+        href: Some("/export".into()),
+        download: Some(false),
+        value: Some("ready".into()),
+        checked: Some(false),
+        drawn: Some(false),
+        ..Control::new("export", "link", "Export", [Operation::Click])
+    };
+    let picked = super::state::Picked {
+        url: "https://example.test/".into(),
+        page_key: "k".into(),
+        document_key: String::new(),
+        decision: code_decision(Operation::Click, Some(target.clone())),
+        look: None,
+    };
+    let changes = [
+        ("href", Control { href: Some("/other".into()), ..target.clone() }),
+        ("download", Control { download: Some(true), ..target.clone() }),
+        ("value", Control { value: Some("changed".into()), ..target.clone() }),
+        ("checked", Control { checked: Some(true), ..target.clone() }),
+        ("drawn", Control { drawn: Some(true), ..target }),
+    ];
+
+    for (field, changed) in changes {
+        assert_eq!(
+            super::driving::pick_stale(&picked, &observation(&[changed])),
+            Some("target_changed"),
+            "changed {field} must invalidate the recovered pick"
+        );
+    }
+}
+
+#[test]
+fn test_a_targetless_recovered_pick_is_stale_when_page_state_changes() {
+    let original = observation(&[button("Continue")]);
+    let mut changed = original.clone();
+    changed.page_key = "login-page".into();
+    let picked = super::state::Picked {
+        url: original.url.clone(),
+        page_key: original.page_key.clone(),
+        document_key: original.document_key.clone(),
+        decision: code_decision(Operation::Done, None),
+        look: None,
+    };
+
+    assert_eq!(super::driving::pick_stale(&picked, &changed), Some("page_changed"));
+
+    let mut replaced = original;
+    replaced.document_key = "login-document".into();
+    assert_eq!(super::driving::pick_stale(&picked, &replaced), Some("page_changed"));
 }
 
 #[tokio::test]
@@ -5290,6 +5618,22 @@ fn test_a_page_with_unrun_scripts_and_no_controls_is_not_said_to_lead_nowhere() 
     );
     assert_eq!(fact(None, &[]), [nowhere]);
     assert!(fact(unread(true, 1, true), &[button("Next")]).is_empty());
+}
+
+#[test]
+fn test_model_reported_site_failure_is_history_in_the_next_decision() {
+    let mut state = run_state();
+    let page = observation(&[button("Retry")]);
+    state.site_failure = Some(SiteFailure { url: page.url.clone(), cause: FailureCause::Reported, since: 0 });
+    let facts = Agent::page_facts(&state, &page, None).join(" ");
+    assert!(facts.contains("An earlier decision judged"), "{facts}");
+    assert!(facts.contains("Judge the currently observed page"), "{facts}");
+    assert!(facts.contains("reloads it"), "{facts}");
+
+    state.site_failure = Some(SiteFailure::http(&page.url, 503, 0));
+    let facts = Agent::page_facts(&state, &page, None).join(" ");
+    assert!(facts.contains("HTTP 503"), "{facts}");
+    assert!(!facts.contains("An earlier decision judged"), "{facts}");
 }
 
 #[tokio::test]
@@ -5445,8 +5789,11 @@ async fn test_a_required_field_the_task_gives_no_value_for_ends_the_run_needing_
 #[tokio::test]
 async fn test_a_stall_is_answered_by_jev_even_when_it_is_unsure() {
     let (state, jev) = stalled_on_apply(0.3).await;
-    let (_, picked, _) = state.picked.expect("Jev's pick is the next decision");
-    assert_eq!((picked.operation, picked.target.map(|c| c.label)), (Operation::Click, Some("Next".to_string())));
+    let picked = state.picked.expect("Jev's pick is the next decision");
+    assert_eq!(
+        (picked.decision.operation, picked.decision.target.map(|c| c.label)),
+        (Operation::Click, Some("Next".to_string()))
+    );
     // Jev was told what failed, and the click that changed nothing was not among its options.
     let shown = jev.2.lock().unwrap()[0].to_string();
     assert!(shown.contains("did not move the task on from this page"), "{shown}");
@@ -6577,6 +6924,8 @@ fn test_a_synthesis_read_reports_the_source_material_it_kept() {
 /// A Reference field a blur leaves. Chrome's page fingerprint reads neither field values nor focus, so the browser
 /// reports that the blur changed nothing, as this page does.
 struct LeavingPage {
+    /// The control a fill reports its text landed in.
+    landed: Option<fastbrowse_core::page::FillReceiver>,
     expected: Operation,
     now: std::sync::Mutex<Observation>,
     left: Observation,
@@ -6607,13 +6956,15 @@ impl Page for LeavingPage {
     fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         assert_eq!(action.operation, self.expected);
         *self.now.lock().unwrap() = self.left.clone();
-        Box::pin(async {
+        let landed = self.landed.clone();
+        Box::pin(async move {
             Ok(ActResult {
                 outcome: StepOutcome::Executed,
                 failure: None,
                 page_changed: false,
                 detail: None,
                 moved: false,
+                landed,
             })
         })
     }
@@ -6655,6 +7006,7 @@ fn reference(value: &str, focused: bool) -> Observation {
 /// Leave the typed Reference field from `typing`, the way the loop does: settle, step, then observe and note.
 async fn leave(seen: &[Observation], typing: Observation) -> RunState {
     let page = LeavingPage {
+        landed: None,
         expected: Operation::Blur,
         now: std::sync::Mutex::new(typing.clone()),
         left: reference("Alpha-17", false),
@@ -6795,7 +7147,8 @@ fn card(revealed: bool) -> Observation {
 
 /// Hover the card on a page whose fingerprint reports no change, landing on `landed`, then build the next ask.
 async fn hover(seen: &[Observation], landed: Observation) -> (RunState, Observation) {
-    let page = LeavingPage { expected: Operation::Hover, now: std::sync::Mutex::new(card(false)), left: landed };
+    let page =
+        LeavingPage { landed: None, expected: Operation::Hover, now: std::sync::Mutex::new(card(false)), left: landed };
     let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
     let mut state = run_state();
     for earlier in seen {
@@ -6839,7 +7192,8 @@ async fn test_focus_changes_do_not_block_an_ordinary_twin_retry() {
     let mut fresh = before.clone();
     fresh.controls[0].id = "replacement".into();
     fresh.controls[0].focused = Some(false);
-    let page = LeavingPage { expected: Operation::Fill, now: std::sync::Mutex::new(fresh.clone()), left: fresh };
+    let page =
+        LeavingPage { landed: None, expected: Operation::Fill, now: std::sync::Mutex::new(fresh.clone()), left: fresh };
     let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
     let action =
         Action { target_id: Some(target.id.clone()), text: Some("Alpha-17".into()), ..Action::new(Operation::Fill) };
@@ -7083,7 +7437,9 @@ impl Page for Scripted {
         assert_eq!(action.operation, expected);
         let page_changed = landed != *self.now.lock().unwrap();
         *self.now.lock().unwrap() = landed;
-        Box::pin(async move { Ok(ActResult { outcome, failure: None, page_changed, detail: None, moved: false }) })
+        Box::pin(async move {
+            Ok(ActResult { outcome, failure: None, page_changed, detail: None, moved: false, landed: None })
+        })
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -7188,8 +7544,52 @@ async fn test_a_covered_link_is_offered_again_once_close_removes_its_cover() {
     assert_eq!(state.unchanged, 2);
     let (offered, problem, _) = next_ask(&agent, &state).await;
     assert!(offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
+    let effect = state.history.last().unwrap().effect.as_deref().unwrap();
+    assert!(effect.contains("Previously covered, with the target still on the page: click 'Contact us'"), "{effect}");
     // Close did change the page; nothing tells Jev otherwise.
     assert!(!problem.as_deref().unwrap_or_default().contains("changed nothing"), "{problem:?}");
+}
+
+#[tokio::test]
+async fn a_covered_action_stays_in_history_when_closing_the_overlay_changes_the_route() {
+    let covered = Observation { document_key: "app".into(), ..header_under_dialog(false) };
+    let uncovered = Observation { url: "https://example.test/#closed".into(), document_key: "app".into(), ..header() };
+    let page = Scripted::new(
+        covered.clone(),
+        vec![
+            (Operation::Click, StepOutcome::Covered, covered.clone()),
+            (Operation::Click, StepOutcome::Executed, uncovered),
+        ],
+    );
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &covered).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Contact us")).await;
+    take(&agent, &mut state, Operation::Click, Some("Close")).await;
+    let effect = state.history.last().unwrap().effect.as_deref().unwrap();
+    assert!(effect.contains("Previously covered, with the target still on the page: click 'Contact us'"), "{effect}");
+}
+
+#[tokio::test]
+async fn a_replacement_control_with_the_same_label_does_not_continue_a_covered_action() {
+    let covered = Observation { document_key: "app".into(), ..header_under_dialog(false) };
+    let mut replacement = button("Contact us");
+    replacement.id = "replacement".into();
+    let next = Observation { document_key: "app".into(), ..at("https://example.test/#closed", &[replacement]) };
+    let page = Scripted::new(
+        covered.clone(),
+        vec![
+            (Operation::Click, StepOutcome::Covered, covered.clone()),
+            (Operation::Click, StepOutcome::Executed, next),
+        ],
+    );
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &covered).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Contact us")).await;
+    take(&agent, &mut state, Operation::Click, Some("Close")).await;
+    let effect = state.history.last().unwrap().effect.as_deref().unwrap();
+    assert!(!effect.contains("Previously covered"), "{effect}");
 }
 
 #[tokio::test]
@@ -7313,6 +7713,7 @@ impl Page for Unmoved {
                 page_changed: false,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }
@@ -7494,6 +7895,30 @@ async fn test_the_tab_an_authorized_commit_was_sent_from_is_handed_over() {
         assert_eq!(page.sent.lock().unwrap().len(), 1, "{irreversible}");
         assert_eq!(page.handed_over.load(std::sync::atomic::Ordering::SeqCst), handed, "{irreversible}");
     }
+}
+
+#[tokio::test]
+async fn building_a_speculative_authorized_commit_does_not_hand_over_the_tab() {
+    let page = Arc::new(Unmoved {
+        now: at("https://shop.test/basket", &[button("Place order")]),
+        sent: Mutex::new(Vec::new()),
+        handed_over: Default::default(),
+        waits: Mutex::default(),
+        swap: Mutex::default(),
+        swap_on_capture: Mutex::default(),
+        waited_on: Mutex::default(),
+    });
+    let jev = Commits(ScriptedJev::new(Vec::new()), 0.99);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.authorization = Authorization { irreversible_actions: true };
+    let page_state = at("https://shop.test/basket", &[button("Place order")]);
+    let decision = code_decision(Operation::Click, Some(page_state.controls[0].clone()));
+
+    agent.action(&mut state, &page_state, &decision).await.expect("built");
+
+    assert!(state.committing, "the gate still records the candidate as a commit");
+    assert!(!page.handed_over.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[tokio::test]
@@ -8055,7 +8480,7 @@ async fn test_rejected_composition_returns_to_existing_recovery_without_withhold
     assert!(result.is_none(), "a rejected composition should return to recovery before finalization");
     assert_eq!(state.rewrites, 1);
     assert_eq!(state.notes.facts().len(), original_facts);
-    assert_eq!(state.picked.as_ref().unwrap().1.operation, Operation::Done);
+    assert_eq!(state.picked.as_ref().unwrap().decision.operation, Operation::Done);
 }
 
 struct RepairComposeJev {
@@ -9044,6 +9469,7 @@ impl Page for HungPage {
                     page_changed: false,
                     detail: None,
                     moved: false,
+                    landed: None,
                 })
             }
         })
@@ -10483,6 +10909,7 @@ impl Page for Picker {
                 page_changed: true,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }
@@ -10909,6 +11336,23 @@ async fn test_a_secret_a_modal_is_named_with_is_masked() {
 }
 
 #[tokio::test]
+async fn test_secret_control_metadata_is_masked_before_observation() {
+    let mut control = button("Account");
+    control.role_description = Some("hunter2 is invalid".into());
+    control.description = Some("hunter2 was rejected".into());
+    control.validation_message = Some("hunter2 is not accepted".into());
+    let page = Observation { controls: vec![control], ..observation(&[]) };
+    let agent =
+        Agent::new(Arc::new(Scripted::new(page, vec![])), Arc::new(ScriptedJev::new(vec![])), Arc::new(ScriptedLLM));
+    agent.redactor().register("password", "hunter2", None);
+    let observed = agent.observe().await.expect("observed");
+    let control = &observed.controls[0];
+    assert_eq!(control.role_description.as_deref(), Some("••••••• is invalid"));
+    assert_eq!(control.description.as_deref(), Some("••••••• was rejected"));
+    assert_eq!(control.validation_message.as_deref(), Some("••••••• is not accepted"));
+}
+
+#[tokio::test]
 async fn test_a_plan_stops_at_the_step_limit() {
     // One step allowed and one taken: the planned fill is a step too, so none is taken.
     let form = delivery("1", "", "");
@@ -11071,6 +11515,28 @@ async fn test_a_press_on_a_slider_picks_one_of_the_keys_its_role_supports() {
         && q.contains("orientation: vertical")));
 }
 
+/// A sortable card says how it is operated in its role description and its described-by text: the key question carries
+/// both, so Jev can pick Space, an arrow, then Space across the steps.
+#[tokio::test]
+async fn test_the_key_question_carries_what_the_page_says_about_a_draggable_card() {
+    let card = Control {
+        role_description: Some("draggable".into()),
+        description: Some("To pick up a draggable item, press the space bar.".into()),
+        ..Control::new("c", "button", "One", [Operation::Click, Operation::Press])
+    };
+    let page = observation(std::slice::from_ref(&card));
+    let jev = Arc::new(FirstChoice { wants: Some("Space"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let action = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(card))).await.expect("action");
+    assert_eq!(action.text.as_deref(), Some("Space"));
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in")
+        && q.contains("The page calls it 'draggable'.")
+        && q.contains("To pick up a draggable item, press the space bar.")));
+}
+
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.
 #[tokio::test]
 async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
@@ -11089,12 +11555,13 @@ async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
 
 /// A press on a field whose role defines no keys copies its key from the task. Told to make a document's text bold and
 /// save it, Jev pressed the editor and the copy came out "document.", which the browser refused, ending the run as an
-/// error (#1212). Copied words that are no key leave the press unmade, and Jev is asked again.
+/// error (#1212). Copied words that are no key leave the press unmade, and Jev is asked again. Jev answers that the
+/// task gives the key, as none of the standard keys offered is it, and the copy is the task's first words.
 #[tokio::test]
 async fn test_a_press_copied_from_a_task_that_names_no_key_is_not_made() {
     let editor = Control::new("e", "textbox", "Editor", [Operation::Fill, Operation::Press]);
     let page = observation(std::slice::from_ref(&editor));
-    let jev = Arc::new(FirstChoice { wants: Some("document"), noul: Some(0.0), ..Default::default() });
+    let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), noul: Some(0.0), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Make the document's text bold, then save the document.".into();
@@ -11620,5 +12087,471 @@ async fn a_text_task_concluded_with_no_answer_is_not_complete() {
     assert_eq!(result.failure_kind.as_deref(), Some("Done/unanswered"));
     assert_eq!(result.error.as_deref(), Some(super::finishing::UNANSWERED));
 }
+
+/// A run's fill, as the browser reports where the text landed: `landed` is the control the browser found focused when
+/// the typing ended, or None when it reported none.
+async fn typed_run(landed: Option<&str>) -> RunState {
+    let page = LeavingPage {
+        landed: landed
+            .map(|element| fastbrowse_core::page::FillReceiver { element: element.into(), document: "doc-1".into() }),
+        expected: Operation::Fill,
+        now: std::sync::Mutex::new(Observation { document_key: "parent-doc".into(), ..observation(&[field("Date")]) }),
+        left: observation(&[Control { value: Some("2026-11-04".into()), ..field("Date") }]),
+    };
+    let agent = Agent::new(Arc::new(page), Arc::new(Answers(Some("write"))), Arc::new(DateWriter::default()));
+    let mut state = RunState::new(
+        "Book a table for input date".into(),
+        IndexMap::from([("date".to_string(), "2026-11-04".to_string())]),
+        Vec::new(),
+        Authorization::default(),
+        Arc::new(Ledger::new(Limits::default())),
+    );
+    state.edits = Some(Edits::Allowed);
+    let observed = agent.observe().await.expect("observed");
+    agent.settle(&mut state, &observed).await.expect("settled");
+    let target = observed.controls[0].clone();
+    agent.step(&mut state, &observed, &code_decision(Operation::Fill, Some(target))).await.expect("stepped");
+    assert_eq!(state.history.last().and_then(|entry| entry.text.as_deref()), Some("2026-11-04"));
+    state
+}
+
+/// The step a later read of a field is attributed to: the page `url` shows the control `element` of the document
+/// `document` holding `value`.
+fn typed_by(state: &RunState, url: &str, document: &str, element: &str, value: &str) -> Option<usize> {
+    let mut page = results_page_720(url, &format!("Date: {value}"));
+    let control = fastbrowse_core::models::SourceControl {
+        role: "textarea".into(),
+        label: "Date".into(),
+        context: None,
+        document: Some(document.into()),
+        held: vec![fastbrowse_core::models::Held { element: element.into(), value: value.into() }],
+    };
+    page.blocks[1].control_context = Some(control.clone());
+    let mut quote = block_evidence(&page, "s1");
+    quote.control_context = Some(control);
+    let mut notes = state.notes.clone();
+    notes.remember_capture(&page, 1);
+    notes.typed_by_step(&quote)
+}
+
+/// Only a field's latest typing counts: the run typed one value, then another, and the site restored the first. The
+/// restored value is the site's, not the run's earlier typing.
+#[tokio::test]
+async fn test_a_value_the_site_restored_after_a_later_typing_is_not_the_runs() {
+    let mut state = typed_run(Some("field")).await;
+    state.notes.remember_typing(1, "doc-1", "field", "2026-12-01");
+    assert_eq!(typed_by(&state, "https://example.test/", "doc-1", "field", "2026-11-04"), None);
+    assert_eq!(typed_by(&state, "https://example.test/", "doc-1", "field", "2026-12-01"), Some(1));
+}
+
+/// A step that typed into a control records the page, the document and the control the browser reported the text in,
+/// so a later read of that control, and no other, is told apart as the run's own typing (#1398). The same id in
+/// another document (a reload numbers a prefilled field the same), and a value the typing did not leave (a site's
+/// autosave replaced it), are not the run's typing.
+#[tokio::test]
+async fn test_a_fill_records_the_page_document_and_control_it_typed_into() {
+    let state = typed_run(Some("field")).await;
+    let read = |url, document, element, value| typed_by(&state, url, document, element, value);
+    assert_eq!(read("https://example.test/", "doc-1", "field", "2026-11-04"), Some(1));
+    assert_eq!(read("https://example.test/#details", "doc-1", "field", "2026-11-04"), Some(1));
+    assert_eq!(read("https://example.test/", "doc-1", "other", "2026-11-04"), None);
+    // A same-document navigation changes the URL, not the document, so the typing is still the run's.
+    assert_eq!(read("https://example.test/elsewhere", "doc-1", "field", "2026-11-04"), Some(1));
+    assert_eq!(read("https://example.test/", "doc-2", "field", "2026-11-04"), None);
+    assert_eq!(read("https://example.test/", "doc-1", "field", "2026-11-05"), None);
+}
+
+/// The browser moved focus to an overlay editor and typed there: the typing is the overlay's, not the requested
+/// control's, and a browser that reports no editor leaves nothing recorded.
+#[tokio::test]
+async fn test_a_fill_is_recorded_where_the_browser_reports_it_landed() {
+    let state = typed_run(Some("overlay")).await;
+    assert_eq!(typed_by(&state, "https://example.test/", "doc-1", "overlay", "2026-11-04"), Some(1));
+    assert_eq!(typed_by(&state, "https://example.test/", "doc-1", "field", "2026-11-04"), None);
+    let unreported = typed_run(None).await;
+    assert_eq!(typed_by(&unreported, "https://example.test/", "doc-1", "field", "2026-11-04"), None);
+}
+
+/// A page whose every capture holds a line the last one did not, as a document reloaded after each step does.
+struct Reloaded(Picker, std::sync::atomic::AtomicUsize);
+
+impl Page for Reloaded {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        self.0.observe()
+    }
+
+    fn document_changed<'a>(&'a self, seen: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        self.0.document_changed(seen)
+    }
+
+    fn navigate<'a>(&'a self, url: &'a str, referrer: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.0.navigate(url, referrer)
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        let n = self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move { Ok(capture(&[(BlockKind::Paragraph, &format!("Saved line {n}"))])) })
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, seen: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.0.act(action, seen)
+    }
+
+    fn redrawn<'a>(&'a self, seen: &'a Observation, wait: f64, to: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        self.0.redrawn(seen, wait, to)
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        self.0.screenshot()
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        self.0.address()
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        self.0.response_status()
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+/// A decision made on a page an earlier step loaded, before the read of that page, did not see what the read took from
+/// it: a reload was chosen twice because the saved line only the read held was not in the notes (#1438). When the
+/// read adds evidence the step is decided again, with those notes, and never twice for a read that added nothing.
+#[tokio::test]
+async fn test_a_decision_made_before_the_read_of_a_fresh_page_is_made_again_with_its_notes() {
+    let jev = Arc::new(Unsure(
+        ScriptedJev::new(crate::scripted::steps("click One way; click Round trip").unwrap()),
+        0.9,
+        Default::default(),
+    ));
+    let page = Arc::new(Reloaded(Picker::new(), Default::default()));
+    let agent = Agent::new(page, jev.clone(), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_steps: Some(3), ..Limits::default() }),
+        ..Default::default()
+    };
+    let _ = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    let decisions: Vec<usize> = jev
+        .2
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|state| state.get("recent_actions").is_some())
+        .map(|state| state["recent_actions"].as_array().map_or(0, Vec::len))
+        .collect();
+    // The first step is decided once; the next is decided again after its read, with the same earlier actions.
+    assert_eq!(decisions[..3], [0, 1, 1], "{decisions:?}");
+}
+
+/// #1137: scrolling a long page changes what the viewport shows and none of its controls, so the page state key saw the
+/// same state every time and withdrew scrolling after the third scroll of a page whose task was to look at all of it.
+#[tokio::test]
+async fn test_a_scroll_to_a_part_never_shown_is_progress_and_scrolling_back_is_not() {
+    let seen = |text: &str, key: &str| Observation {
+        viewport_text: text.into(),
+        viewport_key: key.into(),
+        ..buttons_at(FILES, &["Files"])
+    };
+    let (top, middle, bottom) = (seen("Previews", "top"), seen("Credits", "middle"), seen("Footer", "bottom"));
+    let agent = agent();
+    let mut state = run_state();
+    agent.settle(&mut state, &top).await.expect("settled");
+    for (operation, landed, unchanged) in [
+        (Operation::Scroll, &middle, 0),
+        (Operation::Scroll, &bottom, 0),
+        (Operation::ScrollUp, &middle, 1),
+        (Operation::ScrollUp, &top, 2),
+    ] {
+        state.landing = Some(Some((operation, None)));
+        agent.settle(&mut state, landed).await.expect("settled");
+        assert_eq!(state.unchanged, unchanged, "{operation:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_live_viewport_text_does_not_make_returning_to_the_same_scroll_position_progress() {
+    let seen = |text: &str, key: &str| Observation {
+        viewport_text: text.into(),
+        viewport_key: key.into(),
+        ..buttons_at(FILES, &["Files"])
+    };
+    let (top, middle) = (seen("Clock 12:00", "top"), seen("Middle\nClock 12:00", "middle"));
+    let agent = agent();
+    let mut state = run_state();
+    agent.settle(&mut state, &top).await.expect("settled");
+
+    state.landing = Some(Some((Operation::Scroll, None)));
+    agent.settle(&mut state, &middle).await.expect("settled");
+    assert_eq!(state.unchanged, 0);
+
+    state.landing = Some(Some((Operation::ScrollUp, None)));
+    let top_later = seen("Clock 12:01", "top");
+    agent.settle(&mut state, &top_later).await.expect("settled");
+    assert_eq!(state.unchanged, 1, "a live clock must not renew the scroll stall budget");
+}
+
+#[tokio::test]
+async fn different_scroll_positions_on_a_textless_page_are_progress() {
+    let seen = |key: &str| Observation {
+        viewport_text: String::new(),
+        viewport_key: key.into(),
+        ..buttons_at(FILES, &["Files"])
+    };
+    let (top, middle) = (seen("top"), seen("middle"));
+    let agent = agent();
+    let mut state = run_state();
+    agent.settle(&mut state, &top).await.expect("settled");
+
+    state.landing = Some(Some((Operation::Scroll, None)));
+    agent.settle(&mut state, &middle).await.expect("settled");
+    assert_eq!(state.unchanged, 0, "a new scroll position must renew the stall budget");
+}
 #[path = "tests/citation_record_selected_results.rs"]
 mod citation_record_selected_results;
+
+// -- A save says what it changes ------------------------------------------------------------------------------------
+
+/// An authorized run saved an edit dialog that overwrote another image's caption, judged requested at 0.80: the
+/// questions named only the Apply control and the value the form held, never what the run had replaced or which
+/// card's edit it had opened.
+#[test]
+fn test_a_save_states_what_the_run_replaced_and_what_it_opened() {
+    let form = |control: Control| Control { form_id: Some("dialog".into()), ..control };
+    let title = form(holding("Title", "Test image"));
+    let apply = form(Control { submit_semantics: Some("{}".into()), ..button("Apply") });
+    let controls = [title.clone(), apply.clone()];
+    let filled = HistoryEntry {
+        text: Some("Test image".into()),
+        before: Some("Guide tracker".into()),
+        ..typed_into(&describe(&title))
+    };
+    let opened = HistoryEntry {
+        opened_forms: vec![(None, "dialog".into())],
+        ..executed(Some(Operation::Click), Some("Edit (Guide tracker card)"), true)
+    };
+    let history = [executed(Some(Operation::Click), Some("Unrelated"), true), opened, filled];
+    let (irreversible, action, lasting) =
+        gate_questions(&history, Operation::Click, &apply, None, &controls, "document");
+    let facts = [
+        "The run opened this form by clicking 'Edit (Guide tracker card)'.",
+        "In this form the run replaced 'Title', which held 'Guide tracker', with 'Test image'.",
+    ];
+    for text in [action, irreversible.unwrap().instructions, lasting.instructions] {
+        for fact in facts {
+            assert!(text.contains(fact), "{text}");
+        }
+    }
+    // Nothing filled in the form, or a control that submits nothing, adds no fact.
+    let (_, untouched, _) = gate_questions(&[], Operation::Click, &apply, None, &controls, "document");
+    assert!(!untouched.contains("In this form"), "{untouched}");
+    let (_, plain, _) = gate_questions(&history, Operation::Click, &button("Edit"), None, &controls, "document");
+    assert!(!plain.contains("In this form"), "{plain}");
+}
+
+#[test]
+fn a_save_ignores_fills_from_another_form_document() {
+    let old = Control { form_id: Some("old-form".into()), ..holding("Title", "Old image") };
+    let current = Control { form_id: Some("current-form".into()), ..holding("Title", "Current image") };
+    let apply =
+        Control { form_id: Some("current-form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let filled = HistoryEntry {
+        document_key: Some("old-document".into()),
+        form_id: old.form_id.clone(),
+        text: Some("Old image".into()),
+        before: Some("Older image".into()),
+        ..typed_into(&describe(&old))
+    };
+    let controls = [current, apply.clone()];
+    let (_, action, _) = gate_questions(&[filled], Operation::Click, &apply, None, &controls, "current-document");
+    assert!(!action.contains("Old image"), "{action}");
+    assert!(!action.contains("Older image"), "{action}");
+}
+
+#[test]
+fn a_reset_or_a_press_with_no_filled_field_adds_no_save_facts() {
+    let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
+    let reset = Control { form_id: Some("form".into()), input_type: Some("reset".into()), ..button("Reset") };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New image".into()),
+        before: Some("Current image".into()),
+        ..typed_into(&describe(&field))
+    };
+    let (_, action, _) =
+        gate_questions(&[filled], Operation::Click, &reset, None, &[field.clone(), reset.clone()], "document");
+    assert!(!action.contains("In this form"), "{action}");
+
+    let enter_target = Control { submit_semantics: Some("{}".into()), ..field.clone() };
+    let (_, action, _) =
+        gate_questions(&[], Operation::Press, &enter_target, None, std::slice::from_ref(&enter_target), "document");
+    assert!(!action.contains("In this form"), "{action}");
+}
+
+/// A save chord other than Enter (Ctrl+Enter) and a field whose label changes as it is typed in (a character count)
+/// both left a save without the value it replaced.
+#[test]
+fn a_chord_save_states_the_field_it_replaced_even_when_the_label_changed() {
+    let field = Control {
+        form_id: Some("form".into()),
+        submit_semantics: Some("{}".into()),
+        ..holding("Caption (11 characters)", "New caption")
+    };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New caption".into()),
+        before: Some("Other card caption".into()),
+        ..typed_into("Caption")
+    };
+    let (_, action, _) =
+        gate_questions(&[filled], Operation::Press, &field, None, std::slice::from_ref(&field), "document");
+    assert!(action.contains("which held 'Other card caption', with 'New caption'"), "{action}");
+}
+
+#[test]
+fn a_save_omits_multi_select_toggles_until_the_delta_is_known() {
+    let topics = Control {
+        form_id: Some("form".into()),
+        input_type: Some("select-multiple".into()),
+        value: Some("A, B".into()),
+        ..Control::new("topics", "listbox", "Topics", [Operation::Select])
+    };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let selected = HistoryEntry {
+        form_id: topics.form_id.clone(),
+        text: Some("C".into()),
+        before: Some("A, B".into()),
+        ..HistoryEntry::new(Some(Operation::Select), Some("Topics"), StepOutcome::Executed, false)
+    };
+    let (_, action, _) =
+        gate_questions(&[selected], Operation::Click, &apply, None, &[topics, apply.clone()], "document");
+    assert!(!action.contains("replaced"), "{action}");
+}
+
+#[test]
+fn a_form_opener_is_reported_only_when_the_form_appeared_after_its_click() {
+    let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New image".into()),
+        before: Some("Current image".into()),
+        ..typed_into(&describe(&field))
+    };
+    let unrelated = executed(Some(Operation::Click), Some("Accept cookies"), true);
+    let (_, action, _) =
+        gate_questions(&[unrelated, filled], Operation::Click, &apply, None, &[field, apply.clone()], "document");
+    assert!(!action.contains("opened this form"), "{action}");
+}
+
+#[test]
+fn a_click_records_a_form_opener_only_when_the_form_appears_after_it() {
+    let before = Observation { document_key: "before".into(), ..observation(&[button("Edit")]) };
+    let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
+    let after = Observation { document_key: "after".into(), ..observation(&[field]) };
+    let mut state = run_state();
+    state.acted_from = Some(before);
+    state.history.push(executed(Some(Operation::Click), Some("Edit"), true));
+
+    agent().note_effect(&mut state, &after);
+
+    let entry = state.history.last().expect("the click history");
+    assert_eq!(entry.opened_forms, vec![(None, "form".to_string())]);
+    assert_eq!(entry.document_key.as_deref(), Some("after"));
+}
+
+#[test]
+fn a_save_ignores_fills_from_before_the_form_was_last_opened() {
+    let field = Control { form_id: Some("form".into()), ..holding("Caption", "Second card") };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let fill = |before: &str, typed: &str| HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some(typed.into()),
+        before: Some(before.into()),
+        ..typed_into(&describe(&field))
+    };
+    let open = |card: &str| HistoryEntry {
+        opened_forms: vec![(None, "form".into())],
+        ..executed(Some(Operation::Click), Some(card), true)
+    };
+    // The same modal, reopened for another card: its form and document ids did not change.
+    let history =
+        [open("Edit first"), fill("First old", "First new"), open("Edit second"), fill("Second old", "Second new")];
+    let (_, action, _) = gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document");
+    assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
+    assert!(action.contains("clicking 'Edit second'"), "{action}");
+    assert!(!action.contains("First"), "{action}");
+}
+
+#[test]
+fn a_save_ignores_fills_and_openings_from_another_frame_with_the_same_form_id() {
+    let in_frame = |frame: &str, control: Control| Control {
+        form_id: Some("form".into()),
+        frame_id: Some(frame.into()),
+        ..control
+    };
+    let field = in_frame("second", holding("Caption", "Second card"));
+    let apply = in_frame("second", Control { submit_semantics: Some("{}".into()), ..button("Apply") });
+    let first_fill = HistoryEntry {
+        form_id: Some("form".into()),
+        frame_id: Some("first".into()),
+        text: Some("First new".into()),
+        before: Some("First old".into()),
+        ..typed_into(&describe(&field))
+    };
+    let first_open = HistoryEntry {
+        opened_forms: vec![(Some("first".into()), "form".into())],
+        ..executed(Some(Operation::Click), Some("Edit first"), true)
+    };
+    let second_open = HistoryEntry {
+        opened_forms: vec![(Some("second".into()), "form".into())],
+        ..executed(Some(Operation::Click), Some("Edit second"), true)
+    };
+    let second_fill = HistoryEntry {
+        frame_id: Some("second".into()),
+        text: Some("Second new".into()),
+        before: Some("Second old".into()),
+        ..first_fill.clone()
+    };
+    let history = [first_open, first_fill, second_open, second_fill];
+    let (_, action, _) = gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document");
+    assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
+    assert!(action.contains("clicking 'Edit second'"), "{action}");
+    assert!(!action.contains("First"), "{action}");
+}
+
+#[test]
+fn a_form_opened_in_another_frame_is_recorded_though_one_with_its_id_exists_elsewhere() {
+    let in_frame = |frame: &str| Control {
+        form_id: Some("form".into()),
+        frame_id: Some(frame.into()),
+        ..holding("Title", "Current image")
+    };
+    let before = Observation { document_key: "before".into(), ..observation(&[button("Edit"), in_frame("first")]) };
+    let after = Observation {
+        document_key: "after".into(),
+        ..observation(&[button("Edit"), in_frame("first"), in_frame("second")])
+    };
+    let mut state = run_state();
+    state.acted_from = Some(before);
+    state.history.push(executed(Some(Operation::Click), Some("Edit"), true));
+
+    agent().note_effect(&mut state, &after);
+
+    let entry = state.history.last().expect("the click history");
+    assert_eq!(entry.opened_forms, vec![(Some("second".to_string()), "form".to_string())]);
+}

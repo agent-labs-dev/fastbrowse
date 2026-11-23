@@ -8,7 +8,7 @@ use std::time::Duration;
 use data_encoding::BASE64;
 use fastbrowse_core::keys;
 use fastbrowse_core::models::{Attachment, Operation, StepFailure, StepOutcome};
-use fastbrowse_core::page::{ActResult, Action, DragPath, NATIVE_DATE_INPUT_TYPES, Observation};
+use fastbrowse_core::page::{ActResult, Action, DragPath, FillReceiver, NATIVE_DATE_INPUT_TYPES, Observation};
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
@@ -334,6 +334,25 @@ fn parse_cover(value: &Value) -> Result<Cover, BrowserError> {
 
 /// `[fingerprint, live guard, hit-test point, popup announced, opens a window, address, connected]`.
 /// The address is the active page's own `location.href`, read in the same evaluation.
+/// How `before_action` finds the point to act on: none, a point a press can land on, or a hover's point, where a
+/// control nested in the target still lies inside it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Hit {
+    Skip,
+    Press,
+    Hover,
+}
+
+impl Hit {
+    fn of(operation: Operation) -> Self {
+        match operation {
+            Operation::Hover => Self::Hover,
+            op if op.is_targeted() && op != Operation::Blur => Self::Press,
+            _ => Self::Skip,
+        }
+    }
+}
+
 type TargetState = (String, Option<String>, Point, bool, bool, String, bool);
 
 fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
@@ -398,6 +417,7 @@ impl CdpPage {
             page_changed,
             detail: Some(detail.to_owned()),
             moved: false,
+            landed: None,
         };
         let Some(last) = self.last().filter(|last| last.page_key == observation.page_key) else {
             return Ok(result(StepOutcome::Stale, false, "observation is out of date", None));
@@ -427,13 +447,13 @@ impl CdpPage {
         let pointer_first = matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover);
         let mut drawn = pointer_first && target.as_ref().is_some_and(|t| t.0 == active);
         if self.session.pending_dialog().is_none() {
-            let hit_test = action.operation.is_targeted() && action.operation != Operation::Blur;
+            let hit = Hit::of(action.operation);
             // The frame wait runs on the page's own timers, which a page can replace with ones that never fire; past
             // this bound the page counts as hung, and the agent reopens it once rather than end the run on one slow frame.
             let measured = if drawn {
                 match timeout(
                     secs(MEASURE_DRAWN_SECONDS),
-                    self.before_action(target.as_ref(), hit_test, false, false, true, true),
+                    self.before_action(target.as_ref(), hit, false, false, true, true),
                 )
                 .await
                 {
@@ -448,13 +468,13 @@ impl CdpPage {
                     }
                 }
             } else {
-                self.before_action(target.as_ref(), hit_test, false, false, true, false).await
+                self.before_action(target.as_ref(), hit, false, false, true, false).await
             };
             let measured = match measured {
                 Err(BrowserError::Script) => {
                     // A page can replace those timers with ones that throw while leaving the renderer responsive.
                     drawn = false;
-                    self.before_action(target.as_ref(), hit_test, false, false, true, false).await?
+                    self.before_action(target.as_ref(), hit, false, false, true, false).await?
                 }
                 other => other?,
             };
@@ -465,7 +485,7 @@ impl CdpPage {
                         && self.left_suggesting_field(target).await? =>
                 {
                     drawn = false;
-                    self.before_action(Some(target), hit_test, false, false, true, false).await?
+                    self.before_action(Some(target), hit, false, false, true, false).await?
                 }
                 _ => measured,
             };
@@ -489,8 +509,8 @@ impl CdpPage {
         {
             cursor.glide(x, y).await;
             // The glide gives the page time to change. Never deliver a click using its earlier measurement.
-            let hit_test = action.operation.is_targeted() && action.operation != Operation::Blur;
-            let fresh = self.before_action(Some(target), hit_test, false, false, true, false).await?;
+            let hit = Hit::of(action.operation);
+            let fresh = self.before_action(Some(target), hit, false, false, true, false).await?;
             if fresh.1 != target.3 || !matches!(fresh.2, Point::At(fx, fy) if fx == x && fy == y) {
                 return Ok(result(
                     StepOutcome::Stale,
@@ -553,6 +573,12 @@ impl CdpPage {
             None => None,
         };
         let (outcome, mut detail, failure) = dispatched?;
+        let landed = match action.operation {
+            Operation::Fill => {
+                self.state.lock().unwrap().fill_receiver.take().filter(|_| outcome == StepOutcome::Executed)
+            }
+            _ => None,
+        };
         if outcome == StepOutcome::Executed
             // The page's own script can answer for the listener, so the address is checked here too.
             && let Some(url) = held.filter(|url| url.starts_with("http://") || url.starts_with("https://"))
@@ -571,6 +597,7 @@ impl CdpPage {
                         page_changed: true,
                         detail: Some(format!("opened a new tab, now active, whose page failed to load: {error}")),
                         moved: true,
+                        landed: None,
                     });
                 }
                 Ok(()) => {}
@@ -581,6 +608,7 @@ impl CdpPage {
                 page_changed: true,
                 detail: Some("opened a new tab, now active".into()),
                 moved: true,
+                landed: None,
             });
         }
         if outcome != StepOutcome::Executed {
@@ -590,6 +618,7 @@ impl CdpPage {
                 page_changed: self.session.pending_dialog().is_some(),
                 detail,
                 moved: false,
+                landed: None,
             });
         }
         if action.operation == Operation::Click
@@ -611,6 +640,7 @@ impl CdpPage {
                 page_changed: true,
                 detail: Some("opened a new tab, now active".into()),
                 moved: true,
+                landed: None,
             });
         }
         let moved = self.moved_by_input(document);
@@ -631,7 +661,7 @@ impl CdpPage {
                 })
             });
         }
-        Ok(ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: changed, detail, moved })
+        Ok(ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: changed, detail, moved, landed })
     }
 
     /// Whether a download landed since `since`, waiting the capture's own task out briefly.
@@ -1124,7 +1154,7 @@ impl CdpPage {
         };
         local_id = handed;
         if !secret && native_date {
-            return self.fill_native_date(session_id, local_id, text).await;
+            return self.fill_native_date(target, local_id, text).await;
         }
         let mut suggests = false;
         for attempt in 0..2 {
@@ -1151,6 +1181,9 @@ impl CdpPage {
             if let Some(refusal) = refusal {
                 return Ok(refusal);
             }
+            // The receiver is read before the text goes in: an input handler that advances focus would otherwise name
+            // the next field, not the one that took the text.
+            let receiver = self.focused_editable(target).await;
             if secret {
                 // Sealed before the renderer can insert, and not earlier: a fill refused before this point typed
                 // nothing, so no frame of it can show the secret.
@@ -1198,6 +1231,7 @@ impl CdpPage {
             };
             suggests = wants;
             if landed {
+                self.state.lock().unwrap().fill_receiver = receiver;
                 break;
             }
             // An editor that took focus after the hand-off looked, and so never got the text, is typed into once more,
@@ -1225,12 +1259,30 @@ impl CdpPage {
         Ok((StepOutcome::Executed, None, None))
     }
 
+    /// The editable the page holds focus in, named as the observation names a control: the field text inserted now
+    /// goes to, which a page that hands focus to another editor makes a different one from the field asked for. It
+    /// is looked for through shadow roots and same-origin frames, whose elements the capture numbers in this
+    /// document's registry. None when focus is in no such editable, or the page cannot be asked.
+    async fn focused_editable(&self, target: &Target) -> Option<FillReceiver> {
+        let script = "(() => { let e = document.activeElement; \
+             for (let inner = null; (inner = e?.shadowRoot?.activeElement ?? \
+                 (['IFRAME', 'FRAME'].includes(e?.tagName) ? e.contentDocument?.activeElement : null)); ) e = inner; \
+             const registry = window.__fastbrowse; \
+             if (!registry || !e || !(e.isContentEditable || ['INPUT', 'TEXTAREA'].includes(e.tagName))) return null; \
+             if (!registry.ids.has(e)) registry.ids.set(e, registry.next++); \
+             return [registry.ids.get(e), String(performance.timeOrigin)]; })()";
+        let result = self.evaluate(&target.0, script).await.ok()?;
+        let [id, document] = result.as_array()?.as_slice() else { return None };
+        Some(FillReceiver { element: format!("{}:{}", target.1, id.as_i64()?), document: document.as_str()?.into() })
+    }
+
     /// Commit an ISO value to a native date/time input the way its own picker would.
     ///
     /// Typed keystrokes land in whichever locale-formatted segment the picker's shadow UI has focused, so the value the
     /// field writer produces (told the type's form by `native_date_form`) is set directly through the property setter
     /// React and friends also patch over, then the input/change events a form's own handlers expect to see.
-    async fn fill_native_date(&self, session_id: &str, local_id: i64, value: &str) -> Result<Outcome, BrowserError> {
+    async fn fill_native_date(&self, target: &Target, local_id: i64, value: &str) -> Result<Outcome, BrowserError> {
+        let session_id = target.0.as_str();
         let script = format!(
             "((id, value) => {{ const e = window.__fastbrowse?.nodes.get(id); \
              if (!e?.isConnected) return null; \
@@ -1238,13 +1290,18 @@ impl CdpPage {
              setter.call(e, value); \
              e.dispatchEvent(new Event('input', {{bubbles: true}})); \
              e.dispatchEvent(new Event('change', {{bubbles: true}})); \
-             return e.value === value; }})({local_id}, {})",
+             return e.value === value ? String(performance.timeOrigin) : false; }})({local_id}, {})",
             py_json(&json!(value))
         );
         let result = self.session.input_window(session_id, self.evaluate(session_id, &script)).await?;
         Ok(match result {
             Value::Null => (StepOutcome::Stale, Some("target disconnected".into()), Some(StepFailure::TargetGone)),
-            Value::Bool(true) => (StepOutcome::Executed, None, None),
+            Value::String(document) => {
+                // The value was set on this field directly, so it is the one that took it.
+                self.state.lock().unwrap().fill_receiver =
+                    Some(FillReceiver { element: format!("{}:{local_id}", target.1), document });
+                (StepOutcome::Executed, None, None)
+            }
             _ => (
                 StepOutcome::Failed,
                 Some("field did not retain the supplied ISO value".into()),
@@ -1354,7 +1411,11 @@ impl CdpPage {
                 Point::Gone | Point::Unsettled => {
                     return Ok((StepOutcome::Stale, Some("target disconnected".into()), None));
                 }
-                // A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused.
+                // A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused. A
+                // control that takes no pointer hits with nothing drawn over it (a sortable's picked-up card, set to
+                // pointer-events: none for the drag) is reached by keys all the same, and the arrows that move it
+                // must go to it.
+                Point::Covered if self.cover(&session_id, local_id).await? == Cover::None => {}
                 Point::Covered => {
                     if let Route::Refused(refusal) = self.route_around(target, false).await? {
                         return Ok(refusal);
@@ -1779,7 +1840,7 @@ impl CdpPage {
             // Only the first point was measured in a call that waited for its frame; a later one may have scrolled.
             self.move_to(&target.0, point, drawn).await?;
             drawn = false;
-            let check = self.before_action(Some(target), true, prepare_fill, true, scroll, false);
+            let check = self.before_action(Some(target), Hit::Press, prepare_fill, true, scroll, false);
             let checked = tokio::select! {
                 checked = check => {
                     if self.session.pending_dialog().is_some() {
@@ -1888,7 +1949,7 @@ impl CdpPage {
         }
         // The drop target is hit-tested exactly as the source is: its point is only computed when the live guard still
         // matches the observed one, so a target that moved or was covered since the observation is stale.
-        let (_, _, drop_point, _, _, _, _) = self.before_action(Some(&drop), true, false, false, true, false).await?;
+        let ((_, _, drop_point, _, _, _, _), _) = self.drop_point(&drop, true).await?;
         if !matches!(drop_point, Point::At(..)) {
             return Ok((StepOutcome::Stale, Some("drop target disconnected".into()), None));
         }
@@ -1899,7 +1960,7 @@ impl CdpPage {
             return Ok((outcome, detail, failure));
         }
         // Pointer entry on the source can repurpose the destination after its first guard check.
-        let (_, _, drop_point, _, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+        let ((_, _, drop_point, _, _, _, _), _) = self.drop_point(&drop, false).await?;
         let Point::At(end_x, end_y) = drop_point else {
             return Ok((StepOutcome::Stale, Some("drop target changed before pointer press".into()), None));
         };
@@ -1938,8 +1999,7 @@ impl CdpPage {
             .await?;
             sleep(secs(DRAG_STEP_SECONDS)).await;
             if step == 1 && native {
-                let (_, _, landed, _, _, _, _) =
-                    self.before_action(Some(&drop), true, false, false, false, false).await?;
+                let ((_, _, landed, _, _, _, _), _) = self.drop_point(&drop, false).await?;
                 if !matches!(landed, Point::At(..)) {
                     self.cancel_drag(session_id, (start_x, start_y), 0).await?;
                     held.done();
@@ -1962,26 +2022,82 @@ impl CdpPage {
                 self.drag_move(session_id, at.0, at.1, 0).await?;
                 sleep(secs(DRAG_STEP_SECONDS)).await;
             }
-            let (_, live, landed, _, _, _, connected) =
-                self.before_action(Some(&drop), true, false, false, false, false).await?;
+            let ((_, live, landed, _, _, _, connected), no_hits) = self.drop_point(&drop, false).await?;
             // A destination the drag renamed or repurposed (a dragover handler, or a pointer script) is no longer the
             // control that was chosen, though the hit test still finds it, for a native drag as for a pointer one.
             if !connected || live != drop.3 {
                 break;
             }
-            if self.release_point_holds(session_id, drop.2, target.2, at).await {
+            // A target that takes no hits is released where the pointer rests, so what lies under that point decides
+            // the drop: an unchanged centre does not show it is still the target, or a container holding it.
+            let receives = if no_hits {
+                self.receives_drop(&drop, at).await?
+            } else {
+                self.release_point_holds(session_id, drop.2, target.2, at).await
+            };
+            if receives {
                 self.release(session_id, at.0, at.1, 0).await?;
                 held.done();
                 return Ok((StepOutcome::Executed, None, None));
             }
             match landed {
-                Point::At(x, y) if (x, y) != at => at = (x, y),
+                Point::At(x, y) if !no_hits && (x, y) != at => at = (x, y),
                 _ => break,
             }
         }
         self.cancel_drag(session_id, (start_x, start_y), 0).await?;
         held.done();
         Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))
+    }
+
+    /// Where a drag is released on its drop target, and whether the target takes no pointer hits. A sortable sets
+    /// pointer-events: none on its cards while one is held, so the point at a card's centre lands on the list holding
+    /// it. A target nothing is drawn over still takes the drop, which the library works out from where the pointer
+    /// rests, so its centre is the point and the pointer stays where it is: the card slides aside as the held one
+    /// arrives, and following it moves the pointer onto the next slot.
+    /// The rest of the target's live state comes back with the point, as `before_action` gives it.
+    async fn drop_point(&self, drop: &Target, first: bool) -> Result<(TargetState, bool), BrowserError> {
+        let state = self.before_action(Some(drop), Hit::Press, false, false, first, false).await?;
+        if state.2 != Point::Covered || self.cover(&drop.0, drop.2).await? != Cover::None {
+            return Ok((state, false));
+        }
+        let script = format!(
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected) return null; \
+             if (e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents !== 'none') return null; \
+             let r = e.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2, \
+                 node = e, view = e.ownerDocument.defaultView; \
+             while (view.frameElement) {{ const frame = view.frameElement.getBoundingClientRect(); \
+               x = frame.x + (view.frameElement.clientLeft + x) * frame.width / view.frameElement.offsetWidth; \
+               y = frame.y + (view.frameElement.clientTop + y) * frame.height / view.frameElement.offsetHeight; \
+               node = view.frameElement; view = node.ownerDocument.defaultView; }} return [x, y]; }})()",
+            drop.2
+        );
+        let centre = match self.evaluate(&drop.0, &script).await? {
+            Value::Array(xy) => match (xy.first().and_then(Value::as_f64), xy.get(1).and_then(Value::as_f64)) {
+                (Some(x), Some(y)) => Point::At(x, y),
+                _ => Point::Gone,
+            },
+            _ => Point::Gone,
+        };
+        Ok(((state.0, state.1, centre, state.3, state.4, state.5, state.6), true))
+    }
+
+    /// Whether a release at `at` reaches the drop target or a container holding it. A target that takes no pointer hits
+    /// still receives a drop through its list, but once it has moved away, or a nested control takes hits inside it,
+    /// the pointer rests over a different control and releasing there drops onto that one.
+    async fn receives_drop(&self, drop: &Target, at: (f64, f64)) -> Result<bool, BrowserError> {
+        let script = format!(
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected) return false; \
+             const chain = []; let view = e.ownerDocument.defaultView; \
+             while (view.frameElement) {{ chain.unshift(view.frameElement); view = view.frameElement.ownerDocument.defaultView; }} \
+             let x = {}, y = {}; \
+             for (const f of chain) {{ const r = f.getBoundingClientRect(); \
+               x = (x - r.x) * f.offsetWidth / r.width - f.clientLeft; \
+               y = (y - r.y) * f.offsetHeight / r.height - f.clientTop; }} \
+             const hit = e.ownerDocument.elementFromPoint(x, y); return !!hit && hit.contains(e); }})()",
+            drop.2, at.0, at.1
+        );
+        Ok(self.evaluate(&drop.0, &script).await? == Value::Bool(true))
     }
 
     /// Whether the element at the top-viewport `point` is the destination or the dragged source, or inside one with no
@@ -2003,7 +2119,7 @@ impl CdpPage {
     async fn drag_path(&self, target: &Target, path: &DragPath) -> Result<Outcome, BrowserError> {
         // No scroll: the path was drawn against the target where the screenshot showed it, which `reveal` settled.
         let (_, guard, point, _, _, _, connected) =
-            self.before_action(Some(target), true, false, false, false, false).await?;
+            self.before_action(Some(target), Hit::Press, false, false, false, false).await?;
         if guard != target.3 || !connected || matches!(point, Point::Gone | Point::Unsettled) {
             return Ok((StepOutcome::Stale, Some("drag target disconnected".into()), None));
         }
@@ -2253,7 +2369,7 @@ impl CdpPage {
     pub(crate) async fn before_action(
         &self,
         target: Option<&Target>,
-        hit_test: bool,
+        hit: Hit,
         prepare_fill: bool,
         after_move: bool,
         scroll: bool,
@@ -2283,10 +2399,11 @@ impl CdpPage {
         script
             .push_str(&format!("const guard = r?.guardKey ? r.guardKey(r.nodes.get({local_id}), {local_id}) : null; "));
         script.push_str(&format!(
-            "const point = {} && guard === {} ? ({HIT_TEST_JS})({local_id}, {}) : null; ",
-            py_json(&json!(hit_test)),
+            "const point = {} && guard === {} ? ({HIT_TEST_JS})({local_id}, {}, null, null, {}) : null; ",
+            py_json(&json!(hit != Hit::Skip)),
             py_json(&json!(guard)),
-            py_json(&json!(scroll))
+            py_json(&json!(scroll)),
+            py_json(&json!(hit == Hit::Hover))
         ));
         if prepare_fill {
             script.push_str(&format!(

@@ -55,7 +55,7 @@ pub const TOP_RECT_JS: &str = concat!(
 );
 
 pub const HIT_TEST_JS: &str = concat!(
-    "((id, scroll = true, at = null, topRect) => { const e = window.__fastbrowse?.nodes.get(id); ",
+    "((id, scroll = true, at = null, topRect, hover = false) => { const e = window.__fastbrowse?.nodes.get(id); ",
     "if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled=\"true\"],[inert]') || ",
     "!window.__fastbrowse.visible(e)) return null; ",
     // Scrolling only when the control is not already in full view: a page scroll closes open menus and
@@ -89,9 +89,10 @@ pub const HIT_TEST_JS: &str = concat!(
     // A control nested inside the target (a row's Delete button, a link or checkbox inside a label) takes the
     // click itself, so a point is the target's only when no other control sits between it and the hit: one the
     // snapshot offered, a widget, or a label with its own input. A label and its input are one target. A hover
-    // target is not one: it reveals content but takes no click from its container.
+    // target is not one: the pointer over a nested control is still inside the target, and its enter handler fires, so
+    // a card filled by a link or button keeps points to hover on.
     "const same = x => x === e || x.control === e || e.control === x; ",
-    "const owns = root => { if (!root.contains(hit)) return false; ",
+    "const owns = root => { if (!root.contains(hit)) return false; if (hover) return true; ",
     "for (let x = hit; x !== root; x = x.parentElement) { if (same(x)) return true; ",
     "if (x.matches(ACTIVE) || window.__fastbrowse.controls.has(x) || x.control) return false; } return true; }; ",
     "if (node === e ? !owns(e) && !labels.some(owns) : !node.contains(hit)) return 'covered'; ",
@@ -237,7 +238,7 @@ pub static LEAVE_SUGGESTING_FIELD_JS: LazyLock<String> = LazyLock::new(|| {
 /// dialog, an open menu, a popover), a band fixed to the window (an anchored ad, a sticky footer, a chat bubble)
 /// that floats over whatever is scrolled beneath it, or anything else, such as a full-window backdrop or a panel
 /// drawn over the control in the page's own flow. Only a band is routed around; under anything else the page shows
-/// something other than the control, and that is the run's to deal with.
+/// something other than the control, and that is the run's to deal with. An ancestor of the control is none of these.
 pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
     [
         "((id) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return null; ",
@@ -248,14 +249,17 @@ pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
         "const rect = e.getBoundingClientRect(); let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2; ",
         "let node = e, doc = e.ownerDocument; while (true) { const view = doc.defaultView; ",
         "const hit = deepHit(doc, x, y); ",
-        "if (hit && !holds(node, hit)) { let obstruction = null; ",
+        // An ancestor at the centre means the control takes no hits itself (a sortable's picked-up card, set to
+        // pointer-events: none for the drag), not that anything is drawn over it: a box paints beneath its content.
+        // A centre outside the viewport hits nothing, and is covered rather than a point to release on.
+        "if (hit && !holds(node, hit) && !holds(hit, node)) { let obstruction = null; ",
         "for (let n = hit; n && !obstruction; n = up(n)) if (n.matches(OBSTRUCTIONS)) obstruction = n; ",
         "if (obstruction && !holds(obstruction, node)) return 'obstruction'; ",
         "let band = false; for (let n = hit; n && !holds(n, node); n = up(n)) { ",
         "if (!['fixed', 'sticky'].includes(view.getComputedStyle(n).position)) continue; ",
         "const r = n.getBoundingClientRect(); ",
         "if (r.width * r.height >= view.innerWidth * view.innerHeight / 2) return 'other'; band = true; } ",
-        "return band ? 'band' : 'other'; } ",
+        "return band ? 'band' : 'other'; } if (!hit) return 'other'; ",
         "if (doc === document) return 'none'; node = view.frameElement; if (!node) return 'none'; ",
         "const frame = node.getBoundingClientRect(), pad = getComputedStyle(node); ",
         "x = frame.x + (node.clientLeft + parseFloat(pad.paddingLeft) + x) * frame.width / node.offsetWidth; ",

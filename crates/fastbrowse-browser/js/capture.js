@@ -387,9 +387,10 @@
       text = `${text} (title: ${title})`;
       linkTitles.add(link);
     }
+    const { hosts = hostsOf(nodes), ...rest } = extra;
     blocks.push({
       kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath,
-      control_context: controlOf(nodes), ...extra,
+      control_context: controlOf(nodes), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
       ...(inherited ? { href: hrefOf(link), links: [{ text, href: link.href }, ...(extra.links ?? [])] } : {}),
     });
   };
@@ -465,17 +466,54 @@
         '',
     );
   };
+  // designMode makes every element editable, so the body is the host there, as a contenteditable body is.
+  const isHost = e =>
+    !CONTROLS.has(e.tagName) && e.isContentEditable &&
+    (e.ownerDocument.designMode === 'on' ? e === e.ownerDocument.body : !e.parentElement?.isContentEditable);
   const fieldValue = e => {
     if (e.tagName === 'SELECT') return [...e.selectedOptions].map(o => clean(o.label || o.text)).join(', ');
     if (UNFILLED.has(e.type) || e.dataset?.fastbrowseSecret === '1') return '';
     return clean(e.value ?? '');
   };
+  // What a field holds is reported with it, in the capture's list of held values: the control as the observation names
+  // it, and its value as the page holds it, before the whitespace collapse. A step that typed into a control is told
+  // from a read of it by that identity, never by the words.
+  const heldValue = e => (CONTROLS.has(e.tagName) ? e.value : (e.innerText ?? ''));
+  const held = [];
+  const heldAt = new Map();
+  const hold = e => {
+    if (!heldAt.has(e)) heldAt.set(e, held.push({ element: String(identity(e)), value: heldValue(e) }) - 1);
+    return heldAt.get(e);
+  };
   const fields = el =>
     (CONTROLS.has(el.tagName) ? [el] : [...el.querySelectorAll('input,select,textarea')])
       .filter(visible)
-      .map(e => [nameOf(e), fieldValue(e)])
-      .filter(([, value]) => value)
-      .map(([name, value]) => (name ? `${name}: ${value}` : value));
+      .map(e => [e, nameOf(e), fieldValue(e)])
+      .filter(([, , value]) => value)
+      .map(([e, name, value]) => ({
+        text: name ? `${name}: ${value}` : value,
+        control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
+        ...(e.tagName === 'SELECT' ? {} : { hosts: [e] }),
+      }));
+  const pushFields = root => {
+    for (const { text, ...control } of fields(root)) push('paragraph', text, control);
+  };
+  // The editing hosts a block holds or sits in: its text is read in place, as on any page, and the block carries each
+  // host's identity and value, so a quote from it is told as possibly typed. A host the capture would not show holds
+  // nothing the block reads, so it is not one of them.
+  const hostsOf = nodes => {
+    const found = new Set();
+    for (const node of nodes) {
+      const e = node.nodeType === 1 ? node : node.parentElement;
+      if (!e) continue;
+      for (let p = e.closest('[contenteditable]'); p; p = p.parentElement?.closest('[contenteditable]')) {
+        if (isHost(p)) found.add(p);
+      }
+      for (const h of e.querySelectorAll('[contenteditable]')) if (isHost(h)) found.add(h);
+      if (isHost(e.ownerDocument.body)) found.add(e.ownerDocument.body);
+    }
+    return [...found].filter(visible);
+  };
 
   const renderTable = table => {
     // A table filter hides what it excludes with `hidden`, display or visibility (`collapse` is the one CSS made
@@ -498,6 +536,7 @@
     const of = (written, headed) => ({
       text: [...(headed ? [...headers.map(line), divider] : []), ...written.map(line)].join('\n'),
       links: linksIn([...(headed ? headers : []), ...written].flatMap(row => row.cells)),
+      hosts: hostsOf([...(headed ? headers : []), ...written].flatMap(row => row.cells)),
     });
     // Headerless comparison rows need leading cells for identity and separate source spans for counting.
     if (!headers.length) return rows.map((row, index) => of(index ? [rows[0], row] : [row], false));
@@ -529,7 +568,7 @@
     const links = linksIn(elements);
     if (onlyLink) push('link', text, { href: hrefOf(elements[0]), links }, run);
     else push('paragraph', text, { links }, run);
-    for (const e of elements) for (const field of fields(e)) push('paragraph', field);
+    for (const e of elements) pushFields(e);
     run.length = 0;
   }
 
@@ -667,9 +706,9 @@
       return;
     }
     if (el.tagName === 'TABLE') {
-      for (const { text, links } of renderTable(el)) push('table', text, { links }, [el]);
+      for (const { text, links, hosts } of renderTable(el)) push('table', text, { links, hosts }, [el]);
       // A form laid out in a table: its cells render as text, which holds none of the controls' values.
-      for (const field of fields(el)) push('paragraph', field);
+      pushFields(el);
       return;
     }
     if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
@@ -691,11 +730,11 @@
         },
         [el],
       );
-      for (const field of fields(el)) push('paragraph', field);
+      pushFields(el);
       return;
     }
     if (CONTROLS.has(el.tagName)) {
-      for (const field of fields(el)) push('paragraph', field);
+      pushFields(el);
       return;
     }
     walk(el);
@@ -732,7 +771,7 @@
     sourcePath = source;
     if (text) walk(root);
     // The values of its controls were not read with the text, so they are read here.
-    else for (const field of fields(root)) push('paragraph', field);
+    else pushFields(root);
     path = [...headings];
     headingLevels = [];
     for (const e of [...root.querySelectorAll(`input,select,textarea,button,${roleSelector(CONTROL_ROLES[0])}`)].filter(visible)) {
@@ -860,6 +899,8 @@
     blocks,
     inaccessible_frames: inaccessible,
     content_type: document.contentType,
+    document_key: String(performance.timeOrigin),
+    held,
     ...(json && served ? { json_text: served.textContent } : {}),
   };
 })

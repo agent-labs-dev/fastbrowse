@@ -132,6 +132,7 @@ impl Page for FakeSite {
             page_changed,
             detail: None,
             moved: false,
+            landed: None,
         };
         if action.operation == Operation::Navigate
             && let Some(screen) = action.url.as_deref().and_then(|url| self.site["urls"][url].as_str())

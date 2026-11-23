@@ -197,10 +197,10 @@ fn read_request(
     // say the fact is for the work, a read made to pick took the start page's link "Learn more" as the title of the
     // page it opens (#1174).
     if shows {
-        instructions.push_str(" Select steps when the page holds a fact the task needs only to carry out its work, such as a link to follow or a code to enter, and nothing on it states what the task asks to be told.");
+        instructions.push_str(" Select steps only for information used to carry out an action, such as a link to follow or a code to enter, when it contributes no evidence toward the answer.");
         offered.insert(
             STEPS.into(),
-            "This page holds a fact the task's steps need and nothing that answers the task; keep it for the steps."
+            "This page holds a fact needed to take an action, and that fact does not support any part of the reported answer."
                 .into(),
         );
     } else {
@@ -208,7 +208,7 @@ fn read_request(
     }
     offered.insert(
         SYNTHESIS.into(),
-        "The answer must be composed from several facts, and this page holds at least one.".into(),
+        "This page gives an input needed to combine, compare or calculate the answer, even if the task asks only for the result and the input itself should not be reported.".into(),
     );
     let questions = IndexMap::from([(CHOICE.to_string(), ChoiceQuestion::new(instructions, offered).into())]);
     let capture = page.capture;
@@ -528,7 +528,7 @@ pub(crate) async fn read_page(
     };
     let mut headings: Vec<Fact> =
         group.iter().flat_map(|c| heading_facts(&page, &c.evidence, FactReader::JevChoice)).collect();
-    // A candidate is one line of its block, and a quote's line left its author and tag on the next one.
+    // A candidate can leave the status to its right or the author and tag on the next line.
     let mut enclosing: IndexMap<String, Fact> = IndexMap::new();
     for candidate in group {
         if let Some(block) = block_context(&page, &candidate.evidence, FactReader::JevChoice) {
@@ -564,15 +564,20 @@ fn block_context(page: &Page<'_>, quote: &Evidence, reader: FactReader) -> Optio
             && block.start <= quote.start
             && quote.end <= block.end
     })?;
-    // A table row already keeps the cells before its value, and the rows after it are other records. A downloaded
-    // file's block is the whole file, which an excerpt must not stand in for. One line of prose names its subject in
-    // the sentence the reader quoted; it is a record's other lines that carry the name.
-    if matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle | BlockKind::Table)
+    let after = page.slice(quote.end, block.end);
+    // The browser captures each table record with its headers in one block. A cell's quote can end before the
+    // status that qualified it. Only the last line is that record, and Markdown borders carry no evidence.
+    let needs_context = if block.kind == BlockKind::Table {
+        !after.contains('\n') && cells(after).iter().any(|(_, _, cell)| !text::strip(cell).is_empty())
+    } else {
+        page.slice(block.start, block.end).contains('\n')
+            && (!text::strip(page.slice(block.start, quote.start)).is_empty() || !text::strip(after).is_empty())
+    };
+    // A download's block may be the entire file.
+    if matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
         || block.complete_source
         || block.source_url.is_some()
-        || !page.slice(block.start, block.end).contains('\n')
-        || (text::strip(page.slice(block.start, quote.start)).is_empty()
-            && text::strip(page.slice(quote.end, block.end)).is_empty())
+        || !needs_context
     {
         return None;
     }
@@ -748,6 +753,19 @@ mod tests {
                 })
             })
         }
+    }
+
+    #[test]
+    fn a_read_distinguishes_partial_answer_evidence_from_a_step_input() {
+        let captured = capture(&[(BlockKind::Paragraph, "Room A holds 24 people.")]);
+        let page = Page::new(&captured);
+        let (_, questions) =
+            read_request(&page, "Which of the two rooms holds more people?", "", &[], None, true, None);
+        let Question::Choice(question) = &questions[CHOICE] else { panic!("expected a choice") };
+        assert!(question.criteria[SYNTHESIS].as_str().unwrap().contains("even if the task asks only for the result"));
+        assert!(
+            question.criteria[STEPS].as_str().unwrap().contains("does not support any part of the reported answer")
+        );
     }
 
     /// A passage judged without knowing how the run reached the page is dropped before the read that is told it.
@@ -997,6 +1015,40 @@ mod tests {
         assert!(!read.finished, "a read that must take something cannot end on an option it was not offered");
     }
 
+    #[test]
+    fn a_selected_table_cell_keeps_its_complete_row_as_evidence() {
+        let header = "| Item | Status | Note |\n| --- | --- | --- |\n";
+        let selected = format!("{header}| Atlas | [check icon] | |");
+        let other = format!("{header}| Beacon | | |");
+        let captured = capture(&[(BlockKind::Table, &selected), (BlockKind::Table, &other)]);
+        let candidates = read_candidates(&captured, None);
+        let cell = candidates.iter().find(|candidate| candidate.value.to_str() == "Atlas").unwrap();
+        assert_eq!(cell.id, "c3");
+        let read = judged(&Judge { focus: None, choice: "c3" }, &captured);
+
+        assert_eq!(read.facts.len(), 2);
+        let row = &read.facts[0];
+        let answer = &read.facts[1];
+        assert!(!row.answers);
+        assert_eq!(row.evidence.as_ref().unwrap().quote, selected);
+        assert!(answer.answers);
+        assert_eq!(answer.text, "Atlas");
+        assert_eq!(answer.evidence, Some(cell.evidence.clone()));
+        assert_eq!(answer.basis, [fact_id(row)]);
+
+        let mut notes = crate::memory::Notes::default();
+        notes.record(&captured, 0, read.facts);
+        let draft = crate::retrieval::answers::draft_answer(&notes).unwrap();
+        assert!(draft.citations.iter().any(|citation| citation.quote.contains("Atlas [check icon]")));
+        assert!(draft.citations.iter().all(|citation| !citation.quote.contains("Beacon")));
+
+        let marker = judged(&Judge { focus: None, choice: "c4" }, &captured);
+        assert_eq!(marker.facts.len(), 1, "a trailing empty cell does not add evidence");
+        let header = judged(&Judge { focus: None, choice: "c0" }, &captured);
+        assert!(header.facts.iter().any(|fact| fact.answers && fact.text == "Item"));
+        assert!(header.facts.iter().all(|fact| !fact.text.contains("Atlas") && !fact.text.contains("Beacon")));
+    }
+
     /// A page the step judged to show a fact the task needs may hold it for the steps alone, such as a code to type
     /// later: the read takes the page as notes that answer nothing. Absent stays a read that may skip the page.
     #[test]
@@ -1071,6 +1123,8 @@ mod tests {
                         role: "figure".into(),
                         label: "Avatar".into(),
                         context: Some((*position).into()),
+                        document: None,
+                        held: Vec::new(),
                     }),
                     ..base.clone()
                 },

@@ -111,7 +111,8 @@ optional image reading.
 
 Content shown only under the pointer is reached by a hover target, which moves the real pointer there. An
 element is offered as one when a stylesheet hover rule reveals hidden content inside it, or when it is a card
-of a list that shows a picture and holds no control of its own, because a script may render such a card's
+of a list that shows a picture and holds no control of its own, or a card whose script listens for the pointer
+entering it (`mouseenter`, `mouseover`, `pointerenter`, `pointerover`, read from the element or from React's `__reactProps$` record of the handlers its root calls) whatever else it holds, because a script may render such a card's
 controls only while a pointer is over it. The next observation offers what appeared. A control fading in under the
 pointer counts as shown from the start of its fade, unless it ignores the pointer until the fade ends, and one fading
 out counts as gone. A hover only shows content, so a task to carry out is not done by hovering alone.
@@ -161,7 +162,7 @@ hover, scroll and guard passes read the same facts again when the walk no longer
 snapshots, without allocating new comparison arrays. Repeated heading and scope text reuses its normalized
 lines only when a fresh native read returns the exact same text.
 
-A browser observation reports each control's `focused` state. A custom page may leave it unknown.
+A control also carries `role_description` (`aria-roledescription`) and `description` (the text its `aria-describedby` points at), each as the page states it and only when present, which Jev reads beside the control; a widget that is operated by keys, such as a dnd-kit card, states them there. The key question for a press repeats both. A control in a list also carries `item_position` and `item_count` (`aria-posinset` and `aria-setsize`, or its place among the items of its nearest list), which the drag and press questions state, because "first" is a place the labels do not give. A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
 in form validation. It describes the current field, without claiming that a submission occurred. A field
 that fails a native constraint also carries `validation_message`, the browser's own words for why, which
@@ -278,7 +279,7 @@ others as they were. Jev is asked which option to toggle and told which are sele
 selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
 option, so choosing or removing any one of them is a change.
 
-Press sends a key Jev selects from the target control's ARIA role, or a key chord copied from the task.
+Press sends a key Jev selects from the keys the target control's ARIA role defines followed by the standard navigation and editing keys (arrows, Home, End, Space, Enter, Escape, Backspace, Delete, Ctrl+Home, Ctrl+End), or a key chord copied from the task. A `button`, `link`, `checkbox` or `switch` is offered a press only when it declares an `aria-roledescription`, so a sortable card can be picked up with Space, moved with the arrows and dropped with Space. Such a control is also offered a drag onto any labelled control, which a sortable's pointer sensor takes.
 Sliders, spin buttons, tabs, lists, trees, menus and grids offer their standard WAI-ARIA keyboard interactions
 when focus can reach them. An explicit `aria-orientation` on a widget or its owning composite is included in its context, so the key chooser knows its direction. Widget value changes count as progress. A composite container is indexed for keyboard use when it has a `tabindex`.
 An active descendant keeps DOM focus on its owner while receiving the chosen key. Native selects keep their
@@ -391,7 +392,10 @@ and field names, regardless of how identical surrounding text was split into sou
 claim could change a copied name and fail where the first draft had passed. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
 facts and values, not the form the task asks for, such as JSON, since code writes every answer as claims; citation
-support and browser actions have separate checks. A whole-answer check beside coverage
+support and browser actions have separate checks. A source statement that a value is absent can satisfy coverage
+when supported. An answer that says the run did not establish the value leaves that request open. A quote of text
+the run typed supports the typing itself. Claim and tally checks are told when a quote contains that text, including
+when a typed page label is supplied as tally context. A whole-answer check beside coverage
 judges the claims against the steps the run carried out on the page: an answer that says something was not done, or
 already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
 recovery to write it again. Every draft receives the steps as the run's own record; a claim about a page result still

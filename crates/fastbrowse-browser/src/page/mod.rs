@@ -19,12 +19,12 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{Edges, JEV_IMAGE_SIDE};
-use fastbrowse_core::models::{Artifact, ArtifactKind, Link, Operation, SourceControl};
+use fastbrowse_core::models::{Artifact, ArtifactKind, Held, Link, Operation, SourceControl};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::json as json_document;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, Media, Observation,
-    Page, PageResult,
+    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, FillReceiver, Media,
+    Observation, Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
@@ -135,6 +135,7 @@ struct SnapshotControl {
     id: i64,
     frame_path: Option<String>,
     frame_origin: Option<String>,
+    frame_document_key: Option<String>,
     form_id: Option<String>,
     role: String,
     label: String,
@@ -161,6 +162,10 @@ struct SnapshotControl {
     required: Option<bool>,
     invalid: Option<bool>,
     validation_message: Option<String>,
+    role_description: Option<String>,
+    description: Option<String>,
+    item_position: Option<u32>,
+    item_count: Option<u32>,
     next_page: Option<bool>,
     download: Option<bool>,
     #[serde(default)]
@@ -223,6 +228,9 @@ struct Snapshot {
     #[serde(default)]
     inaccessible_frames: usize,
     viewport_text: String,
+    /// Stable identity of the frame's scroll positions, independent of page text.
+    #[serde(default)]
+    viewport_key: String,
     /// Characters of visible text outside the viewport.
     #[serde(default)]
     offscreen_text: String,
@@ -273,6 +281,9 @@ struct SnapshotBlock {
     #[serde(default)]
     heading_path: Vec<String>,
     control_context: Option<SourceControl>,
+    /// The editable fields this block is the value of or holds, as indexes into the frame's `held`.
+    #[serde(default)]
+    held: Vec<usize>,
     frame_path: Option<String>,
     #[serde(default)]
     source_path: String,
@@ -283,6 +294,13 @@ struct SnapshotBlock {
     /// The block is a record's whole text, its textless parts named.
     #[serde(default)]
     whole_record: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotHeld {
+    element: String,
+    value: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -304,6 +322,11 @@ struct CaptureSnapshot {
     /// The frame document's MIME type, as `document.contentType` gives it.
     #[serde(default)]
     content_type: String,
+    /// The frame document's key, as an observation of it names it.
+    document_key: String,
+    /// Each editable field the blocks name, by the id the observation gives it and its value as the page holds it.
+    #[serde(default)]
+    held: Vec<SnapshotHeld>,
     /// The served text of a JSON document, as Chrome renders it into the body's first `pre`.
     #[serde(default)]
     json_text: Option<String>,
@@ -397,6 +420,9 @@ pub(crate) struct PageState {
     /// The frame session whose new-tab link a background run's click held when a dialog the click opened blocked
     /// reading it back. The dialog step reads it once the dialog is answered.
     pub(crate) held_link: Option<String>,
+    /// For the fill just made: the editable that held focus as its text was inserted, named as the observation names
+    /// a control. Taken by `act` once the fill is done.
+    pub(crate) fill_receiver: Option<FillReceiver>,
 }
 
 pub struct CdpPage {
@@ -487,8 +513,10 @@ fn control_from_raw(
     c: &SnapshotControl,
     retarget: Option<String>,
 ) -> Control {
+    let document_key = c.frame_document_key.as_deref().unwrap_or(document_key);
     Control {
         id: control_id,
+        frame_document_key: c.form_id.as_ref().and(frame_id.as_ref()).map(|_| document_key.to_owned()),
         frame_id,
         frame_origin: c.frame_origin.clone(),
         // An iframe can navigate and reuse its local form ids while the top-level document stays put.
@@ -514,6 +542,10 @@ fn control_from_raw(
         required: c.required,
         invalid: c.invalid,
         validation_message: c.validation_message.clone(),
+        role_description: c.role_description.clone(),
+        description: c.description.clone(),
+        item_position: c.item_position,
+        item_count: c.item_count,
         focused: c.focused,
         next_page: c.next_page,
         download: c.download,
@@ -741,6 +773,7 @@ impl CdpPage {
             }
 
             let page_key = combine_page_keys(frames.iter().map(|(_, f)| f.raw.page_key.clone()).collect());
+            let viewport_key = combine_page_keys(frames.iter().map(|(_, f)| f.raw.viewport_key.clone()).collect());
             if bind {
                 self.set_last(ObservedState { page_key: page_key.clone(), controls: control_state, labels });
             }
@@ -820,6 +853,7 @@ impl CdpPage {
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
                 viewport_text,
+                viewport_key,
                 offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
@@ -891,6 +925,7 @@ impl CdpPage {
             document_key: String::new(),
             controls: vec![],
             viewport_text: String::new(),
+            viewport_key: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
             modal: None,
@@ -1190,6 +1225,16 @@ impl CdpPage {
                 }
                 continue;
             }
+            // A field's identity is the one the observation gives it: its frame's key and its node's id.
+            let held: Vec<Held> = frame
+                .raw
+                .held
+                .iter()
+                .map(|field| Held {
+                    element: format!("{frame_key}:{}", field.element),
+                    value: field.value.as_str().into(),
+                })
+                .collect();
             for block in &frame.raw.blocks {
                 let start = offset;
                 let found: Vec<(String, String)> =
@@ -1212,7 +1257,21 @@ impl CdpPage {
                     start: int(start),
                     end: int(end),
                     heading_path: block.heading_path.clone(),
-                    control_context: block.control_context.clone(),
+                    // A block that only holds an editable field is no control of its own, but its quotes may be typed text.
+                    control_context: if block.held.is_empty() {
+                        block.control_context.clone()
+                    } else {
+                        let mut control = block.control_context.clone().unwrap_or_else(|| SourceControl {
+                            role: "editable".into(),
+                            label: String::new(),
+                            context: None,
+                            document: None,
+                            held: Vec::new(),
+                        });
+                        control.document = Some(frame.raw.document_key.clone());
+                        control.held = block.held.iter().filter_map(|index| held.get(*index).cloned()).collect();
+                        Some(control)
+                    },
                     href: block.href.clone(),
                     links,
                     whole_record: block.whole_record,
