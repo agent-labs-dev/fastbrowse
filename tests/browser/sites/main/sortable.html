@@ -1,0 +1,45 @@
+<!doctype html>
+<html><head><title>Sortable</title>
+<style>
+  ul { list-style: none; padding: 0; width: 240px; }
+  li { height: 44px; margin: 6px 0; border: 1px solid #888; background: #fff; display: flex; align-items: center; }
+  .handle { cursor: grab; flex: 1; height: 100%; display: flex; align-items: center; padding-left: 12px; user-select: none; }
+  li.dragging { background: #def; }
+</style></head><body>
+<h1>Gallery order</h1>
+<p id="order">Alpha, Bravo, Charlie, Delta</p>
+<ul id="list">
+  <li><span class="handle">Alpha</span></li>
+  <li><span class="handle">Bravo</span></li>
+  <li><span class="handle">Charlie</span></li>
+  <li><span class="handle">Delta</span></li>
+</ul>
+<script>
+  // Pointer-driven sortable: listeners sit on the list root and the document, never on an item, and no item is
+  // draggable or has a drop handler, as in a script-driven gallery reorder.
+  const list = document.getElementById('list');
+  let held = null;
+  const report = () => {
+    document.getElementById('order').textContent = [...list.children].map(li => li.textContent.trim()).join(', ');
+  };
+  list.addEventListener('pointerdown', e => {
+    const item = e.target.closest('li');
+    if (!item || !e.target.closest('.handle')) return;
+    held = item;
+    item.classList.add('dragging');
+  });
+  document.addEventListener('pointermove', e => {
+    if (!held) return;
+    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('li');
+    if (!over || over === held || over.parentElement !== list) return;
+    const below = held.compareDocumentPosition(over) & Node.DOCUMENT_POSITION_FOLLOWING;
+    list.insertBefore(held, below ? over.nextSibling : over);
+  });
+  document.addEventListener('pointerup', () => {
+    if (!held) return;
+    held.classList.remove('dragging');
+    held = null;
+    report();
+  });
+</script>
+</body></html>

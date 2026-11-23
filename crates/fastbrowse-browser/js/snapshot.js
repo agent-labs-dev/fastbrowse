@@ -896,7 +896,7 @@
       (!visibilityOf(e, { checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
       leaving(e) ||
       (choice && !shownThrough(e)) ||
-      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e)))
+      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e) || draggedByPointer(e)))
     )
       return false;
     if (!choice) return true;
@@ -1188,7 +1188,7 @@
       return false;
     // A listener can sit on a container to hear its children's clicks, as React's does on its root, so one holding a
     // pressable element leaves the click to it.
-    return declared || ![...descendants(e, '*')].some(c => pressable(c) && visible(c));
+    return declared || ![...descendants(e, '*')].some(c => (pressable(c) || draggedByPointer(c)) && visible(c));
   });
   // A script can make a focusable label its menu trigger without a role, href or pointer cursor. Its label may
   // be wrapped in a child, and hidden menu links must not hide the trigger that reveals them. A container holding
@@ -1203,6 +1203,15 @@
   // Types whose value is a calendar date, not free text: the field writer must produce the type's ISO shape
   // and the native value setter, not typed keystrokes, is what a picker widget actually commits.
   const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
+
+  // A sortable list driven by the page's own pointer script (a grip handle, no `draggable`, no `ondrop`, React's
+  // listeners on the root) states nothing in markup, but its stylesheet gives the element the `grab` or `move` cursor:
+  // the page's own statement that the pointer drags it, read like a `:hover` rule. The cursor inherits, so only the
+  // element it starts on counts, as with `pressable`.
+  const DRAG_CURSORS = ['grab', 'move'];
+  const draggedByPointer = memo(e =>
+    DRAG_CURSORS.includes(styleProperty(e, 'cursor')) &&
+    (!e.parentElement || styleProperty(e.parentElement, 'cursor') !== styleProperty(e, 'cursor')));
 
   const roleOf = e => {
     if (sourceOf(e) !== e) return nativeProperty(sourceOf(e), 'type') === 'file' ? 'textbox' : nativeProperty(sourceOf(e), 'type');
@@ -1227,7 +1236,7 @@
     // A bare draggable element or a declared drop target has no ARIA role of its own, yet it is a real
     // element to act on. Name it generic rather than null so the control walk does not drop it before the
     // drag it offers can be seen.
-    if (e.getAttribute('draggable') === 'true' || e.hasAttribute('ondrop')) return 'generic';
+    if (e.getAttribute('draggable') === 'true' || e.hasAttribute('ondrop') || draggedByPointer(e)) return 'generic';
     // A focusable label is pressed through the page's own listener, as a button is.
     if (focusableText(e)) return 'button';
     return pressable(e) ? 'button' : null;
@@ -1286,7 +1295,7 @@
     const elements = indexedElements(root);
     walkedRoots.push([root, elements]);
     for (const e of elements) {
-      if (listedControl(e) || pressable(e) || focusableText(e)) yield e;
+      if (listedControl(e) || pressable(e) || focusableText(e) || draggedByPointer(e)) yield e;
       if (e.shadowRoot) yield* walk(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
         const inner = childDocument(e);
@@ -1472,8 +1481,11 @@
     // asked whether the task needed a click inside it, and stop when it judged so. An image the page itself gives a
     // widget role is that one control: Leaflet's marker, role button, marked drawn drew the step to it as the surface
     // that held the red circle beside it. An element that names itself draggable is a drag source for the page's own
-    // drag and drop, dragged onto a drop zone: drawn on, a drag would stay inside it and no zone would be reached.
-    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && e.getAttribute('draggable') !== 'true') base.drawn = true;
+    // drag and drop, dragged onto a drop zone: drawn on, a drag would stay inside it and no zone would be reached. An
+    // image the page gives a grab cursor is the same handle for its own pointer script (a sortable card's picture); a
+    // canvas with that cursor is a surface panned in place, so it stays drawn.
+    const handle = e.getAttribute('draggable') === 'true' || (e.tagName === 'IMG' && draggedByPointer(e));
+    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && !handle) base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
@@ -1505,9 +1517,10 @@
         ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow')) : null;
       base.value = reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
-      // Only an element that names itself draggable, or a drawn surface to draw on, is offered as a drag source:
-      // `draggable` reports true for every <a> and <img> by default, which would offer the whole page as draggable.
-      if (e.getAttribute('draggable') === 'true' || base.drawn) base.operations.push('drag');
+      // Only an element that names itself draggable, a drawn surface to draw on, or one the page gives a grab cursor
+      // is offered as a drag source: `draggable` reports true for every <a> and <img> by default, which would offer
+      // the whole page as draggable.
+      if (e.getAttribute('draggable') === 'true' || base.drawn || draggedByPointer(e)) base.operations.push('drag');
     }
     // Focus determines whether the widget can receive keys.
     if (!base.operations.includes('fill') && e.tagName !== 'SELECT' && nativeProperty(source, 'type') !== 'file' &&
