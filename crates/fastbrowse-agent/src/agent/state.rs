@@ -485,11 +485,11 @@ pub(crate) struct RunState {
     /// document under a new address that was offered, and the same address loaded afresh in another tab lifted the
     /// hold on the committing tab.
     pub committed_documents: HashSet<String>,
-    /// The document a committing step was sent from, while the dialog its reply opened is still up. A page behind a
-    /// dialog cannot be read, so the dialog is observed with no `document_key`, and the step that closes an alert is
-    /// not itself committing: a GET that unsubscribed and then said so in an alert lost its hold once the alert
-    /// closed, and was offered again as a reload.
-    pub commit_behind_dialog: Option<String>,
+    /// The document the step that opened the current dialog was sent from, and whether any step since it committed.
+    /// A page behind a dialog cannot be read, so the dialog is observed with no `document_key`, and the step that
+    /// closes an alert is not itself committing: a GET that unsubscribed and then said so in an alert lost its hold
+    /// once the alert closed, and was offered again as a reload.
+    pub behind_dialog: Option<(String, bool)>,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
@@ -855,7 +855,7 @@ impl RunState {
             dialog_form: None,
             commits: 0,
             committed_documents: HashSet::new(),
-            commit_behind_dialog: None,
+            behind_dialog: None,
             redecided: false,
             last_page: None,
             surface_judged: None,
@@ -959,7 +959,7 @@ impl RunState {
             dialog_form: None,
             commits: 0,
             committed_documents: HashSet::new(),
-            commit_behind_dialog: None,
+            behind_dialog: None,
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),
             followed: None,

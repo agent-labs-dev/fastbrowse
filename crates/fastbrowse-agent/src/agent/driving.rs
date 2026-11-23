@@ -1665,14 +1665,18 @@ impl Agent {
         let waited = last.operation == Some(Operation::Wait);
         let sent = state.committing && last.outcome == StepOutcome::Executed;
         if observation.dialog.is_some() {
-            if sent {
-                state.commit_behind_dialog.get_or_insert_with(|| before.document_key.clone());
+            // The opener is kept whether or not it committed: a confirm opened by a reversible click and accepted to
+            // save in place was compared with the dialog's empty document and held the unchanged editor as reloaded.
+            let (_, committed) = state.behind_dialog.get_or_insert_with(|| (before.document_key.clone(), false));
+            *committed |= sent;
+        } else {
+            let (from, committed) = state
+                .behind_dialog
+                .take()
+                .map_or_else(|| (before.document_key.clone(), sent), |(from, committed)| (from, committed || sent));
+            if committed && observation.document_key != from {
+                state.committed_documents.insert(observation.document_key.clone());
             }
-        } else if let Some(from) =
-            state.commit_behind_dialog.take().or_else(|| sent.then(|| before.document_key.clone()))
-            && observation.document_key != from
-        {
-            state.committed_documents.insert(observation.document_key.clone());
         }
         let done = if last.operation == Some(Operation::SwitchTab) {
             // Another tab's controls were there all along: compared with the tab left, every one read as added.

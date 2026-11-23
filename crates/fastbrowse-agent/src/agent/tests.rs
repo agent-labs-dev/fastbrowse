@@ -11207,11 +11207,23 @@ fn a_commit_reply_behind_an_alert_stays_withheld_after_the_alert_closes() {
     // A confirm accepted on a form saved in place left the same document, which stays reloadable.
     let mut state = run_state();
     let confirm = Observation { url: settings.url.clone(), ..alert };
+    let confirm_again = confirm.clone();
     state.committing = true;
     state.acted_from = Some(settings.clone());
     state.history.push(executed(Some(Operation::Click), Some("Save"), true));
     agent().note_effect(&mut state, &confirm);
     state.acted_from = Some(confirm);
+    state.history.push(executed(Some(Operation::Dialog), None, true));
+    agent().note_effect(&mut state, &settings);
+    assert!(state.reload_target(&settings).is_some());
+    // So does one whose confirm a reversible click opened and whose acceptance saved: the opener is what the page
+    // behind the dialog is compared with, not the dialog's empty document.
+    let mut state = run_state();
+    state.acted_from = Some(settings.clone());
+    state.history.push(executed(Some(Operation::Click), Some("Save"), true));
+    agent().note_effect(&mut state, &confirm_again);
+    state.committing = true;
+    state.acted_from = Some(confirm_again);
     state.history.push(executed(Some(Operation::Dialog), None, true));
     agent().note_effect(&mut state, &settings);
     assert!(state.reload_target(&settings).is_some());
