@@ -47,35 +47,40 @@ pub(crate) fn line_quotes(capture: &Capture, lines: &[String]) -> Vec<Evidence> 
     let mut wanted: Vec<&str> = lines.iter().map(|line| text::strip(line)).filter(|line| !line.is_empty()).collect();
     let mut quotes = Vec::new();
     let spans: Vec<_> = super::text::splitlines(&page.chars).into_iter().collect();
-    for (start, end) in spans.into_iter().rev() {
-        let (mut start, mut end) = (start as i64, end as i64);
-        while start < end && page.chars[start as usize].is_whitespace() {
-            start += 1;
+    // A line the added text fills is that text's quote. Only when none does, the line holding it beside text the page
+    // already showed ("Status: " around a changed value) is, so a short piece never claims an unrelated longer line.
+    for whole in [true, false] {
+        for &(start, end) in spans.iter().rev() {
+            let (mut start, mut end) = (start as i64, end as i64);
+            while start < end && page.chars[start as usize].is_whitespace() {
+                start += 1;
+            }
+            while end > start && page.chars[end as usize - 1].is_whitespace() {
+                end -= 1;
+            }
+            let Some(run) = added_run(&wanted, page.slice(start, end), whole) else { continue };
+            let Some(block) = capture.blocks.iter().find(|block| {
+                block.start <= start
+                    && end <= block.end
+                    && !matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
+                    && block.source_url.is_none()
+            }) else {
+                continue;
+            };
+            wanted.drain(run);
+            quotes.push(evidence(&page, block, start, end));
         }
-        while end > start && page.chars[end as usize - 1].is_whitespace() {
-            end -= 1;
-        }
-        let Some(run) = added_run(&wanted, page.slice(start, end)) else { continue };
-        let Some(block) = capture.blocks.iter().find(|block| {
-            block.start <= start
-                && end <= block.end
-                && !matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
-                && block.source_url.is_none()
-        }) else {
-            continue;
-        };
-        wanted.drain(run);
-        quotes.push(evidence(&page, block, start, end));
     }
-    quotes.reverse();
+    quotes.sort_by_key(|quote| quote.start);
     quotes
 }
 
 /// The consecutive added pieces that read as `line` once whitespace is left out. An observation lists each DOM text
 /// node on its own line, while a capture joins the inline content around it, so "Changes <strong>saved</strong>
 /// successfully" is three added pieces and one captured line. The last such run, as the capture is read from its end:
-/// a later line that reads like one of the notice's pieces must take its own piece, not the notice's.
-fn added_run(wanted: &[&str], line: &str) -> Option<std::ops::Range<usize>> {
+/// a later line that reads like one of the notice's pieces must take its own piece, not the notice's. With `whole`
+/// unset, the run may be a part of the line.
+fn added_run(wanted: &[&str], line: &str, whole: bool) -> Option<std::ops::Range<usize>> {
     let squeezed = |text: &str| text.split_whitespace().collect::<String>();
     let line = squeezed(line);
     if line.is_empty() {
@@ -85,10 +90,10 @@ fn added_run(wanted: &[&str], line: &str) -> Option<std::ops::Range<usize>> {
         let mut joined = String::new();
         for (at, piece) in wanted.iter().enumerate().skip(from) {
             joined.push_str(&squeezed(piece));
-            if joined == line {
+            if joined == line || (!whole && line.contains(&joined)) {
                 return Some(from..at + 1);
             }
-            if !line.starts_with(&joined) {
+            if !(if whole { line.starts_with(&joined) } else { line.contains(&joined) }) {
                 return None;
             }
         }
