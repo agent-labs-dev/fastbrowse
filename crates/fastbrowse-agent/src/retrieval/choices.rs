@@ -528,7 +528,7 @@ pub(crate) async fn read_page(
     };
     let mut headings: Vec<Fact> =
         group.iter().flat_map(|c| heading_facts(&page, &c.evidence, FactReader::JevChoice)).collect();
-    // A candidate is one line of its block, and a quote's line left its author and tag on the next one.
+    // A candidate can leave the status to its right or the author and tag on the next line.
     let mut enclosing: IndexMap<String, Fact> = IndexMap::new();
     for candidate in group {
         if let Some(block) = block_context(&page, &candidate.evidence, FactReader::JevChoice) {
@@ -564,13 +564,12 @@ fn block_context(page: &Page<'_>, quote: &Evidence, reader: FactReader) -> Optio
             && block.start <= quote.start
             && quote.end <= block.end
     })?;
-    // A table row already keeps the cells before its value, and the rows after it are other records. A downloaded
-    // file's block is the whole file, which an excerpt must not stand in for. One line of prose names its subject in
-    // the sentence the reader quoted; it is a record's other lines that carry the name.
-    if matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle | BlockKind::Table)
+    // The browser captures each table record with its headers in one block. A cell's quote can end before the
+    // status that qualified it, so keep that block as basis. A download's block may be the entire file.
+    if matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
         || block.complete_source
         || block.source_url.is_some()
-        || !page.slice(block.start, block.end).contains('\n')
+        || (block.kind != BlockKind::Table && !page.slice(block.start, block.end).contains('\n'))
         || (text::strip(page.slice(block.start, quote.start)).is_empty()
             && text::strip(page.slice(quote.end, block.end)).is_empty())
     {
@@ -1008,6 +1007,34 @@ mod tests {
         ))
         .unwrap();
         assert!(!read.finished, "a read that must take something cannot end on an option it was not offered");
+    }
+
+    #[test]
+    fn a_selected_table_cell_keeps_its_complete_row_as_evidence() {
+        let header = "| Item | Status |\n| --- | --- |\n";
+        let selected = format!("{header}| Atlas | [check icon] |");
+        let other = format!("{header}| Beacon | |");
+        let captured = capture(&[(BlockKind::Table, &selected), (BlockKind::Table, &other)]);
+        let candidates = read_candidates(&captured, None);
+        let cell = candidates.iter().find(|candidate| candidate.value.to_str() == "Atlas").unwrap();
+        assert_eq!(cell.id, "c2");
+        let read = judged(&Judge { focus: None, choice: "c2" }, &captured);
+
+        assert_eq!(read.facts.len(), 2);
+        let row = &read.facts[0];
+        let answer = &read.facts[1];
+        assert!(!row.answers);
+        assert_eq!(row.evidence.as_ref().unwrap().quote, selected);
+        assert!(answer.answers);
+        assert_eq!(answer.text, "Atlas");
+        assert_eq!(answer.evidence, Some(cell.evidence.clone()));
+        assert_eq!(answer.basis, [fact_id(row)]);
+
+        let mut notes = crate::memory::Notes::default();
+        notes.record(&captured, 0, read.facts);
+        let draft = crate::retrieval::answers::draft_answer(&notes).unwrap();
+        assert!(draft.citations.iter().any(|citation| citation.quote.contains("Atlas [check icon]")));
+        assert!(draft.citations.iter().all(|citation| !citation.quote.contains("Beacon")));
     }
 
     /// A page the step judged to show a fact the task needs may hold it for the steps alone, such as a code to type
