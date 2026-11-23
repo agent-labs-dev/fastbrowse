@@ -30,6 +30,25 @@ async fn test_validation_labels_preserve_field_semantics() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_readonly_field_says_so_and_keeps_its_click() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<input aria-label=\"Native\" value=\"2026-01-01\" readonly>\
+        <div role=textbox aria-readonly=true aria-label=\"Aria\">fixed</div><input aria-label=\"Open\">";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    for label in ["Native", "Aria"] {
+        let control = find(&observation, label);
+        assert!(control.read_only, "{label}: {control:?}");
+        assert!(control.operations.contains(&Operation::Click) && !control.operations.contains(&Operation::Fill));
+    }
+    let open = find(&observation, "Open");
+    assert!(!open.read_only);
+    assert!(!serde_json::to_value(open).unwrap().as_object().unwrap().contains_key("read_only"));
+    h.close().await;
+}
+
 /// test_forms.py's `form`: a two-field form, then `script`.
 async fn form(h: &Harness, script: &str) {
     h.goto("/dispatch.html").await;

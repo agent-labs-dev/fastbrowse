@@ -118,6 +118,9 @@ pub struct Control {
     /// A field the page marks required (`required` or `aria-required`).
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub required: Option<bool>,
+    /// A field the page marks readonly (`readonly` or `aria-readonly`): it takes a click but not typing.
+    #[serde(default, deserialize_with = "lax::boolean", skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
     /// A field marked invalid by ARIA or a failed native constraint, without implying submission.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub invalid: Option<bool>,
@@ -187,6 +190,7 @@ impl Control {
             input_type: None,
             input_name: None,
             max_length: None,
+            read_only: false,
             autocomplete: None,
             submit_semantics: None,
             checked: None,
