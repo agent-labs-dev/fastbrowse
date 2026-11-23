@@ -331,12 +331,19 @@ pub fn met_question(action: &str, has_unperformed_actions: bool) -> ChoiceQuesti
     );
     if has_unperformed_actions {
         question.instructions.push_str(
-            "\nCheck what the task asks to happen before this action. A covered or stale attempt leaves that step \
-             unperformed. A failed attempt does not prove the step happened.",
+            "\nAn unperformed attempt of the action now being checked leaves this action to do. For any other step \
+             that the task requires before this action, check whether that step actually happened. A covered or stale \
+             attempt leaves that other step unperformed.",
         );
         for (key, note) in [
-            (MET, "Any preceding step the task requires has already happened."),
-            ("not", "This includes an earlier required action whose recorded outcome shows it did not execute."),
+            (
+                MET,
+                "The task requires this action now and any different prerequisite step has already happened. A covered or stale attempt of the action now being checked does not prevent it.",
+            ),
+            (
+                "not",
+                "A different action that was covered or stale remains an unmet prerequisite if the task requires it before the action now being checked.",
+            ),
         ] {
             question.criteria[key] = Value::from(format!("{} {note}", question.criteria[key].as_str().unwrap()));
         }
@@ -1217,9 +1224,9 @@ mod tests {
     #[test]
     fn permission_to_commit_requires_prior_task_steps_to_have_happened() {
         let question = met_question("Click Post", true);
-        assert!(question.instructions.contains("Check what the task asks to happen before this action"));
-        assert!(question.criteria[MET].as_str().unwrap().contains("preceding step the task requires"));
-        assert!(question.criteria["not"].as_str().unwrap().contains("recorded outcome"));
+        assert!(question.instructions.contains("An unperformed attempt of the action now being checked"));
+        assert!(question.criteria[MET].as_str().unwrap().contains("different prerequisite step"));
+        assert!(question.criteria["not"].as_str().unwrap().contains("A different action that was covered or stale"));
     }
 
     #[test]

@@ -1279,13 +1279,14 @@ pub fn build_request(
         offered_operations(observation, &indexed, context, &urls)
     };
     let mut questions: IndexMap<String, Question> = IndexMap::new();
-    let target_rules = told_sites(&TARGET, controls);
-    let target_rules = target_rules.as_str();
+    let mut target_rules = told_sites(&TARGET, controls);
     let mut action_rules = HistoryEntry::told(&NEXT_ACTION, &context.history);
     if HistoryEntry::has_unperformed_actions(&context.history) {
         // History includes attempts as well as executions. A covered action can still be needed when the cover goes.
-        action_rules.push_str("\nUse the outcome of each recorded action. A covered or stale action did not execute, and a failed action does not establish that its task step was carried out. Reconsider a task-required action once its obstruction is gone, before advancing to a later requested step.");
+        action_rules.push_str("\nUse the outcome of each recorded action. A covered or stale action did not execute, and a failed action does not establish that its task step was carried out. Reconsider a task-required action once its obstruction is gone, before advancing to a later requested step.\nWhen a required action was covered and its target is available now, the next operation is the one that carries out that unfinished action.");
+        target_rules.push_str("\nIf a covered action the task still requires can now execute, choose its target before a control for a later task step.");
     }
+    let target_rules = target_rules.as_str();
     questions.insert(
         keys::OPERATION.into(),
         choice(
@@ -3054,7 +3055,7 @@ mod tests {
 
     #[test]
     fn action_questions_distinguish_attempted_steps_from_executed_steps() {
-        let page = observation(vec![button(1)]);
+        let page = observation(vec![button(1), button(2)]);
         let mut context = StepContext::new("Open the menu before continuing");
         context.history.push(HistoryEntry::new(Some(Operation::Click), Some("Menu"), StepOutcome::Covered, false));
         let request = build_request(&page, &page.controls, &context, &Config::default(), 100);
@@ -3062,6 +3063,10 @@ mod tests {
             panic!("expected an operation choice");
         };
         assert!(operation.instructions.contains("A covered or stale action did not execute"));
+        let Question::Choice(target) = &request.questions["click_target"] else {
+            panic!("expected a click target choice");
+        };
+        assert!(target.instructions.contains("choose its target before a control for a later task step"));
         for operation in [Operation::Read, Operation::Done] {
             assert!(operation_label(operation).contains("the recent history shows it executed"));
         }
