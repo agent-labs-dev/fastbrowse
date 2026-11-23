@@ -247,6 +247,31 @@ async fn test_navigate_to_the_current_address_changes_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_navigate_to_a_hash_routed_pages_own_address_loads_it_again() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let loads = Arc::new(AtomicU32::new(0));
+    let served = loads.clone();
+    let port = serve_on(
+        listener,
+        Arc::new(move |_: &str| {
+            served.fetch_add(1, Ordering::SeqCst);
+            Reply::html("<p>Description</p>")
+        }),
+    );
+    let Some(h) = harness().await else { return };
+    let here = format!("http://127.0.0.1:{port}/#/projects/1/description");
+    h.page.navigate(&here, None).await.expect("navigate");
+    let before = h.observe().await;
+    let first = loads.load(Ordering::SeqCst);
+    let result = h.page.act(&navigate_to(&here), &before).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert!(loads.load(Ordering::SeqCst) > first, "the page was not requested again");
+    assert!(h.page.document_changed(&before).await.unwrap());
+    assert_eq!(h.page.address().await.unwrap(), here);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_navigate_refuses_a_missing_or_non_http_address() {
     for url in [None, Some("javascript:alert(1)"), Some("file:///etc/passwd"), Some("data:text/html,hi")] {
         let Some(h) = harness().await else { return };

@@ -1599,6 +1599,31 @@ impl CdpPage {
                 Some(back_to) => state.back_to.insert(session_id.clone(), back_to.to_owned()),
             };
         }
+        // Opening the address a page shows reloads it, but Chrome takes a navigation to an address that matches the
+        // current one up to its fragment as a jump within the document: a hash-routed app asked to reload its own
+        // address kept the document it had, and a run that reloaded to check a save read back what it had typed
+        // (#1433). Only an address with a fragment is taken so, so only then is the current one read first.
+        if url.contains('#') && self.evaluate(&session_id, "location.href").await?.as_str() == Some(url) {
+            let mark = self.session.document_mark(&session_id);
+            self.evaluate(&session_id, "location.reload()").await?;
+            let deadline = Instant::now() + secs(load_timeout_seconds);
+            loop {
+                let lifecycle = self.session.lifecycle_mark();
+                if self.session.document_mark(&session_id) != mark {
+                    break;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    let message = format!("location.reload() loaded no document for {url}");
+                    return Err(BrowserError::NavigationTimeout(Failure::new("Page.reload/TimeoutError", message)));
+                }
+                self.session.wait_for_lifecycle(lifecycle, remaining.as_secs_f64()).await;
+            }
+            if self.ready(&session_id, load_timeout_seconds).await? {
+                let _ = self.changed_since("", None).await;
+            }
+            return Ok(());
+        }
         // A cloud browser's proxy drops a first connection now and then, or leaves a document loading, and a run that
         // never started was scored as a failed task. Chrome's error names (net::ERR_...) carry no page content, so
         // they are shown.
