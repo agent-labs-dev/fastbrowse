@@ -25,7 +25,7 @@ struct DatePage {
 impl DatePage {
     fn controls(&self) -> Value {
         let mut controls = vec![
-            json!({"id": "date", "frame_id": null, "role": "textbox", "label": "Date", "operations": ["click", "fill"],
+            json!({"id": "date", "frame_id": null, "frame_origin": "https://example.test", "role": "textbox", "label": "Date", "operations": ["click", "fill"],
                    "sensitive": false, "offscreen": false}),
             json!({"id": "inline-next", "frame_id": null, "role": "link", "label": "Next", "operations": ["click"],
                    "sensitive": false, "offscreen": false}),
@@ -309,4 +309,41 @@ async fn test_a_done_jev_finds_unsupported_is_refused_and_told_back() {
         run_with(page, driver.clone(), Arc::new(Answering(ScriptedJev::new(Vec::new()), "coverage", 0.0))).await;
     assert_eq!(result.status, Status::Stuck);
     assert!(driver.told(1).contains("done was refused"), "{}", driver.told(1));
+}
+
+/// One secret, `pw`, for the test page's origin only.
+struct Secret;
+
+impl fastbrowse_core::models::SecretResolver for Secret {
+    fn available(&self) -> Vec<fastbrowse_core::models::SecretRef> {
+        vec![fastbrowse_core::models::SecretRef { name: "pw".into(), origins: vec!["https://example.test".into()] }]
+    }
+
+    fn resolve<'a>(&'a self, name: &'a str, origin: &'a str) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move { (name == "pw" && origin == "https://example.test").then(|| "hunter2".to_string()) })
+    }
+}
+
+#[tokio::test]
+async fn test_a_secret_is_typed_by_name_and_its_value_never_reaches_the_driver() {
+    let page = Arc::new(DatePage::default());
+    let driver =
+        Driver::new([json!({"next": "", "actions": [{"tool": "type_secret", "id": "date", "name": "pw"}]}), give_up()]);
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(Vec::new())), driver.clone())
+        .with_chat(true)
+        .with_secrets(Some(Arc::new(Secret)));
+    agent
+        .run(
+            "Sign in with the password.",
+            RunOptions { start: Some("https://example.test/".into()), ..Default::default() },
+        )
+        .await
+        .expect("a result");
+    let acted = page.acted.lock().unwrap();
+    let fill =
+        acted.iter().find(|action| action.operation == fastbrowse_core::models::Operation::Fill).expect("a fill");
+    assert_eq!((fill.text.as_deref(), fill.secret), (Some("hunter2"), true));
+    let sent = driver.sent.lock().unwrap();
+    assert!(sent[0].iter().any(|message| message.content.contains("by name: pw")), "{:?}", sent[0]);
+    assert!(sent.iter().flatten().all(|message| !message.content.contains("hunter2")));
 }
