@@ -1405,3 +1405,155 @@ async fn cancelling_an_in_flight_search_preserves_its_bounded_charge() {
         && cost.basis == CostBasis::Bounded
         && cost.dollars == Some(0.007)));
 }
+
+/// Jev as scripted for the steps, except that it judges the authorization questions as a Jev that was told what the
+/// save replaces would: a save stated to overwrite a value is not what the task asked for. The questions it was asked
+/// are kept, so the test can read what the run said about the save.
+struct SaveJudge {
+    script: fastbrowse_agent::scripted::ScriptedJev,
+    asked: Arc<Mutex<Vec<String>>>,
+}
+
+impl DecisionClient for SaveJudge {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.script.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let Some(Question::Noul(requested)) = questions.get("requested") else {
+            // The value to type is written by the model, which `Typist` plays.
+            let script = self.script.evaluate(state, questions);
+            return Box::pin(async move {
+                let mut evaluation = script.await?;
+                for (key, answer) in evaluation.answers.iter_mut() {
+                    if let (true, Answer::Choice(source)) = (key.ends_with(":source"), answer) {
+                        source.choice = "write".into();
+                    }
+                }
+                Ok(evaluation)
+            });
+        };
+        self.asked.lock().unwrap().extend(questions.values().filter_map(|question| match question {
+            Question::Noul(question) => Some(question.instructions.clone()),
+            _ => None,
+        }));
+        let replaces = requested.instructions.contains("the run replaced");
+        let answers = questions
+            .keys()
+            .map(|key| {
+                let probability = match key.as_str() {
+                    "irreversible" => 0.4,
+                    "lasting" => 0.9,
+                    "requested" if replaces => 0.1,
+                    "requested" => 0.8,
+                    _ => 0.0,
+                };
+                (
+                    key.clone(),
+                    Answer::Noul(fastbrowse_core::decision::NoulAnswer { kind: Default::default(), probability }),
+                )
+            })
+            .collect();
+        Box::pin(async move {
+            Ok(Evaluation {
+                model: "jev".into(),
+                answers,
+                input_tokens: 0,
+                cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                requests: 1,
+            })
+        })
+    }
+}
+
+/// Fills with the value the task gives, as a model asked for it would.
+struct Typist;
+
+impl LLMClient for Typist {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        if purpose != LLMPurpose::Fill {
+            return fastbrowse_agent::scripted::ScriptedLLM.generate_value(purpose, messages, schema, ledger);
+        }
+        Box::pin(async move {
+            let data = schema.validate_json(r#"{"value": "Retitled card"}"#).map_err(LLMError::schema)?;
+            let cost = CostLine {
+                purpose: Some(purpose),
+                ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
+            };
+            Ok(Generation { data, cost })
+        })
+    }
+}
+
+/// A gallery whose only offered edit belongs to the second card, which the task never names: the run opened that
+/// edit and filled its Title, and the save over that card's caption was the one the task did not ask for (#1446). The
+/// questions about the save state what it replaces and which edit opened it, so the save is not taken.
+#[tokio::test]
+async fn test_a_save_over_another_cards_caption_is_not_taken() {
+    if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
+        return;
+    }
+    let page = r#"<body><h1>Gallery</h1>
+<p>First card: Sunrise over the lake</p>
+<section><p>Second card: Harbour at night</p><button onclick="document.getElementById('dialog').hidden=false">Edit</button></section>
+<form id="dialog" hidden onsubmit="fetch('/saved');return false">
+<label>Title <input name="title" value="Harbour at night"></label><button type="submit">Apply</button></form></body>"#;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let start = format!("http://127.0.0.1:{}/", listener.local_addr().unwrap().port());
+    let saves = Arc::new(AtomicUsize::new(0));
+    let counted = saves.clone();
+    let server = tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = [0u8; 4096];
+            let read = socket.read(&mut buffer).await.unwrap_or(0);
+            if String::from_utf8_lossy(&buffer[..read]).starts_with("GET /saved") {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                page.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    // The first looks are at the fetched page, whose Edit the browser has to be opened for, before the dialog it opens.
+    let script =
+        fastbrowse_agent::scripted::steps("read page; click Edit; click Edit; fill Title; click Apply").unwrap();
+    let options = task(|o, h| {
+        o.start = Some(start.clone());
+        o.task = "Retitle the first card to Retitled card, and change no other card.".into();
+        o.local = true;
+        o.launch = true;
+        o.authorization = Some(Authorization { irreversible_actions: true });
+        h.jev = Some(Arc::new(SaveJudge {
+            script: fastbrowse_agent::scripted::ScriptedJev::new(script),
+            asked: asked.clone(),
+        }));
+        h.llm = Some(Arc::new(Typist));
+    });
+    let result = run(options).await;
+    server.abort();
+    result.expect("the run returns a result");
+    assert_eq!(saves.load(Ordering::SeqCst), 0, "the save went through");
+    let asked = asked.lock().unwrap();
+    let saving: Vec<_> = asked.iter().filter(|question| question.contains("labelled 'Apply'")).collect();
+    assert_eq!(saving.len(), 4, "the save was not asked about in each question: {asked:?}");
+    for question in saving {
+        assert!(question.contains("The run opened this form by clicking 'Edit"), "{question}");
+        assert!(
+            question.contains("the run replaced 'Title', which held 'Harbour at night', with 'Retitled card'"),
+            "{question}"
+        );
+    }
+}
