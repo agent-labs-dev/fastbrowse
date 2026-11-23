@@ -11178,6 +11178,14 @@ fn a_page_a_commit_loaded_is_not_offered_as_a_reload() {
     let again = Observation { document_key: "fresh".into(), ..at("https://example.test/done?id=3", &[]) };
     agent().note_effect(&mut state, &again);
     assert_eq!(state.reload_target(&again.url).as_deref(), Some("https://example.test/done?id=3"));
+    // Switching back to the commit's tab shows the document it loaded, which reloading would send again.
+    let mut state = run_state();
+    state.committed_at.insert("https://example.test/done?id=3".into());
+    state.acted_from = Some(Observation { document_key: "other-tab".into(), ..at("https://example.test/", &[]) });
+    state.history.push(executed(Some(Operation::SwitchTab), None, true));
+    let back = Observation { document_key: "done".into(), ..at("https://example.test/done?id=3", &[]) };
+    agent().note_effect(&mut state, &back);
+    assert_eq!(state.reload_target(&back.url), None);
     assert_eq!(run_state().reload_target("about:blank"), None);
     // Opening an address with its secret blanked opens another page.
     assert_eq!(run_state().reload_target("https://example.test/p?token=\u{2022}\u{2022}\u{2022}"), None);

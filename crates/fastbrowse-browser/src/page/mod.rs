@@ -1610,7 +1610,11 @@ impl CdpPage {
         {
             let mark = self.session.document_mark(&session_id);
             let denials_before = self.session.denials();
-            self.evaluate(&session_id, "location.reload()").await?;
+            // Chrome answers the evaluation only once a before-unload dialog the reload opens is answered, so it is
+            // raced with the dialog: awaited alone, it held the run until the agent could never see the dialog.
+            if self.until_dialog(self.evaluate(&session_id, "location.reload()")).await.transpose()?.is_none() {
+                return Ok(());
+            }
             let deadline = Instant::now() + secs(load_timeout_seconds);
             loop {
                 let lifecycle = self.session.lifecycle_mark();

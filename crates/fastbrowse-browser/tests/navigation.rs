@@ -271,6 +271,38 @@ async fn test_navigate_to_a_hash_routed_pages_own_address_loads_it_again() {
     h.close().await;
 }
 
+/// Chrome answers `location.reload()` only once the before-unload dialog it opens is answered, so a reload awaited
+/// alone held the run on a page with unsaved edits and the agent never saw the dialog to answer it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reloading_a_hash_routed_page_that_asks_before_unloading_returns_its_dialog() {
+    let port = serve_on(
+        std::net::TcpListener::bind("127.0.0.1:0").expect("bind"),
+        Arc::new(|_: &str| {
+            Reply::html(
+                r#"<button onclick="window.onbeforeunload = e => { e.preventDefault(); e.returnValue = 'unsaved'; }">Edit</button>"#,
+            )
+        }),
+    );
+    let Some(h) = harness().await else { return };
+    let here = format!("http://127.0.0.1:{port}/#editor");
+    h.page.navigate(&here, None).await.expect("navigate");
+    let before = h.observe().await;
+    h.page.act(&click(&find(&before, "Edit").id), &before).await.expect("edit");
+    let edited = h.observe().await;
+    let result = timeout(Duration::from_secs(15), h.page.act(&navigate_to(&here), &edited)).await;
+    let pending = h.session.pending_dialog().is_some();
+    if pending {
+        let session_id = h.session.active_session_id().expect("session");
+        h.session
+            .send("Page.handleJavaScriptDialog", json!({"accept": false}), Some(&session_id))
+            .await
+            .expect("dismiss");
+    }
+    h.close().await;
+    result.expect("the reload returned while its dialog was open").expect("act");
+    assert!(pending, "the before-unload dialog is left for the agent to answer");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_navigate_refuses_a_missing_or_non_http_address() {
     for url in [None, Some("javascript:alert(1)"), Some("file:///etc/passwd"), Some("data:text/html,hi")] {

@@ -1664,10 +1664,12 @@ impl Agent {
         let Some(last) = state.history.last_mut() else { return };
         // A page reached again by a load that sends nothing holds that load's document, which opening its address
         // again repeats: a save that redirected to /settings withheld its reload for the rest of the run, after a
-        // link had loaded /settings afresh. Back can restore the commit's own document, so it keeps the withholding.
+        // link had loaded /settings afresh. Back can restore the commit's own document, and a tab switch shows a tab's
+        // document as it was loaded, so both keep the withholding: a switch away and back offered a committing load's
+        // own address as a reload.
         if !state.committing
             && last.outcome == StepOutcome::Executed
-            && last.operation != Some(Operation::Back)
+            && !matches!(last.operation, Some(Operation::Back | Operation::SwitchTab))
             && observation.document_key != before.document_key
         {
             state.committed_at.remove(&observation.url);
