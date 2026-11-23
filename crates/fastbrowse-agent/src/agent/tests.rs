@@ -1947,6 +1947,7 @@ async fn test_the_condition_check_is_told_the_steps_the_run_took() {
         stale,
         secret,
         note,
+        executed(Some(Operation::Back), None, true),
     ]);
     let delete = button("delete");
     let page = observation(std::slice::from_ref(&delete));
@@ -1955,7 +1956,7 @@ async fn test_the_condition_check_is_told_the_steps_the_run_took() {
     let asked = jev.asked.lock().unwrap();
     let (_, questions) = &asked[1];
     let facts = "The steps this run has already taken, in order:\n- click 'Reorder (Media)'\n- click 'Cancel (Reorder Media)'\n\
-                 - fill 'Key'\n- fill 'Title' with 'a title'\n";
+                 - fill 'Key'\n- fill 'Title' with 'a title'\n- back\n";
     for key in ["met", "values", "happened"] {
         assert!(questions[key].contains(facts), "{key}: {}", questions[key]);
     }

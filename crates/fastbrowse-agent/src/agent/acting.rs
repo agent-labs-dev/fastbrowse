@@ -2684,11 +2684,15 @@ fn steps_taken(history: &[HistoryEntry]) -> String {
         .iter()
         .filter(|entry| entry.outcome == StepOutcome::Executed)
         .filter_map(|entry| {
-            let (operation, target) = (entry.operation?, entry.target.as_deref()?);
+            // Back, Escape and a wait have no target, and are the steps the page shows no trace of.
+            let operation = entry.operation?;
             let typed = entry.text.as_deref().filter(|text| *text != "<secret>");
-            Some(match typed {
-                Some(text) => format!("- {operation} {} with {}\n", text::repr(target), text::repr(text)),
-                None => format!("- {operation} {}\n", text::repr(target)),
+            Some(match (entry.target.as_deref(), typed) {
+                (Some(target), Some(text)) => {
+                    format!("- {operation} {} with {}\n", text::repr(target), text::repr(text))
+                }
+                (Some(target), None) => format!("- {operation} {}\n", text::repr(target)),
+                (None, _) => format!("- {operation}\n"),
             })
         })
         .collect();
