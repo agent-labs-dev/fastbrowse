@@ -316,6 +316,17 @@ impl Agent {
         if state.site_failure.as_ref().is_some_and(|failure| failure.cause == FailureCause::Reported) {
             state.site_failure = None;
         }
+        // A conversation that already planned arrives here from a page fetched over HTTP, which cannot type or click:
+        // told only that "the page changed", the model read the browser's fresh ids as a redraw and could not know
+        // that nothing it planned had run (pizza-order typed its form twice).
+        if state.chat.planned_on.take().is_some() {
+            state.chat.queue.clear();
+            state.chat.notices.push(
+                "the page was read without a browser, which cannot act on it, so none of your last actions ran. It is \
+                 now open in a browser, where its controls have new ids; plan again from the page below."
+                    .into(),
+            );
+        }
         loop {
             state.ledger.check(0.0)?;
             if let Some(stop) = super::out_of_browsing_time(state) {

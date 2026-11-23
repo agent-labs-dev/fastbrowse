@@ -415,3 +415,24 @@ async fn test_a_fetched_page_the_driver_waits_on_or_gives_up_on_goes_to_a_browse
         assert_eq!(result.failure_kind.as_deref(), Some("NeedsBrowser"), "{:?}", result);
     }
 }
+
+#[tokio::test]
+async fn test_a_plan_made_on_a_fetched_page_is_told_it_never_ran_once_a_browser_opens() {
+    let fetched = Arc::new(DatePage { http: true, ..Default::default() });
+    let driver =
+        Driver::new([json!({"next": "", "actions": [{"tool": "wait"}, {"tool": "click", "id": "1"}]}), give_up()]);
+    let agent = Agent::new(fetched, Arc::new(ScriptedJev::new(Vec::new())), driver.clone()).with_chat(true);
+    let options = || RunOptions {
+        start: Some("https://example.test/".into()),
+        limits: Some(Limits { max_steps: Some(10), ..Default::default() }),
+        ..Default::default()
+    };
+    agent.run("Open the date field.", options()).await;
+    let resume = agent.resume().expect("a browser handoff");
+    let browser = Agent::new(Arc::new(DatePage::default()), Arc::new(ScriptedJev::new(Vec::new())), driver.clone())
+        .with_chat(true);
+    let result = browser.run("Open the date field.", RunOptions { resume: Some(resume), ..options() }).await.unwrap();
+    assert_eq!(result.status, Status::Stuck);
+    assert!(driver.told(1).contains("none of your last actions ran"), "{}", driver.told(1));
+    assert!(!driver.told(1).contains("page changed"), "{}", driver.told(1));
+}
