@@ -23,7 +23,7 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::json;
 
-use super::acting::{Carried, IN_RECORD};
+use super::acting::{Carried, IN_RECORD, gate_questions};
 use super::driving::edit_progress;
 use super::helpers::{describe, doing, read_sources, unsent_fact};
 use super::state::Written;
@@ -11998,3 +11998,38 @@ async fn test_a_decision_made_before_the_read_of_a_fresh_page_is_made_again_with
 
 #[path = "tests/citation_record_selected_results.rs"]
 mod citation_record_selected_results;
+
+// -- A save says what it changes ------------------------------------------------------------------------------------
+
+/// An authorized run saved an edit dialog that overwrote another image's caption, judged requested at 0.80: the
+/// questions named only the Apply control and the value the form held, never what the run had replaced or which
+/// card's edit it had opened.
+#[test]
+fn test_a_save_states_what_the_run_replaced_and_what_it_opened() {
+    let form = |control: Control| Control { form_id: Some("dialog".into()), ..control };
+    let title = form(holding("Title", "Test image"));
+    let apply = form(button("Apply"));
+    let controls = [title.clone(), apply.clone()];
+    let filled = HistoryEntry {
+        text: Some("Test image".into()),
+        before: Some("Guide tracker".into()),
+        ..typed_into(&describe(&title))
+    };
+    let opened = executed(Some(Operation::Click), Some("Edit (Guide tracker card)"), true);
+    let history = [executed(Some(Operation::Click), Some("Unrelated"), true), opened, filled];
+    let (irreversible, action, lasting) = gate_questions(&history, Operation::Click, &apply, None, &controls);
+    let facts = [
+        "The run opened this form by clicking 'Edit (Guide tracker card)'.",
+        "In this form the run replaced 'Title', which held 'Guide tracker', with 'Test image'.",
+    ];
+    for text in [action, irreversible.unwrap().instructions, lasting.instructions] {
+        for fact in facts {
+            assert!(text.contains(fact), "{text}");
+        }
+    }
+    // Nothing filled in the form, or a control that submits nothing, adds no fact.
+    let (_, untouched, _) = gate_questions(&[], Operation::Click, &apply, None, &controls);
+    assert!(!untouched.contains("In this form"), "{untouched}");
+    let (_, plain, _) = gate_questions(&history, Operation::Click, &button("Edit"), None, &controls);
+    assert!(!plain.contains("In this form"), "{plain}");
+}

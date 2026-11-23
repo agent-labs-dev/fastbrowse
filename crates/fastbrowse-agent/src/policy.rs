@@ -186,6 +186,10 @@ pub struct HistoryEntry {
     /// holding after the click. Kept out of what models are shown: it is the run's own record of what it changed.
     #[serde(skip)]
     pub set: Vec<FieldChange>,
+    /// What a fill or select replaced: the value the field held when the step began, masked. Kept out of what models
+    /// are shown; a save's authorization questions state it beside the value typed.
+    #[serde(skip)]
+    pub before: Option<String>,
     /// The task step a click placed inside a drawn surface was made for. Kept apart from `target`, which actions are
     /// withheld and counted by.
     #[serde(skip)]
@@ -345,6 +349,7 @@ impl HistoryEntry {
             setting: None,
             added: false,
             set: Vec::new(),
+            before: None,
             for_step: None,
             look: None,
             submitted: None,

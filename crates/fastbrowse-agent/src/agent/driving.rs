@@ -1361,8 +1361,14 @@ impl Agent {
         if act.outcome == StepOutcome::Executed && observation.dialog.is_none() {
             state.dialog_form.clone_from(&form);
         }
+        // The field's value when the step began, which a later save states beside what the run typed over it.
+        let before = typed.as_ref().and(decision.target.as_ref()).and_then(|target| {
+            let held = observation.controls.iter().find(|c| c.id == target.id).filter(|c| !c.sensitive)?;
+            Some(self.mask(held.value.as_deref().unwrap_or_default()))
+        });
         state.history.push(HistoryEntry {
             text: typed,
+            before,
             effect: effect_now,
             look: state.look.take(),
             setting: setting.then_some(true),

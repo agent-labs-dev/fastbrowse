@@ -311,6 +311,62 @@ fn typed_into(state: &RunState, target: &Control) -> Vec<String> {
         .collect()
 }
 
+/// What a control that submits a form saves, from the run's own steps: each field of that form the run filled, with
+/// the value it held before and the value typed, and the control the run clicked to open the form. The form's text
+/// says only what the fields hold now, so a save over another item's value read as the edit the task asked for.
+/// None when the control submits nothing or the run filled nothing in its form.
+fn form_changes(
+    history: &[HistoryEntry],
+    operation: Operation,
+    target: &Control,
+    controls: &[Control],
+) -> Option<String> {
+    let submits = matches!(operation, Operation::Enter | Operation::Press)
+        || (operation == Operation::Click && target.role == "button");
+    target.form_id.as_ref().filter(|_| submits)?;
+    let fields: Vec<&Control> = controls
+        .iter()
+        .filter(|c| (&c.frame_id, &c.form_id) == (&target.frame_id, &target.form_id) && !c.sensitive)
+        .collect();
+    let named: Vec<String> = fields.iter().map(|c| describe(c)).collect();
+    // Newest first: a field's latest value is the first fill met and its first `before` the last, and the first click
+    // outside the form, met after its fills, is the one that opened it.
+    let mut filled: IndexMap<&str, (&str, &str)> = IndexMap::new();
+    let mut opener = None;
+    for entry in history.iter().rev().filter(|entry| entry.outcome == StepOutcome::Executed) {
+        let Some(label) = entry.target.as_deref().filter(|label| named.iter().any(|n| n == label)) else {
+            if entry.operation == Some(Operation::Click) {
+                opener = entry.target.as_deref();
+                break;
+            }
+            continue;
+        };
+        if let (Some(Operation::Fill | Operation::Select), Some(typed), Some(before)) =
+            (entry.operation, entry.text.as_deref(), entry.before.as_deref())
+            && typed != "<secret>"
+        {
+            filled.entry(label).and_modify(|(_, earlier)| *earlier = before).or_insert((typed, before));
+        }
+    }
+    if filled.is_empty() {
+        return None;
+    }
+    let held = |value: &str| if value.is_empty() { "empty".to_string() } else { text::repr(value) };
+    let mut changes = String::new();
+    if let Some(opener) = opener {
+        changes += &format!("The run opened this form by clicking {}.\n", text::repr(opener));
+    }
+    for (label, (typed, before)) in filled.iter().rev() {
+        changes += &format!(
+            "In this form the run replaced {}, which held {}, with {}.\n",
+            text::repr(label),
+            held(before),
+            held(typed)
+        );
+    }
+    Some(changes)
+}
+
 fn page_question(task: &str, question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
     let content = format!("{UNTRUSTED}\n\n# Task\n{task}\n\n{question}");
     Question::Choice(ChoiceQuestion::new(content, criteria))
@@ -335,7 +391,7 @@ fn ahead_picks(decision: &Decision, asked: &[Asked<'_>]) -> Option<IndexMap<Stri
 ///
 /// An authorized run told a step was undone went back and sent the same support request twice more, each time asked
 /// whether the task wanted it as if it had never been sent: how often this run has already done it is said.
-fn gate_questions(
+pub(super) fn gate_questions(
     history: &[HistoryEntry],
     operation: Operation,
     target: &Control,
@@ -346,6 +402,15 @@ fn gate_questions(
     let irreversible = (!changes_credentials(controls, target, operation))
         .then(|| irreversible_question(operation, target, destination, controls));
     let mut action = control_action(operation, target, destination, controls);
+    let mut irreversible = irreversible;
+    let mut lasting = lasting;
+    if let Some(changes) = form_changes(history, operation, target, controls) {
+        action.push_str(&changes);
+        for question in irreversible.iter_mut().chain(std::iter::once(&mut lasting)) {
+            question.instructions.push('\n');
+            question.instructions.push_str(changes.trim_end());
+        }
+    }
     let done = history
         .iter()
         .filter(|entry| {
