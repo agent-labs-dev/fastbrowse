@@ -1467,6 +1467,28 @@ async fn test_scroll_render_changes_without_dom_mutations_match_full_observation
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn viewport_key_tracks_scroll_positions_without_live_text() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<div id=clock>12:00</div><div style=height:4000px></div>';scrollTo(0,0)",
+    )
+    .await;
+    let top = h.observe().await;
+    eval_active(&h.session, "document.querySelector('#clock').textContent='12:01'").await;
+    let ticking = h.observe().await;
+    assert_eq!(ticking.viewport_key, top.viewport_key, "live text must not change the viewport identity");
+    eval_active(&h.session, "scrollTo(0,2000)").await;
+    let scrolled = h.observe().await;
+    assert_ne!(scrolled.viewport_key, top.viewport_key, "a new page scroll position must change the identity");
+    assert!(top.viewport_text.contains("12:00"));
+    assert!(ticking.viewport_text.contains("12:01"));
+    assert!(scrolled.viewport_text.is_empty(), "the test page has no text at the image-like lower position");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_custom_control_properties_without_events_match_full_observations() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };

@@ -463,6 +463,7 @@ impl Page for FetchedPage {
                 document_key: capture.sha256.clone(),
                 controls: self.loaded.lock().unwrap().controls.clone(),
                 viewport_text: capture.text.clone(),
+                viewport_key: capture.sha256.clone(),
                 offscreen_text: String::new(),
                 visual_content: false,
                 media: Vec::new(),

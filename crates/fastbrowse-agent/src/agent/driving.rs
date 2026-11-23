@@ -1578,6 +1578,11 @@ impl Agent {
         state.visited_addresses.insert(observation.url.clone());
         let state_last = state.reached.insert(state_key(observation), state.evidence_reads);
         let tab_last = state.shown.insert(tab_key(observation), state.evidence_reads);
+        // The viewport is part of what a page shows: a scroll that lands on a part never shown moved the run on even
+        // though the page state, keyed by its controls, is one it has been in.
+        let unseen_view =
+            state.viewed.insert(sha256_hex(json!([observation.url, observation.viewport_key]).to_string().as_bytes()));
+        let scrolled = matches!(state.landing, Some(Some((Operation::Scroll | Operation::ScrollUp, _))));
         // A tab switch moves nothing inside either tab, so it lands on a new place only when that tab was not
         // shown before. Its controls are not compared: a live page ticks them between visits.
         let switched = matches!(state.landing, Some(Some((Operation::SwitchTab, _))));
@@ -1600,7 +1605,9 @@ impl Agent {
             if returned {
                 state.returned_at = state.evidence_reads;
             }
-            let progressed = last.is_none() || returned || replied;
+            // A scroll back to a part already shown is going round, however long ago the last evidence was gathered.
+            let progressed =
+                if scrolled { last.is_none() || unseen_view || replied } else { last.is_none() || returned || replied };
             Box::pin(self.count_progress(state, progressed, observation, Idle::performed(stalled), Status::Stuck))
                 .await?;
         }

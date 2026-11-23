@@ -1295,7 +1295,7 @@ mod benchmark {
 
     pub fn golden_view(result: Value, guards: Value, fingerprint: Value, origin: &str) -> Value {
         let Value::Object(mut view) = result else { panic!("snapshot is not an object: {result}") };
-        for digest in ["document_key", "page_key", "retarget_keys", "read"] {
+        for digest in ["document_key", "page_key", "viewport_key", "retarget_keys", "read"] {
             view.remove(digest);
         }
         if let Some(Value::Array(controls)) = view.get_mut("controls") {

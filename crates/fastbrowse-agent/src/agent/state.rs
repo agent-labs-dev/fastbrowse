@@ -372,6 +372,10 @@ pub(crate) struct RunState {
     /// clocks, counters) is a new page state on every return and made a loop of switches look like progress (#1219).
     /// The tab, not its document: a tab that reloads itself keeps its id and changes its document.
     pub shown: HashMap<String, usize>,
+    /// Every viewport position a page has shown, by address and the browser's stable scroll identity. `reached` keys a
+    /// page state by its controls, which a scroll leaves as they were, so it cannot tell new and repeated positions
+    /// apart (#1137).
+    pub viewed: HashSet<String>,
     /// Addresses actually observed, including pages reached through ordinary links. Recovery proposes unseen routes.
     pub visited_addresses: HashSet<String>,
     /// Reads that added evidence, counted over the run.
@@ -894,6 +898,7 @@ impl RunState {
             login_readings: HashMap::new(),
             reached: HashMap::new(),
             shown: HashMap::new(),
+            viewed: HashSet::new(),
             visited_addresses: HashSet::new(),
             evidence_reads: 0,
             returned_at: 0,
