@@ -2074,7 +2074,11 @@
     const record = recordOf(element);
     if (!record) continue;
     let context = '';
-    for (let card = record; card && !context; card = recordAbove(card)) context = titleOf(card, element, c.label);
+    // A lone record is a record of its own (the only reply names itself, not the comment it answers); only a repeating
+    // card can be a layout row that defers to the record around it.
+    for (let card = record; card && !context; card = cardCount(card.parentElement) > 1 ? recordAbove(card) : null) {
+      context = titleOf(card, element, c.label);
+    }
     context ||= nameOf(record, element, c.label, true);
     if (context) c.context = context;
   }
