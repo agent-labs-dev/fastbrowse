@@ -66,7 +66,7 @@ fn serve_form() -> u16 {
 /// Chrome with the extension loaded and the host registered in its throwaway profile; killed on drop.
 struct Browser {
     child: Child,
-    hosts: PathBuf,
+    hosts: tempfile::TempDir,
     root: PathBuf,
 }
 
@@ -74,15 +74,14 @@ impl Drop for Browser {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.hosts);
     }
 }
 
 impl Browser {
     fn launch(chrome: &Path, root: &Path, extension: &Path) -> Browser {
         let profile = root.join("profile");
-        // A socket path has a 108-byte limit, which a target directory can pass: the host listens somewhere short.
-        let hosts = std::env::temp_dir().join(format!("fbx-{}", std::process::id()));
+        // Concurrent browser fixtures need separate host records, and sockets have a 108-byte path limit.
+        let hosts = tempfile::Builder::new().prefix("fbx-").tempdir().expect("native host directory");
         let manifests = profile.join("NativeMessagingHosts");
         std::fs::create_dir_all(&manifests).expect("profile");
         // The host serves only when registered, so the registry lists the binary under test.
@@ -99,7 +98,7 @@ impl Browser {
             format!(
                 "#!/bin/sh\nFASTBROWSE_HOST_DIR='{}' FASTBROWSE_EXTENSION_DIR='{}' exec '{}' native-host \"$@\" 2>>'{}'\n",
                 registry.display(),
-                hosts.display(),
+                hosts.path().display(),
                 env!("CARGO_BIN_EXE_fastbrowse"),
                 root.join("host.err").display()
             ),
@@ -176,7 +175,7 @@ impl Browser {
     async fn record(&self) -> PathBuf {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            let found = std::fs::read_dir(&self.hosts).ok().and_then(|entries| {
+            let found = std::fs::read_dir(self.hosts.path()).ok().and_then(|entries| {
                 entries.flatten().map(|e| e.path()).find(|p| {
                     p.extension().is_some_and(|x| x == "json")
                         && !p.file_name().unwrap().to_string_lossy().starts_with('.')

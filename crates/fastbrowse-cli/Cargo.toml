@@ -43,4 +43,5 @@ serde_path_to_error = "0.1.20"
 [dev-dependencies]
 # The crate itself with its stand-ins, for the tests that start the binary with them.
 fastbrowse-cli = { path = ".", features = ["scripted"] }
+tempfile = "3"
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net", "io-util", "test-util"] }
