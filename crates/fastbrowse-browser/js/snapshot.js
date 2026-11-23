@@ -896,7 +896,7 @@
       (!visibilityOf(e, { checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
       leaving(e) ||
       (choice && !shownThrough(e)) ||
-      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e)))
+      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e) || draggedByPointer(e)))
     )
       return false;
     if (!choice) return true;

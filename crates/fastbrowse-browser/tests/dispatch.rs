@@ -730,6 +730,45 @@ async fn test_a_drag_hit_tests_the_destination_before_pressing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_default_native_drag_sources_revalidate_the_drop_target() {
+    for (kind, source_markup) in [
+        (
+            "image",
+            r#"<img id=source alt="Card A" src="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27100%27 height=%2780%27%3E%3Crect width=%27100%27 height=%2780%27 fill=%27%2389a%27/%3E%3C/svg%3E" style="position:fixed;left:20px;top:20px;width:100px;height:80px;cursor:grab">"#,
+        ),
+        (
+            "link",
+            r#"<a id=source href="/dispatch.html" aria-label="Card A" style="display:block;position:fixed;left:20px;top:20px;width:100px;height:80px;cursor:grab">Card A</a>"#,
+        ),
+    ] {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        let html = format!(
+            "{source_markup}<button id=drop style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\">Done</button>"
+        );
+        eval_active(
+            &h.page,
+            &format!(
+                "document.body.innerHTML = {}; const source = document.getElementById('source'); \
+                 const drop = document.getElementById('drop'); window.drops = []; \
+                 source.ondragstart = event => {{ event.dataTransfer.setData('text/plain', 'Card A'); drop.textContent = 'Trash'; }}; \
+                 drop.ondragover = event => event.preventDefault(); \
+                 drop.ondrop = event => {{ event.preventDefault(); window.drops.push(event.target.id); }}; true",
+                serde_json::to_string(&html).unwrap()
+            ),
+        )
+        .await;
+        let observation = h.observe().await;
+        let source = find(&observation, "Card A");
+        assert!(source.operations.contains(&Operation::Drag), "{kind}: {source:?}");
+        let result = h.page.act(&drag(source, find(&observation, "Done")), &observation).await.expect("act");
+        assert_eq!(result.outcome, StepOutcome::Stale, "{kind}: {:?}", result.detail);
+        assert_eq!(eval_active(&h.page, "window.drops").await, json!([]), "{kind}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_drag_revalidates_its_endpoints_after_scrolling_and_pointer_entry() {
     for change in ["scroll", "move", "replace", "destination"] {
         let Some(h) = harness().await else { return };

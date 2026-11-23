@@ -1917,10 +1917,7 @@ impl CdpPage {
         // slides out from under the pointer by design and the place it stood is where the item belongs. Only a native
         // drag, whose drop lands on the control the last dragover reached, is held to the control it was checked on.
         let native = self
-            .evaluate(
-                session_id,
-                &format!("window.__fastbrowse?.nodes.get({})?.getAttribute('draggable') === 'true'", target.2),
-            )
+            .evaluate(session_id, &format!("window.__fastbrowse?.nodes.get({})?.draggable === true", target.2))
             .await
             .ok()
             .is_some_and(|value| value == Value::Bool(true));
