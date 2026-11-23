@@ -10,7 +10,7 @@
 //! acceptance pass the authorization gate, a secret is resolved by name at typing time, `done` is judged by `finish`
 //! against what the run read, and the stall rule counts refusals.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use fastbrowse_core::llm::{LLMError, Message, ResponseSchema, Role};
 use fastbrowse_core::models::{LLMPurpose, Operation, RunResult, Status, UntilCheck};
@@ -43,6 +43,33 @@ pub(super) struct Chat {
     pub(super) notices: Vec<String>,
     /// The page state last read, as its url, document and page key, so `done` reads the page in front of it only once.
     read_on: Option<(String, String, String)>,
+    /// The number the model knows each control by, in the order controls were first shown. The page's own ids carry a
+    /// frame (`main:47`), and the model wrote back `47`, a control that did not exist, on 4 of 5 calendar runs.
+    numbers: HashMap<String, usize>,
+    ids: Vec<String>,
+}
+
+impl Chat {
+    /// The number `id` is shown as, given one the first time it is shown, kept for the run.
+    fn number(&mut self, id: &str) -> String {
+        let next = self.ids.len() + 1;
+        let number = *self.numbers.entry(id.to_string()).or_insert(next);
+        if number == next {
+            self.ids.push(id.to_string());
+        }
+        number.to_string()
+    }
+
+    /// The control id the model named as `shown`, or `shown` itself when it names no number given out.
+    fn id_of(&self, shown: &str) -> String {
+        shown
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| self.ids.get(n.wrapping_sub(1)))
+            .cloned()
+            .unwrap_or_else(|| shown.into())
+    }
 }
 
 /// One action the model asks for.
@@ -303,7 +330,9 @@ impl Agent {
         let changed = chat.planned_on.as_ref() != Some(&page_of(observation))
             || observation.controls.len() != chat.planned_ids.len()
             || observation.controls.iter().any(|control| !chat.planned_ids.contains(&control.id));
-        let gone = target_of(next).is_some_and(|id| !observation.controls.iter().any(|control| control.id == id));
+        let gone = target_of(next)
+            .map(|id| chat.id_of(id))
+            .is_some_and(|id| !observation.controls.iter().any(|control| control.id == id));
         if changed || gone {
             let dropped = chat.queue.len();
             chat.queue.clear();
@@ -343,7 +372,12 @@ impl Agent {
         // Links to pages already read are marked, so the model sees which pages of a list it has covered.
         let mut shown = observation.clone();
         state.mark_links(&mut shown);
-        content += &render(&shown, &state.chat.seen);
+        let chat = &mut state.chat;
+        let seen: HashSet<String> = chat.seen.iter().map(|id| chat.numbers[id].to_string()).collect();
+        for control in &mut shown.controls {
+            control.id = chat.number(&control.id);
+        }
+        content += &render(&shown, &seen);
         state.chat.seen = observation.controls.iter().map(|control| control.id.clone()).collect();
         state.chat.messages.push(Message::user(self.redact(&content)));
         let generation =
@@ -354,12 +388,12 @@ impl Agent {
             serde_json::from_value(generation.data).map_err(|error| LLMError::schema(error.to_string()))?;
         // The model's own account of what changed and what it does next, which is what a failed run is read by.
         let next = self.redact(&turn.next);
-        let planned = turn.actions.len();
+        let planned = self.redact(&format!("{:?}", turn.actions));
         self.event("driver_turn", || {
             serde_json::Map::from_iter([
                 ("step".into(), state.steps.len().into()),
                 ("next".into(), next.into()),
-                ("actions".into(), planned.into()),
+                ("actions".into(), Value::String(planned)),
             ])
         });
         let mut actions = VecDeque::from(turn.actions);
@@ -402,7 +436,10 @@ impl Agent {
         output_schema: Option<&RecordSchema>,
         until: Option<&UntilCheck>,
     ) -> Step<Option<RunResult>> {
-        let control = |id: &str| observation.controls.iter().find(|control| control.id == id).cloned();
+        let control = |id: &str| {
+            let id = state.chat.id_of(id);
+            observation.controls.iter().find(|control| control.id == id).cloned()
+        };
         let on = |id: &Option<String>| id.as_deref().map(control);
         let made = match &act {
             Act::Done => {
@@ -467,6 +504,15 @@ impl Agent {
         };
         let Some(decision) = made else {
             let id = target_of(&act).unwrap_or_default();
+            self.event("driver_no_control", || {
+                serde_json::Map::from_iter([
+                    ("id".into(), id.into()),
+                    (
+                        "ids".into(),
+                        observation.controls.iter().map(|control| control.id.clone()).collect::<Vec<_>>().into(),
+                    ),
+                ])
+            });
             state.chat.queue.clear();
             state.chat.notices.push(format!("there is no control [{id}] on the page; use an id listed below."));
             return Ok(None);

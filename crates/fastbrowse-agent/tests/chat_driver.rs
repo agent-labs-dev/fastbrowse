@@ -25,15 +25,15 @@ struct DatePage {
 impl DatePage {
     fn controls(&self) -> Value {
         let mut controls = vec![
-            json!({"id": "date", "frame_id": null, "frame_origin": "https://example.test", "role": "textbox", "label": "Date", "operations": ["click", "fill"],
+            json!({"id": "main:date", "frame_id": null, "frame_origin": "https://example.test", "role": "textbox", "label": "Date", "operations": ["click", "fill"],
                    "sensitive": false, "offscreen": false}),
-            json!({"id": "inline-next", "frame_id": null, "role": "link", "label": "Next", "operations": ["click"],
+            json!({"id": "main:inline-next", "frame_id": null, "role": "link", "label": "Next", "operations": ["click"],
                    "sensitive": false, "offscreen": false}),
-            json!({"id": "note", "frame_id": null, "role": "textbox", "label": "Note", "operations": ["fill"],
+            json!({"id": "main:note", "frame_id": null, "role": "textbox", "label": "Note", "operations": ["fill"],
                    "sensitive": false, "offscreen": false}),
         ];
         if self.open.load(std::sync::atomic::Ordering::SeqCst) {
-            controls.push(json!({"id": "popup-next", "frame_id": null, "role": "link", "label": "Next",
+            controls.push(json!({"id": "main:popup-next", "frame_id": null, "role": "link", "label": "Next",
                                  "operations": ["click"], "sensitive": false, "offscreen": false}));
         }
         Value::Array(controls)
@@ -81,14 +81,14 @@ impl Page for DatePage {
 
     fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         self.acted.lock().unwrap().push(action.clone());
-        let opens =
-            action.target_id.as_deref() == Some("date") && !self.open.swap(true, std::sync::atomic::Ordering::SeqCst);
+        let opens = action.target_id.as_deref() == Some("main:date")
+            && !self.open.swap(true, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             Ok(ActResult {
                 outcome: StepOutcome::Executed,
                 failure: None,
                 // A note taking text changes the page's text but no control on it.
-                page_changed: opens || action.target_id.as_deref() == Some("note"),
+                page_changed: opens || action.target_id.as_deref() == Some("main:note"),
                 detail: None,
                 moved: false,
                 landed: None,
@@ -188,8 +188,8 @@ fn give_up() -> Value {
 async fn test_a_plan_stops_at_the_page_change_and_the_next_turn_sees_the_popups_controls_as_new() {
     let page = Arc::new(DatePage::default());
     let driver = Driver::new([
-        json!({"next": "", "actions": [{"tool": "click", "id": "date"}, {"tool": "click", "id": "inline-next"}]}),
-        json!({"next": "", "actions": [{"tool": "click", "id": "popup-next"}]}),
+        json!({"next": "", "actions": [{"tool": "click", "id": "1"}, {"tool": "click", "id": "2"}]}),
+        json!({"next": "", "actions": [{"tool": "click", "id": "4"}]}),
         give_up(),
     ]);
     let result = run(page.clone(), driver.clone()).await;
@@ -197,22 +197,21 @@ async fn test_a_plan_stops_at_the_page_change_and_the_next_turn_sees_the_popups_
     let acted: Vec<_> = page.acted.lock().unwrap().iter().map(|action| action.target_id.clone()).collect();
     assert_eq!(
         acted,
-        [Some("date".into()), Some("popup-next".into())],
+        [Some("main:date".into()), Some("main:popup-next".into())],
         "the inline Next planned after the click never ran"
     );
     let second = driver.told(1);
     assert!(second.contains("planned action(s) were not run"), "{second}");
-    assert!(second.contains(r#"*[popup-next] link "Next""#), "{second}");
-    assert!(second.contains(r#"[inline-next] link "Next""#) && !second.contains("*[inline-next]"), "{second}");
+    // Controls are shown by number, not by the page's frame-qualified ids the model wrote back without their frame.
+    assert!(second.contains(r#"*[4] link "Next""#), "{second}");
+    assert!(second.contains(r#"[2] link "Next""#) && !second.contains("*[2]") && !second.contains("main:"), "{second}");
 }
 
 #[tokio::test]
 async fn test_typed_text_reaches_the_field_as_the_driver_wrote_it() {
     let page = Arc::new(DatePage::default());
-    let driver = Driver::new([
-        json!({"next": "", "actions": [{"tool": "type", "id": "date", "text": "12/01/2026"}]}),
-        give_up(),
-    ]);
+    let driver =
+        Driver::new([json!({"next": "", "actions": [{"tool": "type", "id": "1", "text": "12/01/2026"}]}), give_up()]);
     run(page.clone(), driver).await;
     let acted = page.acted.lock().unwrap();
     let fill =
@@ -223,10 +222,10 @@ async fn test_typed_text_reaches_the_field_as_the_driver_wrote_it() {
 #[tokio::test]
 async fn test_an_id_not_on_the_page_is_told_back_and_not_acted_on() {
     let page = Arc::new(DatePage::default());
-    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "click", "id": "popup-next"}]}), give_up()]);
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "click", "id": "4"}]}), give_up()]);
     run(page.clone(), driver.clone()).await;
     assert!(page.acted.lock().unwrap().is_empty());
-    assert!(driver.told(1).contains("there is no control [popup-next]"), "{}", driver.told(1));
+    assert!(driver.told(1).contains("there is no control [4]"), "{}", driver.told(1));
 }
 
 #[tokio::test]
@@ -241,7 +240,7 @@ async fn test_a_give_up_ends_the_run_as_its_status() {
 #[tokio::test]
 async fn test_actions_that_change_nothing_end_the_run_stuck() {
     let page = Arc::new(DatePage::default());
-    let clicks = (0..40).map(|_| json!({"next": "", "actions": [{"tool": "click", "id": "inline-next"}]}));
+    let clicks = (0..40).map(|_| json!({"next": "", "actions": [{"tool": "click", "id": "2"}]}));
     let result = run(page, Driver::new(clicks)).await;
     assert_eq!(result.status, Status::Stuck, "{:?}", result.error);
 }
@@ -297,7 +296,7 @@ impl DecisionClient for Answering {
 #[tokio::test]
 async fn test_an_irreversible_click_the_run_is_not_authorized_for_stops_it_unacted() {
     let page = Arc::new(DatePage::default());
-    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "click", "id": "date"}]})]);
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "click", "id": "1"}]})]);
     let jev = Arc::new(Answering(ScriptedJev::new(Vec::new()), "irreversible", 1.0));
     let result = run_with(page.clone(), driver, jev).await;
     assert_eq!(result.status, Status::NeedsConfirmation, "{:?}", result.error);
@@ -331,7 +330,7 @@ impl fastbrowse_core::models::SecretResolver for Secret {
 async fn test_a_secret_is_typed_by_name_and_its_value_never_reaches_the_driver() {
     let page = Arc::new(DatePage::default());
     let driver =
-        Driver::new([json!({"next": "", "actions": [{"tool": "type_secret", "id": "date", "name": "pw"}]}), give_up()]);
+        Driver::new([json!({"next": "", "actions": [{"tool": "type_secret", "id": "1", "name": "pw"}]}), give_up()]);
     let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(Vec::new())), driver.clone())
         .with_chat(true)
         .with_secrets(Some(Arc::new(Secret)));
@@ -370,12 +369,12 @@ async fn test_a_plan_keeps_running_while_a_field_takes_text_and_no_control_appea
     let page = Arc::new(DatePage::default());
     let driver = Driver::new([
         json!({"next": "", "actions": [
-            {"tool": "type", "id": "note", "text": "hello"}, {"tool": "click", "id": "inline-next"}
+            {"tool": "type", "id": "3", "text": "hello"}, {"tool": "click", "id": "2"}
         ]}),
         give_up(),
     ]);
     run(page.clone(), driver.clone()).await;
     let acted: Vec<_> = page.acted.lock().unwrap().iter().map(|action| action.target_id.clone()).collect();
-    assert_eq!(acted, [Some("note".into()), Some("inline-next".into())]);
+    assert_eq!(acted, [Some("main:note".into()), Some("main:inline-next".into())]);
     assert_eq!(driver.sent.lock().unwrap().len(), 2, "both actions ran from one turn");
 }
