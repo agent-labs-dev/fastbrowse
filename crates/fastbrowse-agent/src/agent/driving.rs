@@ -457,8 +457,7 @@ impl Agent {
                 if progressed && decision.operation != Operation::Done && !state.steps.is_empty() && !stopped {
                     self.event("decision_after_read", || Map::from_iter([("step".into(), state.steps.len().into())]));
                     state.built = None;
-                    state.committing = false;
-                    state.keeping = false;
+                    Self::discard_decision(state);
                     continue;
                 }
                 if built.is_some() {
@@ -658,9 +657,17 @@ impl Agent {
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
         self.event("redecide", || Map::from_iter([("url".into(), observation.url.clone().into())]));
         state.redecided = true;
-        // Nothing was sent, so the commit the gate cleared is not one the run has made.
+        Self::discard_decision(state);
+    }
+
+    /// Nothing was sent: the commit the gate cleared is not one the run has made, and a pictured target or look left
+    /// set would be attached to the previous action by the next observation.
+    fn discard_decision(state: &mut RunState) {
         state.committing = false;
         state.keeping = false;
+        state.sighted = None;
+        state.look = None;
+        state.choices.clear();
     }
 
     /// `work`'s result, or `Redrawn` when the page redrew under it: `target`, or with none any control offered.
@@ -1077,6 +1084,12 @@ impl Agent {
                 }
             };
             state.redecided = false;
+            if state.committing {
+                // What this commits can still be redirecting or awaiting a 3-D Secure check when the run ends, and
+                // closing the tab would abort it (#748). Handed over here, not when built: a read can discard the built
+                // action, and the tab would stay handed over for a commit never sent.
+                self.page.hand_over_tab();
+            }
             if action.operation == Operation::Fill
                 && action.text.as_deref().is_none_or(str::is_empty)
                 && require(decision.target.as_ref())?.value.as_deref().is_none_or(str::is_empty)

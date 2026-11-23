@@ -496,6 +496,23 @@ async fn test_a_click_recorded_only_by_its_reply_is_told_the_text_it_added() {
     assert!(state.sighted.is_none());
 }
 
+#[test]
+fn a_discarded_pictured_decision_does_not_attach_to_the_previous_action() {
+    let agent = agent();
+    let mut state = run_state();
+    state.history.push(executed(Some(Operation::Click), Some("Open map"), true));
+    state.sighted = Some("Click the pictured marker".into());
+    state.look = Some(crate::policy::Look { before: vec![1], after: None });
+
+    // A read can discard the pictured decision before its step, so its metadata must not reach the prior history entry.
+    agent.redecide(&mut state, &observation(&[button("marker")]));
+    agent.note_effect(&mut state, &observation(&[button("marker")]));
+
+    assert_eq!(state.history[0].for_step, None);
+    assert!(state.sighted.is_none());
+    assert!(state.look.is_none());
+}
+
 /// A decision to write `value` into a field that currently holds `holds`, and the action doing it.
 fn edit(value: &str, holds: Option<&str>, secret: bool, operation: Operation) -> (Decision, Action) {
     let target = Control { value: holds.map(String::from), ..name_field() };
@@ -7623,6 +7640,30 @@ async fn test_the_tab_an_authorized_commit_was_sent_from_is_handed_over() {
         assert_eq!(page.sent.lock().unwrap().len(), 1, "{irreversible}");
         assert_eq!(page.handed_over.load(std::sync::atomic::Ordering::SeqCst), handed, "{irreversible}");
     }
+}
+
+#[tokio::test]
+async fn building_a_speculative_authorized_commit_does_not_hand_over_the_tab() {
+    let page = Arc::new(Unmoved {
+        now: at("https://shop.test/basket", &[button("Place order")]),
+        sent: Mutex::new(Vec::new()),
+        handed_over: Default::default(),
+        waits: Mutex::default(),
+        swap: Mutex::default(),
+        swap_on_capture: Mutex::default(),
+        waited_on: Mutex::default(),
+    });
+    let jev = Commits(ScriptedJev::new(Vec::new()), 0.99);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.authorization = Authorization { irreversible_actions: true };
+    let page_state = at("https://shop.test/basket", &[button("Place order")]);
+    let decision = code_decision(Operation::Click, Some(page_state.controls[0].clone()));
+
+    agent.action(&mut state, &page_state, &decision).await.expect("built");
+
+    assert!(state.committing, "the gate still records the candidate as a commit");
+    assert!(!page.handed_over.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[tokio::test]
