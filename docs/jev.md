@@ -77,6 +77,9 @@ Direct TypeSafe remains available and adds no service between fastbrowse and the
 The Vercel AI Gateway is a last resort rather than a recommended Jev route. `AI_GATEWAY_API_KEY` alone
 serves the LLM and also serves Jev as the last resort; beside a direct or OpenRouter key it adds a Jev backup.
 
+Each target option carries the control's observed context, including the action that revealed it when known.
+The operation question reads the same context and the eligible operations from the shared state.
+
 Jev images go to OpenRouter and to TypeSafe's own API. On those routes each step's action decision is sent the viewport
 screenshot: the state names it `viewport_screenshot`, and the request carries the PNG in TypeSafe's
 `assets` map with the `TypeSafe-Danger-Zone-Images` header. A screenshot outside TypeSafe's documented

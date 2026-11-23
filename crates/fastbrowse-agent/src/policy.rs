@@ -1923,18 +1923,17 @@ pub fn element(control: &Control) -> Map<String, Value> {
     control_description(control, true)
 }
 
-/// A control's description; `shared` adds the context and operations every question reads from the step's state, which
-/// a target option refers to by id rather than repeating.
-fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
+/// Both questions need the control's context, but only the operation question needs the list of eligible operations.
+fn control_description(control: &Control, include_operations: bool) -> Map<String, Value> {
     let mut element = Map::new();
     element.insert("id".into(), control.id.clone().into());
     element.insert("label".into(), control.label.clone().into());
     element.insert("role".into(), control.role.clone().into());
-    if shared {
+    if include_operations {
         element.insert("operations".into(), sorted_operations(control));
     }
     let optional = [
-        ("context", context_of(control).filter(|_| shared).map(Value::from)),
+        ("context", context_of(control).map(Value::from)),
         ("value", control.value.clone().map(Value::from)),
         // An unfocused control offers nothing an unknown one does not, and every control but one is unfocused.
         ("focused", control.focused.filter(|focused| *focused).map(Value::from)),
@@ -2024,9 +2023,8 @@ fn target_question(
     rules: &str,
     looks: &IndexMap<String, Vec<u8>>,
 ) -> ChoiceQuestion {
-    // An option keeps what tells it apart as a target (label, role, href, value, state), and refers by id to the
-    // context and operations the shared state carries for the operation question. Repeated in every option, they
-    // added 45% to a step request's bytes and 18% to its cost (#1286).
+    // The shared state alone did not tell Jev which widget each target belonged to when it chose a control (#884).
+    // Include that context in each option and leave operation eligibility in shared state (#1286).
     let shown = candidates.iter().any(|c| looks.contains_key(&c.id));
     let rules = if shown { json!([rules, LOOKS_LIKE]) } else { json!(rules) };
     choice(
@@ -2305,7 +2303,7 @@ mod tests {
     }
 
     #[test]
-    fn test_control_context_and_actions_are_sent_once_in_shared_state() {
+    fn test_target_options_send_observed_context_and_leave_operations_in_state() {
         let carded = |i| Control {
             context: Some(format!("Card {i}")),
             shown_by: Some("clicking Booking date".into()),
@@ -2316,9 +2314,12 @@ mod tests {
         let context = StepContext::new("t");
         let targeted = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let criteria: Value = serde_json::from_str(&targeted.questions["click_target"].dump_json()).unwrap();
-        // A target option names its element by id; its context and operations are read from the shared state, which
-        // the operation question needs them in too (#1286).
-        assert_eq!(criteria["criteria"]["b1"], json!({"id": "b1", "label": "Button 1", "role": "button"}));
+        assert_eq!(
+            criteria["criteria"]["b1"],
+            json!({"id": "b1", "label": "Button 1", "role": "button",
+                   "context": "shown by clicking Booking date; Card 1"})
+        );
+        assert!(criteria["criteria"]["away"].get("context").is_none());
         assert_eq!(criteria["criteria"]["away"]["href"], "/away");
         assert!(criteria["instructions"].as_str().unwrap().contains("state.elements"));
         let shown = &targeted.state["elements"][0];
@@ -2330,6 +2331,10 @@ mod tests {
         assert!(!grouped.questions.contains_key("click_target"));
         assert_eq!(grouped.state["elements"][0]["context"], shown["context"]);
         assert_eq!(grouped.state["elements"][0]["operations"], json!(["click"]));
+        let follow_up = group_target_question(&grouped, Operation::Click, &controls[..2]);
+        let criteria: Value = serde_json::from_str(&follow_up["click_target"].dump_json()).unwrap();
+        assert_eq!(criteria["criteria"]["b1"]["context"], shown["context"]);
+        assert!(criteria["criteria"]["b1"].get("operations").is_none());
     }
 
     #[test]
