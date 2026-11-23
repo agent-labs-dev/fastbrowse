@@ -12,7 +12,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - A claim that an item is the first, second or third of a list is now evidenced. Asked for the first three links of a page's list in order, the composer wrote "The third example link is 'Add/Remove Elements'" citing a note that held only that link's text, the support check judged the place unsupported at 0.38, dropped the claim, and the run ended `unverified`. A captured block now carries `item_place` (the item's `position` and `count`, from `aria-posinset` and `aria-setsize`, or counted among the rendered items of its list in a browser capture and a fetched page alike), the composer's note shows it as `list_position` and `list_size`, and the check's quote and instructions state that those give the item's place. The composer is told to state a place only from them. Refs #1108.
-- A claim written only of parts copied from the notes it cites is no longer put to Jev. Its parts are each checked against their note when the draft is bound, so it asserts nothing beyond those spans; three such claims (a link's text quoted alone) were scored 0.59, 0.25 and 0.39 and two were dropped. A claim with any words of its own, a computed value or table cells is still judged. Refs #1108.
 
 - After an iframe reload, the form submission check tells Jev that the earlier form's relationship to the current form is unknown ([#1496](https://github.com/agent-labs-dev/fastbrowse/issues/1496)).
 

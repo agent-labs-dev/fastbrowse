@@ -531,6 +531,7 @@ async fn test_a_list_item_block_carries_its_place_in_the_list() {
         "<h2>Available Examples</h2><ul>\
          <li><a href='/abtest'>A/B Testing</a></li>\
          <li hidden><a href='/hidden'>Hidden</a></li>\
+         <li style='visibility:hidden'><a href='/invisible'>Invisible</a></li>\
          <li><a href='/accessibility'>Accessibility Issues</a></li>\
          <li><a href='/add'>Add/Remove Elements</a></li></ul>\
          <ul><li>Alone</li></ul>\
@@ -558,7 +559,7 @@ async fn test_blocks_inside_a_list_item_carry_its_place() {
     h.page.navigate(&sites().main, None).await.expect("navigate");
     set_body(
         &h.session,
-        "<ul><li><h3>First card</h3><p>First body</p></li><li><h3>Second card</h3><p>Second body</p></li></ul>\
+        "<ul><li><h3>First card</h3><p>First body</p></li><li style='display:contents'><h3>Second card</h3><p>Second body</p></li></ul>\
          <div role='list'><div role='listitem'><p>One</p></div><div role='listitem'><p>Two</p></div></div>\
          <ul><li aria-posinset='5' aria-setsize='-1'>Unsized</li><li aria-posinset='6' aria-setsize='-1'>Also</li></ul>",
     )

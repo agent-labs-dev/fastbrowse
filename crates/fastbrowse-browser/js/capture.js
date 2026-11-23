@@ -702,7 +702,13 @@
       count = Number.parseInt(el.getAttribute('aria-setsize'), 10);
     } else {
       const list = el.parentElement;
-      const siblings = list?.matches(LIST) ? [...list.children].filter(c => c.matches(ITEM) && !hidden(c)) : [];
+      const siblings = list?.matches(LIST) ? [...list.children].filter(c => {
+        if (!c.matches(ITEM) || hidden(c)) return false;
+        if (visible(c)) return true;
+        // The capture also reads display:contents items, which have children on screen but no box of their own.
+        const style = getComputedStyle(c);
+        return style.display === 'contents' && style.visibility === 'visible';
+      }) : [];
       position = siblings.indexOf(el) + 1;
       count = siblings.length;
     }

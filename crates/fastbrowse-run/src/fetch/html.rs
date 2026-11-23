@@ -1359,7 +1359,7 @@ impl<'a> Reader<'a> {
                 links: links.next().unwrap_or_default(),
                 frame_id: None,
                 whole_record: false,
-                item_place: None,
+                item_place: self.places.last().map(|open| open.place),
                 fields: Vec::new(),
             });
         }
@@ -2275,7 +2275,8 @@ mod tests {
              <li><a href='/abtest'>A/B Testing</a></li>\
              <li hidden><a href='/hidden'>Hidden</a></li>\
              <li><a href='/accessibility'>Accessibility Issues</a></li>\
-             <li><a href='/add'>Add/Remove Elements</a> <span>(new)</span></li>\
+             <li><a href='/add'>Add/Remove Elements</a> <span>(new)</span>\
+             <table><tr><td>Table value</td></tr></table></li>\
              </ul><p>After</p><ul><li>Alone</li></ul>",
             "https://example.test/",
         );
@@ -2287,6 +2288,7 @@ mod tests {
         assert_eq!(place("Accessibility Issues"), Some((2, 3)), "a hidden item takes no place");
         assert_eq!(place("Add/Remove Elements"), Some((3, 3)));
         assert_eq!(place("(new)"), Some((3, 3)), "text beside the link is the same item");
+        assert_eq!(place("| Table value |"), Some((3, 3)), "a table row carries its item's place");
         assert_eq!(place("After"), None, "text after the list is no item");
         assert_eq!(place("Alone"), None, "a list of one has no place to state");
     }
