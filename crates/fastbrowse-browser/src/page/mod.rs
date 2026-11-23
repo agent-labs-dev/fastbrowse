@@ -1602,8 +1602,12 @@ impl CdpPage {
         // Opening the address a page shows reloads it, but Chrome takes a navigation to an address that matches the
         // current one up to its fragment as a jump within the document: a hash-routed app asked to reload its own
         // address kept the document it had, and a run that reloaded to check a save read back what it had typed
-        // (#1433). Only an address with a fragment is taken so, so only then is the current one read first.
-        if url.contains('#') && self.evaluate(&session_id, "location.href").await?.as_str() == Some(url) {
+        // (#1433). Only an address with a fragment is taken so, so only then is the current one read first. An open
+        // dialog blocks the page's scripts, so the address is not read then: `Page.navigate` goes ahead of it.
+        if url.contains('#')
+            && self.session.pending_dialog().is_none()
+            && self.evaluate(&session_id, "location.href").await?.as_str() == Some(url)
+        {
             let mark = self.session.document_mark(&session_id);
             let denials_before = self.session.denials();
             self.evaluate(&session_id, "location.reload()").await?;
@@ -1618,16 +1622,28 @@ impl CdpPage {
                 if self.session.document_mark(&session_id) != mark {
                     break;
                 }
+                // A page that asks before it unloads holds the reload behind its dialog, which the next observation
+                // shows for the agent to answer, rather than this waiting it out as a timeout.
+                if self.session.pending_dialog().is_some() {
+                    return Ok(());
+                }
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     let message = format!("location.reload() loaded no document for {url}");
                     return Err(BrowserError::NavigationTimeout(Failure::new("location.reload/TimeoutError", message)));
                 }
-                self.session.wait_for_lifecycle(lifecycle, remaining.as_secs_f64()).await;
+                tokio::select! {
+                    _ = self.session.wait_for_lifecycle(lifecycle, remaining.as_secs_f64()) => {}
+                    () = self.session.wait_for_dialog() => {}
+                }
             }
-            if self.ready(&session_id, load_timeout_seconds).await? {
-                let _ = self.changed_since("", None).await;
+            // Still loading by the deadline is a timeout, as `Page.navigate`'s is below.
+            let remaining = deadline.saturating_duration_since(Instant::now()).as_secs_f64();
+            if !self.ready(&session_id, remaining).await? {
+                let message = format!("location.reload() left the document loading for {url}");
+                return Err(BrowserError::NavigationTimeout(Failure::new("location.reload/TimeoutError", message)));
             }
+            let _ = self.changed_since("", None).await;
             return Ok(());
         }
         // A cloud browser's proxy drops a first connection now and then, or leaves a document loading, and a run that

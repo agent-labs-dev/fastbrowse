@@ -311,6 +311,26 @@ async fn test_navigate_from_a_pending_dialog_lands_on_the_address() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_navigate_to_an_address_with_a_fragment_from_a_pending_dialog_does_not_wait_on_the_page() {
+    // The address a hash-routed page shows is read before it is reloaded in place, and an open dialog blocks that
+    // read until the command deadline.
+    let Some(h) = harness().await else { return };
+    h.goto("/").await;
+    let obs = h.observe().await;
+    h.page.act(&click(&find(&obs, "Confirm").id), &obs).await.expect("click");
+    let session = &h.session;
+    wait_until(|| async move { session.pending_dialog().is_some() }, 5.0).await;
+    let blocked = h.observe().await;
+    let target = format!("{}/iframe.html#top", sites().iframe);
+    let result = timeout(Duration::from_secs(30), h.page.act(&navigate_to(&target), &blocked))
+        .await
+        .expect("in time")
+        .expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_navigating_away_clears_the_dialog_of_the_old_document() {
     let Some(h) = harness().await else { return };
     navigate_from_a_dialog(&h).await;
