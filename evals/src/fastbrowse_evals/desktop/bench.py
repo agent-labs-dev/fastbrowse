@@ -34,6 +34,8 @@ from fastbrowse.evals.judge import Claim, Judge, jev_from_environment
 from fastbrowse.evals.judge import judge as judge_claims
 from pydantic import BaseModel, ConfigDict
 
+from fastbrowse_evals.desktop.result import dollars, model_calls, read_result
+
 FORM = Path(__file__).with_name("order_form.py")
 # How long a timed-out run gets to stop after SIGTERM before it is killed.
 CLEANUP_GRACE = 15.0
@@ -290,21 +292,13 @@ def fastbrowse_arm(binary: str, task: DesktopTask, form: Form, out: Path, timeou
     if task.authorize:
         argv.append("--authorize")
     wall = spawn([*argv, task.task], out, "fastbrowse", timeout)
-    try:
-        result = json.loads((out / "fastbrowse.out").read_text() or "{}")
-    except json.JSONDecodeError:
-        result = {}
-    calls = (
-        sum(1 for line in trace.read_text().splitlines() if json.loads(line).get("event") == "call")
-        if (trace.exists())
-        else 0
-    )
-    lines = (result.get("cost") or {}).get("lines") or []
+    result = read_result((out / "fastbrowse.out").read_text())
+    calls = model_calls(trace)
     return {
         "status": result.get("status", "no result"),
         "answer": result.get("answer") or "",
         "wall": wall,
-        "dollars": sum(line.get("dollars") or 0.0 for line in lines),
+        "dollars": dollars(result),
         "calls": calls,
         "error": result.get("error") or ((out / "fastbrowse.err").read_text()[-500:] if not result else None),
     }

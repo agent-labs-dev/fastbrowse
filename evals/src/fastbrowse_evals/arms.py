@@ -15,6 +15,8 @@ PublicArm = Literal[
     "browser-harness",
     "agent-browser",
     "cua-codex",
+    "fastbrowse-desktop",
+    "claude-code-deskpilot",
 ]
 
 
@@ -39,6 +41,10 @@ ARM_BINDINGS: tuple[ArmBinding, ...] = (
     ArmBinding("agent-browser", "agent-browser", "openai/gpt-6-luna"),
     # Codex on Luna, as browser-harness; Parallax forwards the trial model to the CUA command.
     ArmBinding("cua-codex", "cua-codex", "openai/gpt-6-luna"),
+    # The desktop arms run files-desktop-report-cross-app in a Hyprland box (.github/workflows/desktop-eval.yml), outside
+    # every published group. claude-code on Haiku 5.5, as the browser-harness baseline.
+    ArmBinding("fastbrowse-desktop", "fastbrowse-desktop"),
+    ArmBinding("claude-code-deskpilot", "claude-code-deskpilot", "anthropic/claude-haiku-5.5"),
 )
 
 BY_PUBLIC = {binding.public: binding for binding in ARM_BINDINGS}

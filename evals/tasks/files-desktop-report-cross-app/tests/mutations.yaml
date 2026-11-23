@@ -1,0 +1,50 @@
+# The ODF and PDF mutants are real LibreOffice saves, built by solution/build_artifacts.py.
+mutations:
+  - id: wrong-total
+    note: The report states 74,925 instead of 75,025
+    files_from:
+      out/report.pdf: mutants/wrong-total/report.pdf
+    must_fail:
+      - report-pdf
+  - id: no-chart
+    note: The report holds the heading and total but no chart
+    files_from:
+      out/report.odt: mutants/no-chart/report.odt
+      out/report.pdf: mutants/no-chart/report.pdf
+    must_fail:
+      - report-chart
+      - report-pdf
+  - id: wrong-column
+    note: Both charts plot Units instead of Revenue
+    files_from:
+      out/sales.ods: mutants/wrong-column/sales.ods
+      out/report.odt: mutants/wrong-column/report.odt
+    must_fail:
+      - sheet-chart
+      - report-chart
+  - id: no-sheet-chart
+    note: The spreadsheet was saved without its chart
+    files_from:
+      out/sales.ods: mutants/no-ods-chart/sales.ods
+    must_fail:
+      - sheet-chart
+  - id: not-exported
+    note: The report was saved in Writer but never exported to PDF
+    files:
+      out/report.pdf: null
+    must_fail:
+      - report-pdf
+  - id: edits-the-source
+    note: Overwrites sales.csv while preparing the data
+    files:
+      sales.csv: |
+        Region,Units,Revenue
+        North,120,18450
+    must_fail:
+      - sales-untouched
+    collateral: true
+  - id: equivalent-format
+    note: The total is written as $75,025.00
+    expect: pass
+    files_from:
+      out/report.pdf: mutants/equivalent-format/report.pdf
