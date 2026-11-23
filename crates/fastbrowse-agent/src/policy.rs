@@ -161,6 +161,9 @@ pub struct HistoryEntry {
     pub operation: Option<Operation>,
     #[serde(deserialize_with = "lax::nullable")]
     pub target: Option<String>,
+    /// The named control the drag was dispatched to. The effect records what the page showed afterward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
     pub outcome: StepOutcome,
     #[serde(deserialize_with = "lax::boolean")]
     pub page_changed: bool,
@@ -367,6 +370,7 @@ impl HistoryEntry {
         HistoryEntry {
             operation,
             target: target.map(str::to_string),
+            destination: None,
             outcome,
             page_changed,
             note: None,

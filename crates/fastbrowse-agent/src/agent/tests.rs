@@ -2425,8 +2425,20 @@ impl Page for FinishPage {
         Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Record B: 34")])) })
     }
 
-    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
-        unreachable!("the finish-path test does not act")
+    fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        assert_eq!(action.operation, Operation::Drag);
+        let destination_exists =
+            action.destination_id.as_ref().is_none_or(|id| self.0.controls.iter().any(|control| &control.id == id));
+        Box::pin(async move {
+            Ok(ActResult {
+                outcome: if destination_exists { StepOutcome::Executed } else { StepOutcome::Stale },
+                failure: None,
+                page_changed: destination_exists,
+                detail: None,
+                moved: false,
+                landed: None,
+            })
+        })
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -2520,6 +2532,40 @@ impl DecisionClient for DoneCheckJev {
 
     fn profile(&self) -> DecisionProfile {
         ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn completion_is_told_the_destination_of_an_executed_drag_between_controls() {
+    let source = Control::new("item", "button", "Item", [Operation::Drag]);
+    let destination = Control { context: Some("Project".into()), ..button("Archive") };
+    let observed = observation(&[source.clone(), destination.clone()]);
+
+    for (destination_id, outcome, receipt) in [
+        (Some("archive"), "executed", Some("Archive (Project)")),
+        (Some("archive"), "stale", None),
+        (None, "executed", None),
+    ] {
+        let mut state = run_state();
+        let mut decision = code_decision(Operation::Drag, Some(source.clone()));
+        decision.destination = Some(destination.clone());
+        let live = if outcome == "stale" { observation(std::slice::from_ref(&source)) } else { observed.clone() };
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(live)), jev.clone(), Arc::new(ScriptedLLM));
+        state.built = Some(Ok(super::driving::Watched::Done(Action {
+            target_id: Some(source.id.clone()),
+            destination_id: destination_id.map(str::to_string),
+            ..Action::new(Operation::Drag)
+        })));
+
+        agent.step(&mut state, &observed, &decision).await.unwrap();
+        agent.actions_done(&mut state, &observed).await.unwrap();
+
+        let requests = jev.3.lock().unwrap();
+        let entry = &requests[0]["recent_actions"][0];
+        assert_eq!(entry["target"], "Item");
+        assert_eq!(entry["outcome"], outcome);
+        assert_eq!(entry.get("destination").and_then(serde_json::Value::as_str), receipt);
     }
 }
 
