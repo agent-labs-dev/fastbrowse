@@ -2639,7 +2639,10 @@ impl Agent {
         } else if holds("refused")? {
             Carried::Refused
         } else {
-            let steps = spans(&state.task, SpanKind::Str);
+            // Spanned from the masked task, as the header above is: the clauses become choice labels, and a
+            // resolved secret sitting in one reached Jev unmasked while the header beside it was masked (#1534).
+            // Masking blanks at equal length, so the clauses and their indices are the task's own.
+            let steps = spans(&task, SpanKind::Str);
             let criteria = steps
                 .iter()
                 .enumerate()
