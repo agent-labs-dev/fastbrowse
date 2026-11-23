@@ -2288,27 +2288,31 @@
   // The open modal the rest of the page sits behind. A page marks what is under one aria-hidden or inert, so those
   // controls leave the observation while staying in the document: Google Flights' Stops filter took 145 controls
   // out and put them back on closing, and a run told each by name in every later step.
-  // Many dialogs never say aria-modal: they are a plain role="dialog" and make the page behind them aria-hidden or
-  // inert, usually by marking the app root beside the portal that holds them (CurseForge's "Delete media"). Such a
-  // dialog is modal because it has an aria-hidden or inert sibling, at its own level or any ancestor's, holding
-  // controls, which is what a modal does to the page. Controls it hid then left the observation with no modal to
-  // explain it, and a step was told the page was removed. A decorative aria-hidden icon holds no control.
-  const hidesPage = e => {
-    for (let n = e; n.parentElement; n = n.parentElement) {
-      for (const sibling of n.parentElement.children) {
-        if (sibling !== n && sibling.matches('[aria-hidden="true"],[inert]') && (sibling.matches(SELECTOR) || sibling.querySelector(SELECTOR))) return true;
-      }
+  // Most modals never say aria-modal and need no dialog role: MUI, Radix, react-aria and Headless UI mark the page
+  // behind a modal aria-hidden or inert instead ("aria-hide others"), usually the app root beside the portal that
+  // holds the modal. Content that is aria-hidden or inert and still holds controls is how a page tells assistive tech
+  // that only its siblings are usable, since a page that hid interactive content from them while it stayed usable
+  // would break ARIA. So a visible sibling of such content, holding controls and not itself hidden, is the modal.
+  // CurseForge's "Delete media" dialog and its gallery edit drawer (a role="presentation" root, no dialog role) are
+  // both this shape; unrecognised, the controls they hid were reported as removed. A role="dialog" that says
+  // aria-modal="false" stays non-modal. The hidden subtree must hold a control, so a decorative icon does not count.
+  const hiddenSelector = '[aria-hidden="true"],[inert]';
+  const holdsControls = e => e.matches(SELECTOR) || !!e.querySelector(SELECTOR);
+  const dialogSelector = '[role="dialog"],[role="alertdialog"]';
+  const found = new Set(renderFact('query', document, 'dialog:modal,[aria-modal="true"]'));
+  for (const hidden of renderFact('query', document, hiddenSelector)) {
+    if (hidden.parentElement?.closest(hiddenSelector) || !holdsControls(hidden)) continue;
+    for (const sibling of hidden.parentElement?.children || []) {
+      if (sibling === hidden || sibling.matches(hiddenSelector) || !holdsControls(sibling)) continue;
+      const dialog = sibling.matches(dialogSelector) ? sibling : sibling.querySelector(dialogSelector);
+      if (dialog?.getAttribute('aria-modal') !== 'false') found.add(sibling);
     }
-    return false;
-  };
-  const modals = [...renderFact('query', document, 'dialog:modal,[aria-modal],[role="dialog"],[role="alertdialog"]')].filter(
-    e =>
-      (e.matches('dialog:modal,[aria-modal="true"]') || (!e.matches('[aria-modal]') && hidesPage(e))) &&
-      !e.closest('[aria-hidden="true"],[inert]') &&
-      visibilityOf(e, { checkVisibilityCSS: true }),
-  );
-  // A dialog is named by aria-label or aria-labelledby, never by its content.
-  const dialogName = e =>
+  }
+  const modals = [...found]
+    .filter(e => !e.closest(hiddenSelector) && visibilityOf(e, { checkVisibilityCSS: true }))
+    .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  // A dialog is named by aria-label or aria-labelledby, never by its content, on the modal or on the dialog inside it.
+  const ariaName = e =>
     (
       e.getAttribute('aria-label') ||
       (e.getAttribute('aria-labelledby') || '')
@@ -2318,6 +2322,7 @@
     )
       .replace(/\s+/g, ' ')
       .trim();
+  const dialogName = e => ariaName(e) || (e.querySelector(dialogSelector) ? ariaName(e.querySelector(dialogSelector)) : '');
   const modal = modals.length ? dialogName(modals.at(-1)) : null;
 
   // The read number names a transport baseline, and the read is kept to answer "unchanged" while the page stays.
