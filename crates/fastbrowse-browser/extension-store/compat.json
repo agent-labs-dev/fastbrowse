@@ -1,10 +1,10 @@
 {
   "store": {
     "id": "ghodfgfhbfaghhfdabopagbfopdjgpop",
-    "version": "0.1.1",
-    "snapshot": "published/0.1.1",
+    "version": "0.1.2",
+    "snapshot": "published/0.1.2",
     "needs": "0.1.2",
-    "missing": ["Fetch.disable"],
+    "missing": [],
     "blocking": [],
     "issue": "https://github.com/agent-labs-dev/fastbrowse/issues/1063"
   }

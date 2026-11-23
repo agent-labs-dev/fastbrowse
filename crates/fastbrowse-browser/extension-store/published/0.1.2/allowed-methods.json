@@ -5,6 +5,7 @@
   "Emulation.setDeviceMetricsOverride",
   "Emulation.setFocusEmulationEnabled",
   "Fetch.continueRequest",
+  "Fetch.disable",
   "Fetch.enable",
   "Fetch.failRequest",
   "Fetch.getResponseBody",
