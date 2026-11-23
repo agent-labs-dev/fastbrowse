@@ -6,7 +6,18 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 2. `uv version <x.y.z>`, then `uv run python scripts/npm_versions.py --write`, which gives the SDK's manifest
    and the Rust workspace the same number. Open a `chore: <x.y.z>` PR. CI fails if the version has no entry or
    npm or Cargo disagrees with it.
-3. Before tagging, measure the release commit with `benchmark-campaign.yml`: for a minor release (or a patch tagged
+3. Before each release benchmark, check the newest callable regular Luna and the newest explicitly versioned Jev
+   for each transport fastbrowse supports. Use the providers' documented request IDs. Check Luna in the
+   [OpenAI model docs](https://developers.openai.com/api/docs/models/gpt-6-luna), the
+   [OpenRouter catalog](https://openrouter.ai/api/v1/models), and the
+   [Vercel model catalog](https://vercel.com/ai-gateway/models). Check Jev with
+   [TypeSafe](https://docs.typesafe.ai/models), [OpenRouter](https://openrouter.ai/typesafe), and
+   [Vercel](https://vercel.com/ai-gateway/models). If a newer callable version is available, update the defaults
+   and measure that build before tagging. If the provider exposes only an alias, use that request ID and record
+   the upstream canonical snapshot, when listed, in the release evidence. Keep the candidate's agent and harness
+   SHAs and the actual model IDs reported in the benchmark rows.
+
+   Before tagging, measure the release commit with `benchmark-campaign.yml`: for a minor release (or a patch tagged
    with the line `Benchmarks: run`), run every internal group and suite with three repeats and `refresh_competitors`
    off unless the site needs new competitor rows. Workflow dispatch requires a branch or tag, so confirm the measured
    fastbrowse SHA and harness SHA before using the Parallax run artifacts.
