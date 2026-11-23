@@ -22,7 +22,8 @@ use super::helpers::{decision_label, describe, doing, drew_something, netloc_of,
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::seeing::{cards, covers_viewport};
 use super::state::{
-    FailureCause, Flow, OutputIntent, Picked, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
+    FailureCause, Flow, Kept, OutputIntent, Picked, RunState, SiteFailure, Step, Stop, Typed, Unsure, Written,
+    read_key, tab_key,
 };
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
@@ -1644,6 +1645,15 @@ impl Agent {
             last.for_step = sighted.clone();
         }
         let Some(before) = state.acted_from.take() else { return };
+        // The page as it was before a field's first fill since the last send or page left, where the values a send
+        // carried start: counted after, a later fill saw the draft an earlier one left in a rich-text editor.
+        if let Some(last) = state.history.last()
+            && last.operation == Some(Operation::Fill)
+            && last.outcome == StepOutcome::Executed
+            && let Some(field) = &last.target
+        {
+            state.filled_before.entry(field.clone()).or_insert_with(|| super::helpers::page_text(&before));
+        }
         state.settle_change(observation);
         let landed = read_key(observation);
         if landed != read_key(&before)
@@ -1671,7 +1681,45 @@ impl Agent {
             }
             state.arrived_by = Some((landed, href));
         }
+        // A load since a change ends the page's not having been loaded. A page loaded again at the same address can
+        // still lack what was typed, as CurseForge serves its copy from before a post for about a minute, so with
+        // typed values to check the fact stays, worded for a loaded page; any other load ends it.
+        // A loaded copy that shows every value has nothing left to check, on this step or any later one: kept, a later
+        // step that hid one (collapsing the replies) was told the page still came from before the send. Leaving the
+        // page's address ends the check too, so a route left and returned to is not told it again.
+        let loads = observation.document_key != before.document_key;
+        let ends = state.kept.as_ref().is_some_and(|kept| {
+            kept.url != observation.url
+                || ((kept.loaded || loads) && super::helpers::kept_absent(kept, observation).is_empty())
+        });
+        if ends {
+            state.kept = None;
+        } else if loads && let Some(kept) = state.kept.as_mut() {
+            kept.loaded = true;
+        }
+        let history_len = state.history.len();
+        let typed = if state.committing || keeping {
+            let page = super::helpers::page_text(&before);
+            super::helpers::typed_before_send(&state.history, state.last_send, &state.sent_fills, &before)
+                .into_iter()
+                .map(|(field, value)| {
+                    let page = state.filled_before.get(&field).unwrap_or(&page);
+                    let before = value.as_deref().map_or(0, |value| super::helpers::occurrences(page, value));
+                    (field, value, before)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Fills on a page the run has left went with it: a search typed before following a result was checked for on
+        // the thread a reply was later posted to.
+        if observation.document_key != before.document_key || observation.url != before.url {
+            state.last_send = history_len;
+            state.sent_fills.clear();
+            state.filled_before.clear();
+        }
         let Some(last) = state.history.last_mut() else { return };
+        let described = super::helpers::step_words(last.operation, last.target.as_deref());
         let waited = last.operation == Some(Operation::Wait);
         let sent = state.committing && last.outcome == StepOutcome::Executed;
         note_commit(&mut state.behind_dialog, &mut state.committed_documents, &before, observation, sent);
@@ -1696,6 +1744,31 @@ impl Agent {
             // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
+            if (state.committing || keeping) && observation.document_key != before.document_key {
+                // This send loaded its own page, so an earlier send's kept values were not loaded after it. A lasting save that loads a
+                // new document is the same: recorded as kept and not loaded, it was told the page had not been
+                // loaded since the save it had just loaded.
+                state.kept = None;
+            } else if state.committing || keeping {
+                // A send after a load, or on another route of the same document, starts the fact over: what the
+                // earlier send typed is not this one's to check. A field sent again holds only its newer value.
+                let kept = state.kept.get_or_insert_with(Kept::default);
+                if kept.loaded || kept.url != observation.url {
+                    *kept = Kept::default();
+                }
+                kept.url = observation.url.clone();
+                kept.steps.push(described);
+                kept.typed.retain(|earlier| typed.iter().all(|(sent, ..)| *sent != earlier.field));
+                // Only the fields this send carried are used up: advancing past every fill dropped a title typed
+                // before a separate comment form was posted, and the title's later save was never checked.
+                for (field, ..) in &typed {
+                    state.sent_fills.insert(field.clone(), history_len);
+                    state.filled_before.remove(field);
+                }
+                kept.typed.extend(
+                    typed.into_iter().filter_map(|(field, value, before)| Some(Typed { value: value?, field, before })),
+                );
+            }
             state.replied = (state.committing || keeping || last.look.is_some())
                 && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)

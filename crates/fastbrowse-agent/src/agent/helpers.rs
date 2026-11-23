@@ -12,6 +12,7 @@ use fastbrowse_core::safety::irreversible_question;
 use serde_json::json;
 use url::Url;
 
+use super::state::{Kept, Typed};
 use crate::memory::{Notes, unique};
 use crate::policy::{Decision, HistoryEntry};
 
@@ -165,6 +166,147 @@ pub(crate) fn unsent_fact(history: &[HistoryEntry], observation: &Observation) -
             fields.join(", ")
         )
     })
+}
+
+/// What the run typed into the form a send submitted: each field's last fill since the last send, or since the run
+/// left a page, before the send at the end of `history`, with the value it sent. A field cleared or given a secret is
+/// listed with no value to check, as a secret's value is never in the record: a field cleared and saved again is still
+/// one the send replaced, and keeping its earlier value told Jev the superseded value was missing. When `page`, the
+/// page the send was made on, puts the sending control in a form, only that form's fields are listed: a filter typed
+/// beside a setting saved in place was checked for after the reload had reset it.
+pub(crate) fn typed_before_send(
+    history: &[HistoryEntry],
+    since: usize,
+    sent: &std::collections::HashMap<String, usize>,
+    page: &Observation,
+) -> Vec<(String, Option<String>)> {
+    let Some((send, before)) = history.split_last() else { return Vec::new() };
+    let form_of = |name: &str| page.controls.iter().find(|c| describe(c) == name).map(|c| c.form_id.as_deref());
+    let form = send.target.as_deref().and_then(form_of).flatten();
+    let mut typed = Vec::new();
+    let mut filled = std::collections::HashSet::new();
+    let steps = before.iter().enumerate().skip(since).rev().filter(|(_, e)| e.outcome == StepOutcome::Executed);
+    for (at, entry) in steps {
+        match (entry.operation, entry.target.as_ref(), entry.text.as_ref()) {
+            (Some(Operation::Navigate | Operation::Back | Operation::SwitchTab), ..) => break,
+            // A fill an earlier send carried went with it; another form's send leaves it pending.
+            (Some(Operation::Fill), Some(field), _) if sent.get(field).is_some_and(|sent| at < *sent) => {
+                filled.insert(field.clone());
+            }
+            // Walking back, the first fill of a field is its last: a value typed over before the send never went.
+            (Some(Operation::Fill), Some(field), Some(value)) if filled.insert(field.clone()) => {
+                // A field no longer on the page cannot be placed in a form, so it is kept as the send's.
+                if form.is_some() && form_of(field).is_some_and(|own| own != form) {
+                    continue;
+                }
+                let checked = (value != "<secret>" && !value.trim().is_empty()).then(|| value.clone());
+                typed.push((field.clone(), checked));
+            }
+            _ => {}
+        }
+    }
+    typed.reverse();
+    typed
+}
+
+/// `observation`'s text, whitespace normalised, as `occurrences` counts in it.
+pub(crate) fn page_text(observation: &Observation) -> String {
+    flat(&format!("{}\n{}", observation.viewport_text, observation.offscreen_text))
+}
+
+fn flat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// How many times `value`, whitespace normalised, appears in `page`, a `page_text`.
+pub(crate) fn occurrences(page: &str, value: &str) -> usize {
+    let value = flat(value);
+    if value.is_empty() {
+        return 0;
+    }
+    page.matches(&value).count()
+}
+
+/// A step as the words a fact names it by: "click 'Apply'".
+pub(crate) fn step_words(operation: Option<Operation>, target: Option<&str>) -> String {
+    let word = match operation {
+        Some(Operation::Enter) => "Enter in".to_string(),
+        Some(operation) => operation.to_string(),
+        None => "step".to_string(),
+    };
+    match target {
+        Some(target) => format!("{word} {}", text::repr(target)),
+        None => word,
+    }
+}
+
+/// The fact, while a page the run changed by a send does not show what it typed, that the page may not show what the
+/// site kept.
+///
+/// Whether the run's own value is absent is an exact check, whitespace normalised, not a keyword match over page
+/// content, and one source for both facts. A value counts as shown in the page's text or as a control's current value:
+/// after a saved description was loaded again, its textarea held the new last line, which is not page text, and both
+/// facts kept saying the value did not appear until the run reloaded five times and ended `needs_input`. Before the page is loaded again the fact also states that
+/// the run's steps changed what the site keeps; only a value that does not appear is named beside it: that a value
+/// appears is true but says nothing about staleness. In a replay of a gallery run whose reorder list was drawn before
+/// an upload, Jev chose navigate at 0.19-0.29 with no fact, 0.46-0.51 told that the typed title appeared in the page's
+/// text, and 0.73-0.79 told only that the run's click changed what the site keeps and the page was not loaded since.
+/// "Opening this page's own address asks the site for its copy again" is unreplayed: it replaces "loads what the
+/// site kept", which a live run showed false, as CurseForge served its copy from before a post for about a minute
+/// and the loaded page lacked the reply.
+///
+/// After the page is loaded again at the same address the fact stays while a typed value is still absent, and stops
+/// once every one appears. Told nothing then, Jev read the stale page and chose done at 0.71-0.74 in five replays;
+/// told the load came after the send, that the value is absent and that a later copy loads after waiting, it chose
+/// navigate at 0.33-0.64 (top pick in four of five) and done at 0.20-0.40. A wording ending "so a copy loaded at
+/// once can still leave it out" kept done at 0.46-0.62.
+/// Each value `kept` holds that `observation` does not show: no more often in its text than just before the send,
+/// and in none of its controls' values.
+pub(crate) fn kept_absent<'a>(kept: &'a Kept, observation: &Observation) -> Vec<&'a Typed> {
+    let page = page_text(observation);
+    let values: Vec<String> = observation.controls.iter().filter_map(|c| c.value.as_deref()).map(flat).collect();
+    let shown = |typed: &Typed| {
+        let value = flat(&typed.value);
+        occurrences(&page, &value) > typed.before || values.iter().any(|held| held.contains(&value))
+    };
+    kept.typed.iter().filter(|typed| !shown(typed)).collect()
+}
+
+pub(crate) fn kept_fact(kept: &Kept, observation: &Observation, reloadable: bool) -> Option<String> {
+    if kept.url != observation.url || kept.steps.is_empty() {
+        return None;
+    }
+    let absent: Vec<String> = kept_absent(kept, observation)
+        .into_iter()
+        .map(|typed| format!("{} typed into {}", text::repr(&typed.value), text::repr(&typed.field)))
+        .collect();
+    if kept.loaded {
+        if absent.is_empty() {
+            return None;
+        }
+        let mut fact = format!(
+            "This page was loaded after the run's {} was sent, and {} does not appear anywhere in its text: a site can serve its copy from before a send for a while",
+            kept.steps.join(" and "),
+            absent.join(" and ")
+        );
+        fact += if reloadable {
+            ", and waiting then opening this page's own address again loads a later copy."
+        } else {
+            "."
+        };
+        return Some(fact);
+    }
+    let mut fact = format!(
+        "The run's {} changed what the site keeps, and this page has not been loaded since: it shows the site's redraw, which can leave out what the site kept.",
+        kept.steps.join(" and ")
+    );
+    for value in absent {
+        fact += &format!(" {value} does not appear anywhere in this page's text.");
+    }
+    if reloadable {
+        fact += " Opening this page's own address asks the site for its copy again.";
+    }
+    Some(fact)
 }
 
 /// The fields still empty here on a task to carry out, leaving out those the task gives no value for: Jev confirmed

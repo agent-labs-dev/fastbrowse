@@ -1241,6 +1241,9 @@ impl Agent {
             );
         }
         facts.extend(helpers::unsent_fact(&state.history, observation));
+        if let Some(kept) = &state.kept {
+            facts.extend(helpers::kept_fact(kept, observation, state.reload_target(observation).is_some()));
+        }
         if state.to_carry_out {
             facts.extend(helpers::empty_fields_fact(&state.missing, observation));
         }

@@ -11229,6 +11229,130 @@ fn a_commit_reply_behind_an_alert_stays_withheld_after_the_alert_closes() {
     assert!(state.reload_target(&settings).is_some());
 }
 
+/// A thread whose Post counted the reply and drew only the older ones, and a gallery's reorder list drawn before an
+/// upload, left a run reading a stale view with no word that it had not drawn what the site kept (#1458). Code states
+/// that the run changed what the site keeps and that no document has loaded since, and that a value it typed is not
+/// in the page's text; Jev decides what to do with it.
+#[test]
+fn a_change_the_site_keeps_is_stated_until_a_document_loads() {
+    let thread = |text: &str| {
+        let box_ = Control { value: Some(String::new()), ..field("Reply") };
+        Observation { viewport_text: text.into(), ..at("https://example.test/thread", &[box_, button("Post")]) }
+    };
+    let change = |state: &mut RunState, committing: bool, keeping: bool, after: &Observation| {
+        state.committing = committing;
+        state.keeping = keeping;
+        state.acted_from = Some(Observation { document_key: "d1".into(), ..thread("") });
+        state.history.push(executed(Some(Operation::Fill), Some("Reply"), true));
+        state.history.last_mut().unwrap().text = Some("Glad  it helps!".into());
+        state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+        agent().note_effect(state, &Observation { document_key: "d1".into(), ..after.clone() });
+    };
+    let stale = thread("Hide 3 Replies\nThanks, noted.\nWorks great.");
+    let mut state = run_state();
+    change(&mut state, true, false, &stale);
+    let facts = Agent::page_facts(&state, &stale, None);
+    let stated = "The run's click 'Post' changed what the site keeps, and this page has not been loaded since: it shows the site's redraw, which can leave out what the site kept. 'Glad  it helps!' typed into 'Reply' does not appear anywhere in this page's text. Opening this page's own address asks the site for its copy again.";
+    assert!(facts.iter().any(|fact| fact == stated), "{facts:?}");
+    // A value the page shows, whitespace normalised, is not stated: it is true and says nothing about staleness.
+    let drawn = thread("Thanks, noted.\nGlad\nit helps!");
+    let facts = Agent::page_facts(&state, &drawn, None);
+    let kept = "The run's click 'Post' changed what the site keeps, and this page has not been loaded since: it shows the site's redraw, which can leave out what the site kept. Opening this page's own address asks the site for its copy again.";
+    assert!(facts.iter().any(|fact| fact == kept), "{facts:?}");
+    // Another page is not told.
+    assert!(
+        Agent::page_facts(&state, &at("https://example.test/elsewhere", &[]), None)
+            .iter()
+            .all(|fact| !fact.contains("has not been loaded since"))
+    );
+    // A click that is reversible but lasting, with nothing sent, is kept too, beside the earlier change.
+    change(&mut state, false, true, &stale);
+    let facts = Agent::page_facts(&state, &stale, None);
+    assert!(
+        facts
+            .iter()
+            .any(|fact| fact.starts_with("The run's click 'Post' and click 'Post' changed what the site keeps")),
+        "{facts:?}"
+    );
+    let mut lasting = run_state();
+    change(&mut lasting, false, true, &stale);
+    assert!(
+        Agent::page_facts(&lasting, &stale, None).iter().any(|fact| fact.starts_with("The run's click 'Post' changed"))
+    );
+    // A step neither lasting nor committing is not.
+    let mut plain = run_state();
+    change(&mut plain, false, false, &stale);
+    assert!(Agent::page_facts(&plain, &stale, None).iter().all(|fact| !fact.contains("has not been loaded since")));
+    // A document that loads afterwards, a reload as much as any other, ends the statement.
+    let reloaded = Observation { document_key: "d2".into(), ..thread("Thanks, noted.\nGlad it helps!") };
+    state.acted_from = Some(Observation { document_key: "d1".into(), ..stale.clone() });
+    state.history.push(executed(Some(Operation::Navigate), None, true));
+    agent().note_effect(&mut state, &reloaded);
+    assert!(Agent::page_facts(&state, &reloaded, None).iter().all(|fact| !fact.contains("has not been loaded since")));
+}
+
+/// A site can serve its copy from before a post for a while, so the page the run opened again lacked its reply, was
+/// read as it stood, and ended `done` (#1483). While a typed value is still absent from the loaded page, Jev is told
+/// so; once it appears, or the run leaves the address, nothing is.
+#[test]
+fn a_loaded_page_lacking_what_was_typed_is_stated_until_it_shows_it() {
+    let thread = |text: &str, key: &str| {
+        let box_ = Control { value: Some(String::new()), ..field("Reply") };
+        Observation {
+            viewport_text: text.into(),
+            document_key: key.into(),
+            ..at("https://example.test/thread", &[box_, button("Post")])
+        }
+    };
+    let mut state = run_state();
+    state.committing = true;
+    state.acted_from = Some(thread("", "d1"));
+    state.history.push(executed(Some(Operation::Fill), Some("Reply"), true));
+    state.history.last_mut().unwrap().text = Some("Glad it helps!".into());
+    state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+    agent().note_effect(&mut state, &thread("Thanks, noted.", "d1"));
+    let load = |state: &mut RunState, page: &Observation| {
+        state.committing = false;
+        state.acted_from = Some(thread("", "d1"));
+        state.history.push(executed(Some(Operation::Navigate), None, true));
+        agent().note_effect(state, page);
+    };
+    let lacking = thread("Thanks, noted.", "d2");
+    load(&mut state, &lacking);
+    let stated = "This page was loaded after the run's click 'Post' was sent, and 'Glad it helps!' typed into 'Reply' does not appear anywhere in its text: a site can serve its copy from before a send for a while, and waiting then opening this page's own address again loads a later copy.";
+    let facts = Agent::page_facts(&state, &lacking, None);
+    assert!(facts.iter().any(|fact| fact == stated), "{facts:?}");
+    // Loaded again, still lacking: stated again.
+    let again = thread("Thanks, noted.", "d3");
+    load(&mut state, &again);
+    assert!(Agent::page_facts(&state, &again, None).iter().any(|fact| fact == stated));
+    // A page that shows the value is told nothing.
+    let showing = thread("Thanks, noted.\nGlad it helps!", "d4");
+    load(&mut state, &showing);
+    assert!(Agent::page_facts(&state, &showing, None).iter().all(|fact| !fact.contains("was loaded after")));
+    // A field's value is not page text: a textarea that holds the value shows it.
+    let held = Observation {
+        controls: vec![Control { value: Some("Glad  it helps!\nMore.".into()), ..field("Reply") }, button("Post")],
+        ..thread("Thanks, noted.", "d7")
+    };
+    load(&mut state, &held);
+    assert!(Agent::page_facts(&state, &held, None).iter().all(|fact| !fact.contains("was loaded after")));
+    // Leaving the address ends it for good.
+    let mut left = run_state();
+    left.committing = true;
+    left.acted_from = Some(thread("", "d1"));
+    left.history.push(executed(Some(Operation::Fill), Some("Reply"), true));
+    left.history.last_mut().unwrap().text = Some("Glad it helps!".into());
+    left.history.push(executed(Some(Operation::Click), Some("Post"), true));
+    agent().note_effect(&mut left, &thread("Thanks, noted.", "d1"));
+    let elsewhere = Observation { url: "https://example.test/other".into(), ..thread("Other", "d5") };
+    load(&mut left, &elsewhere);
+    assert!(left.kept.is_none());
+    let back = thread("Thanks, noted.", "d6");
+    load(&mut left, &back);
+    assert!(Agent::page_facts(&left, &back, None).iter().all(|fact| !fact.contains("was loaded after")));
+}
+
 /// A commit that loaded a new document can be sent again by opening its address, as a GET that unsubscribes is, so
 /// that page does not offer itself as a reload; one saved in place keeps the offer.
 #[test]
@@ -12130,5 +12254,307 @@ async fn test_a_decision_made_before_the_read_of_a_fresh_page_is_made_again_with
     assert_eq!(decisions[..3], [0, 1, 1], "{decisions:?}");
 }
 
+/// A field typed over before its send sent only the last value, and a send that loaded its own page left the next
+/// send's typing to start on the page it left, so Jev was told an overwritten value or the last page's value was
+/// missing from this page.
+#[test]
+fn a_send_checks_only_what_its_own_form_last_held() {
+    let fill = |text: &str| {
+        let mut entry = executed(Some(Operation::Fill), Some("Reply"), true);
+        entry.text = Some(text.into());
+        entry
+    };
+    let history = [fill("draft"), fill("final"), executed(Some(Operation::Click), Some("Post"), true)];
+    let blank = observation(&[]);
+    assert_eq!(
+        super::helpers::typed_before_send(&history, 0, &Default::default(), &blank),
+        vec![("Reply".to_string(), Some("final".to_string()))]
+    );
+    let page = |key: &str| Observation { document_key: key.into(), ..at("https://example.test/thread", &[]) };
+    let mut state = run_state();
+    state.history.extend([fill("first"), executed(Some(Operation::Click), Some("Post"), true)]);
+    state.committing = true;
+    state.acted_from = Some(page("d1"));
+    agent().note_effect(&mut state, &page("d2"));
+    assert_eq!(state.last_send, state.history.len());
+    assert!(state.kept.is_none());
+    // A lasting save that loads a new document has loaded what it kept.
+    let mut state = run_state();
+    state.history.extend([fill("first"), executed(Some(Operation::Click), Some("Save"), true)]);
+    state.keeping = true;
+    state.acted_from = Some(page("d1"));
+    agent().note_effect(&mut state, &page("d2"));
+    assert!(state.kept.is_none());
+    assert!(!state.committed_documents.contains("d2"));
+}
+
+fn kept_values(kept: &super::state::Kept) -> Vec<(&str, &str)> {
+    kept.typed.iter().map(|typed| (typed.field.as_str(), typed.value.as_str())).collect()
+}
+
+fn filled(field: &str, text: &str) -> HistoryEntry {
+    let mut entry = executed(Some(Operation::Fill), Some(field), true);
+    entry.text = Some(text.into());
+    entry
+}
+
+/// A field cleared and saved again kept the value an earlier save sent, so after a reload Jev was told the
+/// superseded value was missing.
+#[test]
+fn a_field_cleared_and_saved_again_is_not_checked_for_its_earlier_value() {
+    let page = Observation { document_key: "d1".into(), ..at("https://example.test/settings", &[]) };
+    let mut state = run_state();
+    for value in ["sent-value", ""] {
+        state.history.push(filled("Title", value));
+        state.history.push(executed(Some(Operation::Click), Some("Save"), true));
+        state.keeping = true;
+        state.acted_from = Some(page.clone());
+        agent().note_effect(&mut state, &page);
+    }
+    assert!(kept_values(state.kept.as_ref().expect("the saves are kept")).is_empty());
+}
+
+/// A filter typed beside a setting saved in place was counted as sent by the save, and after the reload reset it,
+/// Jev was told the site served a stale copy.
+#[test]
+fn a_send_checks_only_the_fields_of_its_own_form() {
+    let in_form = |control: Control, form: &str| Control { form_id: Some(form.into()), ..control };
+    let field = |label: &str| Control::new(&label.to_lowercase(), "textbox", label, [Operation::Fill]);
+    let page = Observation {
+        document_key: "d1".into(),
+        ..at(
+            "https://example.test/settings",
+            &[field("Filter"), in_form(field("Title"), "settings"), in_form(button("Save"), "settings")],
+        )
+    };
+    let history = [
+        filled("Filter", "addons"),
+        filled("Title", "New title"),
+        executed(Some(Operation::Click), Some("Save"), true),
+    ];
+    assert_eq!(
+        super::helpers::typed_before_send(&history, 0, &Default::default(), &page),
+        vec![("Title".to_string(), Some("New title".to_string()))]
+    );
+}
+
+/// A short reply already on the page in an older reply was taken as the new one showing, so a reload that served the
+/// copy from before the post ended the check.
+#[test]
+fn a_value_already_on_the_page_shows_only_by_appearing_once_more() {
+    let thread = |key: &str, text: &str| Observation {
+        document_key: key.into(),
+        viewport_text: text.into(),
+        ..at("https://example.test/thread", &[])
+    };
+    let mut state = run_state();
+    state.history.push(filled("Reply", "Thanks"));
+    state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+    state.committing = true;
+    state.acted_from = Some(thread("d1", "Older reply: Thanks"));
+    agent().note_effect(&mut state, &thread("d1", "Older reply: Thanks"));
+    state.committing = false;
+    state.history.push(executed(Some(Operation::Navigate), Some("https://example.test/thread"), true));
+    state.acted_from = Some(thread("d1", "Older reply: Thanks"));
+    agent().note_effect(&mut state, &thread("d2", "Older reply: Thanks"));
+    assert!(state.kept.as_ref().is_some_and(|kept| kept.loaded), "the stale copy is still checked");
+    state.history.push(executed(Some(Operation::Navigate), Some("https://example.test/thread"), true));
+    state.acted_from = Some(thread("d2", "Older reply: Thanks"));
+    agent().note_effect(&mut state, &thread("d3", "Older reply: Thanks New reply: Thanks"));
+    assert!(state.kept.is_none());
+}
+
+/// A rich-text draft is page text, so counted at the send it was already one occurrence: the saved reply replacing it
+/// added none, and a reload showing the reply was told the site served a copy from before the post.
+#[test]
+fn a_saved_rich_text_reply_shows_once_its_draft_is_replaced() {
+    let thread = |key: &str, text: &str| Observation {
+        document_key: key.into(),
+        viewport_text: text.into(),
+        ..at("https://example.test/thread", &[])
+    };
+    let mut state = run_state();
+    state.history.push(filled("Reply", "Glad it helps!"));
+    state.acted_from = Some(thread("d1", "Older replies"));
+    agent().note_effect(&mut state, &thread("d1", "Older replies\nGlad it helps!"));
+    state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+    state.committing = true;
+    state.acted_from = Some(thread("d1", "Older replies\nGlad it helps!"));
+    agent().note_effect(&mut state, &thread("d1", "Older replies\nGlad it helps!"));
+    state.committing = false;
+    assert!(state.kept.is_some(), "the in-place post is kept");
+    state.history.push(executed(Some(Operation::Navigate), Some("https://example.test/thread"), true));
+    state.acted_from = Some(thread("d1", "Older replies\nGlad it helps!"));
+    agent().note_effect(&mut state, &thread("d2", "Older replies\nGlad it helps!"));
+    assert!(state.kept.is_none(), "the reloaded page shows the saved reply");
+}
+
+/// A send used up every fill on its page: a title typed before a separate comment form was posted was never checked
+/// when it was saved, so a reloaded copy still showing the old title raised no fact.
+#[test]
+fn saving_another_form_still_checks_the_value_typed_before_the_first_send() {
+    let in_form = |control: Control, form: &str| Control { form_id: Some(form.into()), ..control };
+    let mut page = Observation {
+        document_key: "d1".into(),
+        ..at(
+            "https://example.test/settings",
+            &[
+                in_form(field("Title"), "settings"),
+                in_form(button("Save"), "settings"),
+                in_form(field("Reply"), "comments"),
+                in_form(button("Post"), "comments"),
+            ],
+        )
+    };
+    let mut state = run_state();
+    for (name, value) in [("Title", "New title"), ("Reply", "Glad it helps!")] {
+        state.history.push(filled(name, value));
+        state.acted_from = Some(page.clone());
+        page.controls.iter_mut().find(|control| control.label == name).unwrap().value = Some(value.into());
+        agent().note_effect(&mut state, &page);
+    }
+    state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+    state.committing = true;
+    state.acted_from = Some(page.clone());
+    page.controls[2].value = Some(String::new());
+    page.viewport_text = "Glad it helps!".into();
+    agent().note_effect(&mut state, &page);
+    assert_eq!(kept_values(state.kept.as_ref().unwrap()), vec![("Reply", "Glad it helps!")]);
+
+    state.committing = false;
+    state.keeping = true;
+    state.history.push(executed(Some(Operation::Click), Some("Save"), true));
+    state.acted_from = Some(page.clone());
+    agent().note_effect(&mut state, &page);
+
+    // The loaded copy shows the comment, but still serves the title from before Save.
+    state.keeping = false;
+    state.history.push(executed(Some(Operation::Navigate), Some(&page.url), true));
+    state.acted_from = Some(page.clone());
+    page.document_key = "d2".into();
+    page.controls[0].value = Some("Old title".into());
+    agent().note_effect(&mut state, &page);
+    let facts = Agent::page_facts(&state, &page, None);
+    assert!(
+        facts.iter().any(|fact| fact.contains("was loaded after") && fact.contains("'New title' typed into 'Title'")),
+        "the stale settings copy must still be checked after sending the other form: {facts:?}"
+    );
+}
+
+/// A draft edited before the post was counted from the page holding the earlier draft: shortened to the "Thanks" an
+/// older reply also says, the saved reply made two occurrences, as many as before, and read as missing.
+#[test]
+fn a_saved_reply_is_counted_from_before_its_first_draft() {
+    let thread = |key: &str, text: &str| Observation {
+        document_key: key.into(),
+        viewport_text: text.into(),
+        ..at("https://example.test/thread", &[])
+    };
+    let mut state = run_state();
+    for (value, from, to) in [
+        ("Thanks, this helps!", "Older: Thanks", "Older: Thanks\nThanks, this helps!"),
+        ("Thanks", "Older: Thanks\nThanks, this helps!", "Older: Thanks\nThanks"),
+    ] {
+        state.history.push(filled("Reply", value));
+        state.acted_from = Some(thread("d1", from));
+        agent().note_effect(&mut state, &thread("d1", to));
+    }
+    state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+    state.committing = true;
+    state.acted_from = Some(thread("d1", "Older: Thanks\nThanks"));
+    agent().note_effect(&mut state, &thread("d1", "Older: Thanks\nThanks"));
+    state.committing = false;
+    assert!(state.kept.is_some(), "the in-place post is kept");
+    state.history.push(executed(Some(Operation::Navigate), Some("https://example.test/thread"), true));
+    state.acted_from = Some(thread("d1", "Older: Thanks\nThanks"));
+    agent().note_effect(&mut state, &thread("d2", "Older: Thanks\nThanks"));
+    assert!(state.kept.is_none(), "the reloaded page shows the saved reply");
+}
+
+/// The check ended only when a document loaded: a loaded copy that showed the reply after a redraw brought the
+/// stale-copy fact back once the reply was collapsed, and a route left and returned to was told it again.
+#[test]
+fn a_send_check_ends_once_its_value_shows_or_its_route_is_left() {
+    let thread = |key: &str, text: &str| Observation {
+        document_key: key.into(),
+        viewport_text: text.into(),
+        ..at("https://example.test/thread", &[])
+    };
+    let sent = || {
+        let mut state = run_state();
+        state.history.push(filled("Reply", "sent-value"));
+        state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+        state.committing = true;
+        state.acted_from = Some(thread("d1", "Older replies"));
+        agent().note_effect(&mut state, &thread("d1", "Older replies"));
+        state.committing = false;
+        state
+    };
+    let step = |state: &mut RunState, from: Observation, to: &Observation| {
+        state.history.push(executed(Some(Operation::Click), Some("Show"), true));
+        state.acted_from = Some(from);
+        agent().note_effect(state, to);
+    };
+    let mut state = sent();
+    state.history.push(executed(Some(Operation::Navigate), Some("https://example.test/thread"), true));
+    state.acted_from = Some(thread("d1", "Older replies"));
+    agent().note_effect(&mut state, &thread("d2", "Older replies"));
+    assert!(state.kept.as_ref().is_some_and(|kept| kept.loaded));
+    step(&mut state, thread("d2", "Older replies"), &thread("d2", "Older replies sent-value"));
+    assert!(state.kept.is_none(), "the reply showing ends the check");
+    let mut state = sent();
+    let other = Observation { document_key: "d1".into(), ..at("https://example.test/other", &[]) };
+    step(&mut state, thread("d1", "Older replies"), &other);
+    assert!(state.kept.is_none(), "leaving the route ends the check");
+}
+
+#[test]
+fn a_send_checks_only_fills_made_on_its_own_page_and_route() {
+    let fill = |field: &str, text: &str| {
+        let mut entry = executed(Some(Operation::Fill), Some(field), true);
+        entry.text = Some(text.into());
+        entry
+    };
+    // A value cleared before the send never went, but the field was still sent, empty.
+    let history = [fill("Filter", "old"), fill("Filter", ""), executed(Some(Operation::Click), Some("Post"), true)];
+    assert_eq!(
+        super::helpers::typed_before_send(&history, 0, &Default::default(), &observation(&[])),
+        vec![("Filter".to_string(), None)]
+    );
+    let page = |url: &str, key: &str| Observation { document_key: key.into(), ..at(url, &[]) };
+    // A search typed and submitted, then a result followed: the reply posted there is all the send carried.
+    let mut state = run_state();
+    state.history.push(fill("Search", "questie addon"));
+    state.history.push(executed(Some(Operation::Enter), Some("Search"), true));
+    state.acted_from = Some(page("https://example.test/search", "d1"));
+    agent().note_effect(&mut state, &page("https://example.test/search?q=questie", "d2"));
+    state.history.push(fill("Reply", "Glad it helps!"));
+    state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+    state.committing = true;
+    state.acted_from = Some(page("https://example.test/thread/1", "d3"));
+    agent().note_effect(&mut state, &page("https://example.test/thread/1", "d3"));
+    let kept = state.kept.clone().expect("the in-place post is kept");
+    assert_eq!(kept_values(&kept), vec![("Reply", "Glad it helps!")]);
+    // A save on another route of the same document starts the fact over.
+    state.committing = false;
+    state.history.push(executed(Some(Operation::Click), Some("Gallery"), true));
+    state.acted_from = Some(page("https://example.test/thread/1", "d3"));
+    agent().note_effect(&mut state, &page("https://example.test/gallery", "d3"));
+    state.history.push(fill("Caption", "Test image"));
+    state.history.push(executed(Some(Operation::Click), Some("Apply"), true));
+    state.keeping = true;
+    state.acted_from = Some(page("https://example.test/gallery", "d3"));
+    agent().note_effect(&mut state, &page("https://example.test/gallery", "d3"));
+    let kept = state.kept.clone().expect("the gallery save is kept");
+    assert_eq!(kept_values(&kept), vec![("Caption", "Test image")]);
+    // A loaded copy that shows every value ends the fact, so hiding one later does not bring it back.
+    state.keeping = false;
+    state.history.push(executed(Some(Operation::Navigate), Some("https://example.test/gallery"), true));
+    state.acted_from = Some(page("https://example.test/gallery", "d3"));
+    let loaded =
+        Observation { viewport_text: "Gallery: Test image".into(), ..page("https://example.test/gallery", "d4") };
+    agent().note_effect(&mut state, &loaded);
+    assert!(state.kept.is_none());
+}
 #[path = "tests/citation_record_selected_results.rs"]
 mod citation_record_selected_results;

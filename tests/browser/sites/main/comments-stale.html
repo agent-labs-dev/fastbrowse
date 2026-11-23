@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Comments - Stale Thread</title>
+<!-- A comment thread whose Post saves the reply and counts it but does not draw it until the page loads again, as a
+     site that redraws only part of its thread after a send does. -->
+</head>
+<body>
+<main>
+  <h1>Stale Thread</h1>
+  <p id="note"></p>
+  <button type="button" id="toggle">Hide 2 Replies</button>
+  <ul id="replies"></ul>
+  <form onsubmit="return false">
+    <textarea id="reply-text" aria-label="Reply text"></textarea>
+    <button type="button" id="post">Post</button>
+  </form>
+</main>
+<script>
+  const saved = () => JSON.parse(sessionStorage.getItem('replies') || '[]');
+  const draw = (replies) => {
+    document.getElementById('replies').replaceChildren(...replies.map(text => {
+      const li = document.createElement('li');
+      li.textContent = text;
+      return li;
+    }));
+  };
+  const older = ['Thanks, noted for the next release.', 'Works great with Questie.'];
+  // A load draws what the site kept, the older replies and any saved since.
+  draw([...older, ...saved()]);
+  const toggle = document.getElementById('toggle');
+  toggle.textContent = `Hide ${older.length + saved().length} Replies`;
+  document.getElementById('post').onclick = () => {
+    const box = document.getElementById('reply-text');
+    sessionStorage.setItem('replies', JSON.stringify([...saved(), box.value]));
+    // The counter moves and the confirmation shows, but the list is left as it was.
+    toggle.textContent = `Hide ${older.length + saved().length} Replies`;
+    document.getElementById('note').textContent = 'Your reply was posted.';
+    box.value = '';
+  };
+</script>
+</body>
+</html>

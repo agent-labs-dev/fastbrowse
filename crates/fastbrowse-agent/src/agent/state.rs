@@ -289,6 +289,29 @@ pub(crate) struct Picked {
     pub look: Option<Look>,
 }
 
+/// What a run has changed on a page that the site keeps, without a document loading since.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Kept {
+    /// The address of the page the changes were made on.
+    pub url: String,
+    /// Each executed step Jev judged lasting or committing, in order, as the step's words: "click 'Apply'".
+    pub steps: Vec<String>,
+    /// What the run typed into the forms those steps sent: a secret is left out.
+    pub typed: Vec<Typed>,
+    /// Whether the page has been loaded again at `url` since: a site can serve its copy from before a send for a
+    /// while, so a loaded page can still lack what was typed.
+    pub loaded: bool,
+}
+
+/// A value a send carried, and how often the page showed it before it was typed: a short reply such as "Thanks"
+/// already on the page in an older reply was taken as the new one showing, so only appearing more often shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Typed {
+    pub field: String,
+    pub value: String,
+    pub before: usize,
+}
+
 pub(crate) struct RunState {
     pub task: String,
     /// The recipe this run replays, while it has steps left to offer.
@@ -490,6 +513,16 @@ pub(crate) struct RunState {
     /// closes an alert is not itself committing: a GET that unsubscribed and then said so in an alert lost its hold
     /// once the alert closed, and was offered again as a reload.
     pub behind_dialog: Option<(String, bool)>,
+    /// Every change the run made that the site keeps, since the last document loaded: the page may not show them yet.
+    pub kept: Option<Kept>,
+    /// The history length when the run last left a page, so a send's typed values start after it.
+    pub last_send: usize,
+    /// The history length at the send that last carried each field, so a send checks only fills made after it.
+    pub sent_fills: HashMap<String, usize>,
+    /// Each field's page text from before its first fill since the last send, where a sent value's earlier showings
+    /// are counted. Counted at the send, a rich-text draft is page text itself, so a saved reply replacing it added no
+    /// occurrence and read as missing.
+    pub filled_before: HashMap<String, String>,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
@@ -856,6 +889,10 @@ impl RunState {
             commits: 0,
             committed_documents: HashSet::new(),
             behind_dialog: None,
+            kept: None,
+            last_send: 0,
+            sent_fills: HashMap::new(),
+            filled_before: HashMap::new(),
             redecided: false,
             last_page: None,
             surface_judged: None,
@@ -960,6 +997,10 @@ impl RunState {
             commits: 0,
             committed_documents: HashSet::new(),
             behind_dialog: None,
+            kept: None,
+            last_send: 0,
+            sent_fills: HashMap::new(),
+            filled_before: HashMap::new(),
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),
             followed: None,
