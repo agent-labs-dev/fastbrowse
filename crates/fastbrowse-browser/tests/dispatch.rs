@@ -2309,6 +2309,46 @@ async fn test_moving_a_picked_up_card_with_a_custom_role_description_reaches_a_n
     check_sortable_moves_reach_new_states("draggable").await;
 }
 
+/// A tall sortable card moving past a short one is seated by an edge, not its centre, and still reads as progress.
+#[tokio::test]
+async fn test_a_tall_sortable_card_moving_past_a_short_card_reports_progress() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dndkit-sortable.html").await;
+    eval_active(
+        &h.page,
+        "document.querySelectorAll('#list button').forEach((e, i) => e.style.height = i === 0 ? '140px' : '40px'); true",
+    )
+    .await;
+    let mut lifted = None;
+    for key in ["Space", "ArrowDown"] {
+        let before = h.observe().await;
+        let card = find(&before, "Test image");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&press, &before).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+        let after = h.observe().await;
+        if key == "ArrowDown" {
+            assert_eq!(
+                eval_active(
+                    &h.page,
+                    "new DOMMatrix(getComputedStyle(document.querySelector('#list button')).transform).m42 > 0"
+                )
+                .await,
+                json!(true),
+                "dnd-kit really moved the card"
+            );
+            assert_ne!(
+                lifted.as_ref().expect("the card was picked up"),
+                &fastbrowse_core::effects::state_key(&after),
+                "moving a tall card past a shorter card must renew the stall budget"
+            );
+            assert_eq!(find(&after, "Test image").item_position, Some(2));
+        }
+        lifted = Some(fastbrowse_core::effects::state_key(&after));
+    }
+    h.close().await;
+}
+
 /// A described control inside a list item reports the item's place, so a DOM reorder still reads as progress.
 #[tokio::test]
 async fn test_a_described_button_inside_a_list_item_reports_reorder_progress() {

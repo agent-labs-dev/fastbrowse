@@ -2103,32 +2103,26 @@
       ? [...list.querySelectorAll(SET_ITEM)].filter(i => setOwner(i) === list && visible(i))
       : [];
     // A picked-up sortable card moves by transform while the DOM keeps its order, so the order a person sees is the
-    // one stated: otherwise every arrow press leaves the page looking unchanged. Every member keeps the slot the
-    // layout gave it, as its neighbours slide to new slots over an animation, and only the lifted card is placed
-    // where its transform has carried it.
+    // one stated: otherwise every arrow press leaves the page looking unchanged. The card has passed a neighbour once
+    // its leading edge, in the direction it travels, reaches that neighbour's far edge: a library may seat a tall card
+    // by an edge rather than its centre. Neighbours are read at the slots the layout gave them, since they slide to
+    // new ones over an animation.
     const held = members.find(i => i.matches(PRESSED) || i.querySelector(PRESSED));
-    // Carried exactly to a neighbour's slot, the card has taken that slot: it counts as past the neighbour it
-    // travelled towards, so a one-slot move is never a tie that leaves the order as it was.
-    let travel = 0;
-    const slot = i => {
-      let y = i.offsetTop + i.offsetHeight / 2;
-      let x = i.offsetLeft + i.offsetWidth / 2;
-      if (i === held) {
-        const carried = new DOMMatrix(styleProperty(i.matches(PRESSED) ? i : i.querySelector(PRESSED), 'transform'));
-        x += carried.m41;
-        y += carried.m42;
-        travel = Math.sign(carried.m42 || carried.m41);
-      }
-      return [y, x];
-    };
-    const siblings = held
-      ? [...members].sort((a, b) => {
-          const [ay, ax] = slot(a);
-          const [by, bx] = slot(b);
-          const apart = ay - by || ax - bx;
-          return apart || (a === held ? travel : -travel);
-        })
-      : members;
+    let siblings = members;
+    if (held) {
+      const carried = new DOMMatrix(styleProperty(held.matches(PRESSED) ? held : held.querySelector(PRESSED), 'transform'));
+      const vertical = Math.abs(carried.m42) >= Math.abs(carried.m41);
+      const travel = Math.sign(vertical ? carried.m42 : carried.m41);
+      const near = i => (vertical ? i.offsetTop : i.offsetLeft);
+      const far = i => near(i) + (vertical ? i.offsetHeight : i.offsetWidth);
+      const shift = vertical ? carried.m42 : carried.m41;
+      const at = members.indexOf(held);
+      const passed = members.filter((i, k) =>
+        travel > 0 ? k > at && near(held) + shift + (far(held) - near(held)) >= far(i) : travel < 0 && k < at && near(held) + shift <= near(i),
+      ).length;
+      siblings = members.filter(i => i !== held);
+      siblings.splice(at + (travel > 0 ? passed : -passed), 0, held);
+    }
     const declared = Number.parseInt(item.getAttribute('aria-posinset'), 10);
     // `aria-setsize="-1"` says the list's size is unknown (a virtualised feed); counting the rendered items instead
     // would state a size the page says it does not know.
