@@ -328,6 +328,16 @@ impl Agent {
         state.chat.messages.push(Message::new(Role::Assistant, generation.data.to_string()));
         let turn: Turn =
             serde_json::from_value(generation.data).map_err(|error| LLMError::schema(error.to_string()))?;
+        // The model's own account of what changed and what it does next, which is what a failed run is read by.
+        let next = self.redact(&turn.next);
+        let planned = turn.actions.len();
+        self.event("driver_turn", || {
+            serde_json::Map::from_iter([
+                ("step".into(), state.steps.len().into()),
+                ("next".into(), next.into()),
+                ("actions".into(), planned.into()),
+            ])
+        });
         let mut actions = VecDeque::from(turn.actions);
         let first = actions.pop_front().ok_or_else(|| LLMError::schema("actions holds no action"))?;
         state.chat.queue = actions;

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use fastbrowse_agent::agent::{Agent, RunOptions};
 use fastbrowse_agent::scripted::{ScriptedJev, ScriptedLLM};
 use fastbrowse_core::BoxFuture;
+use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, DecisionProfile, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
     Artifact, CostBasis, CostComponent, CostLine, LLMPurpose, Limits, RunResult, Status, StepOutcome,
@@ -158,7 +159,11 @@ impl LLMClient for Driver {
 }
 
 async fn run(page: Arc<DatePage>, driver: Arc<Driver>) -> RunResult {
-    let agent = Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), driver).with_chat(true);
+    run_with(page, driver, Arc::new(ScriptedJev::new(Vec::new()))).await
+}
+
+async fn run_with(page: Arc<DatePage>, driver: Arc<Driver>, jev: Arc<dyn DecisionClient>) -> RunResult {
+    let agent = Agent::new(page, jev, driver).with_chat(true);
     agent
         .run(
             "Open the date field and go to the next month.",
@@ -261,4 +266,47 @@ async fn test_wait_reaches_the_page_as_a_wait() {
         "{:?}",
         page.acted.lock().unwrap()
     );
+}
+
+/// The scripted Jev, except that it answers the yes/no question `.1` with probability `.2`.
+struct Answering(ScriptedJev, &'static str, f64);
+
+impl DecisionClient for Answering {
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a indexmap::IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut(self.1) {
+                answer.probability = self.2;
+            }
+            Ok(evaluation)
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_an_irreversible_click_the_run_is_not_authorized_for_stops_it_unacted() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "click", "id": "date"}]})]);
+    let jev = Arc::new(Answering(ScriptedJev::new(Vec::new()), "irreversible", 1.0));
+    let result = run_with(page.clone(), driver, jev).await;
+    assert_eq!(result.status, Status::NeedsConfirmation, "{:?}", result.error);
+    assert!(page.acted.lock().unwrap().is_empty(), "{:?}", page.acted.lock().unwrap());
+}
+
+#[tokio::test]
+async fn test_a_done_jev_finds_unsupported_is_refused_and_told_back() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "done"}]}), give_up()]);
+    let result =
+        run_with(page, driver.clone(), Arc::new(Answering(ScriptedJev::new(Vec::new()), "coverage", 0.0))).await;
+    assert_eq!(result.status, Status::Stuck);
+    assert!(driver.told(1).contains("done was refused"), "{}", driver.told(1));
 }
