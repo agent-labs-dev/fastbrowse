@@ -213,6 +213,9 @@ pub struct HistoryEntry {
     /// The document that supplied the action, kept private so form changes cannot cross document instances.
     #[serde(skip)]
     pub document_key: Option<String>,
+    /// The id of the control the action targeted, which a field is matched by when its label changes as it is typed in.
+    #[serde(skip)]
+    pub control_id: Option<String>,
     /// The form instance the action targeted, kept private so same-label fields cannot cross form instances.
     #[serde(skip)]
     pub form_id: Option<String>,
@@ -368,6 +371,7 @@ impl HistoryEntry {
             commit: None,
             form: None,
             document_key: None,
+            control_id: None,
             form_id: None,
             frame_id: None,
             opened_forms: Vec::new(),

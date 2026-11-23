@@ -321,14 +321,13 @@ fn form_changes(
     target: &Control,
     controls: &[Control],
     document_key: &str,
-    key: Option<&str>,
 ) -> Option<String> {
     // A script-built editor's Apply is a plain button with no submit semantics, so a click on any button in the form
-    // but a native reset may save it; a key press submits only as Enter.
+    // but a native reset may save it. Any chord may submit (Enter, Ctrl+Enter, a page's own save key): the chord is
+    // stated beside these facts and Jev judges it.
     let submits = match operation {
         Operation::Click => target.role == "button" && target.input_type.as_deref() != Some("reset"),
-        Operation::Enter => true,
-        Operation::Press => key == Some("Enter"),
+        Operation::Enter | Operation::Press => true,
         _ => false,
     };
     target.form_id.as_ref().filter(|_| submits)?;
@@ -340,9 +339,10 @@ fn form_changes(
                 && c.input_type.as_deref() != Some("select-multiple")
         })
         .collect();
-    let named: Vec<String> = fields.iter().map(|c| describe(c)).collect();
     let form_id = target.form_id.as_deref();
     // Newest first: a field's latest value is the first fill met and its first `before` the last.
+    // Fields are matched by control identity: a label that changes as it is typed in (a character count) is still the
+    // same field.
     let mut filled: IndexMap<&str, (&str, &str)> = IndexMap::new();
     let mut opener = None;
     for entry in history.iter().rev().filter(|entry| entry.outcome == StepOutcome::Executed) {
@@ -362,14 +362,14 @@ fn form_changes(
             // the newest opening belong to another record and would pair its old value with this one's typing.
             break;
         }
-        let Some(label) = entry.target.as_deref().filter(|label| named.iter().any(|n| n == label)) else {
+        let Some(field) = fields.iter().find(|c| entry.control_id.as_deref() == Some(c.id.as_str())) else {
             continue;
         };
         if let (Some(Operation::Fill | Operation::Select), Some(typed), Some(before)) =
             (entry.operation, entry.text.as_deref(), entry.before.as_deref())
             && typed != "<secret>"
         {
-            filled.entry(label).and_modify(|(_, earlier)| *earlier = before).or_insert((typed, before));
+            filled.entry(field.id.as_str()).and_modify(|(_, earlier)| *earlier = before).or_insert((typed, before));
         }
     }
     if filled.is_empty() {
@@ -380,10 +380,11 @@ fn form_changes(
     if let Some(opener) = opener {
         changes += &format!("The run opened this form by clicking {}.\n", text::repr(opener));
     }
-    for (label, (typed, before)) in filled.iter().rev() {
+    for (id, (typed, before)) in filled.iter().rev() {
+        let label = fields.iter().find(|c| c.id == *id).map(|c| describe(c)).unwrap_or_default();
         changes += &format!(
             "In this form the run replaced {}, which held {}, with {}.\n",
-            text::repr(label),
+            text::repr(&label),
             held(before),
             held(typed)
         );
@@ -422,7 +423,6 @@ pub(super) fn gate_questions(
     destination: Option<&Control>,
     controls: &[Control],
     document_key: &str,
-    key: Option<&str>,
 ) -> (Option<NoulQuestion>, String, NoulQuestion) {
     let lasting = lasting_question(operation, target, destination, controls);
     let irreversible = (!changes_credentials(controls, target, operation))
@@ -430,7 +430,7 @@ pub(super) fn gate_questions(
     let mut action = control_action(operation, target, destination, controls);
     let mut irreversible = irreversible;
     let mut lasting = lasting;
-    if let Some(changes) = form_changes(history, operation, target, controls, document_key, key) {
+    if let Some(changes) = form_changes(history, operation, target, controls, document_key) {
         action.push_str(&changes);
         for question in irreversible.iter_mut().chain(std::iter::once(&mut lasting)) {
             question.instructions.push('\n');
@@ -584,7 +584,7 @@ impl Agent {
                 let chord = self.key(state, observation, decision, target).await?;
                 self.gate_key_edit(state, observation, decision, target, &chord).await?;
                 let fact = format!("\nThe exact key chord to press is {}.\n", text::repr(&chord));
-                self.gate_irreversible_with_fact(state, observation, decision, Some(&fact), Some(&chord)).await?;
+                self.gate_irreversible_with_fact(state, observation, decision, Some(&fact)).await?;
                 Ok(Action { target_id: Some(target.id.clone()), text: Some(chord), ..Action::new(Operation::Press) })
             }
             Operation::Drag => {
@@ -702,7 +702,7 @@ impl Agent {
                     .into());
                 }
                 let fact = format!("\nThe file to attach is {}.\n", text::repr(&name));
-                self.gate_irreversible_with_fact(state, observation, decision, Some(&fact), None).await?;
+                self.gate_irreversible_with_fact(state, observation, decision, Some(&fact)).await?;
                 Ok(Action { target_id: Some(require(target)?.id.clone()), files, ..Action::new(Operation::Upload) })
             }
             Operation::Dialog => {
@@ -746,7 +746,7 @@ impl Agent {
         observation: &Observation,
         decision: &Decision,
     ) -> Step {
-        self.gate_irreversible_with_fact(state, observation, decision, None, None).await
+        self.gate_irreversible_with_fact(state, observation, decision, None).await
     }
 
     /// The irreversible gate, with `fact` added to every question about the action: what the operation's target alone
@@ -757,7 +757,6 @@ impl Agent {
         observation: &Observation,
         decision: &Decision,
         fact: Option<&str>,
-        key: Option<&str>,
     ) -> Step {
         let Some(target) = decision.target.as_ref().filter(|_| may_be_irreversible(decision.operation)) else {
             return Ok(());
@@ -774,7 +773,6 @@ impl Agent {
             decision.destination.as_ref(),
             &observation.controls,
             &observation.document_key,
-            key,
         );
         // A tab's Delete and ArrowRight target the same control but can commit different changes, and one file input
         // can be given a file the task allows or one it does not.

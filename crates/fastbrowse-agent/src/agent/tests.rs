@@ -664,7 +664,11 @@ const FILES: &str = "https://addons.example.test/project/files";
 const DOWNLOAD: &str = "https://addons.example.test/project/download/1";
 
 fn typed_into(label: &str) -> HistoryEntry {
-    HistoryEntry::new(Some(Operation::Fill), Some(label), StepOutcome::Executed, false)
+    HistoryEntry {
+        // The id `holding` gives its control.
+        control_id: Some("f".into()),
+        ..HistoryEntry::new(Some(Operation::Fill), Some(label), StepOutcome::Executed, false)
+    }
 }
 
 fn holding(label: &str, value: &str) -> Control {
@@ -12021,7 +12025,7 @@ fn test_a_save_states_what_the_run_replaced_and_what_it_opened() {
     };
     let history = [executed(Some(Operation::Click), Some("Unrelated"), true), opened, filled];
     let (irreversible, action, lasting) =
-        gate_questions(&history, Operation::Click, &apply, None, &controls, "document", None);
+        gate_questions(&history, Operation::Click, &apply, None, &controls, "document");
     let facts = [
         "The run opened this form by clicking 'Edit (Guide tracker card)'.",
         "In this form the run replaced 'Title', which held 'Guide tracker', with 'Test image'.",
@@ -12032,9 +12036,9 @@ fn test_a_save_states_what_the_run_replaced_and_what_it_opened() {
         }
     }
     // Nothing filled in the form, or a control that submits nothing, adds no fact.
-    let (_, untouched, _) = gate_questions(&[], Operation::Click, &apply, None, &controls, "document", None);
+    let (_, untouched, _) = gate_questions(&[], Operation::Click, &apply, None, &controls, "document");
     assert!(!untouched.contains("In this form"), "{untouched}");
-    let (_, plain, _) = gate_questions(&history, Operation::Click, &button("Edit"), None, &controls, "document", None);
+    let (_, plain, _) = gate_questions(&history, Operation::Click, &button("Edit"), None, &controls, "document");
     assert!(!plain.contains("In this form"), "{plain}");
 }
 
@@ -12052,13 +12056,13 @@ fn a_save_ignores_fills_from_another_form_document() {
         ..typed_into(&describe(&old))
     };
     let controls = [current, apply.clone()];
-    let (_, action, _) = gate_questions(&[filled], Operation::Click, &apply, None, &controls, "current-document", None);
+    let (_, action, _) = gate_questions(&[filled], Operation::Click, &apply, None, &controls, "current-document");
     assert!(!action.contains("Old image"), "{action}");
     assert!(!action.contains("Older image"), "{action}");
 }
 
 #[test]
-fn a_reset_or_a_key_other_than_enter_is_not_a_form_save() {
+fn a_reset_or_a_press_with_no_filled_field_adds_no_save_facts() {
     let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
     let reset = Control { form_id: Some("form".into()), input_type: Some("reset".into()), ..button("Reset") };
     let filled = HistoryEntry {
@@ -12068,20 +12072,33 @@ fn a_reset_or_a_key_other_than_enter_is_not_a_form_save() {
         ..typed_into(&describe(&field))
     };
     let (_, action, _) =
-        gate_questions(&[filled], Operation::Click, &reset, None, &[field.clone(), reset.clone()], "document", None);
+        gate_questions(&[filled], Operation::Click, &reset, None, &[field.clone(), reset.clone()], "document");
     assert!(!action.contains("In this form"), "{action}");
 
     let enter_target = Control { submit_semantics: Some("{}".into()), ..field.clone() };
-    let (_, action, _) = gate_questions(
-        &[],
-        Operation::Press,
-        &enter_target,
-        None,
-        std::slice::from_ref(&enter_target),
-        "document",
-        Some("ArrowRight"),
-    );
+    let (_, action, _) =
+        gate_questions(&[], Operation::Press, &enter_target, None, std::slice::from_ref(&enter_target), "document");
     assert!(!action.contains("In this form"), "{action}");
+}
+
+/// A save chord other than Enter (Ctrl+Enter) and a field whose label changes as it is typed in (a character count)
+/// both left a save without the value it replaced.
+#[test]
+fn a_chord_save_states_the_field_it_replaced_even_when_the_label_changed() {
+    let field = Control {
+        form_id: Some("form".into()),
+        submit_semantics: Some("{}".into()),
+        ..holding("Caption (11 characters)", "New caption")
+    };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New caption".into()),
+        before: Some("Other card caption".into()),
+        ..typed_into("Caption")
+    };
+    let (_, action, _) =
+        gate_questions(&[filled], Operation::Press, &field, None, std::slice::from_ref(&field), "document");
+    assert!(action.contains("which held 'Other card caption', with 'New caption'"), "{action}");
 }
 
 #[test]
@@ -12100,7 +12117,7 @@ fn a_save_omits_multi_select_toggles_until_the_delta_is_known() {
         ..HistoryEntry::new(Some(Operation::Select), Some("Topics"), StepOutcome::Executed, false)
     };
     let (_, action, _) =
-        gate_questions(&[selected], Operation::Click, &apply, None, &[topics, apply.clone()], "document", None);
+        gate_questions(&[selected], Operation::Click, &apply, None, &[topics, apply.clone()], "document");
     assert!(!action.contains("replaced"), "{action}");
 }
 
@@ -12116,7 +12133,7 @@ fn a_form_opener_is_reported_only_when_the_form_appeared_after_its_click() {
     };
     let unrelated = executed(Some(Operation::Click), Some("Accept cookies"), true);
     let (_, action, _) =
-        gate_questions(&[unrelated, filled], Operation::Click, &apply, None, &[field, apply.clone()], "document", None);
+        gate_questions(&[unrelated, filled], Operation::Click, &apply, None, &[field, apply.clone()], "document");
     assert!(!action.contains("opened this form"), "{action}");
 }
 
@@ -12153,8 +12170,7 @@ fn a_save_ignores_fills_from_before_the_form_was_last_opened() {
     // The same modal, reopened for another card: its form and document ids did not change.
     let history =
         [open("Edit first"), fill("First old", "First new"), open("Edit second"), fill("Second old", "Second new")];
-    let (_, action, _) =
-        gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document", None);
+    let (_, action, _) = gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document");
     assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
     assert!(action.contains("clicking 'Edit second'"), "{action}");
     assert!(!action.contains("First"), "{action}");
@@ -12191,8 +12207,7 @@ fn a_save_ignores_fills_and_openings_from_another_frame_with_the_same_form_id() 
         ..first_fill.clone()
     };
     let history = [first_open, first_fill, second_open, second_fill];
-    let (_, action, _) =
-        gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document", None);
+    let (_, action, _) = gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document");
     assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
     assert!(action.contains("clicking 'Edit second'"), "{action}");
     assert!(!action.contains("First"), "{action}");

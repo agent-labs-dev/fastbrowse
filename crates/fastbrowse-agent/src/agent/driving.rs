@@ -1383,6 +1383,7 @@ impl Agent {
             commit: sent.then_some(Commit::Sent),
             form,
             document_key: Some(observation.document_key.clone()),
+            control_id: decision.target.as_ref().map(|target| target.id.clone()),
             form_id: decision.target.as_ref().and_then(|target| target.form_id.clone()),
             frame_id: decision.target.as_ref().and_then(|target| target.frame_id.clone()),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
