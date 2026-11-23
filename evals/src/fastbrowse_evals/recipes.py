@@ -159,9 +159,12 @@ def run(binary: str, browser: list[str], task: RecipeTask, out: Path, timeout: f
     ]:
         stale.unlink(missing_ok=True)
     measured = []
-    # SIGTERM would end the benchmark without unwinding, leaving a running CLI behind: raise instead, as SIGINT does.
-    previous = signal.signal(signal.SIGTERM, _terminated)
+    # SIGTERM must unwind to clean up the CLI. A launcher that ignored SIGINT can pass that disposition to Python.
+    previous_term = signal.signal(signal.SIGTERM, _terminated)
+    previous_int = signal.getsignal(signal.SIGINT)
     try:
+        if previous_int == signal.SIG_IGN:
+            signal.signal(signal.SIGINT, signal.default_int_handler)
         for arm, inputs, recipe_flags, expect in arms:
             if arm != "fresh" and not recipe.exists():
                 break
@@ -190,7 +193,9 @@ def run(binary: str, browser: list[str], task: RecipeTask, out: Path, timeout: f
             row.expected = asyncio.run(judged(f"{task.task} (inputs: {json.dumps(inputs)})", row.answer, expect))
             measured.append(row)
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        if previous_int == signal.SIG_IGN:
+            signal.signal(signal.SIGINT, previous_int)
+        signal.signal(signal.SIGTERM, previous_term)
     return measured
 
 
