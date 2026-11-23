@@ -810,7 +810,8 @@ async fn test_unnamed_card_controls_are_named_by_their_icon_and_card() {
             ("trash icon", Some("old-banner.png")),
             ("trash icon", Some("new-banner.png")),
             ("trash can icon", Some("old-logo.png")),
-            ("Delete image", None),
+            // A uniquely named control is still named by its card, so a delete is tied to the image it removes.
+            ("Delete image", Some("new-logo.png")),
             ("delete icon", Some("old-icon.png")),
             ("Remove from gallery", Some("new-icon.png")),
             // The card's action row has its own caption, which every card repeats and which names no image.
@@ -844,6 +845,30 @@ async fn test_identical_labels_carry_their_card_as_context() {
     assert_eq!(adds, vec![Some("Brass Kettle"), Some("Copper Pan")]);
     // The price sits in a wrapper closer to the button than the card is; the card is what tells them apart.
     assert_eq!(find(&obs, "Sign in").context, None);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_unique_controls_in_repeated_cards_keep_their_card_context() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        r#"document.body.innerHTML = '<section><h2>Comments</h2>' +
+          '<div class="comment-card"><p>Ada</p><button>Hide 3 Replies</button></div>' +
+          '<div class="comment-card"><p>Grace</p><button>Hide 4 Replies</button></div>' +
+          '<div role="row"><span role="cell">Order A</span> <span role="cell"><button>Hide 5 Replies</button></span></div>' +
+          '<div role="row"><span role="cell">Order B</span> <span role="cell"><button>Hide 6 Replies</button></span></div></section>'"#,
+    )
+    .await;
+    let obs = observe_until(&h.page, "Hide 3 Replies").await;
+    let contexts: Vec<Option<String>> =
+        obs.controls.iter().filter(|c| c.label.starts_with("Hide ")).map(|c| c.context.clone()).collect();
+    assert_eq!(
+        contexts,
+        vec![Some("Ada".into()), Some("Grace".into()), Some("Order A".into()), Some("Order B".into())]
+    );
     h.close().await;
 }
 
