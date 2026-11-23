@@ -142,8 +142,10 @@ fn read_groups(candidates: &[Candidate]) -> IndexMap<String, Vec<Candidate>> {
     groups.into_values().map(|group| (group[0].id.clone(), group)).collect()
 }
 
-/// What a candidate with `source_kind` observation is, said once to Jev when the question offers one.
-const OBSERVATION_EXPLAINED: &str = " A candidate whose source_kind is observation is a description code wrote of a control's state, not words the page showed: it states nothing about the page's content, so it never answers a task about what the page's text says. A task about content, such as confirming what was saved, is answered by that content, never by the state of a control.";
+/// What a candidate with `source_kind` control_state is, said once to Jev when the question offers one. Only a
+/// control's state is set apart: an image's address or an icon link's destination is an observation that does answer
+/// a task asking for it.
+const CONTROL_STATE_EXPLAINED: &str = " A candidate whose source_kind is control_state is a description code wrote of a control's state, not words the page showed: it states nothing about the page's content, so it never answers a task about what the page's text says. A task about content, such as confirming what was saved, is answered by that content, never by the state of a control.";
 
 fn read_request(
     page: &Page<'_>,
@@ -170,7 +172,7 @@ fn read_request(
                         && block.start <= c.evidence.start
                         && c.evidence.end <= block.end
                 }) {
-                    observed |= block.kind == BlockKind::Observation;
+                    observed |= block.kind == BlockKind::ControlState;
                     source.insert("source_kind".into(), json!(block.kind));
                 }
                 source
@@ -196,7 +198,7 @@ fn read_request(
     // A "Save: disabled" candidate was picked as the answer to a task that asked to confirm a saved description (#1437):
     // Jev was never told the candidate is code's description of a control, not a sentence of the page.
     if observed {
-        instructions.push_str(OBSERVATION_EXPLAINED);
+        instructions.push_str(CONTROL_STATE_EXPLAINED);
     }
     if blocks.is_some() {
         instructions
@@ -577,8 +579,10 @@ fn block_context(page: &Page<'_>, quote: &Evidence, reader: FactReader) -> Optio
     // A table row already keeps the cells before its value, and the rows after it are other records. A downloaded
     // file's block is the whole file, which an excerpt must not stand in for. One line of prose names its subject in
     // the sentence the reader quoted; it is a record's other lines that carry the name.
-    if matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle | BlockKind::Table)
-        || block.complete_source
+    if matches!(
+        block.kind,
+        BlockKind::Observation | BlockKind::ControlState | BlockKind::DocumentTitle | BlockKind::Table
+    ) || block.complete_source
         || block.source_url.is_some()
         || !page.slice(block.start, block.end).contains('\n')
         || (text::strip(page.slice(block.start, quote.start)).is_empty()
@@ -1124,12 +1128,18 @@ mod tests {
             let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
             question.instructions.clone()
         };
-        let with =
-            asked(&capture(&[(BlockKind::Paragraph, "Updated for 1.15."), (BlockKind::Observation, "Save: disabled")]));
-        assert!(with.contains("source_kind is observation is a description code wrote of a control's state"));
+        let with = asked(&capture(&[
+            (BlockKind::Paragraph, "Updated for 1.15."),
+            (BlockKind::ControlState, "Save: disabled"),
+        ]));
+        assert!(with.contains("source_kind is control_state is a description code wrote of a control's state"));
         assert!(with.contains("never by the state of a control"));
+        assert!(!asked(&capture(&[(BlockKind::Paragraph, "Updated for 1.15.")])).contains("control_state"));
+        // An icon link's destination is an observation a task can ask for: it is not called a control's state.
+        let link = r#"Link element DOM metadata: {"label":"Download","href":"https://example.test/app.zip","near":null}. The link has no text."#;
         assert!(
-            !asked(&capture(&[(BlockKind::Paragraph, "Updated for 1.15.")])).contains("source_kind is observation")
+            !asked(&capture(&[(BlockKind::Paragraph, "Release 1.2"), (BlockKind::Observation, link)]))
+                .contains("control's state")
         );
     }
 
@@ -1149,7 +1159,7 @@ mod tests {
         // The link's own label and destination answer a question about the link; its row's text is already offered.
         assert_eq!(values, ["A story title", "upvote", "https://example.test/vote"]);
         // What a field shows is still an answer.
-        let captured = capture(&[(BlockKind::Observation, "Email: [empty]")]);
+        let captured = capture(&[(BlockKind::ControlState, "Email: [empty]")]);
         assert_eq!(read_candidates(&captured, None).len(), 1);
     }
 

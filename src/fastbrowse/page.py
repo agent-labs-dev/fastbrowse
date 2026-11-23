@@ -159,6 +159,7 @@ class BlockKind(StrEnum):
     CODE = "code"
     LINK = "link"
     OBSERVATION = "observation"
+    CONTROL_STATE = "control_state"
 
 
 class SourceField(Frozen):

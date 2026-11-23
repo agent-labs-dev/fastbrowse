@@ -193,6 +193,11 @@ and participates in the capture hash and secret masking. Read candidates name th
 tab title stays distinct from a heading rendered in the page body. A title alone does not establish that a
 script-rendered body was read.
 
+A browser capture writes what code reads off elements as typed lines: a control's state ("Save: disabled", "Name:
+[empty]", "Remember me: checked") as a `control_state` block, and an image's or a textless link's attributes, a
+player's state and the viewport as `observation` blocks. A read question that offers a `control_state` candidate tells
+Jev it is not the page's text, so it never answers a task about what the page says.
+
 Browser and HTTP captures keep a text label's `title` advice beside it as `(title: ...)`, within the
 same record or table cell. The advice supplements the label rather than replacing it, so a shortened listing
 name can retain its full native tooltip text as citable evidence.
