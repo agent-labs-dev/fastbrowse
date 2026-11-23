@@ -2639,7 +2639,9 @@ impl Agent {
         } else if holds("refused")? {
             Carried::Refused
         } else {
-            let steps = spans(&state.task, SpanKind::Str);
+            // A resolved value can contain a clause boundary, so mask the whole task before splitting its choices.
+            let task = self.mask(&state.task);
+            let steps = spans(&task, SpanKind::Str);
             let criteria = steps
                 .iter()
                 .enumerate()

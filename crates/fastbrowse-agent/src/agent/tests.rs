@@ -3043,11 +3043,21 @@ async fn test_the_gate_and_done_check_mask_a_secret_resolved_after_preparation()
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), done.clone(), Arc::new(ScriptedLLM));
     agent.redactor().register("token", "private-token", None);
     let _ = agent.actions_done(&mut state, &page).await;
-    let asked = done.5.lock().unwrap();
-    assert!(!asked.is_empty());
-    for instructions in asked.iter() {
-        assert!(!instructions.contains("private-token"), "{instructions}");
+    {
+        let asked = done.5.lock().unwrap();
+        assert!(!asked.is_empty());
+        for instructions in asked.iter() {
+            assert!(!instructions.contains("private-token"), "{instructions}");
+        }
     }
+
+    let undone = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), undone, Arc::new(ScriptedLLM));
+    agent.redactor().register("token", "private-token", None);
+    let Carried::Undone(step) = agent.actions_done(&mut state, &page).await.unwrap() else {
+        panic!("expected an unfinished clause")
+    };
+    assert_eq!(step, agent.mask("Delete the list named private-token."));
 }
 
 /// `DoneCheckJev`, judging that no answer gives every requested fact.
