@@ -66,6 +66,9 @@ pub struct Control {
     pub frame_id: Option<String>,
     #[serde(default)]
     pub frame_origin: Option<String>,
+    /// The receiving iframe's document identity. The observation carries the top-level document identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_document_key: Option<String>,
     /// Owner form or local field group, scoped to the frame and document that observed it.
     #[serde(default)]
     pub form_id: Option<String>,
@@ -157,6 +160,7 @@ impl Control {
             id: id.into(),
             frame_id: None,
             frame_origin: None,
+            frame_document_key: None,
             form_id: None,
             retarget_key: None,
             role: role.into(),

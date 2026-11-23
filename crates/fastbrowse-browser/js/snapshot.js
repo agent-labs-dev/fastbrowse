@@ -1447,6 +1447,10 @@
       form_id: fieldScope(source),
       submit_semantics: submitSemantics(e),
     };
+    // An inlined iframe can reload while the document producing this snapshot stays put.
+    if (base.form_id !== null && e.ownerDocument !== document) {
+      base.frame_document_key = String(e.ownerDocument.defaultView.performance.timeOrigin);
+    }
     if (rname === 'link' && nativeProperty(e, 'href')) {
       const u = new URL(nativeProperty(e, 'href'), location.href);
       // Another origin's link keeps its whole address, as capture.js writes it: a recipe or a follow joins the href

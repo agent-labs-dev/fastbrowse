@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- After an iframe reload, the form submission check tells Jev that the earlier form's relationship to the current form is unknown ([#1496](https://github.com/agent-labs-dev/fastbrowse/issues/1496)).
+
 - Steps fit pictures and text to the decision model's context. When a screenshot would overflow the step budget, the agent drops it before cutting page text or controls. OpenRouter decision model pins, including catalog aliases, use the listed context, price and image support. Question names are encoded for each decision wire and restored in the answers.
 - Install Chrome extension 0.1.2 for the full command set. Extension 0.1.1 can still run tasks and releases request interception when the run closes.
 
