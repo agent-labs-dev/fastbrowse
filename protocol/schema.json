@@ -720,7 +720,8 @@
     "FactReader": {
       "enum": [
         "jev_choice",
-        "llm_image"
+        "llm_image",
+        "llm_quote"
       ],
       "title": "FactReader",
       "type": "string"

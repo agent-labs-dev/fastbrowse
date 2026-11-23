@@ -387,6 +387,7 @@ str_enum! {
     pub enum FactReader {
         JevChoice = "jev_choice",
         LlmImage = "llm_image",
+        LlmQuote = "llm_quote",
     }
 }
 

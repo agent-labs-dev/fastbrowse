@@ -8,7 +8,9 @@ use serde_json::Map;
 use super::Agent;
 use super::helpers::read_sources;
 use super::state::{RunState, Step, tab_key};
-use crate::memory::address;
+use fastbrowse_core::models::FactReader;
+
+use crate::memory::{Fact, address};
 use crate::retrieval::{PageRead, read_page};
 
 impl Agent {
@@ -91,6 +93,43 @@ impl Agent {
         let (read, done) = tokio::join!(self.trace.phase("read", reading), work(state));
         let progressed = self.end_read(state, capture, observation, tries, known, read?);
         Ok(Some((done, progressed)))
+    }
+
+    /// Read `quotes` off `capture` as the facts that answer the task, returning those the page does not hold verbatim.
+    /// The driver saw the page and names what answers; a Jev read picks one passage, and kept "Date: 12/04/2026" from a
+    /// page whose date, day and month were three blocks, so done was refused with the answer on screen.
+    pub(super) fn read_quoted(
+        &self,
+        state: &mut RunState,
+        capture: Capture,
+        observation: &Observation,
+        quotes: &[String],
+    ) -> Vec<String> {
+        let (found, missing): (Vec<_>, Vec<_>) = quotes
+            .iter()
+            .map(|quote| (quote, crate::retrieval::quoted(&capture, quote)))
+            .partition(|(_, e)| e.is_some());
+        let missing: Vec<String> = missing.into_iter().map(|(quote, _)| quote.clone()).collect();
+        if !missing.is_empty() {
+            return missing;
+        }
+        let tries = state.begin_read(observation);
+        let known = read_sources(&state.notes);
+        let facts: Vec<Fact> = found
+            .into_iter()
+            .filter_map(|(quote, evidence)| Some(Fact::read(quote, evidence?, FactReader::LlmQuote).answering()))
+            .collect();
+        // Several quotes are parts of one answer, written up together.
+        let compose = facts.len() > 1;
+        self.end_read(
+            state,
+            capture,
+            observation,
+            tries,
+            known,
+            PageRead { facts, compose, finished: true, for_steps: false },
+        );
+        Vec::new()
     }
 
     fn end_read(

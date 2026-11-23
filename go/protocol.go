@@ -246,6 +246,7 @@ type FactReader string
 const (
 	FactReaderJevChoice FactReader = "jev_choice"
 	FactReaderLLMImage  FactReader = "llm_image"
+	FactReaderLLMQuote  FactReader = "llm_quote"
 )
 
 // The client's side of the handshake.

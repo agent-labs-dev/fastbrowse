@@ -76,18 +76,43 @@ impl Chat {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 pub(super) enum Act {
-    Click { id: String },
-    Type { id: String, text: String },
-    TypeSecret { id: String, name: String },
-    Select { id: String, option: String },
-    Key { id: String, key: String },
-    Scroll { id: Option<String>, down: bool },
-    Goto { url: String },
+    Click {
+        id: String,
+    },
+    Type {
+        id: String,
+        text: String,
+    },
+    TypeSecret {
+        id: String,
+        name: String,
+    },
+    Select {
+        id: String,
+        option: String,
+    },
+    Key {
+        id: String,
+        key: String,
+    },
+    Scroll {
+        id: Option<String>,
+        down: bool,
+    },
+    Goto {
+        url: String,
+    },
     Back,
     Wait,
     Read,
-    Done,
-    GiveUp { status: GiveUp, reason: String },
+    Done {
+        #[serde(default)]
+        quotes: Vec<String>,
+    },
+    GiveUp {
+        status: GiveUp,
+        reason: String,
+    },
 }
 
 /// The ways the model may end a run short of done.
@@ -144,8 +169,10 @@ gave; back() goes back.
 - wait() waits until the page changes, for a page that is still loading or checking the browser.
 - read() records what the current page shows as evidence. The final answer is written only from pages you read, so \
 read each earlier page that shows part of the answer, while it shows it.
-- done() reads the current page, then ends the run once the task is carried out and the pages read show the answer. \
-It is refused when they do not support it, and you are told so.
+- done(quotes) ends the run once the task is carried out and the pages read show the answer. quotes are the passages \
+of the current page's visible text that show it, each copied exactly, one per passage; give every one the answer \
+needs, or none to have the page read for you. It is refused when what was read does not support the answer, or a \
+quote is not on the page, and you are told so.
 - give_up(status, reason) ends the run when the task cannot be finished: needs_login (a sign-in no secret covers), \
 needs_input (a value the task does not give), blocked (a bot check), unavailable (the site is down or the thing does \
 not exist), stuck (nothing left to try).
@@ -187,7 +214,7 @@ impl ResponseSchema for Actions {
             Actions::tool("back", &[]),
             Actions::tool("wait", &[]),
             Actions::tool("read", &[]),
-            Actions::tool("done", &[]),
+            Actions::tool("done", &[("quotes", json!({"type": "array", "items": {"type": "string"}}))]),
             Actions::tool(
                 "give_up",
                 &[
@@ -269,7 +296,7 @@ fn target_of(act: &Act) -> Option<&str> {
         | Act::Select { id, .. }
         | Act::Key { id, .. } => Some(id),
         Act::Scroll { id, .. } => id.as_deref(),
-        Act::Goto { .. } | Act::Back | Act::Wait | Act::Read | Act::Done | Act::GiveUp { .. } => None,
+        Act::Goto { .. } | Act::Back | Act::Wait | Act::Read | Act::Done { .. } | Act::GiveUp { .. } => None,
     }
 }
 
@@ -442,10 +469,27 @@ impl Agent {
         };
         let on = |id: &Option<String>| id.as_deref().map(control);
         let made = match &act {
-            Act::Done => {
+            Act::Done { quotes } => {
                 // Done means the page in front of the model shows the task done. Ending on it unread made every run spend a
                 // refused done and a read turn: the check judged only what was read, and the model saw the answer but had
-                // not read it.
+                // not read it. The model names what answers; a Jev read of the page picks one passage, and kept only the
+                // date of a date, day and month shown as three blocks.
+                if !quotes.is_empty() && state.chat.read_on.as_ref() != Some(&read_key(observation)) {
+                    let capture = self.capture().await?;
+                    let missing = self.read_quoted(state, capture, observation, quotes);
+                    if !missing.is_empty() {
+                        state.chat.queue.clear();
+                        let missing: Vec<String> =
+                            missing.iter().map(|quote| self.redact(&format!("{quote:?}"))).collect();
+                        state.chat.notices.push(format!(
+                            "done was refused: the current page does not show {} word for word. Quote the page's text \
+                             exactly, or carry out what is left.",
+                            missing.join(", ")
+                        ));
+                        return Ok(None);
+                    }
+                    state.chat.read_on = Some(read_key(observation));
+                }
                 if state.chat.read_on.as_ref() != Some(&read_key(observation)) {
                     Box::pin(self.step(state, observation, &decision(Operation::Read, None, None, None))).await?;
                     state.chat.read_on = Some(read_key(observation));

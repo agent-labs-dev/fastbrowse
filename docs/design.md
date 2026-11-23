@@ -95,7 +95,7 @@ the page's block holding the words it quotes is the stop's evidence.
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 
-Screenshot facts use the `llm_image` reader label; Jev-selected facts use `jev_choice`.
+Screenshot facts use the `llm_image` reader label; Jev-selected facts use `jev_choice`; quotes the chat driver cites when it calls `done`, found verbatim in the capture by code, use `llm_quote`.
 The LLM screenshot reader records `image_read` calls separately from answer composition. Jev image limits apply
 to Jev questions; the LLM reader uses its own client, which must refuse unsupported image input explicitly.
 Screenshot readings pass the same support and requested-coverage checks as composed text before completion.

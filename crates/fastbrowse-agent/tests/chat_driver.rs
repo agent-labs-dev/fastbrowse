@@ -378,3 +378,23 @@ async fn test_a_plan_keeps_running_while_a_field_takes_text_and_no_control_appea
     assert_eq!(acted, [Some("main:note".into()), Some("main:inline-next".into())]);
     assert_eq!(driver.sent.lock().unwrap().len(), 2, "both actions ran from one turn");
 }
+
+#[tokio::test]
+async fn test_a_done_cites_its_quotes_and_each_found_on_the_page_is_evidence() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "done", "quotes": ["a date"]}]}), give_up()]);
+    let result = run(page, driver.clone()).await;
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    assert_eq!(driver.sent.lock().unwrap().len(), 1);
+    let quotes: Vec<&str> = result.evidence.iter().map(|evidence| evidence.quote.as_str()).collect();
+    assert_eq!(quotes, ["a date"]);
+}
+
+#[tokio::test]
+async fn test_a_done_quoting_words_the_page_does_not_show_is_refused_and_told_back() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "done", "quotes": ["Pick a day"]}]}), give_up()]);
+    let result = run(page, driver.clone()).await;
+    assert_eq!(result.status, Status::Stuck);
+    assert!(driver.told(1).contains(r#"does not show "Pick a day" word for word"#), "{}", driver.told(1));
+}

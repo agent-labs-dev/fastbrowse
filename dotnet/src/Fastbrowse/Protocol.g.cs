@@ -415,6 +415,8 @@ public enum FactReader
     JevChoice,
     [JsonStringEnumMemberName("llm_image")]
     LlmImage,
+    [JsonStringEnumMemberName("llm_quote")]
+    LlmQuote,
 }
 
 /// <summary>

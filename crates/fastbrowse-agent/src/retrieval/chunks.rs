@@ -38,6 +38,25 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
     }
 }
 
+/// The first span of `capture` that is `quote` exactly and lies inside one block, cut as code cuts any quote. A model
+/// that saw the page cites its words; code finds them, so a claim rests on page text whatever the model wrote.
+pub(crate) fn quoted(capture: &Capture, quote: &str) -> Option<Evidence> {
+    if text::strip(quote).is_empty() {
+        return None;
+    }
+    let page = Page::new(capture);
+    let length = quote.chars().count() as i64;
+    capture.text.match_indices(quote).find_map(|(at, _)| {
+        let start = capture.text[..at].chars().count() as i64;
+        let end = start + length;
+        let block = capture
+            .blocks
+            .iter()
+            .find(|block| block.kind != BlockKind::DocumentTitle && block.start <= start && end <= block.end)?;
+        Some(evidence(&page, block, start, end))
+    })
+}
+
 /// The page's rendered text, quoted block by block, for a page the run stops on without reading.
 pub fn page_quotes(capture: &Capture) -> Vec<Evidence> {
     // Each block's evidence looks at every other block, so a page of many blocks is long work (#1284).
@@ -56,4 +75,40 @@ pub fn page_quotes(capture: &Capture) -> Vec<Evidence> {
             .map(|block| evidence(&page, block, block.start, block.end))
             .collect()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capture(text: &str, blocks: &[(i64, i64)]) -> Capture {
+        let blocks: Vec<_> = blocks
+            .iter()
+            .enumerate()
+            .map(|(i, (start, end))| {
+                serde_json::json!({"source_id": format!("b{i}"), "frame_id": null, "kind": "paragraph",
+                                   "start": start, "end": end})
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "url": "https://example.test/", "title": "t", "captured_at": "2026-11-18T00:00:00Z",
+            "sha256": "s", "text": text, "blocks": blocks
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_quote_is_cut_from_the_block_that_holds_it() {
+        let page = capture("Date: 12/04/2026\n\nDay: Friday", &[(0, 16), (18, 29)]);
+        let day = quoted(&page, "Day: Friday").expect("on the page");
+        assert_eq!((day.start, day.end, day.quote.as_str(), day.source_id.as_str()), (18, 29, "Day: Friday", "b1"));
+    }
+
+    #[test]
+    fn a_quote_the_page_does_not_hold_in_one_block_is_not_found() {
+        let page = capture("Date: 12/04/2026\n\nDay: Friday", &[(0, 16), (18, 29)]);
+        assert!(quoted(&page, "Day: Monday").is_none());
+        assert!(quoted(&page, "2026\n\nDay").is_none(), "spans two blocks");
+        assert!(quoted(&page, "  ").is_none());
+    }
 }

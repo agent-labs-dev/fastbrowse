@@ -70,7 +70,7 @@ export type StepFailure =
   | 'navigation_failed'
   | 'dialog_interrupted'
   | 'browser_error';
-export type FactReader = 'jev_choice' | 'llm_image';
+export type FactReader = 'jev_choice' | 'llm_image' | 'llm_quote';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy' | 'search';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
 export type LLMPurpose =
