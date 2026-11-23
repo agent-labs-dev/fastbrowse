@@ -55,7 +55,7 @@ pub(crate) fn line_quotes(capture: &Capture, lines: &[String]) -> Vec<Evidence> 
         while end > start && page.chars[end as usize - 1].is_whitespace() {
             end -= 1;
         }
-        let Some(at) = wanted.iter().position(|line| *line == page.slice(start, end)) else { continue };
+        let Some(run) = added_run(&wanted, page.slice(start, end)) else { continue };
         let Some(block) = capture.blocks.iter().find(|block| {
             block.start <= start
                 && end <= block.end
@@ -64,11 +64,35 @@ pub(crate) fn line_quotes(capture: &Capture, lines: &[String]) -> Vec<Evidence> 
         }) else {
             continue;
         };
-        wanted.remove(at);
+        wanted.drain(run);
         quotes.push(evidence(&page, block, start, end));
     }
     quotes.reverse();
     quotes
+}
+
+/// The consecutive added pieces that read as `line` once whitespace is left out. An observation lists each DOM text
+/// node on its own line, while a capture joins the inline content around it, so "Changes <strong>saved</strong>
+/// successfully" is three added pieces and one captured line.
+fn added_run(wanted: &[&str], line: &str) -> Option<std::ops::Range<usize>> {
+    let squeezed = |text: &str| text.split_whitespace().collect::<String>();
+    let line = squeezed(line);
+    if line.is_empty() {
+        return None;
+    }
+    (0..wanted.len()).find_map(|from| {
+        let mut joined = String::new();
+        for (at, piece) in wanted.iter().enumerate().skip(from) {
+            joined.push_str(&squeezed(piece));
+            if joined == line {
+                return Some(from..at + 1);
+            }
+            if !line.starts_with(&joined) {
+                return None;
+            }
+        }
+        None
+    })
 }
 
 /// The page's rendered text, quoted block by block, for a page the run stops on without reading.
