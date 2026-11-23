@@ -2463,13 +2463,14 @@ pub(crate) async fn draft_reviewed(
     screenshot: Screenshot,
     notes: &Notes,
     ledger: Option<&Ledger>,
+    committed: &[Value],
 ) -> Result<Option<Draft>> {
     let claims = draft_claims(notes);
     if claims.is_empty() {
         return Ok(None);
     }
     let questions = IndexMap::from([
-        ("coverage".to_string(), coverage_question(task, screenshot, None, &claims, notes, &[], &[])),
+        ("coverage".to_string(), coverage_question(task, screenshot, None, &claims, notes, &[], committed)),
         ("exact".to_string(), exact_question(task, &claims, notes)),
     ]);
     let state = json!({"task": task, "pages_read": pages_read(notes)});
@@ -5718,12 +5719,9 @@ mod tests {
         collapse.effect = Some("Show 3 Replies appeared".into());
         let mut post = HistoryEntry::new(Some(Operation::Click), Some("Post"), StepOutcome::Executed, true);
         post.effect = Some("Reply (3) shown".into());
-        post.commit = Some(crate::policy::Commit::Taken);
-        let kept: Vec<Value> = [collapse, post]
-            .iter()
-            .filter(|entry| entry.commit == Some(crate::policy::Commit::Taken))
-            .map(HistoryEntry::kept)
-            .collect();
+        post.committed = true;
+        let kept: Vec<Value> =
+            [collapse, post].iter().filter(|entry| entry.committed).map(HistoryEntry::kept).collect();
         assert_eq!(kept, [json!({"operation": "click", "target": "Post", "outcome": "executed"})]);
         let Question::Noul(coverage) =
             coverage_question("Reply to the thread", Screenshot::Absent, None, &[], &Notes::default(), &[], &kept)
@@ -5999,12 +5997,25 @@ mod tests {
         }
         let jev = Support::new(true);
         let Some(Draft::Reviewed(reviewed)) =
-            draft_reviewed(&jev, "Report every record", Screenshot::Absent, &notes, None).await.unwrap()
+            draft_reviewed(&jev, "Report every record", Screenshot::Absent, &notes, None, &[]).await.unwrap()
         else {
             panic!("a draft too long to judge stands unjudged");
         };
         assert!(reviewed.answer.problem.unwrap().contains("input limits"));
         assert!(jev.asked.lock().unwrap().is_empty());
+    }
+
+    /// A pick the task asks an action beside: the picked-answer coverage question is told the run's committed steps,
+    /// as the composed answer's is, or an action such as a delete reads as a fact the notes lack.
+    #[tokio::test]
+    async fn a_pick_is_held_to_coverage_told_the_steps_the_run_committed() {
+        let notes = Notes::new([Fact { answers: true, ..fact(0, "Record B: 34".into()) }]);
+        let jev = Support::new(true);
+        let kept = [json!({"operation": "click", "target": "Delete", "outcome": "executed"})];
+        draft_reviewed(&jev, "Delete it and report record B", Screenshot::Absent, &notes, None, &kept).await.unwrap();
+        let asked = jev.asked.lock().unwrap();
+        let Question::Noul(coverage) = &asked[0]["coverage"] else { panic!("coverage is asked") };
+        assert!(coverage.instructions.contains("\"target\": \"Delete\""), "{}", coverage.instructions);
     }
 
     /// A pick Jev holds to cover the task but leaves its exactness unjudged has not been shown to state only what was
@@ -6014,7 +6025,7 @@ mod tests {
         let notes = Notes::new([Fact { answers: true, ..fact(0, "Record B: 34".into()) }]);
         let jev = Support { unanswered: Some("exact"), ..Support::new(true) };
         let Some(Draft::Reviewed(reviewed)) =
-            draft_reviewed(&jev, "Report record B", Screenshot::Absent, &notes, None).await.unwrap()
+            draft_reviewed(&jev, "Report record B", Screenshot::Absent, &notes, None, &[]).await.unwrap()
         else {
             panic!("an unjudged pick stands as it is");
         };
@@ -6058,6 +6069,7 @@ mod tests {
             Screenshot::Absent,
             &notes,
             None,
+            &[],
         )
         .await
         .unwrap();

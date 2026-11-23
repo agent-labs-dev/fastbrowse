@@ -275,6 +275,8 @@ impl Agent {
             }
             // Going back from a commit that failed sends it again.
             let committed = std::mem::take(&mut state.committing);
+            // A change the site keeps is one the run made even when it can be undone, such as a saved setting.
+            let keeps = state.keeping;
             if committed
                 && state.page_failed
                 && let Some(failure) = &state.site_failure
@@ -284,13 +286,7 @@ impl Agent {
             // Only a commit that was sent counts: one the page redrew, covered or replaced before it went is not one
             // the run has made. One that opened a dialog is not made yet: accepting the dialog makes it, through its
             // own gate.
-            let taken = committed
-                && !state.page_failed
-                && observation.dialog.is_none()
-                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed);
-            if taken {
-                state.commits += 1;
-            }
+            let taken = !state.page_failed && observation.dialog.is_none() && state.record_kept_step(committed, keeps);
             if observation.dialog.is_none() {
                 state.dialog_form = None;
             }

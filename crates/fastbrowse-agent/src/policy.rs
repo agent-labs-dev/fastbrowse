@@ -203,6 +203,11 @@ pub struct HistoryEntry {
     /// own form, and no others.
     #[serde(skip)]
     pub form: Option<Form>,
+    /// The step was sent and made a change the site keeps: an irreversible commit by the authorization classification,
+    /// or a reversible change such as a saved setting. Kept out of what models are shown, and the only steps the
+    /// coverage check is told of.
+    #[serde(skip)]
+    pub committed: bool,
 }
 
 /// The scope of a form or field group. A local form id can be reused in other frames or documents.
@@ -334,6 +339,7 @@ impl HistoryEntry {
             submitted: None,
             commit: None,
             form: None,
+            committed: false,
         }
     }
 
