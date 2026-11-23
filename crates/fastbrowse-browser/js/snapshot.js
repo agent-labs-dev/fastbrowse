@@ -1328,7 +1328,8 @@
     for (const e of registry.selfUpdating) if (scope.contains(e)) text = text.replace(innerTextOf(e) || '', '');
     return digest(text.slice(0, GUARD_TEXT_CHARS));
   });
-  registry.guard = (e, id) => {
+  // `stable` blanks the control's own current state, for `retargetKey` below.
+  registry.guard = (e, id, stable = false) => {
     if (!e?.isConnected || !visible(e)) return null;
     const axis = registry.scrollAxes?.get(id);
     if (axis) return [identity(e), 'scroll', axis,
@@ -1337,22 +1338,23 @@
     const source = sourceOf(e);
     if (source !== e && (source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
+    const own = value => (stable ? null : value);
     // An absent aria-disabled and "false" both mean enabled. Google Flights adds the "false" as it hydrates, and
     // the raw attribute turned the run's first click stale.
     return [
       identity(e),
       roleOf(e),
       labelOf(e) || fallbackLabel(e),
-      reveal(source),
-      nativeProperty(source, 'checked') ?? null,
-      chosen(e),
+      own(reveal(source)),
+      own(nativeProperty(source, 'checked') ?? null),
+      own(chosen(e)),
       nativeProperty(e, 'readOnly') ?? null,
       e.matches(':disabled'),
       e.getAttribute('aria-disabled') === 'true',
-      e.getAttribute('aria-expanded'),
-      e.getAttribute('aria-checked'),
-      e.getAttribute('aria-pressed'),
-      e.getAttribute('aria-selected'),
+      own(e.getAttribute('aria-expanded')),
+      own(e.getAttribute('aria-checked')),
+      own(e.getAttribute('aria-pressed')),
+      own(e.getAttribute('aria-selected')),
       e.getAttribute('href'),
       scope ? scopeDigest(scope) : '',
       e.ownerDocument.location.origin,
@@ -1367,6 +1369,11 @@
     const guard = registry.guard(e, id);
     return guard && digest(JSON.stringify(guard));
   };
+  // What a control is apart from its node ids and its own current state. A redraw that also fills a field or checks a
+  // box changes that state, and keying on it left the replacement unpaired: two rebuilt "Name" fields, one just
+  // filled, were reported as one removed and one shown, never as the value set. A retargeted action still compares the
+  // whole control, state included, before it follows the key.
+  registry.retargetKey = (e, id) => registry.guard(e, id, true)?.slice(1, -1) ?? null;
 
   const DRAWN_KINDS = { IMG: 'image', CANVAS: 'canvas', VIDEO: 'video' };
   const controls = [];
@@ -2256,9 +2263,10 @@
   for (const c of controls) {
     const guard = registry.guard(registry.nodes.get(c.id), c.id);
     guards[c.id] = guard && digest(JSON.stringify(guard));
-    // A redraw changes the node ids at either end of the guard. Everything between them, including the receiving
-    // document's timeOrigin and form semantics, must survive before an action can follow it.
-    retarget_keys[c.id] = guard && digest(JSON.stringify(guard.slice(1, -1)));
+    // A redraw changes the node ids at either end of the guard. Everything between them but the control's own state,
+    // including the receiving document's timeOrigin and form semantics, must survive before an action can follow it.
+    const retarget = registry.retargetKey(registry.nodes.get(c.id), c.id);
+    retarget_keys[c.id] = retarget && digest(JSON.stringify(retarget));
   }
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
   if (mode !== 'glance') registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));

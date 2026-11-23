@@ -1,5 +1,7 @@
 //! What an action visibly did, told back to the policy so that a no-op cannot pass for progress.
 
+use std::collections::VecDeque;
+
 use indexmap::IndexMap;
 use serde_json::json;
 
@@ -199,14 +201,24 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
     for control in old.values() {
         by_name.entry((control.role.as_str(), text::strip(&control.label))).or_default().push(control);
     }
+    // A rebuilt control has a new id, and twins that share a name (two "Name" fields) are paired by what the control
+    // is, its `retarget_key`, in document order, so a value set during the redraw is still reported.
+    let mut by_retarget: IndexMap<&str, VecDeque<&Control>> = IndexMap::new();
+    for control in old.values().filter(|c| !new.contains_key(c.id.as_str())) {
+        if let Some(key) = control.retarget_key.as_deref() {
+            by_retarget.entry(key).or_default().push_back(control);
+        }
+    }
     for (key, now) in &new {
-        let was = match old.get(key) {
-            Some(was) => *was,
-            None => match by_name.get(&(now.role.as_str(), text::strip(&now.label))).map(Vec::as_slice) {
-                Some([namesake]) if !new.contains_key(namesake.id.as_str()) => *namesake,
-                _ => continue,
-            },
-        };
+        let paired = old.get(key).copied().or_else(|| {
+            now.retarget_key.as_deref().and_then(|k| by_retarget.get_mut(k)).and_then(VecDeque::pop_front).or_else(
+                || match by_name.get(&(now.role.as_str(), text::strip(&now.label))).map(Vec::as_slice) {
+                    Some([namesake]) if !new.contains_key(namesake.id.as_str()) => Some(*namesake),
+                    _ => None,
+                },
+            )
+        });
+        let Some(was) = paired else { continue };
         let attributes = [
             ("label", Shown::Text(was.label.clone()), Shown::Text(now.label.clone())),
             ("value", Shown::of_text(&was.value), Shown::of_text(&now.value)),
@@ -280,9 +292,9 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
     }
     // A page that rebuilds its nodes gives every control a new id, so ids alone report a re-rendered thread as both
     // lost and shown again, and Jev was told a reply the page still showed had been removed. The capture's
-    // `retarget_key` hashes what a control is without its node id (role, label, state, scope text, document), so a
-    // control whose id is gone still survived when a new control keeps its key. Twins pair off one for one, so a real
-    // removal among them still counts.
+    // `retarget_key` pairs replacement attributes and hashes what a control is without its node id or mutable state,
+    // so a control whose id is gone still survived when a new control keeps its key. Twins pair off one for one, so a
+    // real removal among them still counts.
     let mut lost: IndexMap<&str, Vec<&str>> = IndexMap::new();
     if !replaced {
         for c in before.controls.iter().filter(|c| !new.contains_key(c.id.as_str())) {
@@ -515,6 +527,25 @@ mod tests {
         let bare = observation(vec![control("c1", "Kal66", "link")]);
         let moved = observation(vec![control("c2", "Kal66", "link")]);
         assert!(effect(&bare, &moved, None, false).summary.contains("removed 1 control: Kal66"));
+    }
+
+    #[test]
+    fn test_duplicate_rebuilt_fields_pair_when_identity_key_is_stable() {
+        let field = |id: &str, value: Option<&str>, key: &str| {
+            with(&control(id, "Name", "textbox"), |c| {
+                c.value = value.map(str::to_string);
+                c.retarget_key = Some(key.into());
+            })
+        };
+        let before = observation(vec![field("old-1", None, "same-1"), field("old-2", None, "same-2")]);
+        let after = observation(vec![field("new-1", Some("Ada"), "same-1"), field("new-2", None, "same-2")]);
+
+        let done = effect(&before, &after, None, false);
+
+        assert_eq!(done.set, [("new-1".into(), Setting::Value(Some("Ada".into())))]);
+        assert!(done.summary.contains("Name value: empty -> Ada"), "{}", done.summary);
+        assert!(done.shown.is_empty(), "{}", done.summary);
+        assert!(!done.summary.contains("removed"), "{}", done.summary);
     }
 
     #[test]

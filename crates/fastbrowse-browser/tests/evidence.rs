@@ -371,6 +371,30 @@ async fn test_a_carousel_with_aria_hidden_clones_is_not_modal() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_duplicate_fields_keep_their_value_change_across_a_redraw() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    let page = |value: &str| {
+        format!(
+            "document.body.innerHTML = '<form><label>Name <input value=\"{value}\"></label></form><form><label>Name <input></label></form>'"
+        )
+    };
+    eval_active(&h.session, &page("")).await;
+    let before = h.observe().await;
+    // Both forms are rebuilt, so every control gets a new id and the two fields share their name.
+    eval_active(&h.session, &page("Ada")).await;
+    let after = h.observe().await;
+    let done = fastbrowse_core::effects::effect(&before, &after, None, false);
+    assert_eq!(
+        done.set,
+        [(after.controls[0].id.clone(), fastbrowse_core::effects::Setting::Value(Some("Ada".into())))]
+    );
+    assert!(done.shown.is_empty(), "{}", done.summary);
+    assert!(!done.summary.contains("removed"), "{}", done.summary);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_drawing_below_the_fold_does_not_ask_for_a_screenshot() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
