@@ -185,8 +185,9 @@ read each earlier page that shows part of the answer, while it shows it.
 of text that show it, from the current page or any page shown to you before, each copied exactly, one per passage; \
 give every one the answer needs, or none to have the current page read for you. It is refused when what was read does not support the answer, or a \
 quote is not on the page, and you are told so.
-- give_up(status, reason) ends the run when the task cannot be finished: needs_login (a sign-in no secret covers), \
-needs_input (a value the task does not give), blocked (a bot check), unavailable (the site is down or the thing does \
+- give_up(status, reason) ends the whole run, once no way to finish the task is left; a check that bars one way, \
+such as a search, leaves the others. Its status: needs_login (a sign-in no secret covers), needs_input (a value the \
+task does not give), blocked (a bot check on every way to the goal), unavailable (the site is down or the thing does \
 not exist), stuck (nothing left to try).
 
 An action the task did not ask for that cannot be undone (buying, sending, deleting, submitting) is refused unless the \
@@ -504,6 +505,14 @@ impl Agent {
                     &message[..start]
                 );
             }
+            // A fetched page has no viewport to cut it to: a Hacker News thread of 2923 comments was fetched whole and
+            // stayed past the driver model's context. A browser lays it out, and what is past the viewport goes.
+            if !fits(&chat.messages, &page) && self.page.over_http() {
+                return Err(self
+                    .page
+                    .needs_browser("the page is longer than the driver model's context and has no viewport".into())
+                    .into());
+            }
             // A thread of 2923 comments rendered 3.2 MB of controls alone, past the driver model's context with its
             // offscreen text left out, so what lies outside the viewport goes as a whole: controls and text.
             let offscreen = shown.controls.iter().any(|control| control.offscreen);
@@ -604,9 +613,12 @@ impl Agent {
                     );
                 } else if finished.is_none() {
                     state.chat.queue.clear();
+                    // Told to read the page that shows it, the driver went back to saucedemo's order overview, which the
+                    // finished order had emptied to $0.00, though the total it saw there before was its to quote.
                     state.chat.notices.push(
-                        "done was refused: what was read, this page included, does not show the task done. Read the page \
-                         that shows it, or carry out what is left."
+                        "done was refused: what was read, this page included, does not show the task done. Quote the \
+                         passages that show it, from this page or any page shown to you before, or carry out what is \
+                         left."
                             .into(),
                     );
                 }

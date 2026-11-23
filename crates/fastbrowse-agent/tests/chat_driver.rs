@@ -344,7 +344,11 @@ async fn test_a_done_jev_finds_unsupported_is_refused_and_told_back() {
     let result =
         run_with(page, driver.clone(), Arc::new(Answering(ScriptedJev::new(Vec::new()), "coverage", 0.0))).await;
     assert_eq!(result.status, Status::Stuck);
-    assert!(driver.told(1).contains("done was refused"), "{}", driver.told(1));
+    let told = driver.told(1);
+    assert!(
+        told.contains("done was refused") && told.contains("from this page or any page shown to you before"),
+        "{told}"
+    );
 }
 
 /// One secret, `pw`, for the test page's origin only.
@@ -573,4 +577,23 @@ async fn test_the_driver_is_told_the_browser_is_solving_a_captcha_on_the_page() 
     run(page, driver.clone()).await;
     let told = driver.told(0);
     assert!(told.contains("CAPTCHA solver is working on this page's cloudflare CAPTCHA; wait()"), "{told}");
+}
+
+#[tokio::test]
+async fn test_a_fetched_page_longer_than_the_models_context_goes_to_a_browser() {
+    let first = first_request_bytes(DatePage { replies: 2000, http: true, ..DatePage::default() }).await;
+    let page = Arc::new(DatePage { replies: 2000, http: true, ..DatePage::default() });
+    let driver =
+        Arc::new(Driver { context: Some(first - 20_000), ..Arc::into_inner(Driver::new([give_up()])).unwrap() });
+    let result = run(page, driver.clone()).await;
+    assert_eq!(result.failure_kind.as_deref(), Some("NeedsBrowser"), "{result:?}");
+    assert!(driver.sent.lock().unwrap().is_empty(), "the page too long for the model was never sent");
+}
+
+#[tokio::test]
+async fn test_the_driver_is_told_a_check_that_bars_one_way_leaves_the_others() {
+    let driver = Driver::new([give_up()]);
+    run(Arc::new(DatePage::default()), driver.clone()).await;
+    let system = &driver.sent.lock().unwrap()[0][0].content;
+    assert!(system.contains("a check that bars one way, such as a search, leaves the others"), "{system}");
 }
