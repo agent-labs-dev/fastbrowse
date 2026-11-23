@@ -285,18 +285,21 @@ impl Submitted {
     fn told(&self, target: Option<&Control>, observation: &Observation) -> String {
         // Back can reload the same form with fresh ids. Calling it a different form led Jev to permit a duplicate
         // submission after the first submission had already reached its confirmation page.
-        let which = if observation.url != self.document.0 {
-            "a form submitted from another address"
-        } else if observation.document_key != self.document.1 {
-            "a form from an earlier document at this address; its relation to the current form is unknown"
-        } else if let Some(target) = target.filter(|target| target.form_id.is_some()) {
-            if (&target.frame_id, target.form_id.as_ref()) == (&self.frame_id, Some(&self.form_id)) {
-                "the same form the action now asked about submits"
-            } else {
-                "a different form from the one the action now asked about submits"
+        let same_document = !observation.document_key.is_empty() && observation.document_key == self.document.1;
+        let which = if same_document {
+            match target.and_then(|target| target.form_id.as_ref().map(|id| (&target.frame_id, id))) {
+                Some((frame, id)) if (frame, id) == (&self.frame_id, &self.form_id) => {
+                    "the same form the action now asked about submits"
+                }
+                Some(_) => "a different form from the one the action now asked about submits",
+                None => "a form from this document",
             }
+        } else if observation.url != self.document.0 {
+            "a form submitted from another address"
+        } else if observation.document_key.is_empty() || self.document.1.is_empty() {
+            "a form submitted at this address; its relation to the current form is unknown"
         } else {
-            "a form from this document"
+            "a form from an earlier document at this address; its relation to the current form is unknown"
         };
         // The observation can omit fields in the submitted form, so no recorded values is not proof of emptiness.
         match self.held.is_empty() {

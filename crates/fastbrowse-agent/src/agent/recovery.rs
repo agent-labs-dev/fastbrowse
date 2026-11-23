@@ -196,7 +196,7 @@ pub(super) fn uncover(idle: &mut Vec<Idle>, before: &Observation, after: &Observ
     });
     if !available.is_empty() {
         summary.push_str(&format!(
-            "; Previously covered and offered again: {}. These actions did not execute. If the task requires them, carry them out before any later step that needs them.",
+            "; Previously covered, with the target still on the page: {}. These actions did not execute. If the task requires them, carry them out before any later step that needs them.",
             available.join(", ")
         ));
     }

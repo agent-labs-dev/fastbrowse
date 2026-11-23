@@ -1915,7 +1915,7 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     text.value = Some("Thanks for the log".into());
     let post = in_form(button("Post"), "reply");
     let controls = [comment, top.clone(), text, post.clone()];
-    let page = observation(&controls);
+    let page = Observation { document_key: "first-document".into(), ..observation(&controls) };
     assert_eq!(crate::policy::Submitted::of(Operation::Fill, &controls[2], &page), None, "a fill submits nothing");
     // A new document at the same address may have reloaded the same form.
     let elsewhere = Observation { document_key: "later-document".into(), ..page.clone() };
@@ -1945,7 +1945,18 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     );
     let mut password = in_form(Control::new("p", "textbox", "Password", [Operation::Fill]), "top");
     (password.sensitive, password.value) = (true, Some("hunter2".into()));
-    let signed = observation(&[password, top.clone()]);
+    let signed = Observation { document_key: "signed-document".into(), ..observation(&[password, top.clone()]) };
+    let submitted = crate::policy::Submitted::of(Operation::Click, &controls[3], &page).unwrap();
+    let entry = HistoryEntry { submitted: Some(submitted), ..executed(Some(Operation::Click), Some("Post"), false) };
+    let routed = Observation { url: format!("{}#reply", page.url), ..page.clone() };
+    assert!(entry.shown_beside(Some(&controls[3]), &routed)["form"].as_str().unwrap().starts_with("the same form"));
+    let unidentified = Observation { document_key: String::new(), ..page.clone() };
+    assert!(
+        entry.shown_beside(Some(&controls[3]), &unidentified)["form"]
+            .as_str()
+            .unwrap()
+            .starts_with("a form submitted at this address; its relation to the current form is unknown")
+    );
     let masked = crate::policy::Submitted::of(Operation::Click, &top, &signed).expect("a submission");
     let told = HistoryEntry { submitted: Some(masked), ..executed(Some(Operation::Click), Some("Post"), false) }
         .shown_beside(Some(&top), &signed);
@@ -7339,7 +7350,7 @@ async fn test_a_covered_link_is_offered_again_once_close_removes_its_cover() {
     let (offered, problem, _) = next_ask(&agent, &state).await;
     assert!(offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
     let effect = state.history.last().unwrap().effect.as_deref().unwrap();
-    assert!(effect.contains("Previously covered and offered again: click 'Contact us'"), "{effect}");
+    assert!(effect.contains("Previously covered, with the target still on the page: click 'Contact us'"), "{effect}");
     // Close did change the page; nothing tells Jev otherwise.
     assert!(!problem.as_deref().unwrap_or_default().contains("changed nothing"), "{problem:?}");
 }
