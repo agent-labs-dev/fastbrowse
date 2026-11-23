@@ -26,14 +26,12 @@ details, and run artifacts.
 ## Running a campaign
 
 Run one invocation for each comparison. The runner writes `manifest.json`,
-`results.jsonl`, `budget.jsonl`, and the trial artifacts into the run directory.
+`results.jsonl` and the trial artifacts into the run directory.
 
 ```sh
 uv run parallax run fastbrowse \
     --harness fastbrowse \
     --repeats 3 \
-    --budget 300 \
-    --reserve 3 \
     --retry-invalid 2 \
     --retry-wait 60 \
     --out runs/internal-fastbrowse
@@ -44,14 +42,13 @@ The backend comparison uses:
 ```sh
 uv run parallax run fastbrowse \
     --harness fastbrowse,fastbrowse-pool \
-    --repeats 3 --budget 300 --reserve 3 \
+    --repeats 3 \
     --out runs/internal-backend
 ```
 
-`--budget` is the campaign total. `--reserve` is the amount Parallax holds
-before starting a trial. Neither value limits an active agent. `--retry-invalid`
-and `--retry-wait` cover environment interruptions. No paid campaign is part of
-the offline test suite.
+The configured provider key limits apply across campaigns that share a key.
+`--retry-invalid` and `--retry-wait` cover environment interruptions. The
+offline test suite runs without paid campaigns.
 
 ## Arm mapping
 
@@ -96,8 +93,7 @@ parallax run bu-bench --harness fastbrowse
 parallax run online-mind2web --harness fastbrowse
 ```
 
-The workflow passes `--budget`, `--reserve`, `--retry-invalid`, and
-`--retry-wait`. It uploads an encrypted private run and a sanitized run
+The workflow passes `--retry-invalid` and `--retry-wait`. It uploads an encrypted private run and a sanitized run
 directory with provenance for the publication stage. Official results use the same mapping as
 internal results, keyed by the run selection, and keep the upstream score in
 `TrialResult.score`. Published history is not regenerated.

@@ -4,7 +4,7 @@ name: Paper campaign
 # runner limit, graded by one independent judge panel (Parallax grades with the panel alone).
 #
 # Dispatch only: every task drives a real browser and real model calls. Each arm and shard is one job, writing one
-# Parallax run. `paper-<arm>-<shard>` holds its manifest, provenance, results and budget journal; `paper-private-...`
+# Parallax run. `paper-<arm>-<shard>` holds its manifest, provenance and results; `paper-private-...`
 # holds the whole run, encrypted to PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT, since pages and screenshots stay private.
 #
 # An arm is a Parallax harness, with `:model` for a harness that pins one, such as `browser-use-cloud:bu-4.0`.
@@ -47,11 +47,6 @@ on:
         required: true
         type: string
         default: "4"
-      budget:
-        description: Approved dollars for each arm and shard; it gates new trials
-        required: true
-        type: string
-        default: "100"
       concurrency:
         description: Trials in flight in each job
         required: true
@@ -284,7 +279,6 @@ jobs:
           MODEL: ${{ matrix.model }}
           TASKS: ${{ matrix.tasks }}
           REPEAT: ${{ needs.plan.outputs.repeat }}
-          BUDGET: ${{ inputs.budget }}
           WORKERS: ${{ inputs.concurrency }}
           ARM: ${{ matrix.arm }}
           SHARD: ${{ matrix.shard }}
@@ -334,7 +328,7 @@ jobs:
           # longest finished smoke trial (409 s), so it ends only a hung turn, which would otherwise hold the job to
           # its cap.
           turn_timeout=1800
-          args=(--harness "$HARNESS" --repeats "$REPEAT" --concurrency "$WORKERS" --budget "$BUDGET" --reserve 3
+          args=(--harness "$HARNESS" --repeats "$REPEAT" --concurrency "$WORKERS"
             --retry-invalid 2 --retry-wait 60 --turn-timeout "$turn_timeout"
             --provenance "paper.campaign=$CAMPAIGN_ID" --provenance "paper.arm=$ARM" --provenance "paper.shard=$SHARD"
             --provenance "paper.turn_timeout_s=$turn_timeout"
@@ -355,7 +349,7 @@ jobs:
           public="$RUNNER_TEMP/public/$NAME"
           mkdir -p "$public"
           lost=""
-          for name in manifest.json provenance.json results.jsonl budget.jsonl; do
+          for name in manifest.json provenance.json results.jsonl; do
             if test -f "$PRIVATE_RUN/$name"; then cp "$PRIVATE_RUN/$name" "$public/$name"; else lost="$lost $name"; fi
           done
           # A shard that finished must leave its rows: a run whose evidence was lost measured nothing it can report.

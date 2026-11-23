@@ -18,20 +18,17 @@ The campaign workflow installs the harness checkout first, then installs the
 measured fastbrowse SHA. Keep that order, the `harness_sha`, and the pool GCP
 service account unchanged.
 
-Each campaign group runs Parallax with an approved total and per-trial reserve:
+Spend limits are configured on provider keys and are shared by campaign groups that use the same key.
 
 ```sh
 uv run --project evals --no-sync parallax run fastbrowse \
-  --harness fastbrowse --repeats 3 --budget 300 --reserve 3 \
-  --budget-journal runs/budget.jsonl --retry-invalid 2 --retry-wait 60 \
+  --harness fastbrowse --repeats 3 --retry-invalid 2 --retry-wait 60 \
   --out runs/internal-fastbrowse
 ```
 
-Parallax writes `manifest.json`, `results.jsonl`, `budget.jsonl`, and private
-trial artifacts. `--budget` gates new trials and `--reserve` holds capacity
-before each trial. Neither option limits an active agent. Retry settings cover
-environment interruptions. The campaign keeps the complete run directory as
-the source for publication.
+Parallax writes `manifest.json`, `results.jsonl`, and private trial artifacts.
+Retry settings cover environment interruptions. The campaign keeps the complete
+run directory as the source for publication.
 
 A narrowed rerun can use the workflow's `only` input for affected task ids. `candidate_only`
 skips new trials and builds from the campaign's downloaded run artifacts. The
@@ -104,8 +101,8 @@ revision named by Parallax, installs its own dependencies in its own virtual
 environment, and maps the existing judge secrets to Parallax's official bridge.
 
 The workflow sends the encrypted private run to the benchmark artifact and
-uploads a sanitized run directory containing the manifest, provenance, results,
-and budget journal. Provenance records the measured fastbrowse and harness
+uploads a sanitized run directory containing the manifest, provenance,
+and results. Provenance records the measured fastbrowse and harness
 commits, so the release gate can verify the exact producer run. The campaign
 stage downloads those runs and passes them to the same
 `TrialResult` to `Row` mapping used by internal campaigns. The run selection
