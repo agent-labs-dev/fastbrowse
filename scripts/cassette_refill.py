@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -391,6 +392,10 @@ mutation($input: CreateCommitOnBranchInput!) {
 """
 
 
+class GitHubGatewayTimeout(RuntimeError):
+    """GitHub's gateway returned HTTP 504, leaving the mutation outcome unknown."""
+
+
 def gh(*args: str, token: str, body: Any = None) -> Any:
     """One GitHub REST or GraphQL call as `token`; the body, if any, goes in on stdin."""
     done = subprocess.run(
@@ -402,7 +407,11 @@ def gh(*args: str, token: str, body: Any = None) -> Any:
         check=False,
     )
     if done.returncode != 0:
-        raise RuntimeError(f"gh api {args[0]} failed: {done.stderr.strip()[:500]}")
+        stderr = done.stderr.strip()
+        error = f"gh api {args[0]} failed: {stderr[:500]}"
+        if stderr.splitlines()[-1:] == ["gh: HTTP 504"]:
+            raise GitHubGatewayTimeout(error)
+        raise RuntimeError(error)
     return json.loads(done.stdout) if done.stdout.strip() else None
 
 
@@ -700,17 +709,28 @@ def fill() -> int:
 
 
 def recover_commit(
-    repo: str, number: str, branch: str, parent: str, message: str, additions: Sequence[Mapping[str, str]], token: str
+    repo: str,
+    number: str,
+    branch: str,
+    parent: str,
+    message: str,
+    additions: Sequence[Mapping[str, str]],
+    token: str,
+    *,
+    wait_for_head: bool,
 ) -> dict[str, str] | None:
     """Recover a commit response only when the open branch tip is exactly the batch we sent."""
-    facts, actual_branch = pull_facts(repo, number, token)
-    if (
-        not facts.open
-        or facts.head_repo != repo
-        or facts.base_repo != repo
-        or actual_branch != branch
-        or facts.head_sha == parent
-    ):
+    # A gateway timeout can leave the commit in flight. Give the same branch two more reads one minute apart.
+    delays = (0, 60, 60) if wait_for_head else (0,)
+    for delay in delays:
+        if delay:
+            time.sleep(delay)
+        facts, actual_branch = pull_facts(repo, number, token)
+        if not facts.open or facts.head_repo != repo or facts.base_repo != repo or actual_branch != branch:
+            return None
+        if facts.head_sha != parent:
+            break
+    else:
         return None
     commit = read_commit(repo, facts.head_sha, token)
     if [entry["sha"] for entry in commit["parents"]] != [parent] or commit["commit"]["message"].rstrip(
@@ -753,7 +773,16 @@ def commit_batch(
         return commit_response(made)
     except (RuntimeError, json.JSONDecodeError) as error:
         try:
-            recovered = recover_commit(repo, number, branch, parent, message, additions, token)
+            recovered = recover_commit(
+                repo,
+                number,
+                branch,
+                parent,
+                message,
+                additions,
+                token,
+                wait_for_head=isinstance(error, GitHubGatewayTimeout),
+            )
         except (AttributeError, IndexError, KeyError, TypeError, ValueError, RuntimeError) as verification_error:
             raise ValueError(f"GitHub's commit result could not be verified: {error}; {verification_error}") from error
         if recovered is None:

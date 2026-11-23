@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import math
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -472,6 +473,20 @@ def test_plan_uses_the_exact_refill_commit_and_ci_head(
         assert refill.attempted_shas(claims[0]) == [source, head]
 
 
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [("gh: HTTP 504", refill.GitHubGatewayTimeout), ("gh: HTTP 422", RuntimeError)],
+)
+def test_gh_distinguishes_a_gateway_timeout_from_an_http_rejection(
+    monkeypatch: pytest.MonkeyPatch, stderr: str, expected: type[RuntimeError]
+) -> None:
+    result = subprocess.CompletedProcess(["gh"], 1, stdout="", stderr=stderr + "\n")
+    monkeypatch.setattr(refill.subprocess, "run", lambda *args, **kwargs: result)
+    with pytest.raises(expected) as raised:
+        refill.gh("graphql", token="test")
+    assert type(raised.value) is expected
+
+
 def publish_split(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -480,6 +495,8 @@ def publish_split(
     wrong_blob: bool = False,
     lose_body: bool = False,
     unchanged: bool = False,
+    delayed_reads: int = 0,
+    sleeps: list[float] | None = None,
 ) -> tuple[int, list, str]:
     """`publish` of three cassettes, one per commit, with GitHub refusing commit number `refuse_commit`."""
     tasks = ["mock-basket", "mock-swatch", "mock-sign-in"]
@@ -500,9 +517,11 @@ def publish_split(
     posted: list[str] = []
     head = sha
     omitted: dict[str, str] = {}
+    if sleeps is not None:
+        monkeypatch.setattr("time.sleep", sleeps.append)
 
     def gh(*args: str, token: str, body: Any = None) -> Any:
-        nonlocal head
+        nonlocal head, delayed_reads
         if args[0] == "graphql":
             commits.append(body["variables"]["input"])
             if len(commits) == refuse_commit:
@@ -511,11 +530,15 @@ def publish_split(
             if len(commits) == lose_response:
                 if lose_body:
                     return {"data": {"createCommitOnBranch": None}}
-                raise RuntimeError("gh api graphql failed: gh: HTTP 504")
+                raise refill.GitHubGatewayTimeout("gh api graphql failed: gh: HTTP 504")
             return {"data": {"createCommitOnBranch": {"commit": {"oid": head, "url": f"c/{head}"}}}}
         if args[0].endswith("/pulls/7"):
             repo = {"full_name": REPO}
-            return {"state": "open", "head": {"sha": head, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
+            visible = head
+            if commits and len(commits) == lose_response and delayed_reads:
+                delayed_reads -= 1
+                visible = commits[-1]["expectedHeadOid"]
+            return {"state": "open", "head": {"sha": visible, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
         if "/git/trees/" in args[0]:
             filename, oid = next(iter(omitted.items()))
             return cassette_tree(args[0], filename, "0" * 40 if wrong_blob else oid)
@@ -580,7 +603,9 @@ def test_a_refill_over_one_request_is_committed_as_a_chain_with_the_trailer_on_i
 def test_a_split_refill_stopped_partway_says_what_it_committed_and_leaves_the_rest_to_the_next_refill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    code, commits, comment = publish_split(tmp_path, monkeypatch, refuse_commit=2)
+    sleeps: list[float] = []
+    code, commits, comment = publish_split(tmp_path, monkeypatch, refuse_commit=2, sleeps=sleeps)
+    assert sleeps == []
     assert code == 1
     assert refill.refill_source(commits[0]["message"]["body"]) is None
     assert "Committed [111111111111]" in comment and "refused" in comment
@@ -595,6 +620,25 @@ def test_a_committed_batch_whose_response_was_lost_is_reported_and_followed_by_t
     assert code == 0
     assert [c["expectedHeadOid"] for c in commits] == ["a" * 40, "1" * 40, "2" * 40]
     assert all(oid[:12] in comment for oid in ("1" * 40, "2" * 40, "3" * 40))
+
+
+@pytest.mark.parametrize(("delayed_reads", "success"), [(1, True), (2, True), (3, False)])
+def test_a_gateway_timeout_waits_for_the_commit_to_become_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delayed_reads: int, success: bool
+) -> None:
+    sleeps: list[float] = []
+    code, commits, comment = publish_split(
+        tmp_path, monkeypatch, lose_response=1, delayed_reads=delayed_reads, sleeps=sleeps
+    )
+    assert sleeps == [60] * min(delayed_reads, 2)
+    if success:
+        assert code == 0
+        assert [batch["expectedHeadOid"] for batch in commits] == ["a" * 40, "1" * 40, "2" * 40]
+        assert "[111111111111]" in comment
+    else:
+        assert code == 1
+        assert len(commits) == 1
+        assert "No batch was confirmed" in comment
 
 
 @pytest.mark.parametrize("wrong_blob", [False, True])
@@ -618,7 +662,9 @@ def test_a_lost_response_checks_an_unchanged_cassette_in_the_commit_tree(
 def test_a_moved_branch_with_another_blob_is_not_treated_as_the_expected_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    code, commits, comment = publish_split(tmp_path, monkeypatch, lose_response=1, wrong_blob=True)
+    sleeps: list[float] = []
+    code, commits, comment = publish_split(tmp_path, monkeypatch, lose_response=1, wrong_blob=True, sleeps=sleeps)
+    assert sleeps == []
     assert code == 1
     assert len(commits) == 1
     assert "GitHub's commit result could not be verified" in comment
