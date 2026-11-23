@@ -10,7 +10,7 @@ use serde_json::{Map, json};
 
 use super::Agent;
 use super::helpers::{decision_label, describe};
-use super::state::{Edits, RunState, Step, Stop};
+use super::state::{Edits, Picked, RunState, Step, Stop};
 use crate::policy::{Decision, Look, StepContext, decide, takes};
 use crate::start::{accept_start, propose_route, recovery_pages};
 
@@ -376,7 +376,13 @@ impl Agent {
             ])
         });
         let look = Look::of(&decision, &context.looks);
-        state.picked = Some((observation.url.clone(), decision, look));
+        state.picked = Some(Picked {
+            url: observation.url.clone(),
+            page_key: observation.page_key.clone(),
+            document_key: observation.document_key.clone(),
+            decision,
+            look,
+        });
         Ok(())
     }
 }

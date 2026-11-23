@@ -280,6 +280,15 @@ impl Drop for KnownAsked {
     }
 }
 
+/// Jev's recovery pick, tied to the page state that was shown when it was made.
+pub(crate) struct Picked {
+    pub url: String,
+    pub page_key: String,
+    pub document_key: String,
+    pub decision: Decision,
+    pub look: Option<Look>,
+}
+
 pub(crate) struct RunState {
     pub task: String,
     /// The recipe this run replays, while it has steps left to offer.
@@ -327,9 +336,9 @@ pub(crate) struct RunState {
     pub start_failure: Option<SiteFailure>,
     pub http_seen: HashSet<(String, String, i64)>,
     pub hint: Option<String>,
-    /// Jev's pick when asked again after a stall, by the address it was asked on, taken as the next decision while
-    /// its target is still on the page, with the card of the target it chose.
-    pub picked: Option<(String, Decision, Option<Look>)>,
+    /// Jev's pick when asked again after a stall, kept only for the page state and target it was asked about, with the
+    /// card of the target it chose.
+    pub picked: Option<Picked>,
     /// The action the next step carries out, built while the page was read.
     pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,
     pub unchanged: i64,
