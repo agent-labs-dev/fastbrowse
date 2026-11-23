@@ -1684,9 +1684,10 @@ async fn test_a_wait_ends_when_the_page_navigates_itself() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
     let script = "setTimeout(() => location.assign('/dispatch.html'), 5500); true";
+    // Start before scheduling, since the timer already runs during observe.
+    let started = std::time::Instant::now();
     assert_eq!(eval_active(&h.page, script).await, json!(true));
     let before = h.observe().await;
-    let started = std::time::Instant::now();
     let result = h.page.wait(&Action::new(Operation::Wait), &before, 60.0).await.expect("wait");
     let waited = started.elapsed();
     assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
