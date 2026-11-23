@@ -17,6 +17,7 @@ class Control(Frozen):
     """Kept across observations for as long as the same DOM node survives."""
     frame_id: str | None
     frame_origin: str | None = None
+    frame_document_key: str | None = Field(default=None, exclude_if=lambda key: key is None)
     form_id: str | None = None
     """Owner form or local field group, scoped to the frame and document that observed it."""
     retarget_key: str | None = Field(default=None, exclude=True)
@@ -50,6 +51,14 @@ class Control(Frozen):
     """A field marked invalid by ARIA or a failed native constraint, without implying submission."""
     validation_message: str | None = Field(default=None, exclude_if=lambda message: message is None)
     """The browser's own words for why a native constraint refuses this field."""
+    role_description: str | None = Field(default=None, exclude_if=lambda text: text is None)
+    """What the page calls this control's role (`aria-roledescription`), such as "draggable"."""
+    description: str | None = Field(default=None, exclude_if=lambda text: text is None)
+    """The text the page attaches to this control to describe it (`aria-describedby`), as the page states it."""
+    item_position: int | None = Field(default=None, exclude_if=lambda number: number is None)
+    """Which item of its list this control is, counted from 1 (`aria-posinset`, or its place among its list's items)."""
+    item_count: int | None = Field(default=None, exclude_if=lambda number: number is None)
+    """How many items that list holds (`aria-setsize`, or the items counted in the list)."""
     next_page: bool | None = None
     """A link the page marks `rel="next"`: the next page of the list it belongs to."""
     download: bool | None = None
@@ -114,6 +123,9 @@ class Observation(Frozen):
     viewport_text: str
     """The visible text in the viewport of every frame the observation read; a cross-origin frame's text follows the
     page's own under a `[Frame: origin]` line."""
+    viewport_key: str = ""
+    """Identity of the place the viewport shows, from the page's and its scroll containers' scroll positions, so text
+    that updates by itself does not make a place look new and a textless place is still told apart."""
     offscreen_text: str = ""
     """The visible text outside the viewport, from every frame the observation read in the same order and form: what
     a read takes in that `viewport_text` leaves out."""

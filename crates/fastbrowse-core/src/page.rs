@@ -66,6 +66,9 @@ pub struct Control {
     pub frame_id: Option<String>,
     #[serde(default)]
     pub frame_origin: Option<String>,
+    /// The receiving iframe's document identity. The observation carries the top-level document identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_document_key: Option<String>,
     /// Owner form or local field group, scoped to the frame and document that observed it.
     #[serde(default)]
     pub form_id: Option<String>,
@@ -121,6 +124,19 @@ pub struct Control {
     /// The browser's own words for why a native constraint refuses this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_message: Option<String>,
+    /// What the page calls this control's role (`aria-roledescription`), such as "draggable".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_description: Option<String>,
+    /// The text the page attaches to this control to describe it (`aria-describedby`), as the page states it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Which item of its list this control is, counted from 1: `aria-posinset`, or its place among the items of its
+    /// nearest list. A position such as "first" is a place in that list, which a label does not state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_position: Option<u32>,
+    /// How many items that list holds: `aria-setsize`, or the items counted in the list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_count: Option<u32>,
     /// A link the page marks `rel="next"`: the next page of the list it belongs to.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub next_page: Option<bool>,
@@ -157,6 +173,7 @@ impl Control {
             id: id.into(),
             frame_id: None,
             frame_origin: None,
+            frame_document_key: None,
             form_id: None,
             retarget_key: None,
             role: role.into(),
@@ -180,6 +197,10 @@ impl Control {
             required: None,
             invalid: None,
             validation_message: None,
+            role_description: None,
+            description: None,
+            item_position: None,
+            item_count: None,
             next_page: None,
             download: None,
             drawn: None,
@@ -301,6 +322,10 @@ pub struct Observation {
     /// The visible text in the viewport of every frame the observation read; a cross-origin frame's text follows
     /// the page's own under a `[Frame: origin]` line.
     pub viewport_text: String,
+    /// Identity of the place the viewport shows, from the page's and its scroll containers' scroll positions: text that
+    /// updates by itself made a place a run had seen read as new, and a textless place could not be told apart.
+    #[serde(default)]
+    pub viewport_key: String,
     /// The visible text outside the viewport, from every frame the observation read in the same order and form.
     #[serde(default)]
     pub offscreen_text: String,

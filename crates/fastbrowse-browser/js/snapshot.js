@@ -1447,6 +1447,10 @@
       form_id: fieldScope(source),
       submit_semantics: submitSemantics(e),
     };
+    // An inlined iframe can reload while the document producing this snapshot stays put.
+    if (base.form_id !== null && e.ownerDocument !== document) {
+      base.frame_document_key = String(e.ownerDocument.defaultView.performance.timeOrigin);
+    }
     if (rname === 'link' && nativeProperty(e, 'href')) {
       const u = new URL(nativeProperty(e, 'href'), location.href);
       // Another origin's link keeps its whole address, as capture.js writes it: a recipe or a follow joins the href
@@ -1494,6 +1498,13 @@
     const handle = e.getAttribute('draggable') === 'true' || (e.tagName === 'IMG' && draggedByPointer(e));
     if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && !handle) base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
+    // What the page says the control is and how it is operated, in its own words: a dnd-kit card is a "button" whose
+    // `aria-roledescription` is "draggable" and whose described-by text says Space picks it up and the arrows move it.
+    // Without both, Jev saw a plain button and clicked it.
+    const roleDescription = (e.getAttribute('aria-roledescription') || '').replace(/\s+/g, ' ').trim();
+    if (roleDescription) base.role_description = roleDescription;
+    const description = describedBy(e);
+    if (description && description !== base.label) base.description = description;
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
     if (nativeProperty(source, 'required') || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
@@ -1526,12 +1537,19 @@
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
       // Only an element that names itself draggable, a drawn surface to draw on, or one the page gives a grab cursor
       // is offered as a drag source: `draggable` reports true for every <a> and <img> by default, which would offer
-      // the whole page as draggable.
-      if (e.getAttribute('draggable') === 'true' || base.drawn || draggedByPointer(e)) base.operations.push('drag');
+      // the whole page as draggable. A custom widget names itself with an `aria-roledescription` (a sortable card,
+      // which its pointer sensor also takes by drag), as a press is offered it; Jev reads the description and decides
+      // whether to drag or press.
+      if (e.getAttribute('draggable') === 'true' || base.drawn || draggedByPointer(e) ||
+          e.hasAttribute('aria-roledescription')) base.operations.push('drag');
     }
-    // Focus determines whether the widget can receive keys.
+    // Focus determines whether the widget can receive keys. A button, link, checkbox or switch answers Enter and
+    // Space by activating, which a click already does, unless its page says it is something else: an
+    // `aria-roledescription` (a sortable card is a "button" that Space picks up and the arrows move). Focus alone
+    // does not say so: every button just clicked is focused, and each would add a press question to every step.
+    const activation = ['button', 'link', 'checkbox', 'switch'].includes(rname) && !e.hasAttribute('aria-roledescription');
     if (!base.operations.includes('fill') && e.tagName !== 'SELECT' && nativeProperty(source, 'type') !== 'file' &&
-        !['button', 'link', 'checkbox', 'switch', 'textbox', 'searchbox'].includes(rname) &&
+        !activation && !['textbox', 'searchbox'].includes(rname) &&
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
       base.operations.push('press');
     controls.push(base);
@@ -2090,6 +2108,112 @@
       c.context = [c.context, `orientation: ${orientation}`].filter(Boolean).join('; ');
   }
 
+  // "First" and "last" are places in a list, which a label does not state. The page's own `aria-posinset` and
+  // `aria-setsize` say it where present; otherwise the place among the visible items of the nearest list container.
+  // A custom widget's items name themselves with an `aria-roledescription` (a sortable card, a slide) and sit in a plain
+  // container, whatever the page calls them or in which language. A tree's child group is its own set.
+  const SORTABLE = '[aria-roledescription]';
+  const LIST_ITEM = 'li,[role="listitem"],[role="option"],[role="row"],[role="treeitem"]';
+  const SET_ITEM = `${LIST_ITEM},${SORTABLE}`;
+  const SET_LIST = 'ul,ol,[role="list"],[role="listbox"],[role="grid"],[role="tree"],[role="tree"] [role="group"]';
+  // A list item that holds a described control is the member, not the control inside it.
+  const PRESSED = `${SORTABLE}[aria-pressed="true"]`;
+  const setOwner = i => (i.matches(SORTABLE) && !i.matches(LIST_ITEM) ? i.parentElement : i.parentElement?.closest(SET_LIST));
+  for (const c of controls) {
+    const e = registry.nodes.get(c.id);
+    const item = e?.closest(`[aria-posinset],${LIST_ITEM}`) ?? e?.closest(SORTABLE);
+    if (!item) continue;
+    const list = setOwner(item);
+    const members = list
+      ? [...list.querySelectorAll(SET_ITEM)].filter(i => setOwner(i) === list && visible(i))
+      : [];
+    // A picked-up sortable card moves by transform while the DOM keeps its order, and the library states its order
+    // nowhere else a page reliably carries (its live announcement is prose in the page's language), so the order a
+    // person sees is the one stated: otherwise every arrow press leaves the page looking unchanged. Neighbours are read
+    // at the slots the layout gave them, since they slide to new ones over an animation. The held item is drawn at its
+    // own slot moved by every translation between the pressed handle and the item, wherever the page put it.
+    // Rows and columns are told apart by centres, since the edges of two cells that touch are read from different
+    // sources (a box, a transform string) and do not compare exactly. The item has passed a neighbour in a row before
+    // its own, or a neighbour beside it in its row on the side it moved to; where it covers a neighbour's centre, it has
+    // passed that neighbour once its edge leading on the axis it travelled reaches that centre, so a tall card seated by
+    // the edge it leads with counts, and a wrapping grid's slots run in rows.
+    const held = members.find(i => i.matches(PRESSED) || i.querySelector(PRESSED));
+    let siblings = members;
+    if (held) {
+      // A library slides the lifted item to its new place over a transition, and the page is read while it runs: the
+      // place it holds is where the transition ends, not the frame it is passing through.
+      const settled = e =>
+        e.getAnimations().map(a => a.effect?.getKeyframes().at(-1)?.transform).filter(Boolean).at(-1) ??
+        styleProperty(e, 'transform');
+      // A translation is in its parent's units while boxes are in the viewport's, so a scaled list or grid (a zoomed
+      // board) would otherwise compare a full slot's move against half a slot. The scale each element's parent draws
+      // it at is the product of every ancestor's.
+      const scaleAbove = e => {
+        let x = 1;
+        let y = 1;
+        for (let p = e.parentElement; p; p = p.parentElement) {
+          const m = new DOMMatrix(styleProperty(p, 'transform'));
+          x *= m.a;
+          y *= m.d;
+        }
+        return [x, y];
+      };
+      const moved = (from, to) => {
+        let x = 0;
+        let y = 0;
+        for (let e = from; e; e = e.parentElement) {
+          const m = new DOMMatrix(settled(e));
+          const [sx, sy] = scaleAbove(e);
+          x += m.m41 * sx;
+          y += m.m42 * sy;
+          if (e === to) break;
+        }
+        return [x, y];
+      };
+      // The box the layout gave an item, before its own transform: a library may also scale a lifted card to the
+      // slot it hovers, and a scale about the transform origin moves every edge, so the scale is undone as well as the
+      // translation. Sortable libraries scale and translate; they do not rotate.
+      const slot = (e, [dx, dy] = [0, 0]) => {
+        const box = boxOf(e);
+        const m = new DOMMatrix(styleProperty(e, 'transform'));
+        const [ox, oy] = styleProperty(e, 'transformOrigin').split(' ').map(Number.parseFloat);
+        const [sx, sy] = scaleAbove(e);
+        const left = box.left - sx * (m.e + ox * (1 - m.a)) + dx;
+        const top = box.top - sy * (m.f + oy * (1 - m.d)) + dy;
+        return { left, top, right: left + box.width / m.a, bottom: top + box.height / m.d };
+      };
+      const shift = moved(held.matches(PRESSED) ? held : held.querySelector(PRESSED), held);
+      const vertical = Math.abs(shift[1]) >= Math.abs(shift[0]);
+      const drawn = slot(held, shift);
+      const mid = box => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
+      const above = (a, b) => mid(a).y < b.top && mid(b).y > a.bottom;
+      const side = (a, b) => (mid(a).x < b.left ? -1 : mid(a).x > b.right ? 1 : 0);
+      const reaches = (j, forward) =>
+        vertical ? (forward ? drawn.bottom >= mid(j).y : drawn.top <= mid(j).y)
+          : forward ? drawn.right >= mid(j).x : drawn.left <= mid(j).x;
+      const passed = (j, forward) =>
+        forward
+          ? above(j, drawn) || (!above(drawn, j) && (side(j, drawn) < 0 || (side(j, drawn) === 0 && reaches(j, true))))
+          : above(drawn, j) || (!above(j, drawn) && (side(j, drawn) > 0 || (side(j, drawn) === 0 && reaches(j, false))));
+      const at = members.indexOf(held);
+      const after = members.filter((i, k) => k > at && passed(slot(i), true)).length;
+      const before = members.filter((i, k) => k < at && passed(slot(i), false)).length;
+      siblings = members.filter(i => i !== held);
+      siblings.splice(at + after - before, 0, held);
+    }
+    const declared = Number.parseInt(item.getAttribute('aria-posinset'), 10);
+    // `aria-setsize="-1"` says the list's size is unknown (a virtualised feed); counting the rendered items instead
+    // would state a size the page says it does not know.
+    const declaredSize = item.getAttribute('aria-setsize');
+    const size = declaredSize === null ? siblings.length : Number.parseInt(declaredSize, 10);
+    const position = declared > 0 ? declared : siblings.indexOf(item) + 1;
+    const count = size > 0 ? size : 0;
+    if (position > 0 && count > 1 && position <= count) {
+      c.item_position = position;
+      c.item_count = count;
+    }
+  }
+
   // A wheel at the viewport centre misses panels and horizontal lists. Index the browser's actual scroll owners,
   // separately for each overflowing axis, so the chosen target determines which content moves.
   registry.scrollIds ||= new WeakMap();
@@ -2275,6 +2399,27 @@
     .map(e => [identity(e), reveal(e), nativeProperty(e, 'checked'), chosen(e), nativeProperty(e, 'disabled'), nativeProperty(e, 'readOnly')]);
   // Compare meaning and identity for the page_key fingerprint; geometry is re-resolved just before input.
   const semantics = controls.map(({ distance, ...c }) => c);
+  // A scroll can land on a new part without changing text, while live text can change on the same part. Keep this
+  // identity to let the agent distinguish those cases without treating page content as geometry.
+  // A scroll area is named by its label and its place among areas of that label, never by its registry id: a page
+  // that replaces the container while rendering would otherwise turn a place already shown into a new one.
+  const seen_areas = new Map();
+  const scroll_positions = controls
+    .filter(c => registry.scrollAxes?.has(c.id))
+    .map(c => {
+      const e = registry.nodes.get(c.id);
+      const nth = seen_areas.get(c.label) ?? 0;
+      seen_areas.set(c.label, nth + 1);
+      return [c.label, nth, ...renderFact('scrollPosition', e)];
+    });
+  const viewport_key = digest(JSON.stringify([
+    location.href,
+    scrollX,
+    scrollY,
+    innerWidth,
+    innerHeight,
+    scroll_positions,
+  ]));
   const page_key = digest(JSON.stringify([
     location.href,
     scrollX,
@@ -2379,6 +2524,7 @@
     url: location.href,
     title: document.title,
     viewport_text,
+    viewport_key,
     offscreen_text,
     visual_content,
     media,

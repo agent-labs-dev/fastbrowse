@@ -1361,8 +1361,14 @@ impl Agent {
         if act.outcome == StepOutcome::Executed && observation.dialog.is_none() {
             state.dialog_form.clone_from(&form);
         }
+        // The field's value when the step began, which a later save states beside what the run typed over it.
+        let before = typed.as_ref().and(decision.target.as_ref()).and_then(|target| {
+            let held = observation.controls.iter().find(|c| c.id == target.id).filter(|c| !c.sensitive)?;
+            Some(self.mask(held.value.as_deref().unwrap_or_default()))
+        });
         state.history.push(HistoryEntry {
             text: typed,
+            before,
             effect: effect_now,
             look: state.look.take(),
             setting: setting.then_some(true),
@@ -1376,6 +1382,10 @@ impl Agent {
                 .and_then(|target| Submitted::of(decision.operation, target, observation)),
             commit: sent.then_some(Commit::Sent),
             form,
+            document_key: Some(observation.document_key.clone()),
+            control_id: decision.target.as_ref().map(|target| target.id.clone()),
+            form_id: decision.target.as_ref().and_then(|target| target.form_id.clone()),
+            frame_id: decision.target.as_ref().and_then(|target| target.frame_id.clone()),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let (Some(entry), Some(landed)) = (state.history.last(), &act.landed)
@@ -1573,6 +1583,11 @@ impl Agent {
         state.visited_addresses.insert(observation.url.clone());
         let state_last = state.reached.insert(state_key(observation), state.evidence_reads);
         let tab_last = state.shown.insert(tab_key(observation), state.evidence_reads);
+        // The viewport is part of what a page shows: a scroll that lands on a part never shown moved the run on even
+        // though the page state, keyed by its controls, is one it has been in.
+        let unseen_view =
+            state.viewed.insert(sha256_hex(json!([observation.url, observation.viewport_key]).to_string().as_bytes()));
+        let scrolled = matches!(state.landing, Some(Some((Operation::Scroll | Operation::ScrollUp, _))));
         // A tab switch moves nothing inside either tab, so it lands on a new place only when that tab was not
         // shown before. Its controls are not compared: a live page ticks them between visits.
         let switched = matches!(state.landing, Some(Some((Operation::SwitchTab, _))));
@@ -1595,7 +1610,9 @@ impl Agent {
             if returned {
                 state.returned_at = state.evidence_reads;
             }
-            let progressed = last.is_none() || returned || replied;
+            // A scroll back to a part already shown is going round, however long ago the last evidence was gathered.
+            let progressed =
+                if scrolled { last.is_none() || unseen_view || replied } else { last.is_none() || returned || replied };
             Box::pin(self.count_progress(state, progressed, observation, Idle::performed(stalled), Status::Stuck))
                 .await?;
         }
@@ -1695,6 +1712,23 @@ impl Agent {
         } else {
             effect(&before, observation, None, waited)
         };
+        if last.operation == Some(Operation::Click) && last.outcome == StepOutcome::Executed {
+            last.opened_forms = observation
+                .controls
+                .iter()
+                .filter_map(|control| Some((control.frame_id.clone(), control.form_id.clone()?)))
+                .filter(|(frame, form)| {
+                    !before
+                        .controls
+                        .iter()
+                        .any(|control| control.frame_id == *frame && control.form_id.as_deref() == Some(form.as_str()))
+                })
+                .collect();
+            last.opened_forms.dedup();
+            if !last.opened_forms.is_empty() {
+                last.document_key = Some(observation.document_key.clone());
+            }
+        }
         last.added = done.added;
         // A Wait is told how far a playing clock moved, but a clock that moves by itself removes no cover.
         let moved = done.changed && (!waited || effect(&before, observation, None, false).changed);
@@ -1747,6 +1781,9 @@ impl Agent {
                 href: mask_opt(&control.href),
                 frame_origin: mask_opt(&control.frame_origin),
                 submit_semantics: mask_opt(&control.submit_semantics),
+                validation_message: mask_opt(&control.validation_message),
+                role_description: mask_opt(&control.role_description),
+                description: mask_opt(&control.description),
                 options: control.options.iter().map(|option| mask(option)).collect(),
                 ..control.clone()
             })

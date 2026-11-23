@@ -19,6 +19,36 @@ use fastbrowse_core::page::{Action, DragPath, DragPoint};
 use serde_json::{Value, json};
 
 #[tokio::test(flavor = "multi_thread")]
+async fn observes_the_receiving_document_when_an_inlined_iframe_reloads() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        r#"const f = document.createElement('iframe'); f.id = 'reload-frame';
+           f.srcdoc = '<form><button>First submit</button></form>'; document.body.append(f);"#,
+    )
+    .await;
+    let before = observe_until(&h.page, "First submit").await;
+    eval_active(
+        &h.page,
+        r#"document.querySelector('#reload-frame').srcdoc = '<form><button>Second submit</button></form>'"#,
+    )
+    .await;
+    let after = observe_until(&h.page, "Second submit").await;
+
+    let first = find(&before, "First submit");
+    let second = find(&after, "Second submit");
+    assert_eq!(before.document_key, after.document_key);
+    assert!(first.frame_id.is_some());
+    assert_eq!(first.frame_id, second.frame_id);
+    assert!(first.frame_document_key.is_some());
+    assert!(second.frame_document_key.is_some());
+    assert_ne!(first.frame_document_key, second.frame_document_key);
+    assert_ne!(first.form_id, second.form_id);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_screenshot_glance_preserves_action_guards() {
     for change_target in [false, true] {
         let Some(h) = harness().await else { return };
@@ -677,6 +707,40 @@ async fn test_a_drop_the_page_posts_does_not_hold_the_action() {
     assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
     assert!(started.elapsed().as_secs_f64() < 2.0, "took {:?}", started.elapsed());
     h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_drop_that_takes_no_hits_is_not_released_on_a_different_control() {
+    // The destination moves away mid-drag, or holds a nested button that takes hits: either way the pointer would rest
+    // on another control, which must not receive the drop.
+    for setup in [
+        "destination.style.pointerEvents = 'none'; destination.style.left = '600px';",
+        "destination.style.pointerEvents = 'none'; document.getElementById('nested').style.pointerEvents = 'auto';",
+        "destination.style.pointerEvents = 'none'; destination.innerHTML = \"<button id=delete style='position:absolute;inset:0;pointer-events:auto'>Delete</button>\";",
+    ] {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        eval_active(
+            &h.page,
+            &format!(
+                "document.body.innerHTML = `
+                  <div id=source draggable=true aria-label=Card style=\"position:fixed;left:20px;top:20px;width:100px;height:80px\">Card</div>
+                  <div id=trash aria-label=Trash style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\">Trash</div>
+                  <div id=destination role=button tabindex=0 aria-label=Destination style=\"position:fixed;left:220px;top:20px;width:100px;height:80px\"><button id=nested style='position:absolute;inset:0;pointer-events:none'>Nested</button></div>`;
+                window.drops = [];
+                document.addEventListener('dragover', e => e.preventDefault());
+                document.addEventListener('drop', e => {{ e.preventDefault(); window.drops.push(e.target.id); }});
+                source.ondragstart = e => {{ e.dataTransfer.setData('text/plain', 'Card'); {setup} }};
+                true"
+            ),
+        )
+        .await;
+        let obs = h.observe().await;
+        let result = h.page.act(&drag(find(&obs, "Card"), find(&obs, "Destination")), &obs).await.expect("act");
+        assert_eq!(eval_active(&h.page, "window.drops").await, json!([]), "{setup}: {result:?}");
+        assert_eq!(result.outcome, StepOutcome::Stale, "{setup}: {result:?}");
+        h.close().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2204,6 +2268,387 @@ async fn test_role_keys_step_a_native_slider_and_focus_a_composite_widget() {
     h.close().await;
 }
 
+/// A sortable list's cards are `button`s that Space picks up, the arrows move and Space drops. Their role lists no
+/// keys, so the cards were offered a click and nothing else and the order could not be changed from the keyboard.
+#[tokio::test]
+async fn test_a_card_that_declares_itself_sortable_is_moved_by_keys() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        // dnd-kit's markup: each card is a role=button li that names itself "draggable" and points at a hidden
+        // element holding the keyboard instructions.
+        document.body.innerHTML = '<div id="dnd-kit-description-1" style="display:none">To pick up a draggable item, press the space bar. While dragging, use the arrow keys to move the item. Press space again to drop the item in its new position, or press escape to cancel.</div><ul id="cards">'
+          + ['One', 'Two', 'Three'].map(n => `<li role="button" tabindex="0" aria-roledescription="draggable" aria-describedby="dnd-kit-description-1" aria-pressed="false" aria-label="${n}">${n}</li>`).join('')
+          + '</ul><button>Save</button>';
+        let lifted = null;
+        const list = document.getElementById('cards');
+        list.addEventListener('keydown', e => {
+          const card = e.target.closest('li');
+          if (e.key === ' ') { lifted = lifted ? null : card; e.preventDefault(); }
+          else if (lifted && e.key === 'ArrowDown' && card.nextElementSibling) card.nextElementSibling.after(card);
+          if (lifted) setTimeout(() => card.focus());
+        });
+        true
+    "#,
+    )
+    .await;
+    let before = h.observe().await;
+    assert!(!find(&before, "Save").operations.contains(&Operation::Press));
+    let one = find(&before, "One");
+    assert!(one.operations.contains(&Operation::Press), "{one:?}");
+    assert_eq!(one.role_description.as_deref(), Some("draggable"));
+    assert!(
+        one.description.as_deref().is_some_and(|d| d.starts_with("To pick up a draggable item, press the space bar.")),
+        "{one:?}"
+    );
+    assert_eq!(find(&before, "Save").description, None);
+    // The page's markup says nothing of order, so the place is the card's index among its list's items.
+    let places: Vec<_> =
+        ["One", "Two", "Three"].iter().map(|n| (find(&before, n).item_position, find(&before, n).item_count)).collect();
+    assert_eq!(places, [(Some(1), Some(3)), (Some(2), Some(3)), (Some(3), Some(3))]);
+    assert_eq!((find(&before, "Save").item_position, find(&before, "Save").item_count), (None, None));
+    for key in ["Space", "ArrowDown", "Space"] {
+        let now = h.observe().await;
+        let card = find(&now, "One");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        let result = h.page.act(&press, &now).await.expect("press");
+        assert_eq!(result.outcome, StepOutcome::Executed, "{key}: {result:?}");
+    }
+    assert_eq!(
+        eval_active(&h.page, "[...document.querySelectorAll('#cards [role=button]')].map(e => e.textContent)").await,
+        json!(["Two", "One", "Three"])
+    );
+    h.close().await;
+}
+
+/// The same reorder on the real dnd-kit (KeyboardSensor, sortable list): the card picked up keeps focus and the arrows
+/// must reach it, though dnd-kit draws a live region and the sortable's own layers around it.
+#[tokio::test]
+async fn test_a_real_dnd_kit_card_is_lifted_moved_and_dropped_by_keys() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dndkit-sortable.html").await;
+    let order = || eval_active(&h.page, "document.getElementById('order').textContent");
+    assert_eq!(order().await, json!("Test image,Second image,Third image"));
+    for key in ["Space", "ArrowDown", "Space"] {
+        let now = h.observe().await;
+        let card = find(&now, "Test image");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        let result = h.page.act(&press, &now).await.expect("press");
+        assert_eq!(result.outcome, StepOutcome::Executed, "{key}: {result:?}");
+    }
+    assert_eq!(order().await, json!("Second image,Test image,Third image"));
+    h.close().await;
+}
+
+/// A picked-up card moves by transform while the DOM keeps its order: each arrow must still read as a new page state,
+/// or a reorder longer than the stall budget is cut off, whatever the page calls its cards.
+async fn check_sortable_moves_reach_new_states(role_description: &str) {
+    let Some(h) = harness().await else { return };
+    h.goto("/dndkit-sortable.html").await;
+    eval_active(
+        &h.page,
+        &format!("document.querySelectorAll('[aria-roledescription]').forEach(e => e.setAttribute('aria-roledescription', '{role_description}')); true"),
+    )
+    .await;
+    let mut seen = Vec::new();
+    for key in ["Space", "ArrowDown", "ArrowDown"] {
+        let now = h.observe().await;
+        let card = find(&now, "Test image");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&press, &now).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+        seen.push(fastbrowse_core::effects::state_key(&h.observe().await));
+    }
+    assert_ne!(seen[0], seen[1], "the first ArrowDown moves the card");
+    assert_ne!(seen[1], seen[2], "the second ArrowDown moves it again");
+    h.close().await;
+}
+
+#[tokio::test]
+async fn test_moving_a_picked_up_card_reaches_a_new_page_state() {
+    check_sortable_moves_reach_new_states("sortable").await;
+}
+
+#[tokio::test]
+async fn test_moving_a_picked_up_card_with_a_custom_role_description_reaches_a_new_page_state() {
+    check_sortable_moves_reach_new_states("draggable").await;
+}
+
+/// A tall sortable card moving past a short one is seated by an edge, not its centre, and still reads as progress.
+#[tokio::test]
+async fn test_a_tall_sortable_card_moving_past_a_short_card_reports_progress() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dndkit-sortable.html").await;
+    eval_active(
+        &h.page,
+        "document.querySelectorAll('#list button').forEach((e, i) => e.style.height = i === 0 ? '140px' : '40px'); true",
+    )
+    .await;
+    let mut lifted = None;
+    for key in ["Space", "ArrowDown"] {
+        let before = h.observe().await;
+        let card = find(&before, "Test image");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&press, &before).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+        let after = h.observe().await;
+        if key == "ArrowDown" {
+            assert_eq!(
+                eval_active(
+                    &h.page,
+                    "new DOMMatrix(getComputedStyle(document.querySelector('#list button')).transform).m42 > 0"
+                )
+                .await,
+                json!(true),
+                "dnd-kit really moved the card"
+            );
+            assert_ne!(
+                lifted.as_ref().expect("the card was picked up"),
+                &fastbrowse_core::effects::state_key(&after),
+                "moving a tall card past a shorter card must renew the stall budget"
+            );
+            assert_eq!(find(&after, "Test image").item_position, Some(2));
+        }
+        lifted = Some(fastbrowse_core::effects::state_key(&after));
+    }
+    h.close().await;
+}
+
+/// In a wrapping grid a card lifted one column to the right is second, not counted past the next row's cards.
+#[tokio::test]
+async fn test_a_lifted_grid_card_moves_one_column_not_one_column_per_row() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = '<div id=cards style="display:grid;grid-template-columns:100px 100px 100px;gap:10px">'
+          + ['One','Two','Three','Four','Five','Six'].map(n =>
+            `<button aria-roledescription="draggable" aria-pressed="false" style="height:50px">${n}</button>`).join('')
+          + '</div>';
+        cards.addEventListener('keydown', e => {
+          if (e.code === 'Space') { e.target.setAttribute('aria-pressed', 'true'); e.preventDefault(); }
+          if (e.key === 'ArrowRight' && e.target.getAttribute('aria-pressed') === 'true') {
+            e.target.style.transform = 'translateX(110px)';
+            e.target.nextElementSibling.style.transform = 'translateX(-110px)';
+            e.preventDefault();
+          }
+          if (e.key === 'ArrowDown' && e.target.getAttribute('aria-pressed') === 'true') {
+            // One takes Four's slot; Two, Three and Four each shift back one slot.
+            const [, two, three, four] = cards.children;
+            e.target.style.transform = 'translateY(60px)';
+            two.style.transform = 'translateX(-110px)';
+            three.style.transform = 'translateX(-110px)';
+            four.style.transform = 'translate(220px, -60px)';
+            e.preventDefault();
+          }
+        });
+        true
+    "#,
+    )
+    .await;
+    let labels = ["One", "Two", "Three", "Four", "Five", "Six"];
+    for key in ["Space", "ArrowRight"] {
+        let before = h.observe().await;
+        let card = find(&before, "One");
+        let action =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&action, &before).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+    }
+    let after = h.observe().await;
+    let positions: Vec<_> = labels.iter().map(|label| find(&after, label).item_position).collect();
+    assert_eq!(positions, [Some(2), Some(1), Some(3), Some(4), Some(5), Some(6)]);
+    let before = h.observe().await;
+    let card = find(&before, "One");
+    let action =
+        Action { target_id: Some(card.id.clone()), text: Some("ArrowDown".into()), ..Action::new(Operation::Press) };
+    assert_eq!(h.page.act(&action, &before).await.expect("press").outcome, StepOutcome::Executed);
+    let after = h.observe().await;
+    let positions: Vec<_> = labels.iter().map(|label| find(&after, label).item_position).collect();
+    h.close().await;
+    assert_eq!(positions, [Some(4), Some(1), Some(2), Some(3), Some(5), Some(6)]);
+}
+
+/// A list or grid drawn at half size: an item's translation is in the list's units and its box in the viewport's, so a
+/// one-slot move must still read as one slot, in a list moved by a child handle and in a wrapping grid.
+#[tokio::test]
+async fn test_a_lifted_item_in_a_scaled_list_or_grid_reports_its_new_place() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let labels = ["One", "Two", "Three", "Four", "Five", "Six"];
+    for markup in [
+        r#"'<ul id=cards style="transform:scale(.5);transform-origin:top left">' + names.map(n => `<li style="height:50px"><button aria-roledescription="draggable" aria-pressed="false">${n}</button></li>`).join('') + '</ul>'"#,
+        r#"'<div id=cards style="display:grid;grid-template-columns:100px 100px 100px;gap:10px;transform:scale(.5);transform-origin:top left">' + names.map(n => `<button aria-roledescription="draggable" aria-pressed="false" style="height:50px">${n}</button>`).join('') + '</div>'"#,
+    ] {
+        eval_active(
+            &h.page,
+            &format!("(names => {{ document.body.innerHTML = {markup}; cards.querySelector('button').setAttribute('aria-pressed', 'true'); return true; }})({labels:?})"),
+        )
+        .await;
+        let lifted = h.observe().await;
+        let positions: Vec<_> = labels.iter().map(|label| find(&lifted, label).item_position).collect();
+        assert_eq!(positions, [Some(1), Some(2), Some(3), Some(4), Some(5), Some(6)], "{markup}");
+        // The keyboard handler's result: the held item takes the next slot and its neighbour slides into the old one.
+        eval_active(
+            &h.page,
+            "(([held, next], grid) => { \
+             held.style.transform = grid ? 'translateX(110px)' : 'translateY(50px)'; \
+             next.style.transform = grid ? 'translateX(-110px)' : 'translateY(-50px)'; return true; \
+             })(cards.children, cards.tagName === 'DIV')",
+        )
+        .await;
+        let moved = h.observe().await;
+        assert_ne!(
+            fastbrowse_core::effects::state_key(&lifted),
+            fastbrowse_core::effects::state_key(&moved),
+            "{markup}"
+        );
+        let positions: Vec<_> = labels.iter().map(|label| find(&moved, label).item_position).collect();
+        assert_eq!(positions, [Some(2), Some(1), Some(3), Some(4), Some(5), Some(6)], "{markup}");
+    }
+    h.close().await;
+}
+
+/// A list item moved by transform while its keyboard handle is a child button: the item carries the transform, so its
+/// place, and with it the page state, must still change.
+#[tokio::test]
+async fn test_a_lifted_list_item_moves_when_its_keyboard_handle_is_a_child_button() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = '<ul id=cards>' + ['One','Two','Three','Four','Five','Six'].map(n =>
+          `<li style="height:50px"><button aria-roledescription="draggable" aria-pressed="false">${n}</button></li>`).join('')
+          + '</ul>';
+        cards.addEventListener('keydown', e => {
+          if (e.code === 'Space') { e.target.setAttribute('aria-pressed', 'true'); e.preventDefault(); }
+          if (e.key === 'ArrowDown' && e.target.getAttribute('aria-pressed') === 'true') {
+            const item = e.target.closest('li');
+            item.style.transform = 'translateY(50px)';
+            item.nextElementSibling.style.transform = 'translateY(-50px)';
+            e.preventDefault();
+          }
+        });
+        true
+    "#,
+    )
+    .await;
+    let mut lifted = None;
+    for key in ["Space", "ArrowDown"] {
+        let before = h.observe().await;
+        let card = find(&before, "One");
+        let action =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&action, &before).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+        if key == "Space" {
+            lifted = Some(fastbrowse_core::effects::state_key(&h.observe().await));
+        }
+    }
+    let after = h.observe().await;
+    h.close().await;
+    assert_ne!(lifted.expect("lifted"), fastbrowse_core::effects::state_key(&after), "moving the item is progress");
+    assert_eq!(find(&after, "One").item_position, Some(2));
+    assert_eq!(find(&after, "Two").item_position, Some(1));
+}
+
+/// A described control inside a list item reports the item's place, so a DOM reorder still reads as progress.
+#[tokio::test]
+async fn test_a_described_button_inside_a_list_item_reports_reorder_progress() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = '<ul id=cards>' + ['One','Two','Three','Four','Five','Six']
+          .map(n => `<li><button aria-roledescription="draggable">${n}</button></li>`).join('') + '</ul>';
+        let lifted = false;
+        document.getElementById('cards').addEventListener('keydown', e => {
+          if (e.code === 'Space') { lifted = !lifted; e.preventDefault(); }
+          const item = e.target.closest('li');
+          if (lifted && e.key === 'ArrowDown' && item.nextElementSibling) {
+            item.nextElementSibling.after(item);
+            e.target.focus();
+          }
+        });
+        true
+    "#,
+    )
+    .await;
+    let mut previous = None;
+    for key in ["Space", "ArrowDown", "ArrowDown", "ArrowDown", "ArrowDown", "ArrowDown"] {
+        let before = h.observe().await;
+        let card = find(&before, "One");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&press, &before).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+        let state = fastbrowse_core::effects::state_key(&h.observe().await);
+        if key != "Space"
+            && let Some(previous) = &previous
+        {
+            assert_ne!(previous, &state, "a successful ArrowDown must renew the stall budget");
+        }
+        previous = Some(state);
+    }
+    h.close().await;
+}
+
+/// A tree's child group is a separate set from its parent's siblings.
+#[tokio::test]
+async fn test_tree_positions_are_relative_to_their_sibling_group() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = `
+          <div role="tree" aria-label="Files" tabindex="0">
+            <div role="treeitem" aria-label="Folder" aria-expanded="true" tabindex="-1">
+              Folder
+              <div role="group">
+                <div role="treeitem" aria-label="Child one" tabindex="-1">Child one</div>
+                <div role="treeitem" aria-label="Child two" tabindex="-1">Child two</div>
+              </div>
+            </div>
+            <div role="treeitem" aria-label="Last root" tabindex="-1">Last root</div>
+          </div>`;
+        true
+    "#,
+    )
+    .await;
+    let observed = h.observe().await;
+    for (label, position) in [("Folder", 1), ("Last root", 2), ("Child one", 1), ("Child two", 2)] {
+        let control = find(&observed, label);
+        assert_eq!((control.item_position, control.item_count), (Some(position), Some(2)), "{label}");
+    }
+    h.close().await;
+}
+
+/// The same list moved with the pointer, as its PointerSensor takes it: the last card dragged onto the first. The card
+/// declares itself a draggable, so it is offered as a drag source though it carries no `draggable` attribute.
+#[tokio::test]
+async fn test_a_real_dnd_kit_card_is_dragged_onto_the_first_by_the_pointer() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dndkit-sortable.html").await;
+    let order = || eval_active(&h.page, "document.getElementById('order').textContent");
+    let now = h.observe().await;
+    let last = find(&now, "Third image");
+    assert!(last.operations.contains(&Operation::Drag), "a declared draggable is a drag source: {last:?}");
+    let drag = Action {
+        target_id: Some(last.id.clone()),
+        destination_id: Some(find(&now, "Test image").id.clone()),
+        ..Action::new(Operation::Drag)
+    };
+    let result = h.page.act(&drag, &now).await.expect("drag");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(order().await, json!("Third image,Test image,Second image"));
+    h.close().await;
+}
+
 #[tokio::test]
 async fn test_role_keys_capture_orientation_and_count_custom_slider_progress() {
     let Some(h) = harness().await else { return };
@@ -2257,6 +2702,49 @@ async fn test_a_wait_sees_a_change_made_after_the_observation_it_was_decided_on(
         assert!(h.page.capture().await.expect("capture").text.contains("Hello World!"), "{place}");
         assert_eq!(wait_watches(&h).await, json!(0), "{place}");
     }
+    h.close().await;
+}
+
+#[tokio::test]
+async fn test_unknown_aria_setsize_does_not_fall_back_to_visible_siblings() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<ul><li role=button aria-label=First aria-posinset=1 aria-setsize=-1>First</li><li role=button aria-label=Second aria-posinset=2 aria-setsize=-1>Second</li></ul>'; true",
+    )
+    .await;
+    let observed = h.observe().await;
+    for label in ["First", "Second"] {
+        let control = find(&observed, label);
+        assert_eq!((control.item_position, control.item_count), (None, None), "{label}: {control:?}");
+    }
+    h.close().await;
+}
+
+#[tokio::test]
+async fn test_a_covered_drop_target_is_not_released_on_a_nested_control() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = `
+          <div id=source draggable=true style='position:fixed;left:20px;top:20px;width:100px;height:80px'>Card</div>
+          <div id=drop role=button tabindex=0 aria-label=Target style='position:fixed;left:220px;top:20px;width:100px;height:80px'>
+            <button id=delete style='position:absolute;inset:0'>Delete</button>
+          </div>`;
+        window.presses = [];
+        document.addEventListener('pointerdown', e => window.presses.push(e.target.id));
+        source.ondragstart = e => e.dataTransfer.setData('text/plain', 'Card');
+        drop.ondragover = e => e.preventDefault();
+        drop.ondrop = e => e.preventDefault();
+        true",
+    )
+    .await;
+    let observed = h.observe().await;
+    let result = h.page.act(&drag(find(&observed, "Card"), find(&observed, "Target")), &observed).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
+    assert_eq!(eval_active(&h.page, "window.presses").await, json!([]));
     h.close().await;
 }
 

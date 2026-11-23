@@ -135,6 +135,7 @@ struct SnapshotControl {
     id: i64,
     frame_path: Option<String>,
     frame_origin: Option<String>,
+    frame_document_key: Option<String>,
     form_id: Option<String>,
     role: String,
     label: String,
@@ -161,6 +162,10 @@ struct SnapshotControl {
     required: Option<bool>,
     invalid: Option<bool>,
     validation_message: Option<String>,
+    role_description: Option<String>,
+    description: Option<String>,
+    item_position: Option<u32>,
+    item_count: Option<u32>,
     next_page: Option<bool>,
     download: Option<bool>,
     #[serde(default)]
@@ -223,6 +228,9 @@ struct Snapshot {
     #[serde(default)]
     inaccessible_frames: usize,
     viewport_text: String,
+    /// Stable identity of the frame's scroll positions, independent of page text.
+    #[serde(default)]
+    viewport_key: String,
     /// Characters of visible text outside the viewport.
     #[serde(default)]
     offscreen_text: String,
@@ -505,8 +513,10 @@ fn control_from_raw(
     c: &SnapshotControl,
     retarget: Option<String>,
 ) -> Control {
+    let document_key = c.frame_document_key.as_deref().unwrap_or(document_key);
     Control {
         id: control_id,
+        frame_document_key: c.form_id.as_ref().and(frame_id.as_ref()).map(|_| document_key.to_owned()),
         frame_id,
         frame_origin: c.frame_origin.clone(),
         // An iframe can navigate and reuse its local form ids while the top-level document stays put.
@@ -532,6 +542,10 @@ fn control_from_raw(
         required: c.required,
         invalid: c.invalid,
         validation_message: c.validation_message.clone(),
+        role_description: c.role_description.clone(),
+        description: c.description.clone(),
+        item_position: c.item_position,
+        item_count: c.item_count,
         focused: c.focused,
         next_page: c.next_page,
         download: c.download,
@@ -759,6 +773,7 @@ impl CdpPage {
             }
 
             let page_key = combine_page_keys(frames.iter().map(|(_, f)| f.raw.page_key.clone()).collect());
+            let viewport_key = combine_page_keys(frames.iter().map(|(_, f)| f.raw.viewport_key.clone()).collect());
             if bind {
                 self.set_last(ObservedState { page_key: page_key.clone(), controls: control_state, labels });
             }
@@ -838,6 +853,7 @@ impl CdpPage {
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
                 viewport_text,
+                viewport_key,
                 offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
@@ -909,6 +925,7 @@ impl CdpPage {
             document_key: String::new(),
             controls: vec![],
             viewport_text: String::new(),
+            viewport_key: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
             modal: None,

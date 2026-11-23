@@ -23,7 +23,7 @@ credentials, irreversible actions and spending under the control of code.
 
 - **It picks, it does not invent.** Each page is indexed into the controls it has, and
   [Jev](https://typesafe.ai), a choice model, picks one. It cannot click something that is not on the page, and
-  there are no selectors to maintain. Widget keyboard actions are chosen from the keys their ARIA roles define.
+  there are no selectors to maintain. Widget keyboard actions are chosen from the keys their ARIA roles define plus the standard navigation and editing keys.
 - **Answers you can check.** Every claim in a complete answer cites a verbatim quote from the page, with a link
   that scrolls to it. Pass a schema and get validated data back.
   Tasks over a whole list can follow its next-page links, checking each page and preserving its citations; a total
@@ -517,7 +517,9 @@ timeout if it has one (`MCP_TOOL_TIMEOUT` in Claude Code).
 - **Irreversible actions.** Jev judges each click, key chord, file attached to an input and dialog acceptance,
   including Enter presses. Without authorization, an irreversible action stops at `needs_confirmation`. An action the
   task says not to take ("do not click Upload") is refused, authorized or not. This is a
-  classifier, not a guarantee: a page can word a harmful control to look harmless.
+  classifier, not a guarantee: a page can word a harmful control to look harmless. The questions about a save state
+  which fields the run replaced and the values before and after, so an edit of an item the task never named is judged
+  as it is.
 - **Secrets.** Models see names only. A value is resolved at the moment it is typed, only on its declared origin,
   and redacted from everything the run returns. A password field is typed only from a stored secret.
 - **Page content is data.** Every prompt says so, and what a run reports is copied from quotes on the page.

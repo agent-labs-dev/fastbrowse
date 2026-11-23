@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
-    NoulAnswer, Question,
+    NoulAnswer, NoulQuestion, Question,
 };
 use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
@@ -23,7 +23,7 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::json;
 
-use super::acting::{Carried, IN_RECORD};
+use super::acting::{Carried, IN_RECORD, gate_questions};
 use super::driving::edit_progress;
 use super::helpers::{describe, doing, read_sources, unsent_fact};
 use super::state::Written;
@@ -665,7 +665,11 @@ const FILES: &str = "https://addons.example.test/project/files";
 const DOWNLOAD: &str = "https://addons.example.test/project/download/1";
 
 fn typed_into(label: &str) -> HistoryEntry {
-    HistoryEntry::new(Some(Operation::Fill), Some(label), StepOutcome::Executed, false)
+    HistoryEntry {
+        // The id `holding` gives its control.
+        control_id: Some("f".into()),
+        ..HistoryEntry::new(Some(Operation::Fill), Some(label), StepOutcome::Executed, false)
+    }
 }
 
 fn holding(label: &str, value: &str) -> Control {
@@ -1872,6 +1876,109 @@ async fn test_a_commit_with_values_for_later_proceeds_only_once_the_site_has_res
     }
 }
 
+#[tokio::test]
+async fn test_a_conditional_gate_describes_press_chords_and_navigation_addresses() {
+    for (operation, action, expected, absent) in [
+        (
+            Operation::Press,
+            "press the element labelled 'Name'.\nThe exact key chord to press is 'x'.\n",
+            "exact key chord",
+            "types no text",
+        ),
+        (
+            Operation::Navigate,
+            "open the address https://example.test/next.\n",
+            "address is its only input",
+            "control it acts on",
+        ),
+    ] {
+        let jev = Arc::new(Conditioned {
+            answers: IndexMap::from([
+                ("irreversible", 0.95),
+                ("requested", 0.97),
+                ("lasting", 0.95),
+                ("conditional", 0.9),
+            ]),
+            chosen: IndexMap::from([("values", "first"), ("met", "asked")]),
+            asked: Default::default(),
+        });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.authorization = Authorization { irreversible_actions: true };
+        let target = (operation == Operation::Press).then(|| button("Name"));
+        let decision = Decision { operation_confidence: 0.86, ..code_decision(operation, target.clone()) };
+        let page = observation(target.as_slice());
+        let irreversible = NoulQuestion::new("irreversible", Some("yes"), Some("no"));
+        let lasting = NoulQuestion::new("lasting", Some("yes"), Some("no"));
+        agent
+            .gate_question(
+                &mut state,
+                &page,
+                &decision,
+                target.as_ref().map_or("address", |control| control.label.as_str()),
+                Some(irreversible),
+                action,
+                Some(lasting),
+            )
+            .await
+            .expect("the conditional action proceeds");
+        let asked = jev.asked.lock().unwrap();
+        let values = &asked[1].1["values"];
+        assert!(values.contains(expected), "{operation}: {values}");
+        assert!(!values.contains(absent), "{operation}: {values}");
+    }
+}
+
+/// A task that orders a delete after opening a dialog and cancelling it ("then delete") was refused because the
+/// condition check judged only from a page that cannot show a dialog that was opened and cancelled (#1006). Each of the
+/// check's questions now states the steps the run took, in order, and none a refused, stale or secret one.
+#[tokio::test]
+async fn test_the_condition_check_is_told_the_steps_the_run_took() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([("irreversible", 0.95), ("requested", 0.97), ("lasting", 0.95), ("conditional", 0.9)]),
+        chosen: IndexMap::from([("values", "first"), ("met", "asked")]),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Click Reorder, then click Cancel there. Then delete the image titled Old.".into();
+    state.authorization = Authorization { irreversible_actions: true };
+    let stale = HistoryEntry { outcome: StepOutcome::Stale, ..executed(Some(Operation::Click), Some("Old"), false) };
+    let secret = HistoryEntry { text: Some("<secret>".into()), ..executed(Some(Operation::Fill), Some("Key"), true) };
+    let note = HistoryEntry { text: Some("a title".into()), ..executed(Some(Operation::Fill), Some("Title"), true) };
+    state.history.extend([
+        executed(Some(Operation::Click), Some("Reorder (Media)"), true),
+        executed(Some(Operation::Click), Some("Cancel (Reorder Media)"), true),
+        stale,
+        secret,
+        note,
+        executed(Some(Operation::Back), None, true),
+    ]);
+    let delete = button("delete");
+    let page = observation(std::slice::from_ref(&delete));
+    let decision = Decision { operation_confidence: 0.86, ..code_decision(Operation::Click, Some(delete)) };
+    agent.gate_irreversible(&mut state, &page, &decision).await.expect("the delete goes ahead");
+    let asked = jev.asked.lock().unwrap();
+    let (_, questions) = &asked[1];
+    let facts = "The steps this run has already taken, in order:\n- click 'Reorder (Media)'\n- click 'Cancel (Reorder Media)'\n\
+                 - fill 'Key'\n- fill 'Title' with 'a title'\n- back\n";
+    for key in ["met", "values", "happened"] {
+        assert!(questions[key].contains(facts), "{key}: {}", questions[key]);
+    }
+    // The facts stand before the question, which the task's later steps do not turn into a wait for a response.
+    assert!(
+        questions["happened"]
+            .contains("has the run done what the task asks first, and, if the task waits for the site")
+    );
+    assert!(!asked[0].1["requested"].contains("The steps this run has already taken"));
+    // The values question states what a click takes from the task, and offers no option to name values it has none of.
+    assert!(
+        questions["values"]
+            .contains("This action types no text. The only things it uses are the control it acts on, named above")
+    );
+    assert!(questions["values"].ends_with("only for once something happens?"), "{}", questions["values"]);
+}
+
 /// The page can only take a commit's authorization away: whether the task asked for it is judged without the page,
 /// and the page, dialog included, is shown masked only to the check that can refuse it, which never asks `requested`.
 #[tokio::test]
@@ -2175,6 +2282,30 @@ async fn test_a_press_is_asked_whether_it_changes_a_value_not_whether_it_commits
     let (_, question) = asked.iter().find(|(key, _)| key == "changes_value").expect("changes_value is asked");
     assert!(question.contains("change what a field holds or a selected setting?"), "{question}");
     assert!(question.contains("neither does committing what the fields already hold"), "{question}");
+}
+
+/// A card whose role is "button" is a draggable: the page says so, and the press is asked about with that.
+#[tokio::test]
+async fn test_a_requested_press_states_what_the_page_calls_the_control() {
+    let mut card = Control::new("c", "button", "Card", [Operation::Press]);
+    card.role_description = Some("draggable".into());
+    card.description = Some("Press the space bar to pick up the item.".into());
+    let page = observation(std::slice::from_ref(&card));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Reorder the cards. Change nothing else.".into();
+    let decision = code_decision(Operation::Press, Some(card.clone()));
+    let gated = agent.gate_key_edit(&mut state, &page, &decision, &card, "Space").await;
+    assert!(gated.is_ok(), "{gated:?}");
+    let asked = jev.0.lock().unwrap();
+    assert!(
+        asked[0]
+            .1
+            .contains("The page describes it as 'draggable', and says: 'Press the space bar to pick up the item.'"),
+        "{}",
+        asked[0].1
+    );
 }
 
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
@@ -11112,6 +11243,23 @@ async fn test_a_secret_a_modal_is_named_with_is_masked() {
 }
 
 #[tokio::test]
+async fn test_secret_control_metadata_is_masked_before_observation() {
+    let mut control = button("Account");
+    control.role_description = Some("hunter2 is invalid".into());
+    control.description = Some("hunter2 was rejected".into());
+    control.validation_message = Some("hunter2 is not accepted".into());
+    let page = Observation { controls: vec![control], ..observation(&[]) };
+    let agent =
+        Agent::new(Arc::new(Scripted::new(page, vec![])), Arc::new(ScriptedJev::new(vec![])), Arc::new(ScriptedLLM));
+    agent.redactor().register("password", "hunter2", None);
+    let observed = agent.observe().await.expect("observed");
+    let control = &observed.controls[0];
+    assert_eq!(control.role_description.as_deref(), Some("••••••• is invalid"));
+    assert_eq!(control.description.as_deref(), Some("••••••• was rejected"));
+    assert_eq!(control.validation_message.as_deref(), Some("••••••• is not accepted"));
+}
+
+#[tokio::test]
 async fn test_a_plan_stops_at_the_step_limit() {
     // One step allowed and one taken: the planned fill is a step too, so none is taken.
     let form = delivery("1", "", "");
@@ -11274,6 +11422,28 @@ async fn test_a_press_on_a_slider_picks_one_of_the_keys_its_role_supports() {
         && q.contains("orientation: vertical")));
 }
 
+/// A sortable card says how it is operated in its role description and its described-by text: the key question carries
+/// both, so Jev can pick Space, an arrow, then Space across the steps.
+#[tokio::test]
+async fn test_the_key_question_carries_what_the_page_says_about_a_draggable_card() {
+    let card = Control {
+        role_description: Some("draggable".into()),
+        description: Some("To pick up a draggable item, press the space bar.".into()),
+        ..Control::new("c", "button", "One", [Operation::Click, Operation::Press])
+    };
+    let page = observation(std::slice::from_ref(&card));
+    let jev = Arc::new(FirstChoice { wants: Some("Space"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let action = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(card))).await.expect("action");
+    assert_eq!(action.text.as_deref(), Some("Space"));
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in")
+        && q.contains("The page calls it 'draggable'.")
+        && q.contains("To pick up a draggable item, press the space bar.")));
+}
+
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.
 #[tokio::test]
 async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
@@ -11292,12 +11462,13 @@ async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
 
 /// A press on a field whose role defines no keys copies its key from the task. Told to make a document's text bold and
 /// save it, Jev pressed the editor and the copy came out "document.", which the browser refused, ending the run as an
-/// error (#1212). Copied words that are no key leave the press unmade, and Jev is asked again.
+/// error (#1212). Copied words that are no key leave the press unmade, and Jev is asked again. Jev answers that the
+/// task gives the key, as none of the standard keys offered is it, and the copy is the task's first words.
 #[tokio::test]
 async fn test_a_press_copied_from_a_task_that_names_no_key_is_not_made() {
     let editor = Control::new("e", "textbox", "Editor", [Operation::Fill, Operation::Press]);
     let page = observation(std::slice::from_ref(&editor));
-    let jev = Arc::new(FirstChoice { wants: Some("document"), noul: Some(0.0), ..Default::default() });
+    let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), noul: Some(0.0), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Make the document's text bold, then save the document.".into();
@@ -11994,5 +12165,300 @@ async fn test_a_decision_made_before_the_read_of_a_fresh_page_is_made_again_with
     assert_eq!(decisions[..3], [0, 1, 1], "{decisions:?}");
 }
 
+/// #1137: scrolling a long page changes what the viewport shows and none of its controls, so the page state key saw the
+/// same state every time and withdrew scrolling after the third scroll of a page whose task was to look at all of it.
+#[tokio::test]
+async fn test_a_scroll_to_a_part_never_shown_is_progress_and_scrolling_back_is_not() {
+    let seen = |text: &str, key: &str| Observation {
+        viewport_text: text.into(),
+        viewport_key: key.into(),
+        ..buttons_at(FILES, &["Files"])
+    };
+    let (top, middle, bottom) = (seen("Previews", "top"), seen("Credits", "middle"), seen("Footer", "bottom"));
+    let agent = agent();
+    let mut state = run_state();
+    agent.settle(&mut state, &top).await.expect("settled");
+    for (operation, landed, unchanged) in [
+        (Operation::Scroll, &middle, 0),
+        (Operation::Scroll, &bottom, 0),
+        (Operation::ScrollUp, &middle, 1),
+        (Operation::ScrollUp, &top, 2),
+    ] {
+        state.landing = Some(Some((operation, None)));
+        agent.settle(&mut state, landed).await.expect("settled");
+        assert_eq!(state.unchanged, unchanged, "{operation:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_live_viewport_text_does_not_make_returning_to_the_same_scroll_position_progress() {
+    let seen = |text: &str, key: &str| Observation {
+        viewport_text: text.into(),
+        viewport_key: key.into(),
+        ..buttons_at(FILES, &["Files"])
+    };
+    let (top, middle) = (seen("Clock 12:00", "top"), seen("Middle\nClock 12:00", "middle"));
+    let agent = agent();
+    let mut state = run_state();
+    agent.settle(&mut state, &top).await.expect("settled");
+
+    state.landing = Some(Some((Operation::Scroll, None)));
+    agent.settle(&mut state, &middle).await.expect("settled");
+    assert_eq!(state.unchanged, 0);
+
+    state.landing = Some(Some((Operation::ScrollUp, None)));
+    let top_later = seen("Clock 12:01", "top");
+    agent.settle(&mut state, &top_later).await.expect("settled");
+    assert_eq!(state.unchanged, 1, "a live clock must not renew the scroll stall budget");
+}
+
+#[tokio::test]
+async fn different_scroll_positions_on_a_textless_page_are_progress() {
+    let seen = |key: &str| Observation {
+        viewport_text: String::new(),
+        viewport_key: key.into(),
+        ..buttons_at(FILES, &["Files"])
+    };
+    let (top, middle) = (seen("top"), seen("middle"));
+    let agent = agent();
+    let mut state = run_state();
+    agent.settle(&mut state, &top).await.expect("settled");
+
+    state.landing = Some(Some((Operation::Scroll, None)));
+    agent.settle(&mut state, &middle).await.expect("settled");
+    assert_eq!(state.unchanged, 0, "a new scroll position must renew the stall budget");
+}
 #[path = "tests/citation_record_selected_results.rs"]
 mod citation_record_selected_results;
+
+// -- A save says what it changes ------------------------------------------------------------------------------------
+
+/// An authorized run saved an edit dialog that overwrote another image's caption, judged requested at 0.80: the
+/// questions named only the Apply control and the value the form held, never what the run had replaced or which
+/// card's edit it had opened.
+#[test]
+fn test_a_save_states_what_the_run_replaced_and_what_it_opened() {
+    let form = |control: Control| Control { form_id: Some("dialog".into()), ..control };
+    let title = form(holding("Title", "Test image"));
+    let apply = form(Control { submit_semantics: Some("{}".into()), ..button("Apply") });
+    let controls = [title.clone(), apply.clone()];
+    let filled = HistoryEntry {
+        text: Some("Test image".into()),
+        before: Some("Guide tracker".into()),
+        ..typed_into(&describe(&title))
+    };
+    let opened = HistoryEntry {
+        opened_forms: vec![(None, "dialog".into())],
+        ..executed(Some(Operation::Click), Some("Edit (Guide tracker card)"), true)
+    };
+    let history = [executed(Some(Operation::Click), Some("Unrelated"), true), opened, filled];
+    let (irreversible, action, lasting) =
+        gate_questions(&history, Operation::Click, &apply, None, &controls, "document");
+    let facts = [
+        "The run opened this form by clicking 'Edit (Guide tracker card)'.",
+        "In this form the run replaced 'Title', which held 'Guide tracker', with 'Test image'.",
+    ];
+    for text in [action, irreversible.unwrap().instructions, lasting.instructions] {
+        for fact in facts {
+            assert!(text.contains(fact), "{text}");
+        }
+    }
+    // Nothing filled in the form, or a control that submits nothing, adds no fact.
+    let (_, untouched, _) = gate_questions(&[], Operation::Click, &apply, None, &controls, "document");
+    assert!(!untouched.contains("In this form"), "{untouched}");
+    let (_, plain, _) = gate_questions(&history, Operation::Click, &button("Edit"), None, &controls, "document");
+    assert!(!plain.contains("In this form"), "{plain}");
+}
+
+#[test]
+fn a_save_ignores_fills_from_another_form_document() {
+    let old = Control { form_id: Some("old-form".into()), ..holding("Title", "Old image") };
+    let current = Control { form_id: Some("current-form".into()), ..holding("Title", "Current image") };
+    let apply =
+        Control { form_id: Some("current-form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let filled = HistoryEntry {
+        document_key: Some("old-document".into()),
+        form_id: old.form_id.clone(),
+        text: Some("Old image".into()),
+        before: Some("Older image".into()),
+        ..typed_into(&describe(&old))
+    };
+    let controls = [current, apply.clone()];
+    let (_, action, _) = gate_questions(&[filled], Operation::Click, &apply, None, &controls, "current-document");
+    assert!(!action.contains("Old image"), "{action}");
+    assert!(!action.contains("Older image"), "{action}");
+}
+
+#[test]
+fn a_reset_or_a_press_with_no_filled_field_adds_no_save_facts() {
+    let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
+    let reset = Control { form_id: Some("form".into()), input_type: Some("reset".into()), ..button("Reset") };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New image".into()),
+        before: Some("Current image".into()),
+        ..typed_into(&describe(&field))
+    };
+    let (_, action, _) =
+        gate_questions(&[filled], Operation::Click, &reset, None, &[field.clone(), reset.clone()], "document");
+    assert!(!action.contains("In this form"), "{action}");
+
+    let enter_target = Control { submit_semantics: Some("{}".into()), ..field.clone() };
+    let (_, action, _) =
+        gate_questions(&[], Operation::Press, &enter_target, None, std::slice::from_ref(&enter_target), "document");
+    assert!(!action.contains("In this form"), "{action}");
+}
+
+/// A save chord other than Enter (Ctrl+Enter) and a field whose label changes as it is typed in (a character count)
+/// both left a save without the value it replaced.
+#[test]
+fn a_chord_save_states_the_field_it_replaced_even_when_the_label_changed() {
+    let field = Control {
+        form_id: Some("form".into()),
+        submit_semantics: Some("{}".into()),
+        ..holding("Caption (11 characters)", "New caption")
+    };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New caption".into()),
+        before: Some("Other card caption".into()),
+        ..typed_into("Caption")
+    };
+    let (_, action, _) =
+        gate_questions(&[filled], Operation::Press, &field, None, std::slice::from_ref(&field), "document");
+    assert!(action.contains("which held 'Other card caption', with 'New caption'"), "{action}");
+}
+
+#[test]
+fn a_save_omits_multi_select_toggles_until_the_delta_is_known() {
+    let topics = Control {
+        form_id: Some("form".into()),
+        input_type: Some("select-multiple".into()),
+        value: Some("A, B".into()),
+        ..Control::new("topics", "listbox", "Topics", [Operation::Select])
+    };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let selected = HistoryEntry {
+        form_id: topics.form_id.clone(),
+        text: Some("C".into()),
+        before: Some("A, B".into()),
+        ..HistoryEntry::new(Some(Operation::Select), Some("Topics"), StepOutcome::Executed, false)
+    };
+    let (_, action, _) =
+        gate_questions(&[selected], Operation::Click, &apply, None, &[topics, apply.clone()], "document");
+    assert!(!action.contains("replaced"), "{action}");
+}
+
+#[test]
+fn a_form_opener_is_reported_only_when_the_form_appeared_after_its_click() {
+    let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New image".into()),
+        before: Some("Current image".into()),
+        ..typed_into(&describe(&field))
+    };
+    let unrelated = executed(Some(Operation::Click), Some("Accept cookies"), true);
+    let (_, action, _) =
+        gate_questions(&[unrelated, filled], Operation::Click, &apply, None, &[field, apply.clone()], "document");
+    assert!(!action.contains("opened this form"), "{action}");
+}
+
+#[test]
+fn a_click_records_a_form_opener_only_when_the_form_appears_after_it() {
+    let before = Observation { document_key: "before".into(), ..observation(&[button("Edit")]) };
+    let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
+    let after = Observation { document_key: "after".into(), ..observation(&[field]) };
+    let mut state = run_state();
+    state.acted_from = Some(before);
+    state.history.push(executed(Some(Operation::Click), Some("Edit"), true));
+
+    agent().note_effect(&mut state, &after);
+
+    let entry = state.history.last().expect("the click history");
+    assert_eq!(entry.opened_forms, vec![(None, "form".to_string())]);
+    assert_eq!(entry.document_key.as_deref(), Some("after"));
+}
+
+#[test]
+fn a_save_ignores_fills_from_before_the_form_was_last_opened() {
+    let field = Control { form_id: Some("form".into()), ..holding("Caption", "Second card") };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let fill = |before: &str, typed: &str| HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some(typed.into()),
+        before: Some(before.into()),
+        ..typed_into(&describe(&field))
+    };
+    let open = |card: &str| HistoryEntry {
+        opened_forms: vec![(None, "form".into())],
+        ..executed(Some(Operation::Click), Some(card), true)
+    };
+    // The same modal, reopened for another card: its form and document ids did not change.
+    let history =
+        [open("Edit first"), fill("First old", "First new"), open("Edit second"), fill("Second old", "Second new")];
+    let (_, action, _) = gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document");
+    assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
+    assert!(action.contains("clicking 'Edit second'"), "{action}");
+    assert!(!action.contains("First"), "{action}");
+}
+
+#[test]
+fn a_save_ignores_fills_and_openings_from_another_frame_with_the_same_form_id() {
+    let in_frame = |frame: &str, control: Control| Control {
+        form_id: Some("form".into()),
+        frame_id: Some(frame.into()),
+        ..control
+    };
+    let field = in_frame("second", holding("Caption", "Second card"));
+    let apply = in_frame("second", Control { submit_semantics: Some("{}".into()), ..button("Apply") });
+    let first_fill = HistoryEntry {
+        form_id: Some("form".into()),
+        frame_id: Some("first".into()),
+        text: Some("First new".into()),
+        before: Some("First old".into()),
+        ..typed_into(&describe(&field))
+    };
+    let first_open = HistoryEntry {
+        opened_forms: vec![(Some("first".into()), "form".into())],
+        ..executed(Some(Operation::Click), Some("Edit first"), true)
+    };
+    let second_open = HistoryEntry {
+        opened_forms: vec![(Some("second".into()), "form".into())],
+        ..executed(Some(Operation::Click), Some("Edit second"), true)
+    };
+    let second_fill = HistoryEntry {
+        frame_id: Some("second".into()),
+        text: Some("Second new".into()),
+        before: Some("Second old".into()),
+        ..first_fill.clone()
+    };
+    let history = [first_open, first_fill, second_open, second_fill];
+    let (_, action, _) = gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document");
+    assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
+    assert!(action.contains("clicking 'Edit second'"), "{action}");
+    assert!(!action.contains("First"), "{action}");
+}
+
+#[test]
+fn a_form_opened_in_another_frame_is_recorded_though_one_with_its_id_exists_elsewhere() {
+    let in_frame = |frame: &str| Control {
+        form_id: Some("form".into()),
+        frame_id: Some(frame.into()),
+        ..holding("Title", "Current image")
+    };
+    let before = Observation { document_key: "before".into(), ..observation(&[button("Edit"), in_frame("first")]) };
+    let after = Observation {
+        document_key: "after".into(),
+        ..observation(&[button("Edit"), in_frame("first"), in_frame("second")])
+    };
+    let mut state = run_state();
+    state.acted_from = Some(before);
+    state.history.push(executed(Some(Operation::Click), Some("Edit"), true));
+
+    agent().note_effect(&mut state, &after);
+
+    let entry = state.history.last().expect("the click history");
+    assert_eq!(entry.opened_forms, vec![(Some("second".to_string()), "form".to_string())]);
+}

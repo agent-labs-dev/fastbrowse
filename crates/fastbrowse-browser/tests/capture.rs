@@ -1295,8 +1295,16 @@ mod benchmark {
 
     pub fn golden_view(result: Value, guards: Value, fingerprint: Value, origin: &str) -> Value {
         let Value::Object(mut view) = result else { panic!("snapshot is not an object: {result}") };
-        for digest in ["document_key", "page_key", "retarget_keys", "read"] {
+        for digest in ["document_key", "page_key", "viewport_key", "retarget_keys", "read"] {
             view.remove(digest);
+        }
+        if let Some(Value::Array(controls)) = view.get_mut("controls") {
+            for control in controls {
+                // Inlined iframe document keys are clock readings too.
+                if let Some(control) = control.as_object_mut() {
+                    control.remove("frame_document_key");
+                }
+            }
         }
         // A guard holds its document's `performance.timeOrigin` at index 16.
         let Value::Object(guards) = guards else { panic!("guards are not an object: {guards}") };

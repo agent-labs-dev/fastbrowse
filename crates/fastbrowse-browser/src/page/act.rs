@@ -1392,7 +1392,11 @@ impl CdpPage {
                 Point::Gone | Point::Unsettled => {
                     return Ok((StepOutcome::Stale, Some("target disconnected".into()), None));
                 }
-                // A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused.
+                // A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused. A
+                // control that takes no pointer hits with nothing drawn over it (a sortable's picked-up card, set to
+                // pointer-events: none for the drag) is reached by keys all the same, and the arrows that move it
+                // must go to it.
+                Point::Covered if self.cover(&session_id, local_id).await? == Cover::None => {}
                 Point::Covered => {
                     if let Route::Refused(refusal) = self.route_around(target, false).await? {
                         return Ok(refusal);
@@ -1926,7 +1930,7 @@ impl CdpPage {
         }
         // The drop target is hit-tested exactly as the source is: its point is only computed when the live guard still
         // matches the observed one, so a target that moved or was covered since the observation is stale.
-        let (_, _, drop_point, _, _, _, _) = self.before_action(Some(&drop), true, false, false, true, false).await?;
+        let ((_, _, drop_point, _, _, _, _), _) = self.drop_point(&drop, true).await?;
         if !matches!(drop_point, Point::At(..)) {
             return Ok((StepOutcome::Stale, Some("drop target disconnected".into()), None));
         }
@@ -1937,7 +1941,7 @@ impl CdpPage {
             return Ok((outcome, detail, failure));
         }
         // Pointer entry on the source can repurpose the destination after its first guard check.
-        let (_, _, drop_point, _, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+        let ((_, _, drop_point, _, _, _, _), _) = self.drop_point(&drop, false).await?;
         let Point::At(end_x, end_y) = drop_point else {
             return Ok((StepOutcome::Stale, Some("drop target changed before pointer press".into()), None));
         };
@@ -1976,8 +1980,7 @@ impl CdpPage {
             .await?;
             sleep(secs(DRAG_STEP_SECONDS)).await;
             if step == 1 && native {
-                let (_, _, landed, _, _, _, _) =
-                    self.before_action(Some(&drop), true, false, false, false, false).await?;
+                let ((_, _, landed, _, _, _, _), _) = self.drop_point(&drop, false).await?;
                 if !matches!(landed, Point::At(..)) {
                     self.cancel_drag(session_id, (start_x, start_y), 0).await?;
                     held.done();
@@ -2000,26 +2003,82 @@ impl CdpPage {
                 self.drag_move(session_id, at.0, at.1, 0).await?;
                 sleep(secs(DRAG_STEP_SECONDS)).await;
             }
-            let (_, live, landed, _, _, _, connected) =
-                self.before_action(Some(&drop), true, false, false, false, false).await?;
+            let ((_, live, landed, _, _, _, connected), no_hits) = self.drop_point(&drop, false).await?;
             // A destination the drag renamed or repurposed (a dragover handler, or a pointer script) is no longer the
             // control that was chosen, though the hit test still finds it, for a native drag as for a pointer one.
             if !connected || live != drop.3 {
                 break;
             }
-            if self.release_point_holds(session_id, drop.2, target.2, at).await {
+            // A target that takes no hits is released where the pointer rests, so what lies under that point decides
+            // the drop: an unchanged centre does not show it is still the target, or a container holding it.
+            let receives = if no_hits {
+                self.receives_drop(&drop, at).await?
+            } else {
+                self.release_point_holds(session_id, drop.2, target.2, at).await
+            };
+            if receives {
                 self.release(session_id, at.0, at.1, 0).await?;
                 held.done();
                 return Ok((StepOutcome::Executed, None, None));
             }
             match landed {
-                Point::At(x, y) if (x, y) != at => at = (x, y),
+                Point::At(x, y) if !no_hits && (x, y) != at => at = (x, y),
                 _ => break,
             }
         }
         self.cancel_drag(session_id, (start_x, start_y), 0).await?;
         held.done();
         Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))
+    }
+
+    /// Where a drag is released on its drop target, and whether the target takes no pointer hits. A sortable sets
+    /// pointer-events: none on its cards while one is held, so the point at a card's centre lands on the list holding
+    /// it. A target nothing is drawn over still takes the drop, which the library works out from where the pointer
+    /// rests, so its centre is the point and the pointer stays where it is: the card slides aside as the held one
+    /// arrives, and following it moves the pointer onto the next slot.
+    /// The rest of the target's live state comes back with the point, as `before_action` gives it.
+    async fn drop_point(&self, drop: &Target, first: bool) -> Result<(TargetState, bool), BrowserError> {
+        let state = self.before_action(Some(drop), true, false, false, first, false).await?;
+        if state.2 != Point::Covered || self.cover(&drop.0, drop.2).await? != Cover::None {
+            return Ok((state, false));
+        }
+        let script = format!(
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected) return null; \
+             if (e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents !== 'none') return null; \
+             let r = e.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2, \
+                 node = e, view = e.ownerDocument.defaultView; \
+             while (view.frameElement) {{ const frame = view.frameElement.getBoundingClientRect(); \
+               x = frame.x + (view.frameElement.clientLeft + x) * frame.width / view.frameElement.offsetWidth; \
+               y = frame.y + (view.frameElement.clientTop + y) * frame.height / view.frameElement.offsetHeight; \
+               node = view.frameElement; view = node.ownerDocument.defaultView; }} return [x, y]; }})()",
+            drop.2
+        );
+        let centre = match self.evaluate(&drop.0, &script).await? {
+            Value::Array(xy) => match (xy.first().and_then(Value::as_f64), xy.get(1).and_then(Value::as_f64)) {
+                (Some(x), Some(y)) => Point::At(x, y),
+                _ => Point::Gone,
+            },
+            _ => Point::Gone,
+        };
+        Ok(((state.0, state.1, centre, state.3, state.4, state.5, state.6), true))
+    }
+
+    /// Whether a release at `at` reaches the drop target or a container holding it. A target that takes no pointer hits
+    /// still receives a drop through its list, but once it has moved away, or a nested control takes hits inside it,
+    /// the pointer rests over a different control and releasing there drops onto that one.
+    async fn receives_drop(&self, drop: &Target, at: (f64, f64)) -> Result<bool, BrowserError> {
+        let script = format!(
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected) return false; \
+             const chain = []; let view = e.ownerDocument.defaultView; \
+             while (view.frameElement) {{ chain.unshift(view.frameElement); view = view.frameElement.ownerDocument.defaultView; }} \
+             let x = {}, y = {}; \
+             for (const f of chain) {{ const r = f.getBoundingClientRect(); \
+               x = (x - r.x) * f.offsetWidth / r.width - f.clientLeft; \
+               y = (y - r.y) * f.offsetHeight / r.height - f.clientTop; }} \
+             const hit = e.ownerDocument.elementFromPoint(x, y); return !!hit && hit.contains(e); }})()",
+            drop.2, at.0, at.1
+        );
+        Ok(self.evaluate(&drop.0, &script).await? == Value::Bool(true))
     }
 
     /// Whether the element at the top-viewport `point` is the destination or the dragged source, or inside one with no

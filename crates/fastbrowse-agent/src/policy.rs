@@ -91,6 +91,9 @@ pub const GROUP: &str = "Too many elements to list at once. Choose the group tha
 /// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
 const PRESS_ROLE_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, or the key or key chord the task gives in an editable field.";
 
+/// The Press operation where a control with no role keys, such as a sortable card, takes a press: Space picks it up, the arrows move it, Space drops it.
+const PRESS_STANDARD_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, a standard navigation or editing key (arrows, Home, End, Space, Delete) that moves a caret or picks up, moves and drops an item, or the key or key chord the task gives.";
+
 pub fn operation_label(operation: Operation) -> &'static str {
     match operation {
         Operation::Search => {
@@ -183,6 +186,10 @@ pub struct HistoryEntry {
     /// holding after the click. Kept out of what models are shown: it is the run's own record of what it changed.
     #[serde(skip)]
     pub set: Vec<FieldChange>,
+    /// What a fill or select replaced: the value the field held when the step began, masked. Kept out of what models
+    /// are shown; a save's authorization questions state it beside the value typed.
+    #[serde(skip)]
+    pub before: Option<String>,
     /// The task step a click placed inside a drawn surface was made for. Kept apart from `target`, which actions are
     /// withheld and counted by.
     #[serde(skip)]
@@ -203,6 +210,21 @@ pub struct HistoryEntry {
     /// own form, and no others.
     #[serde(skip)]
     pub form: Option<Form>,
+    /// The document that supplied the action, kept private so form changes cannot cross document instances.
+    #[serde(skip)]
+    pub document_key: Option<String>,
+    /// The id of the control the action targeted, which a field is matched by when its label changes as it is typed in.
+    #[serde(skip)]
+    pub control_id: Option<String>,
+    /// The form instance the action targeted, kept private so same-label fields cannot cross form instances.
+    #[serde(skip)]
+    pub form_id: Option<String>,
+    #[serde(skip)]
+    /// The frame `form_id` is local to: two frames can each hold a form with the same id.
+    pub frame_id: Option<String>,
+    /// Form instances that appeared after this action, kept private so an unrelated click is not called the opener.
+    #[serde(skip)]
+    pub opened_forms: Vec<(Option<String>, String)>,
 }
 
 /// The scope of a form or field group. A local form id can be reused in other frames or documents.
@@ -244,9 +266,10 @@ pub enum Commit {
 /// The form a step submitted, and what its other fields held as it went.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Submitted {
-    /// The document the form was in. Form ids identify forms within a document.
+    /// The top-level document containing the form.
     document: (String, String),
     frame_id: Option<String>,
+    frame_document_key: Option<String>,
     form_id: String,
     held: Vec<String>,
 }
@@ -276,6 +299,7 @@ impl Submitted {
         Some(Submitted {
             document: (observation.url.clone(), observation.document_key.clone()),
             frame_id: target.frame_id.clone(),
+            frame_document_key: target.frame_document_key.clone(),
             form_id,
             held,
         })
@@ -283,13 +307,24 @@ impl Submitted {
 
     /// Which form this was beside the one `target` submits, and what it held.
     fn told(&self, target: Option<&Control>, observation: &Observation) -> String {
-        // Back can reload the same form with fresh ids. Calling it a different form led Jev to permit a duplicate
-        // submission after the first submission had already reached its confirmation page.
+        // Back can reload the same form with fresh ids. Calling it different led to a duplicate submission.
         let same_document = !observation.document_key.is_empty() && observation.document_key == self.document.1;
         let which = if same_document {
-            match target.and_then(|target| target.form_id.as_ref().map(|id| (&target.frame_id, id))) {
-                Some((frame, id)) if (frame, id) == (&self.frame_id, &self.form_id) => {
-                    "the same form the action now asked about submits"
+            match target.and_then(|target| target.form_id.as_ref().map(|id| (target, id))) {
+                Some((target, id)) if target.frame_id == self.frame_id => {
+                    let frame_reloaded = self.frame_id.is_some()
+                        && match (&self.frame_document_key, &target.frame_document_key) {
+                            (Some(previous), Some(current)) => previous != current,
+                            // Older observations lack the receiving document, so a changed id could be a reload.
+                            _ => id != &self.form_id,
+                        };
+                    if frame_reloaded {
+                        "an earlier form whose relationship to the current form is unknown"
+                    } else if id == &self.form_id {
+                        "the same form the action now asked about submits"
+                    } else {
+                        "a different form from the one the action now asked about submits"
+                    }
                 }
                 Some(_) => "a different form from the one the action now asked about submits",
                 None => "a form from this document",
@@ -341,11 +376,17 @@ impl HistoryEntry {
             setting: None,
             added: false,
             set: Vec::new(),
+            before: None,
             for_step: None,
             look: None,
             submitted: None,
             commit: None,
             form: None,
+            document_key: None,
+            control_id: None,
+            form_id: None,
+            frame_id: None,
+            opened_forms: Vec::new(),
         }
     }
 
@@ -1317,6 +1358,13 @@ pub fn build_request(
                     // Only a page with a control whose role defines keys is told so, so a page of plain fields asks
                     // what it always has.
                     (Operation::Press, _)
+                        if indexed.get(op).is_some_and(|controls| {
+                            controls.iter().any(|c| !c.operations.contains(&Operation::Fill) && role_keys(&c.role).is_empty())
+                        }) =>
+                    {
+                        PRESS_STANDARD_KEYS.into()
+                    }
+                    (Operation::Press, _)
                         if indexed
                             .get(op)
                             .is_some_and(|controls| controls.iter().any(|c| !role_keys(&c.role).is_empty())) =>
@@ -1898,6 +1946,10 @@ fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
         ("input_name", control.input_name.clone().map(Value::from)),
         ("autocomplete", control.autocomplete.clone().map(Value::from)),
         ("validation_message", control.validation_message.clone().map(Value::from)),
+        ("role_description", control.role_description.clone().map(Value::from)),
+        ("description", control.description.clone().map(Value::from)),
+        ("item_position", control.item_position.map(Value::from)),
+        ("item_count", control.item_count.map(Value::from)),
     ];
     for (key, value) in optional {
         if let Some(value) = value {
@@ -2106,6 +2158,27 @@ mod tests {
             "viewport_text": "", "tabs": [],
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn submitted_form_relationship_is_unknown_after_iframe_reload() {
+        let mut target = button(0);
+        target.frame_id = Some("frame".into());
+        target.form_id = Some("first-document:1".into());
+        target.frame_document_key = Some("first-document".into());
+        let mut outer = observation(vec![target.clone()]);
+        outer.document_key = "outer-document".into();
+        let submitted = Submitted::of(Operation::Click, &target, &outer).unwrap();
+
+        assert!(submitted.told(Some(&target), &outer).contains("the same form"));
+        target.form_id = Some("first-document:2".into());
+        assert!(submitted.told(Some(&target), &outer).contains("a different form"));
+
+        target.form_id = Some("second-document:1".into());
+        target.frame_document_key = Some("second-document".into());
+        outer.controls = vec![target.clone()];
+        let evidence = submitted.told(Some(&target), &outer);
+        assert!(evidence.contains("unknown"), "{evidence}");
     }
 
     /// Picks `pick` for every choice it names, else the first option; scores relevance high for `relevant` labels
@@ -2460,6 +2533,13 @@ mod tests {
         assert!(!takes(&native_select, Operation::Press));
         let unfocusable = Control::new("cell", "gridcell", "Cell", [Operation::Click]);
         assert!(!takes(&unfocusable, Operation::Press));
+        // A card that takes a press without a role's keys is told the standard keys exist; a page of fields is not.
+        let card = Control::new("card", "button", "One", [Operation::Click, Operation::Press]);
+        let sortable = vec![card, field("name", None)];
+        let page = observation(sortable.clone());
+        let request = build_request(&page, &sortable, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert_eq!(operation.criteria["press"], json!(PRESS_STANDARD_KEYS));
         let plain = vec![field("name", None), button(1)];
         let page = observation(plain.clone());
         let request = build_request(&page, &plain, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
@@ -3109,6 +3189,17 @@ mod tests {
         assert_eq!(element(&field)["required"], true);
         assert_eq!(element(&field)["invalid"], true);
         assert_eq!(element(&field)["validation_message"], "Please fill in this field.");
+        let mut card = Control::new("card", "button", "One", [Operation::Click, Operation::Press]);
+        card.role_description = Some("draggable".into());
+        card.description = Some("Press the space bar to pick up.".into());
+        assert_eq!(element(&card)["role_description"], "draggable");
+        assert_eq!(element(&card)["description"], "Press the space bar to pick up.");
+        assert!(!element(&button(1)).contains_key("description"));
+        card.item_position = Some(6);
+        card.item_count = Some(6);
+        assert_eq!(element(&card)["item_position"], 6);
+        assert_eq!(element(&card)["item_count"], 6);
+        assert!(!element(&button(1)).contains_key("item_position"));
         assert!(!element(&button(2)).contains_key("required"));
         assert!(!element(&button(2)).contains_key("invalid"));
     }
