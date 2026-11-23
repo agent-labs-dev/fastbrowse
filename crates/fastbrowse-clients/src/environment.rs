@@ -274,7 +274,7 @@ impl Default for Settings {
             decision_base_url: None,
             decision_model: None,
             decision_api_key: None,
-            action_picker: ActionPickerSource::Jev,
+            action_picker: ActionPickerSource::Chat,
             telnyx_api_key: None,
             openai_api_key: None,
             aimlapi_api_key: None,
