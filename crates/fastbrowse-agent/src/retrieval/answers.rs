@@ -6159,7 +6159,9 @@ mod tests {
         let notes = Notes::new([Fact { answers: true, ..fact(0, "Record B: 34".into()) }]);
         let jev = Support::new(true);
         let kept = [json!({"operation": "click", "target": "Delete", "outcome": "executed"})];
-        draft_reviewed(&jev, "Delete it and report record B", Screenshot::Absent, &notes, None, &[], &kept).await.unwrap();
+        draft_reviewed(&jev, "Delete it and report record B", Screenshot::Absent, &notes, None, &[], &kept)
+            .await
+            .unwrap();
         let asked = jev.asked.lock().unwrap();
         let Question::Noul(coverage) = &asked[0]["coverage"] else { panic!("coverage is asked") };
         assert!(coverage.instructions.contains("\"target\": \"Delete\""), "{}", coverage.instructions);
