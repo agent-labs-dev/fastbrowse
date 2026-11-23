@@ -856,7 +856,7 @@ async fn test_a_reply_counter_is_named_by_the_comment_it_belongs_to() {
         "<nav><ul><li><a href=#a>Files</a></li><li><a href=#b>Issues</a></li></ul></nav>\
          <section aria-label=Comments><ul>{}{}</ul></section>",
         comment("Kal66", "7 days ago", "Hide 4 Replies", &nested),
-        comment("Pinnnnnnnnnn", "8 days ago", "Hide 2 Replies", "")
+        comment("Pinnnnnnnnnn", "8 days ago", "Hide 2 Replies", &comment("Lone", "2 days ago", "Hide 5 Replies", ""))
     );
     eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(&html).unwrap())).await;
     let observation = h.observe().await;
@@ -866,6 +866,7 @@ async fn test_a_reply_counter_is_named_by_the_comment_it_belongs_to() {
         ("Hide 3 Replies", "cjber"),
         ("Hide 1 Replies", "Serzath"),
         ("Hide 2 Replies", "Pinnnnnnnnnn"),
+        ("Hide 5 Replies", "Lone"),
     ] {
         assert!(context(label).starts_with(author), "{label} is named {:?}, not for {author}", context(label));
     }
