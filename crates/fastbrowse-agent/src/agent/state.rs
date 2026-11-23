@@ -535,9 +535,14 @@ impl RunState {
     }
 
     /// The address of the page at `url`, which opening again reloads, unless a commit loaded the document there: opening
-    /// that address again can send the commit again.
+    /// that address again can send the commit again. An address with a secret blanked out is not the page's own: a
+    /// browser's address is percent-encoded, so the mark is only ever the redactor's, and opening it opens another
+    /// page, while the real address would put the secret in a model's action.
     pub fn reload_target(&self, url: &str) -> Option<String> {
-        (fastbrowse_core::navigation::valid_address(url) && !self.committed_at.contains(url)).then(|| url.to_owned())
+        (fastbrowse_core::navigation::valid_address(url)
+            && !url.contains(fastbrowse_core::safety::MASK)
+            && !self.committed_at.contains(url))
+        .then(|| url.to_owned())
     }
 
     pub fn read_note(&self) -> &'static str {

@@ -29,7 +29,8 @@ declare the task complete. `plan_ahead=false` disables list reads and planned fi
 ## Authorization
 
 Jev judges every model-selected click, drag, key chord or file attached to an input (a page can upload a file the
-moment it is chosen), including links, navigation to a caller-supplied address, every Enter press and acceptance of
+moment it is chosen), including links, navigation to a caller-supplied address or to the page's own (which reloads
+it, and is not offered where a commit loaded the page, since that would send the commit again), every Enter press and acceptance of
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
 for it; otherwise the run stops at `needs_confirmation`, unless it has already carried out a commit the task asked

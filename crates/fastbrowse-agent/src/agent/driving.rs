@@ -1662,6 +1662,16 @@ impl Agent {
             state.arrived_by = Some((landed, href));
         }
         let Some(last) = state.history.last_mut() else { return };
+        // A page reached again by a load that sends nothing holds that load's document, which opening its address
+        // again repeats: a save that redirected to /settings withheld its reload for the rest of the run, after a
+        // link had loaded /settings afresh. Back can restore the commit's own document, so it keeps the withholding.
+        if !state.committing
+            && last.outcome == StepOutcome::Executed
+            && last.operation != Some(Operation::Back)
+            && observation.document_key != before.document_key
+        {
+            state.committed_at.remove(&observation.url);
+        }
         let waited = last.operation == Some(Operation::Wait);
         let done = if last.operation == Some(Operation::SwitchTab) {
             // Another tab's controls were there all along: compared with the tab left, every one read as added.

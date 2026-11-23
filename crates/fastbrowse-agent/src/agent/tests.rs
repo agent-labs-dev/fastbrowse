@@ -11166,7 +11166,21 @@ fn a_page_a_commit_loaded_is_not_offered_as_a_reload() {
     assert_eq!(commit(saved).as_deref(), Some("https://example.test/edit"));
     let loaded = Observation { document_key: "done".into(), ..at("https://example.test/done?id=3", &[]) };
     assert_eq!(commit(loaded), None);
+    // A result the page shows in place under a new address (pushState) loaded no document, so reloading it sends
+    // nothing.
+    let pushed = Observation { document_key: "form".into(), ..at("https://example.test/done?id=4", &[]) };
+    assert_eq!(commit(pushed).as_deref(), Some("https://example.test/done?id=4"));
+    // A link that loads the commit's address afresh makes it reloadable again.
+    let mut state = run_state();
+    state.committed_at.insert("https://example.test/done?id=3".into());
+    state.acted_from = Some(Observation { document_key: "elsewhere".into(), ..at("https://example.test/", &[]) });
+    state.history.push(executed(Some(Operation::Click), Some("Done"), true));
+    let again = Observation { document_key: "fresh".into(), ..at("https://example.test/done?id=3", &[]) };
+    agent().note_effect(&mut state, &again);
+    assert_eq!(state.reload_target(&again.url).as_deref(), Some("https://example.test/done?id=3"));
     assert_eq!(run_state().reload_target("about:blank"), None);
+    // Opening an address with its secret blanked opens another page.
+    assert_eq!(run_state().reload_target("https://example.test/p?token=\u{2022}\u{2022}\u{2022}"), None);
 }
 
 #[test]

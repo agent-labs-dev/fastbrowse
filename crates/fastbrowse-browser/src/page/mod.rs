@@ -1605,17 +1605,23 @@ impl CdpPage {
         // (#1433). Only an address with a fragment is taken so, so only then is the current one read first.
         if url.contains('#') && self.evaluate(&session_id, "location.href").await?.as_str() == Some(url) {
             let mark = self.session.document_mark(&session_id);
+            let denials_before = self.session.denials();
             self.evaluate(&session_id, "location.reload()").await?;
             let deadline = Instant::now() + secs(load_timeout_seconds);
             loop {
                 let lifecycle = self.session.lifecycle_mark();
+                // A reload the site redirects off the granted origins is refused as `Page.navigate`'s is, rather
+                // than waited on until it times out.
+                if self.session.denials() != denials_before {
+                    return Err(BrowserError::OriginNotAllowed);
+                }
                 if self.session.document_mark(&session_id) != mark {
                     break;
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     let message = format!("location.reload() loaded no document for {url}");
-                    return Err(BrowserError::NavigationTimeout(Failure::new("Page.reload/TimeoutError", message)));
+                    return Err(BrowserError::NavigationTimeout(Failure::new("location.reload/TimeoutError", message)));
                 }
                 self.session.wait_for_lifecycle(lifecycle, remaining.as_secs_f64()).await;
             }

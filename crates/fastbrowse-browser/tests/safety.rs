@@ -342,11 +342,16 @@ fn origin_sites() -> OriginSites {
             Reply::html(format!("<title>Foreign title</title><h1>{SECRET_TEXT}</h1>"))
         }),
     );
+    let served_once = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let granted = serve_on(
         TcpListener::bind("127.0.0.1:0").expect("bind"),
-        Arc::new(|full: &str| {
+        Arc::new(move |full: &str| {
             let path = full.split('?').next().unwrap_or("/");
             let to = query_param(full, "to");
+            // Serves a page the first time and redirects every later load, as a reload a site sends elsewhere.
+            if path == "/once" && served_once.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return Reply { status: 302, headers: vec![("Location", to)], ..Reply::html("") };
+            }
             if path == "/sw.js" {
                 // Answers /swtarget itself, so without a bypass the request never reaches the network or Fetch.
                 let script = [
@@ -369,6 +374,7 @@ fn origin_sites() -> OriginSites {
                 }
                 "/swtarget" => "<title>Granted real page</title><h1>Granted real page</h1>".to_owned(),
                 "/ok" => "<title>Granted popup</title><h1>Granted popup</h1>".to_owned(),
+                "/once" => "<title>Granted once</title><h1>Granted once</h1>".to_owned(),
                 "/refresh" => format!("<meta http-equiv=refresh content='0;url={to}'><h1>Granted refresh</h1>"),
                 "/script" => format!("<h1>Granted script</h1><script>location = {}</script>", json!(to)),
                 "/frame" => {
@@ -1063,4 +1069,21 @@ async fn test_one_run_types_a_secret_the_client_holds_and_leaves_no_chrome_behin
     process.close().await;
     assert!(gone(&started).await, "Chrome processes left: {:?}", alive(&started));
     assert_eq!(*posted.lock().unwrap(), [TOKEN]);
+}
+
+/// A hash-routed page is reloaded in place rather than navigated to, and a reload the site redirected off the granted
+/// origins was waited on until it timed out instead of refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_reload_redirected_to_a_foreign_origin_is_refused() {
+    let _turn = turn().await;
+    let Some(connection) = chrome() else { return };
+    let sites = origin_sites();
+    let foreign = format!("{}/page?{SECRET_QUERY}", sites.foreign("127.0.0.1"));
+    let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
+    let start = format!("{}/once?to={}#route", sites.granted, quote(&foreign));
+    s.page.navigate(&start, None).await.expect("the first load is served");
+    not_allowed(s.page.navigate(&start, None).await);
+    settle().await;
+    assert!(sites.hits.lock().unwrap().is_empty());
+    s.close().await;
 }
