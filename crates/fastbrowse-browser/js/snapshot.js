@@ -2315,7 +2315,9 @@
     .map(c => registry.nodes.get(c.id))
     .filter(Boolean);
   for (const hidden of renderFact('query', document, hiddenSelector)) {
-    if (hidden.parentElement?.closest(hiddenSelector) || !holdsControls(hidden)) continue;
+    // The page behind a modal is still drawn; a menu or template kept aria-hidden while dormant is not rendered, and
+    // would otherwise make the whole usable page look like a modal sitting over it.
+    if (hidden.parentElement?.closest(hiddenSelector) || !holdsControls(hidden) || !visibilityOf(hidden, { checkVisibilityCSS: true })) continue;
     for (const sibling of hidden.parentElement?.children || []) {
       if (sibling === hidden || sibling.matches(hiddenSelector) || !usable.length || !usable.every(e => sibling.contains(e))) continue;
       const dialog = sibling.matches(dialogSelector) ? sibling : sibling.querySelector(dialogSelector);

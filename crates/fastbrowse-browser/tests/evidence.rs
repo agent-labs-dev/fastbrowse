@@ -350,6 +350,24 @@ async fn test_a_modal_with_no_dialog_role_is_modal_when_the_page_behind_it_is_ar
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_dormant_aria_hidden_section_does_not_make_the_page_modal() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // A responsive menu kept aria-hidden and not drawn while closed, beside the page's usable content.
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<aside aria-hidden="true" style="display:none"><button>Menu item</button></aside>' +
+          '<main><button>Continue</button></main>';
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    assert_eq!(obs.modal, None);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_carousel_with_aria_hidden_clones_is_not_modal() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
