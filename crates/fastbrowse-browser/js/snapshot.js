@@ -1481,8 +1481,11 @@
     // asked whether the task needed a click inside it, and stop when it judged so. An image the page itself gives a
     // widget role is that one control: Leaflet's marker, role button, marked drawn drew the step to it as the surface
     // that held the red circle beside it. An element that names itself draggable is a drag source for the page's own
-    // drag and drop, dragged onto a drop zone: drawn on, a drag would stay inside it and no zone would be reached.
-    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && e.getAttribute('draggable') !== 'true') base.drawn = true;
+    // drag and drop, dragged onto a drop zone: drawn on, a drag would stay inside it and no zone would be reached. An
+    // image the page gives a grab cursor is the same handle for its own pointer script (a sortable card's picture); a
+    // canvas with that cursor is a surface panned in place, so it stays drawn.
+    const handle = e.getAttribute('draggable') === 'true' || (e.tagName === 'IMG' && draggedByPointer(e));
+    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role')) && !handle) base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.

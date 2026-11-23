@@ -1921,6 +1921,12 @@ impl CdpPage {
             .await
             .ok()
             .is_some_and(|value| value == Value::Bool(true));
+        let rect_script = format!(
+            "(() => {{ const r = window.__fastbrowse?.nodes.get({})?.getBoundingClientRect(); \
+             return r ? [r.x, r.y, r.width, r.height] : null; }})()",
+            drop.2
+        );
+        let box_before = self.evaluate(session_id, &rect_script).await.ok();
         let press = json!({"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1, "buttons": 1});
         self.input(self.session.send("Input.dispatchMouseEvent", press, Some(session_id))).await?;
         let mut held = self.held(session_id, (start_x, start_y), 0);
@@ -1951,25 +1957,6 @@ impl CdpPage {
         // Hover styling can shift the destination's point (a border, a nudge, a placeholder above it). The release
         // follows the control, but only to a point the hit test confirms with the pointer already resting on it.
         let mut at = (end_x, end_y);
-        if !native {
-            for _ in 0..2 {
-                self.drag_move(session_id, at.0, at.1, 0).await?;
-                sleep(secs(DRAG_STEP_SECONDS)).await;
-            }
-            // The destination may slide, but it must still be the control that was chosen: a document-level release
-            // handler acts on whatever zone now holds the point, so a destination the drag replaced, renamed or
-            // covered cancels the drag as a native one does.
-            let (_, live, landed, _, _, _, connected) =
-                self.before_action(Some(&drop), true, false, false, false, false).await?;
-            if !connected || live != drop.3 || !matches!(landed, Point::At(..)) {
-                self.cancel_drag(session_id, (start_x, start_y), 0).await?;
-                held.done();
-                return Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None));
-            }
-            self.release(session_id, at.0, at.1, 0).await?;
-            held.done();
-            return Ok((StepOutcome::Executed, None, None));
-        }
         for _ in 0..2 {
             // Chrome drops on the target its last dragover reached, not on what lies under the pointer now, and takes a
             // newly entered target only after the dragover a further move sends. Two moves at rest bring Chrome's target
@@ -1979,9 +1966,30 @@ impl CdpPage {
                 self.drag_move(session_id, at.0, at.1, 0).await?;
                 sleep(secs(DRAG_STEP_SECONDS)).await;
             }
-            let (_, _, landed, _, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+            let (_, live, landed, _, _, _, connected) =
+                self.before_action(Some(&drop), true, false, false, false, false).await?;
+            // A page's own release handler acts on whatever zone holds the pointer, so a destination the drag replaced,
+            // renamed or covered cancels the drag as a native one does.
+            if !native && (!connected || live != drop.3) {
+                break;
+            }
             let Point::At(x, y) = landed else { break };
             if (x, y) == at {
+                self.release(session_id, at.0, at.1, 0).await?;
+                held.done();
+                return Ok((StepOutcome::Executed, None, None));
+            }
+            if !native {
+                // A destination that slid (a sortable list moves its items as the pointer passes them) is released
+                // where it stood, which is where the item belongs. One that did not move has this point covered:
+                // release on the exposed point the hit test found, never on the covering control.
+                let slid = box_before != self.evaluate(session_id, &rect_script).await.ok();
+                if !slid {
+                    self.drag_move(session_id, x, y, 0).await?;
+                    self.release(session_id, x, y, 0).await?;
+                    held.done();
+                    return Ok((StepOutcome::Executed, None, None));
+                }
                 self.release(session_id, at.0, at.1, 0).await?;
                 held.done();
                 return Ok((StepOutcome::Executed, None, None));
