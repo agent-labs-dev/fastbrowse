@@ -311,6 +311,90 @@ fn typed_into(state: &RunState, target: &Control) -> Vec<String> {
         .collect()
 }
 
+/// What a control that submits a form saves, from the run's own steps: each field of that form the run filled, with
+/// the value it held before and the value typed, and the control the run clicked to open the form. The form's text
+/// says only what the fields hold now, so a save over another item's value read as the edit the task asked for.
+/// None when the control submits nothing or the run filled nothing in its form.
+fn form_changes(
+    history: &[HistoryEntry],
+    operation: Operation,
+    target: &Control,
+    controls: &[Control],
+    document_key: &str,
+) -> Option<String> {
+    // A script-built editor's Apply is a plain button with no submit semantics, so a click on any button in the form
+    // but a native reset may save it. Any chord may submit (Enter, Ctrl+Enter, a page's own save key): the chord is
+    // stated beside these facts and Jev judges it.
+    let submits = match operation {
+        Operation::Click => target.role == "button" && target.input_type.as_deref() != Some("reset"),
+        Operation::Enter | Operation::Press => true,
+        _ => false,
+    };
+    target.form_id.as_ref().filter(|_| submits)?;
+    let fields: Vec<&Control> = controls
+        .iter()
+        .filter(|c| {
+            (&c.frame_id, &c.form_id) == (&target.frame_id, &target.form_id)
+                && !c.sensitive
+                && c.input_type.as_deref() != Some("select-multiple")
+        })
+        .collect();
+    let form_id = target.form_id.as_deref();
+    // Newest first: a field's latest value is the first fill met and its first `before` the last.
+    // Fields are matched by control identity: a label that changes as it is typed in (a character count) is still the
+    // same field.
+    let mut filled: IndexMap<&str, (&str, &str)> = IndexMap::new();
+    let mut opener = None;
+    for entry in history.iter().rev().filter(|entry| entry.outcome == StepOutcome::Executed) {
+        if entry.document_key.as_deref().is_some_and(|key| key != document_key) {
+            continue;
+        }
+        // The opener is matched by the form it opened, before the form it sits in is compared: a gallery's Edit
+        // button belongs to the gallery's own form while opening a separate editor.
+        if opener.is_none()
+            && entry.operation == Some(Operation::Click)
+            && form_id.is_some_and(|id| {
+                entry.opened_forms.iter().any(|(frame, opened)| *frame == target.frame_id && opened == id)
+            })
+        {
+            opener = entry.target.as_deref();
+            // A page that reuses one form for several records keeps its document and form ids, so fills from before
+            // the newest opening belong to another record and would pair its old value with this one's typing.
+            break;
+        }
+        if entry.form_id.as_deref().is_some_and(|id| Some(id) != form_id || entry.frame_id != target.frame_id) {
+            continue;
+        }
+        let Some(field) = fields.iter().find(|c| entry.control_id.as_deref() == Some(c.id.as_str())) else {
+            continue;
+        };
+        if let (Some(Operation::Fill | Operation::Select), Some(typed), Some(before)) =
+            (entry.operation, entry.text.as_deref(), entry.before.as_deref())
+            && typed != "<secret>"
+        {
+            filled.entry(field.id.as_str()).and_modify(|(_, earlier)| *earlier = before).or_insert((typed, before));
+        }
+    }
+    if filled.is_empty() {
+        return None;
+    }
+    let held = |value: &str| if value.is_empty() { "empty".to_string() } else { text::repr(value) };
+    let mut changes = String::new();
+    if let Some(opener) = opener {
+        changes += &format!("The run opened this form by clicking {}.\n", text::repr(opener));
+    }
+    for (id, (typed, before)) in filled.iter().rev() {
+        let label = fields.iter().find(|c| c.id == *id).map(|c| describe(c)).unwrap_or_default();
+        changes += &format!(
+            "In this form the run replaced {}, which held {}, with {}.\n",
+            text::repr(&label),
+            held(before),
+            held(typed)
+        );
+    }
+    Some(changes)
+}
+
 fn page_question(task: &str, question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
     let content = format!("{UNTRUSTED}\n\n# Task\n{task}\n\n{question}");
     Question::Choice(ChoiceQuestion::new(content, criteria))
@@ -335,17 +419,27 @@ fn ahead_picks(decision: &Decision, asked: &[Asked<'_>]) -> Option<IndexMap<Stri
 ///
 /// An authorized run told a step was undone went back and sent the same support request twice more, each time asked
 /// whether the task wanted it as if it had never been sent: how often this run has already done it is said.
-fn gate_questions(
+pub(super) fn gate_questions(
     history: &[HistoryEntry],
     operation: Operation,
     target: &Control,
     destination: Option<&Control>,
     controls: &[Control],
+    document_key: &str,
 ) -> (Option<NoulQuestion>, String, NoulQuestion) {
     let lasting = lasting_question(operation, target, destination, controls);
     let irreversible = (!changes_credentials(controls, target, operation))
         .then(|| irreversible_question(operation, target, destination, controls));
     let mut action = control_action(operation, target, destination, controls);
+    let mut irreversible = irreversible;
+    let mut lasting = lasting;
+    if let Some(changes) = form_changes(history, operation, target, controls, document_key) {
+        action.push_str(&changes);
+        for question in irreversible.iter_mut().chain(std::iter::once(&mut lasting)) {
+            question.instructions.push('\n');
+            question.instructions.push_str(changes.trim_end());
+        }
+    }
     let done = history
         .iter()
         .filter(|entry| {
@@ -681,6 +775,7 @@ impl Agent {
             target,
             decision.destination.as_ref(),
             &observation.controls,
+            &observation.document_key,
         );
         // A tab's Delete and ArrowRight target the same control but can commit different changes, and one file input
         // can be given a file the task allows or one it does not.

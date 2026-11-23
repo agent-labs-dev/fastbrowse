@@ -23,7 +23,7 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::json;
 
-use super::acting::{Carried, IN_RECORD};
+use super::acting::{Carried, IN_RECORD, gate_questions};
 use super::driving::edit_progress;
 use super::helpers::{describe, doing, read_sources, unsent_fact};
 use super::state::Written;
@@ -664,7 +664,11 @@ const FILES: &str = "https://addons.example.test/project/files";
 const DOWNLOAD: &str = "https://addons.example.test/project/download/1";
 
 fn typed_into(label: &str) -> HistoryEntry {
-    HistoryEntry::new(Some(Operation::Fill), Some(label), StepOutcome::Executed, false)
+    HistoryEntry {
+        // The id `holding` gives its control.
+        control_id: Some("f".into()),
+        ..HistoryEntry::new(Some(Operation::Fill), Some(label), StepOutcome::Executed, false)
+    }
 }
 
 fn holding(label: &str, value: &str) -> Control {
@@ -12101,3 +12105,235 @@ async fn test_a_decision_made_before_the_read_of_a_fresh_page_is_made_again_with
 
 #[path = "tests/citation_record_selected_results.rs"]
 mod citation_record_selected_results;
+
+// -- A save says what it changes ------------------------------------------------------------------------------------
+
+/// An authorized run saved an edit dialog that overwrote another image's caption, judged requested at 0.80: the
+/// questions named only the Apply control and the value the form held, never what the run had replaced or which
+/// card's edit it had opened.
+#[test]
+fn test_a_save_states_what_the_run_replaced_and_what_it_opened() {
+    let form = |control: Control| Control { form_id: Some("dialog".into()), ..control };
+    let title = form(holding("Title", "Test image"));
+    let apply = form(Control { submit_semantics: Some("{}".into()), ..button("Apply") });
+    let controls = [title.clone(), apply.clone()];
+    let filled = HistoryEntry {
+        text: Some("Test image".into()),
+        before: Some("Guide tracker".into()),
+        ..typed_into(&describe(&title))
+    };
+    let opened = HistoryEntry {
+        opened_forms: vec![(None, "dialog".into())],
+        ..executed(Some(Operation::Click), Some("Edit (Guide tracker card)"), true)
+    };
+    let history = [executed(Some(Operation::Click), Some("Unrelated"), true), opened, filled];
+    let (irreversible, action, lasting) =
+        gate_questions(&history, Operation::Click, &apply, None, &controls, "document");
+    let facts = [
+        "The run opened this form by clicking 'Edit (Guide tracker card)'.",
+        "In this form the run replaced 'Title', which held 'Guide tracker', with 'Test image'.",
+    ];
+    for text in [action, irreversible.unwrap().instructions, lasting.instructions] {
+        for fact in facts {
+            assert!(text.contains(fact), "{text}");
+        }
+    }
+    // Nothing filled in the form, or a control that submits nothing, adds no fact.
+    let (_, untouched, _) = gate_questions(&[], Operation::Click, &apply, None, &controls, "document");
+    assert!(!untouched.contains("In this form"), "{untouched}");
+    let (_, plain, _) = gate_questions(&history, Operation::Click, &button("Edit"), None, &controls, "document");
+    assert!(!plain.contains("In this form"), "{plain}");
+}
+
+#[test]
+fn a_save_ignores_fills_from_another_form_document() {
+    let old = Control { form_id: Some("old-form".into()), ..holding("Title", "Old image") };
+    let current = Control { form_id: Some("current-form".into()), ..holding("Title", "Current image") };
+    let apply =
+        Control { form_id: Some("current-form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let filled = HistoryEntry {
+        document_key: Some("old-document".into()),
+        form_id: old.form_id.clone(),
+        text: Some("Old image".into()),
+        before: Some("Older image".into()),
+        ..typed_into(&describe(&old))
+    };
+    let controls = [current, apply.clone()];
+    let (_, action, _) = gate_questions(&[filled], Operation::Click, &apply, None, &controls, "current-document");
+    assert!(!action.contains("Old image"), "{action}");
+    assert!(!action.contains("Older image"), "{action}");
+}
+
+#[test]
+fn a_reset_or_a_press_with_no_filled_field_adds_no_save_facts() {
+    let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
+    let reset = Control { form_id: Some("form".into()), input_type: Some("reset".into()), ..button("Reset") };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New image".into()),
+        before: Some("Current image".into()),
+        ..typed_into(&describe(&field))
+    };
+    let (_, action, _) =
+        gate_questions(&[filled], Operation::Click, &reset, None, &[field.clone(), reset.clone()], "document");
+    assert!(!action.contains("In this form"), "{action}");
+
+    let enter_target = Control { submit_semantics: Some("{}".into()), ..field.clone() };
+    let (_, action, _) =
+        gate_questions(&[], Operation::Press, &enter_target, None, std::slice::from_ref(&enter_target), "document");
+    assert!(!action.contains("In this form"), "{action}");
+}
+
+/// A save chord other than Enter (Ctrl+Enter) and a field whose label changes as it is typed in (a character count)
+/// both left a save without the value it replaced.
+#[test]
+fn a_chord_save_states_the_field_it_replaced_even_when_the_label_changed() {
+    let field = Control {
+        form_id: Some("form".into()),
+        submit_semantics: Some("{}".into()),
+        ..holding("Caption (11 characters)", "New caption")
+    };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New caption".into()),
+        before: Some("Other card caption".into()),
+        ..typed_into("Caption")
+    };
+    let (_, action, _) =
+        gate_questions(&[filled], Operation::Press, &field, None, std::slice::from_ref(&field), "document");
+    assert!(action.contains("which held 'Other card caption', with 'New caption'"), "{action}");
+}
+
+#[test]
+fn a_save_omits_multi_select_toggles_until_the_delta_is_known() {
+    let topics = Control {
+        form_id: Some("form".into()),
+        input_type: Some("select-multiple".into()),
+        value: Some("A, B".into()),
+        ..Control::new("topics", "listbox", "Topics", [Operation::Select])
+    };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let selected = HistoryEntry {
+        form_id: topics.form_id.clone(),
+        text: Some("C".into()),
+        before: Some("A, B".into()),
+        ..HistoryEntry::new(Some(Operation::Select), Some("Topics"), StepOutcome::Executed, false)
+    };
+    let (_, action, _) =
+        gate_questions(&[selected], Operation::Click, &apply, None, &[topics, apply.clone()], "document");
+    assert!(!action.contains("replaced"), "{action}");
+}
+
+#[test]
+fn a_form_opener_is_reported_only_when_the_form_appeared_after_its_click() {
+    let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let filled = HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some("New image".into()),
+        before: Some("Current image".into()),
+        ..typed_into(&describe(&field))
+    };
+    let unrelated = executed(Some(Operation::Click), Some("Accept cookies"), true);
+    let (_, action, _) =
+        gate_questions(&[unrelated, filled], Operation::Click, &apply, None, &[field, apply.clone()], "document");
+    assert!(!action.contains("opened this form"), "{action}");
+}
+
+#[test]
+fn a_click_records_a_form_opener_only_when_the_form_appears_after_it() {
+    let before = Observation { document_key: "before".into(), ..observation(&[button("Edit")]) };
+    let field = Control { form_id: Some("form".into()), ..holding("Title", "Current image") };
+    let after = Observation { document_key: "after".into(), ..observation(&[field]) };
+    let mut state = run_state();
+    state.acted_from = Some(before);
+    state.history.push(executed(Some(Operation::Click), Some("Edit"), true));
+
+    agent().note_effect(&mut state, &after);
+
+    let entry = state.history.last().expect("the click history");
+    assert_eq!(entry.opened_forms, vec![(None, "form".to_string())]);
+    assert_eq!(entry.document_key.as_deref(), Some("after"));
+}
+
+#[test]
+fn a_save_ignores_fills_from_before_the_form_was_last_opened() {
+    let field = Control { form_id: Some("form".into()), ..holding("Caption", "Second card") };
+    let apply = Control { form_id: Some("form".into()), submit_semantics: Some("{}".into()), ..button("Apply") };
+    let fill = |before: &str, typed: &str| HistoryEntry {
+        form_id: field.form_id.clone(),
+        text: Some(typed.into()),
+        before: Some(before.into()),
+        ..typed_into(&describe(&field))
+    };
+    let open = |card: &str| HistoryEntry {
+        opened_forms: vec![(None, "form".into())],
+        ..executed(Some(Operation::Click), Some(card), true)
+    };
+    // The same modal, reopened for another card: its form and document ids did not change.
+    let history =
+        [open("Edit first"), fill("First old", "First new"), open("Edit second"), fill("Second old", "Second new")];
+    let (_, action, _) = gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document");
+    assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
+    assert!(action.contains("clicking 'Edit second'"), "{action}");
+    assert!(!action.contains("First"), "{action}");
+}
+
+#[test]
+fn a_save_ignores_fills_and_openings_from_another_frame_with_the_same_form_id() {
+    let in_frame = |frame: &str, control: Control| Control {
+        form_id: Some("form".into()),
+        frame_id: Some(frame.into()),
+        ..control
+    };
+    let field = in_frame("second", holding("Caption", "Second card"));
+    let apply = in_frame("second", Control { submit_semantics: Some("{}".into()), ..button("Apply") });
+    let first_fill = HistoryEntry {
+        form_id: Some("form".into()),
+        frame_id: Some("first".into()),
+        text: Some("First new".into()),
+        before: Some("First old".into()),
+        ..typed_into(&describe(&field))
+    };
+    let first_open = HistoryEntry {
+        opened_forms: vec![(Some("first".into()), "form".into())],
+        ..executed(Some(Operation::Click), Some("Edit first"), true)
+    };
+    let second_open = HistoryEntry {
+        opened_forms: vec![(Some("second".into()), "form".into())],
+        ..executed(Some(Operation::Click), Some("Edit second"), true)
+    };
+    let second_fill = HistoryEntry {
+        frame_id: Some("second".into()),
+        text: Some("Second new".into()),
+        before: Some("Second old".into()),
+        ..first_fill.clone()
+    };
+    let history = [first_open, first_fill, second_open, second_fill];
+    let (_, action, _) = gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document");
+    assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
+    assert!(action.contains("clicking 'Edit second'"), "{action}");
+    assert!(!action.contains("First"), "{action}");
+}
+
+#[test]
+fn a_form_opened_in_another_frame_is_recorded_though_one_with_its_id_exists_elsewhere() {
+    let in_frame = |frame: &str| Control {
+        form_id: Some("form".into()),
+        frame_id: Some(frame.into()),
+        ..holding("Title", "Current image")
+    };
+    let before = Observation { document_key: "before".into(), ..observation(&[button("Edit"), in_frame("first")]) };
+    let after = Observation {
+        document_key: "after".into(),
+        ..observation(&[button("Edit"), in_frame("first"), in_frame("second")])
+    };
+    let mut state = run_state();
+    state.acted_from = Some(before);
+    state.history.push(executed(Some(Operation::Click), Some("Edit"), true));
+
+    agent().note_effect(&mut state, &after);
+
+    let entry = state.history.last().expect("the click history");
+    assert_eq!(entry.opened_forms, vec![(Some("second".to_string()), "form".to_string())]);
+}

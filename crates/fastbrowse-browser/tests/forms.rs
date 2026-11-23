@@ -101,6 +101,9 @@ async fn test_a_button_carries_the_form_it_submits() {
     eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
     let before = h.observe().await;
     assert!(find(&before, "Send").form_id.is_some());
+    assert!(
+        find(&before, "Send").form_id.as_deref().is_some_and(|id| id.starts_with(&format!("{}:", before.document_key)))
+    );
     assert_eq!(find(&before, "Send").form_id, find(&before, "Name").form_id);
     assert_eq!(find(&before, "Elsewhere").form_id, None);
     h.close().await;
