@@ -1095,7 +1095,14 @@ impl Redactor {
         let basic = crate::py::base64::encode(format!("{user}:{password}").as_bytes());
         let url_safe = basic.replace('+', "-").replace('/', "_");
         let unpadded = [basic.trim_end_matches('=').to_string(), url_safe.trim_end_matches('=').to_string()];
-        let forms = [Some(secret.to_string()), Some(decoded(secret)), browser, Some(basic), Some(url_safe)]
+        // A decoded form of one delimiter (`%2F` read as `/`) is not a form anything shows as the credential: on
+        // its own it is every address's punctuation, and registering it would blank that everywhere.
+        let decoded_secret = decoded(secret);
+        let decoded_form = (decoded_secret != secret
+            && !(decoded_secret.chars().count() == 1
+                && decoded_secret.chars().next().is_some_and(|c| c.is_ascii_punctuation())))
+        .then_some(decoded_secret);
+        let forms = [Some(secret.to_string()), decoded_form, browser, Some(basic), Some(url_safe)]
             .into_iter()
             .chain(unpadded.map(Some));
         let mut new = false;
@@ -1915,6 +1922,20 @@ mod tests {
         masked.register_credentials_in("https://\u{2022}\u{2022}@h.test/");
         assert!(masked.holds_credentials());
         assert_eq!(masked.redact("a \u{2022}\u{2022} b"), "a \u{2022}\u{2022} b");
+    }
+
+    /// A password that is one encoded delimiter (`%2F`) must not register the lone `/` it decodes to: that is
+    /// every address's punctuation, and blanking it would corrupt unrelated addresses and page text.
+    #[test]
+    fn test_a_password_of_one_encoded_delimiter_registers_no_lone_delimiter() {
+        let mut redactor = Redactor::new();
+        assert!(redactor.register_address("https://ops:%2F@shop.test/"));
+        assert!(redactor.holds_credentials());
+        assert_eq!(
+            redactor.redact("see https://other.test/a/b and ops:%2F@shop.test"),
+            "see https://other.test/a/b and ops:[secret:address_credentials]@shop.test"
+        );
+        assert!(!redactor.reveals("a/b/c"));
     }
 
     /// A password holding a bullet or a `[secret:` marker was skipped as already masked: never registered, so its
