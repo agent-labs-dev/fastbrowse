@@ -2482,7 +2482,15 @@ struct DoneCheckJev(
 
 impl DoneCheckJev {
     fn new(requests: std::sync::Arc<std::sync::atomic::AtomicUsize>, probability: f64, pick: &'static str) -> Self {
-        Self(requests, probability, pick, Default::default(), Default::default(), Default::default(), Default::default())
+        Self(
+            requests,
+            probability,
+            pick,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        )
     }
 }
 
@@ -2500,10 +2508,9 @@ impl DecisionClient for DoneCheckJev {
                 if let Question::Choice(choice) = question {
                     self.4.lock().unwrap().push(choice.criteria.keys().cloned().collect());
                     self.5.lock().unwrap().push(choice.instructions.clone());
-                    self.6
-                        .lock()
-                        .unwrap()
-                        .push(choice.criteria.values().map(|value| value.as_str().unwrap_or_default().to_string()).collect());
+                    self.6.lock().unwrap().push(
+                        choice.criteria.values().map(|value| value.as_str().unwrap_or_default().to_string()).collect(),
+                    );
                 }
                 if let Question::Noul(noul) = question {
                     self.5.lock().unwrap().push(noul.instructions.clone());
