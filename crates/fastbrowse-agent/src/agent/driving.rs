@@ -1742,6 +1742,9 @@ impl Agent {
                 href: mask_opt(&control.href),
                 frame_origin: mask_opt(&control.frame_origin),
                 submit_semantics: mask_opt(&control.submit_semantics),
+                validation_message: mask_opt(&control.validation_message),
+                role_description: mask_opt(&control.role_description),
+                description: mask_opt(&control.description),
                 options: control.options.iter().map(|option| mask(option)).collect(),
                 ..control.clone()
             })

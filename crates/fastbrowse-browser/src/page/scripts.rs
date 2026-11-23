@@ -237,7 +237,7 @@ pub static LEAVE_SUGGESTING_FIELD_JS: LazyLock<String> = LazyLock::new(|| {
 /// dialog, an open menu, a popover), a band fixed to the window (an anchored ad, a sticky footer, a chat bubble)
 /// that floats over whatever is scrolled beneath it, or anything else, such as a full-window backdrop or a panel
 /// drawn over the control in the page's own flow. Only a band is routed around; under anything else the page shows
-/// something other than the control, and that is the run's to deal with.
+/// something other than the control, and that is the run's to deal with. An ancestor of the control is none of these.
 pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
     [
         "((id) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return null; ",
@@ -248,14 +248,17 @@ pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
         "const rect = e.getBoundingClientRect(); let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2; ",
         "let node = e, doc = e.ownerDocument; while (true) { const view = doc.defaultView; ",
         "const hit = deepHit(doc, x, y); ",
-        "if (hit && !holds(node, hit)) { let obstruction = null; ",
+        // An ancestor at the centre means the control takes no hits itself (a sortable's picked-up card, set to
+        // pointer-events: none for the drag), not that anything is drawn over it: a box paints beneath its content.
+        // A centre outside the viewport hits nothing, and is covered rather than a point to release on.
+        "if (hit && !holds(node, hit) && !holds(hit, node)) { let obstruction = null; ",
         "for (let n = hit; n && !obstruction; n = up(n)) if (n.matches(OBSTRUCTIONS)) obstruction = n; ",
         "if (obstruction && !holds(obstruction, node)) return 'obstruction'; ",
         "let band = false; for (let n = hit; n && !holds(n, node); n = up(n)) { ",
         "if (!['fixed', 'sticky'].includes(view.getComputedStyle(n).position)) continue; ",
         "const r = n.getBoundingClientRect(); ",
         "if (r.width * r.height >= view.innerWidth * view.innerHeight / 2) return 'other'; band = true; } ",
-        "return band ? 'band' : 'other'; } ",
+        "return band ? 'band' : 'other'; } if (!hit) return 'other'; ",
         "if (doc === document) return 'none'; node = view.frameElement; if (!node) return 'none'; ",
         "const frame = node.getBoundingClientRect(), pad = getComputedStyle(node); ",
         "x = frame.x + (node.clientLeft + parseFloat(pad.paddingLeft) + x) * frame.width / node.offsetWidth; ",

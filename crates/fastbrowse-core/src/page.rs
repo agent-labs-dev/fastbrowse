@@ -124,6 +124,19 @@ pub struct Control {
     /// The browser's own words for why a native constraint refuses this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_message: Option<String>,
+    /// What the page calls this control's role (`aria-roledescription`), such as "draggable".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_description: Option<String>,
+    /// The text the page attaches to this control to describe it (`aria-describedby`), as the page states it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Which item of its list this control is, counted from 1: `aria-posinset`, or its place among the items of its
+    /// nearest list. A position such as "first" is a place in that list, which a label does not state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_position: Option<u32>,
+    /// How many items that list holds: `aria-setsize`, or the items counted in the list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_count: Option<u32>,
     /// A link the page marks `rel="next"`: the next page of the list it belongs to.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub next_page: Option<bool>,
@@ -184,6 +197,10 @@ impl Control {
             required: None,
             invalid: None,
             validation_message: None,
+            role_description: None,
+            description: None,
+            item_position: None,
+            item_count: None,
             next_page: None,
             download: None,
             drawn: None,

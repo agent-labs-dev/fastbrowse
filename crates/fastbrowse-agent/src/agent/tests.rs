@@ -2160,6 +2160,30 @@ async fn test_a_press_is_asked_whether_it_changes_a_value_not_whether_it_commits
     assert!(question.contains("neither does committing what the fields already hold"), "{question}");
 }
 
+/// A card whose role is "button" is a draggable: the page says so, and the press is asked about with that.
+#[tokio::test]
+async fn test_a_requested_press_states_what_the_page_calls_the_control() {
+    let mut card = Control::new("c", "button", "Card", [Operation::Press]);
+    card.role_description = Some("draggable".into());
+    card.description = Some("Press the space bar to pick up the item.".into());
+    let page = observation(std::slice::from_ref(&card));
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Reorder the cards. Change nothing else.".into();
+    let decision = code_decision(Operation::Press, Some(card.clone()));
+    let gated = agent.gate_key_edit(&mut state, &page, &decision, &card, "Space").await;
+    assert!(gated.is_ok(), "{gated:?}");
+    let asked = jev.0.lock().unwrap();
+    assert!(
+        asked[0]
+            .1
+            .contains("The page describes it as 'draggable', and says: 'Press the space bar to pick up the item.'"),
+        "{}",
+        asked[0].1
+    );
+}
+
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
 /// of checkboxes would otherwise end the run stuck.
 #[test]
@@ -11050,6 +11074,23 @@ async fn test_a_secret_a_modal_is_named_with_is_masked() {
 }
 
 #[tokio::test]
+async fn test_secret_control_metadata_is_masked_before_observation() {
+    let mut control = button("Account");
+    control.role_description = Some("hunter2 is invalid".into());
+    control.description = Some("hunter2 was rejected".into());
+    control.validation_message = Some("hunter2 is not accepted".into());
+    let page = Observation { controls: vec![control], ..observation(&[]) };
+    let agent =
+        Agent::new(Arc::new(Scripted::new(page, vec![])), Arc::new(ScriptedJev::new(vec![])), Arc::new(ScriptedLLM));
+    agent.redactor().register("password", "hunter2", None);
+    let observed = agent.observe().await.expect("observed");
+    let control = &observed.controls[0];
+    assert_eq!(control.role_description.as_deref(), Some("••••••• is invalid"));
+    assert_eq!(control.description.as_deref(), Some("••••••• was rejected"));
+    assert_eq!(control.validation_message.as_deref(), Some("••••••• is not accepted"));
+}
+
+#[tokio::test]
 async fn test_a_plan_stops_at_the_step_limit() {
     // One step allowed and one taken: the planned fill is a step too, so none is taken.
     let form = delivery("1", "", "");
@@ -11212,6 +11253,28 @@ async fn test_a_press_on_a_slider_picks_one_of_the_keys_its_role_supports() {
         && q.contains("orientation: vertical")));
 }
 
+/// A sortable card says how it is operated in its role description and its described-by text: the key question carries
+/// both, so Jev can pick Space, an arrow, then Space across the steps.
+#[tokio::test]
+async fn test_the_key_question_carries_what_the_page_says_about_a_draggable_card() {
+    let card = Control {
+        role_description: Some("draggable".into()),
+        description: Some("To pick up a draggable item, press the space bar.".into()),
+        ..Control::new("c", "button", "One", [Operation::Click, Operation::Press])
+    };
+    let page = observation(std::slice::from_ref(&card));
+    let jev = Arc::new(FirstChoice { wants: Some("Space"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let action = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(card))).await.expect("action");
+    assert_eq!(action.text.as_deref(), Some("Space"));
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in")
+        && q.contains("The page calls it 'draggable'.")
+        && q.contains("To pick up a draggable item, press the space bar.")));
+}
+
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.
 #[tokio::test]
 async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
@@ -11230,12 +11293,13 @@ async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
 
 /// A press on a field whose role defines no keys copies its key from the task. Told to make a document's text bold and
 /// save it, Jev pressed the editor and the copy came out "document.", which the browser refused, ending the run as an
-/// error (#1212). Copied words that are no key leave the press unmade, and Jev is asked again.
+/// error (#1212). Copied words that are no key leave the press unmade, and Jev is asked again. Jev answers that the
+/// task gives the key, as none of the standard keys offered is it, and the copy is the task's first words.
 #[tokio::test]
 async fn test_a_press_copied_from_a_task_that_names_no_key_is_not_made() {
     let editor = Control::new("e", "textbox", "Editor", [Operation::Fill, Operation::Press]);
     let page = observation(std::slice::from_ref(&editor));
-    let jev = Arc::new(FirstChoice { wants: Some("document"), noul: Some(0.0), ..Default::default() });
+    let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), noul: Some(0.0), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Make the document's text bold, then save the document.".into();

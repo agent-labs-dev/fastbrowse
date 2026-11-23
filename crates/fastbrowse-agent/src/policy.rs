@@ -91,6 +91,9 @@ pub const GROUP: &str = "Too many elements to list at once. Choose the group tha
 /// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
 const PRESS_ROLE_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, or the key or key chord the task gives in an editable field.";
 
+/// The Press operation where a control with no role keys, such as a sortable card, takes a press: Space picks it up, the arrows move it, Space drops it.
+const PRESS_STANDARD_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, a standard navigation or editing key (arrows, Home, End, Space, Delete) that moves a caret or picks up, moves and drops an item, or the key or key chord the task gives.";
+
 pub fn operation_label(operation: Operation) -> &'static str {
     match operation {
         Operation::Search => {
@@ -1308,6 +1311,13 @@ pub fn build_request(
                     // Only a page with a control whose role defines keys is told so, so a page of plain fields asks
                     // what it always has.
                     (Operation::Press, _)
+                        if indexed.get(op).is_some_and(|controls| {
+                            controls.iter().any(|c| !c.operations.contains(&Operation::Fill) && role_keys(&c.role).is_empty())
+                        }) =>
+                    {
+                        PRESS_STANDARD_KEYS.into()
+                    }
+                    (Operation::Press, _)
                         if indexed
                             .get(op)
                             .is_some_and(|controls| controls.iter().any(|c| !role_keys(&c.role).is_empty())) =>
@@ -1889,6 +1899,10 @@ fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
         ("input_name", control.input_name.clone().map(Value::from)),
         ("autocomplete", control.autocomplete.clone().map(Value::from)),
         ("validation_message", control.validation_message.clone().map(Value::from)),
+        ("role_description", control.role_description.clone().map(Value::from)),
+        ("description", control.description.clone().map(Value::from)),
+        ("item_position", control.item_position.map(Value::from)),
+        ("item_count", control.item_count.map(Value::from)),
     ];
     for (key, value) in optional {
         if let Some(value) = value {
@@ -2472,6 +2486,13 @@ mod tests {
         assert!(!takes(&native_select, Operation::Press));
         let unfocusable = Control::new("cell", "gridcell", "Cell", [Operation::Click]);
         assert!(!takes(&unfocusable, Operation::Press));
+        // A card that takes a press without a role's keys is told the standard keys exist; a page of fields is not.
+        let card = Control::new("card", "button", "One", [Operation::Click, Operation::Press]);
+        let sortable = vec![card, field("name", None)];
+        let page = observation(sortable.clone());
+        let request = build_request(&page, &sortable, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert_eq!(operation.criteria["press"], json!(PRESS_STANDARD_KEYS));
         let plain = vec![field("name", None), button(1)];
         let page = observation(plain.clone());
         let request = build_request(&page, &plain, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
@@ -3102,6 +3123,17 @@ mod tests {
         assert_eq!(element(&field)["required"], true);
         assert_eq!(element(&field)["invalid"], true);
         assert_eq!(element(&field)["validation_message"], "Please fill in this field.");
+        let mut card = Control::new("card", "button", "One", [Operation::Click, Operation::Press]);
+        card.role_description = Some("draggable".into());
+        card.description = Some("Press the space bar to pick up.".into());
+        assert_eq!(element(&card)["role_description"], "draggable");
+        assert_eq!(element(&card)["description"], "Press the space bar to pick up.");
+        assert!(!element(&button(1)).contains_key("description"));
+        card.item_position = Some(6);
+        card.item_count = Some(6);
+        assert_eq!(element(&card)["item_position"], 6);
+        assert_eq!(element(&card)["item_count"], 6);
+        assert!(!element(&button(1)).contains_key("item_position"));
         assert!(!element(&button(2)).contains_key("required"));
         assert!(!element(&button(2)).contains_key("invalid"));
     }

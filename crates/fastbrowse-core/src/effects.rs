@@ -57,6 +57,10 @@ pub fn state_key(observation: &Observation) -> String {
             if leavable(c) {
                 key.as_array_mut().expect("an array").push(true.into());
             }
+            // Reordering a list changes where its items sit though no control changes, so a place is part of the state.
+            if let Some(place) = c.item_position {
+                key.as_array_mut().expect("an array").push(json!({"place": place}));
+            }
             dumps(&key)
         })
         .collect();
