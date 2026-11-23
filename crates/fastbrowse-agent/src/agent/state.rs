@@ -310,6 +310,9 @@ pub struct Typed {
     pub field: String,
     pub value: String,
     pub before: usize,
+    /// The text the field held before the run filled it, flattened, when the fill replaced it rather than added to
+    /// it: its showings are no copy of the value, before the send or after.
+    pub replaced: Option<String>,
 }
 
 pub(crate) struct RunState {
@@ -511,11 +514,11 @@ pub(crate) struct RunState {
     /// document under a new address that was offered, and the same address loaded afresh in another tab lifted the
     /// hold on the committing tab.
     pub committed_documents: HashSet<String>,
-    /// The document the step that opened the current dialog was sent from, and whether any step since it committed.
-    /// A page behind a dialog cannot be read, so the dialog is observed with no `document_key`, and the step that
-    /// closes an alert is not itself committing: a GET that unsubscribed and then said so in an alert lost its hold
-    /// once the alert closed, and was offered again as a reload.
-    pub behind_dialog: Option<(String, bool)>,
+    /// The page the step that opened the current dialog was sent from, and whether any step since it committed. A page
+    /// behind a dialog cannot be read, so the dialog is observed with no `document_key`, and the step that closes an
+    /// alert is not itself committing: a GET that unsubscribed and then said so in an alert lost its hold once the
+    /// alert closed, and was offered again as a reload; a confirmed save read as a load and lost its pending fills.
+    pub behind_dialog: Option<(Observation, bool)>,
     /// Every change the run made that the site keeps, since the last document loaded: the page may not show them yet.
     pub kept: Option<Kept>,
     /// The history length when the run last left a page, so a send's typed values start after it.
@@ -523,9 +526,9 @@ pub(crate) struct RunState {
     /// The history length at the send that last carried each field, so a send checks only fills made after it.
     pub sent_fills: HashMap<String, usize>,
     /// Each field's page text from before its first fill since the last send, where a sent value's earlier showings
-    /// are counted. Counted at the send, a rich-text draft is page text itself, so a saved reply replacing it added no
-    /// occurrence and read as missing.
-    pub filled_before: HashMap<String, String>,
+    /// are counted, with the value the field held then. Counted at the send, a rich-text draft is page text itself, so
+    /// a saved reply replacing it added no occurrence and read as missing.
+    pub filled_before: HashMap<String, (String, Option<String>)>,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.

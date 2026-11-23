@@ -1604,17 +1604,23 @@ impl Agent {
     /// Record on the last action what it did, which the next choice and recovery both read.
     /// What a lasting or committing step sent, kept until a loaded page shows it, and the fills it used up.
     fn note_sent(state: &mut RunState, before: &Observation, observation: &Observation, keeping: bool) {
+        // A step taken in a dialog was sent from the page that opened it: compared with the dialog's empty document,
+        // a confirmed save read as a load, ended the facts it owed and dropped the fills it carried.
+        let opener = before.dialog.as_ref().and(state.behind_dialog.as_ref()).map(|(opener, _)| opener.clone());
+        let before = opener.as_ref().unwrap_or(before);
+        let open = observation.dialog.is_some();
         // A load since a change ends the page's not having been loaded. A page loaded again at the same address can
         // still lack what was typed, as CurseForge serves its copy from before a post for about a minute, so with
         // typed values to check the fact stays, worded for a loaded page; any other load ends it.
         // A loaded copy that shows every value has nothing left to check, on this step or any later one: kept, a later
         // step that hid one (collapsing the replies) was told the page still came from before the send. Leaving the
         // page's address ends the check too, so a route left and returned to is not told it again.
-        let loads = observation.document_key != before.document_key;
-        let ends = state.kept.as_ref().is_some_and(|kept| {
-            kept.url != observation.url
-                || ((kept.loaded || loads) && super::helpers::kept_absent(kept, observation).is_empty())
-        });
+        let loads = !open && observation.document_key != before.document_key;
+        let ends = !open
+            && state.kept.as_ref().is_some_and(|kept| {
+                kept.url != observation.url
+                    || ((kept.loaded || loads) && super::helpers::kept_absent(kept, observation).is_empty())
+            });
         if ends {
             state.kept = None;
         } else if loads && let Some(kept) = state.kept.as_mut() {
@@ -1626,9 +1632,12 @@ impl Agent {
             super::helpers::typed_before_send(&state.history, state.last_send, &state.sent_fills, before)
                 .into_iter()
                 .map(|(field, value)| {
-                    let page = state.filled_before.get(&field).unwrap_or(&page);
-                    let before = value.as_deref().map_or(0, |value| super::helpers::occurrences(page, value));
-                    (field, value, before)
+                    let (page, prior) =
+                        state.filled_before.get(&field).map_or((&page, None), |(text, prior)| (text, prior.as_deref()));
+                    let replaced = super::helpers::replaced_text(prior, value.as_deref());
+                    let page = super::helpers::without(page, replaced.as_deref());
+                    let before = value.as_deref().map_or(0, |value| super::helpers::occurrences(&page, value));
+                    (field, value, before, replaced)
                 })
                 .collect()
         } else {
@@ -1636,7 +1645,7 @@ impl Agent {
         };
         // Fills on a page the run has left went with it: a search typed before following a result was checked for on
         // the thread a reply was later posted to.
-        if observation.document_key != before.document_key || observation.url != before.url {
+        if !open && (observation.document_key != before.document_key || observation.url != before.url) {
             state.last_send = history_len;
             state.sent_fills.clear();
             state.filled_before.clear();
@@ -1674,7 +1683,9 @@ impl Agent {
                 state.filled_before.remove(field);
             }
             kept.typed.extend(
-                typed.into_iter().filter_map(|(field, value, before)| Some(Typed { value: value?, field, before })),
+                typed.into_iter().filter_map(|(field, value, before, replaced)| {
+                    Some(Typed { value: value?, field, before, replaced })
+                }),
             );
         }
     }
@@ -1728,7 +1739,10 @@ impl Agent {
             && last.outcome == StepOutcome::Executed
             && let Some(field) = &last.target
         {
-            state.filled_before.entry(field.clone()).or_insert_with(|| super::helpers::page_text(&before));
+            state.filled_before.entry(field.clone()).or_insert_with(|| {
+                let prior = before.controls.iter().find(|c| super::helpers::describe(c) == *field);
+                (super::helpers::page_text(&before), prior.and_then(|c| c.value.clone()))
+            });
         }
         state.settle_change(observation);
         let landed = read_key(observation);
@@ -2242,20 +2256,18 @@ fn same_control(chosen: &Control, now: &Control) -> bool {
 /// The opener is kept whether or not it committed: a confirm opened by a reversible click and accepted to save in place
 /// was compared with the dialog's empty document and held the unchanged editor as reloaded.
 pub(super) fn note_commit(
-    behind_dialog: &mut Option<(String, bool)>,
+    behind_dialog: &mut Option<(Observation, bool)>,
     committed_documents: &mut HashSet<String>,
     before: &Observation,
     observation: &Observation,
     sent: bool,
 ) {
     if observation.dialog.is_some() {
-        let (_, committed) = behind_dialog.get_or_insert_with(|| (before.document_key.clone(), false));
+        let (_, committed) = behind_dialog.get_or_insert_with(|| (before.clone(), false));
         *committed |= sent;
     } else {
-        let (from, committed) = behind_dialog
-            .take()
-            .map_or_else(|| (before.document_key.clone(), sent), |(from, committed)| (from, committed || sent));
-        if committed && observation.document_key != from {
+        let committed = behind_dialog.take().is_some_and(|(_, committed)| committed) || sent;
+        if committed && observation.document_key != before.document_key {
             committed_documents.insert(observation.document_key.clone());
         }
     }

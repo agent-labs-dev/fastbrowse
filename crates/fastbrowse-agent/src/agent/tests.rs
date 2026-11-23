@@ -12556,5 +12556,23 @@ fn a_send_checks_only_fills_made_on_its_own_page_and_route() {
     agent().note_effect(&mut state, &loaded);
     assert!(state.kept.is_none());
 }
+
+/// A shortened description shows its new text inside the old one: a page still serving the old copy does not show the
+/// save, and one serving the new copy does.
+#[test]
+fn a_value_a_fill_shortened_is_shown_only_once_the_old_text_is_gone() {
+    use super::helpers::{kept_absent, replaced_text};
+    use super::state::{Kept, Typed};
+    let replaced = replaced_text(Some("Thanks for your help"), Some("Thanks"));
+    assert_eq!(replaced.as_deref(), Some("Thanks for your help"));
+    assert_eq!(replaced_text(Some("Thanks"), Some("Thanks for your help")), None, "an extension replaced nothing");
+    let kept = Kept {
+        typed: vec![Typed { field: "Description".into(), value: "Thanks".into(), before: 0, replaced }],
+        ..Kept::default()
+    };
+    let page = |text: &str| Observation { viewport_text: text.into(), ..at("https://example.test/edit", &[]) };
+    assert_eq!(kept_absent(&kept, &page("Description: Thanks for your help")).len(), 1);
+    assert!(kept_absent(&kept, &page("Description: Thanks")).is_empty());
+}
 #[path = "tests/citation_record_selected_results.rs"]
 mod citation_record_selected_results;

@@ -227,6 +227,23 @@ pub(crate) fn occurrences(page: &str, value: &str) -> usize {
     page.matches(&value).count()
 }
 
+/// The text a fill replaced, flattened: `prior`, what the field held before the run filled it, unless the new value
+/// holds it. A description shortened from "Thanks for your help" to "Thanks" showed "Thanks" once before the save and
+/// once after, and was reported missing from the saved page; "Hello" extended to "Hello world" replaced nothing.
+pub(crate) fn replaced_text(prior: Option<&str>, value: Option<&str>) -> Option<String> {
+    let prior = flat(prior?);
+    (!prior.is_empty() && !flat(value?).contains(&prior)).then_some(prior)
+}
+
+/// `text`, flattened, with every showing of `replaced` taken out.
+pub(crate) fn without(text: &str, replaced: Option<&str>) -> String {
+    let text = flat(text);
+    match replaced {
+        Some(replaced) => text.replace(replaced, "\n"),
+        None => text,
+    }
+}
+
 /// A step as the words a fact names it by: "click 'Apply'".
 pub(crate) fn step_words(operation: Option<Operation>, target: Option<&str>) -> String {
     let word = match operation {
@@ -264,10 +281,15 @@ pub(crate) fn step_words(operation: Option<Operation>, target: Option<&str>) -> 
 /// and in none of its controls' values.
 pub(crate) fn kept_absent<'a>(kept: &'a Kept, observation: &Observation) -> Vec<&'a Typed> {
     let page = page_text(observation);
-    let values: Vec<String> = observation.controls.iter().filter_map(|c| c.value.as_deref()).map(flat).collect();
     let shown = |typed: &Typed| {
         let value = flat(&typed.value);
-        occurrences(&page, &value) > typed.before || values.iter().any(|held| held.contains(&value))
+        let replaced = typed.replaced.as_deref();
+        occurrences(&without(&page, replaced), &value) > typed.before
+            || observation
+                .controls
+                .iter()
+                .filter_map(|c| c.value.as_deref())
+                .any(|held| without(held, replaced).contains(&value))
     };
     kept.typed.iter().filter(|typed| !shown(typed)).collect()
 }
