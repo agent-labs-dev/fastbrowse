@@ -86,7 +86,11 @@ pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTIO
 pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
 pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
 pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
-pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. A later question picks the element inside the group.";
+const TARGET_GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names.";
+const DESTINATION_GROUP: &str =
+    "Too many elements to list at once. Choose the group that contains the best drop destination.";
+const GROUP_CONTEXT: &str = "Match each member ID to its element in the shared state for its context.
+A later question picks the element inside the group.";
 
 /// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
 const PRESS_ROLE_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, or the key or key chord the task gives in an editable field.";
@@ -954,11 +958,25 @@ impl Fitting<'_> {
             let pictured = self.jev.image_tokens(&request.state, questions, &request.images);
             input_room(state_chars, questions, self.config, pictured)
         };
-        request.groups.iter().fold(room_for(&request.questions), |room, (&operation, groups)| {
+        let room = request.groups.iter().fold(room_for(&request.questions), |room, (&operation, groups)| {
             groups
                 .iter()
                 .fold(room, |room, group| room.min(room_for(&group_target_question(request, operation, group))))
-        })
+        });
+        let drag_sources = request
+            .targets
+            .get(&Operation::Drag)
+            .into_iter()
+            .flatten()
+            .chain(request.groups.get(&Operation::Drag).into_iter().flatten().flatten());
+        if !drag_sources.into_iter().any(|control| control.drawn != Some(true)) {
+            return room;
+        }
+        if request.destination_groups.is_empty() {
+            return room.min(room_for(&destination_questions(&request.destinations)));
+        }
+        let room = room.min(room_for(&destination_group_questions(&request.destination_groups)));
+        request.destination_groups.iter().fold(room, |room, group| room.min(room_for(&destination_questions(group))))
     }
 
     fn request_fits(&self, request: &Request) -> bool {
@@ -1438,7 +1456,8 @@ pub fn build_request(
             continue;
         }
         let parts = chunks(candidates, size);
-        questions.insert(keys::group(*operation), group_question(*operation, &parts, target_rules).into());
+        questions
+            .insert(keys::group(*operation), group_question(*operation, &parts, target_rules, TARGET_GROUP).into());
         groups.insert(*operation, parts);
     }
     let drops: Vec<Control> = controls.iter().filter(|control| !control.label.is_empty()).cloned().collect();
@@ -1734,21 +1753,16 @@ async fn evaluate(
     let mut destination: Option<Control> = None;
     if operation == Operation::Drag && target.as_ref().is_none_or(|target| target.drawn != Some(true)) {
         let destination_confidence = if request.destination_groups.is_empty() {
-            let key = keys::DRAG_DESTINATION.to_string();
-            let question = destination_question(&request.destinations);
-            let destination_evaluation = ask(&IndexMap::from([(key.clone(), question.into())])).await?;
-            let destination_answer = choice_answer(&destination_evaluation, &key)?;
+            let destination_evaluation = ask(&destination_questions(&request.destinations)).await?;
+            let destination_answer = choice_answer(&destination_evaluation, keys::DRAG_DESTINATION)?;
             destination = Some(find_control(&request.destinations, &destination_answer.choice)?);
             destination_answer.confidence
         } else {
-            let group_key = keys::DRAG_DESTINATION_GROUP.to_string();
-            let group_question = group_question(Operation::Drag, &request.destination_groups, &DESTINATION);
-            let group_evaluation = ask(&IndexMap::from([(group_key.clone(), group_question.into())])).await?;
-            let group_answer = choice_answer(&group_evaluation, &group_key)?;
+            let group_evaluation = ask(&destination_group_questions(&request.destination_groups)).await?;
+            let group_answer = choice_answer(&group_evaluation, keys::DRAG_DESTINATION_GROUP)?;
             let group =
                 &request.destination_groups[group_index(&group_answer.choice, request.destination_groups.len())?];
-            let questions = IndexMap::from([(keys::DRAG_DESTINATION.to_string(), destination_question(group).into())]);
-            let inner = ask(&questions).await?;
+            let inner = ask(&destination_questions(group)).await?;
             let destination_answer = choice_answer(&inner, keys::DRAG_DESTINATION)?;
             destination = Some(find_control(group, &destination_answer.choice)?);
             group_answer.confidence * destination_answer.confidence
@@ -1993,21 +2007,28 @@ fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
     element
 }
 
-fn group_question(operation: Operation, groups: &[Vec<Control>], rules: &str) -> ChoiceQuestion {
+fn group_question(operation: Operation, groups: &[Vec<Control>], rules: &str, group_rule: &str) -> ChoiceQuestion {
     choice(
-        dumps(&json!({"rules": [rules, GROUP], "operation": operation.as_str()})),
+        dumps(&json!({"rules": [rules, format!("{group_rule} {GROUP_CONTEXT}")], "operation": operation.as_str()})),
         groups.iter().enumerate().map(|(i, group)| {
-            let labels: Vec<&str> = group.iter().map(|c| c.label.as_str()).collect();
-            (i.to_string(), Value::from(labels.join(" | ")))
+            // Two groups can contain controls with the same label. The ID connects each one to its context.
+            let members: Map<String, Value> = group.iter().map(|c| (c.id.clone(), c.label.clone().into())).collect();
+            (i.to_string(), Value::Object(members))
         }),
     )
 }
 
-fn destination_question(candidates: &[Control]) -> ChoiceQuestion {
-    choice(
+fn destination_group_questions(groups: &[Vec<Control>]) -> IndexMap<String, Question> {
+    let question = group_question(Operation::Drag, groups, &DESTINATION, DESTINATION_GROUP);
+    IndexMap::from([(keys::DRAG_DESTINATION_GROUP.into(), question.into())])
+}
+
+fn destination_questions(candidates: &[Control]) -> IndexMap<String, Question> {
+    let question = choice(
         dumps(&json!({"rules": *DESTINATION, "operation": Operation::Drag.as_str()})),
         candidates.iter().map(|control| (control.id.clone(), Value::Object(relevance_element(control)))),
-    )
+    );
+    IndexMap::from([(keys::DRAG_DESTINATION.into(), question.into())])
 }
 
 /// What a target option's `looks_like` is, told to Jev once in the question rather than in every option.
@@ -2626,6 +2647,48 @@ mod tests {
         assert_eq!(inner.criteria.keys().collect::<Vec<_>>(), ["b8", "b9", "b10", "b11"]);
         assert_eq!(decision.cost.len(), 2);
         assert!((decision.confidence() - 0.81).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_target_groups_link_equal_labels_to_their_own_context() {
+        let config = Config { observation: ObservationLimits { group_size: 1 }, ..Config::default() };
+        let mut page = observation((0..3).map(button).collect());
+        page.controls[0].label = "Open".into();
+        page.controls[0].context = Some("Billing".into());
+        page.controls[1].label = "Open".into();
+        page.controls[1].context = Some("Shipping".into());
+        let context = StepContext::new("Open Shipping");
+        let request = build_request(&page, &page.controls, &context, &config, 2);
+        let Question::Choice(question) = &request.questions["click_group"] else { panic!("a group choice") };
+        assert_eq!(question.criteria["0"], json!({"b0": "Open"}));
+        assert_eq!(question.criteria["1"], json!({"b1": "Open"}));
+        assert_eq!(request.state["elements"][0]["id"], "b0");
+        assert_eq!(request.state["elements"][0]["context"], "Billing");
+        assert_eq!(request.state["elements"][1]["id"], "b1");
+        assert_eq!(request.state["elements"][1]["context"], "Shipping");
+    }
+
+    #[test]
+    fn test_fitting_counts_drag_destination_followups() {
+        let config = grouped();
+        let jev = fake(&[], "");
+        let fitting = Fitting { config: &config, options: 4, jev: &jev };
+        let mut controls: Vec<_> = (0..8).map(button).collect();
+        controls[0].operations.insert(Operation::Drag);
+        controls[1].context = Some("Details of the destination. ".repeat(400));
+        let page = observation(controls);
+        let context = StepContext::new("Drag the card into its matching destination");
+        let request = build_request(&page, &page.controls, &context, &config, fitting.options);
+        let state_chars = text::len(&dumps(&request.state)) as i64;
+        let group = &request.destination_groups[0];
+        let questions = destination_group_questions(&request.destination_groups);
+        let Question::Choice(question) = &questions[keys::DRAG_DESTINATION_GROUP] else { panic!("a group choice") };
+        assert!(question.instructions.contains("Choose the group that contains the best drop destination"));
+        assert_eq!(question.criteria["0"]["b1"], "Button 1");
+        let initial_room = input_room(state_chars, &request.questions, &config, 0);
+        let followup_room = input_room(state_chars, &destination_questions(group), &config, 0);
+        assert!(followup_room < initial_room);
+        assert_eq!(fitting.room(&request), followup_room);
     }
 
     #[test]
