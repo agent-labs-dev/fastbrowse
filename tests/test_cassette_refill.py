@@ -382,6 +382,30 @@ def test_what_bench_writes_beside_its_report_is_not_in_the_artifact_that_is_comm
     assert json.loads((refill.OUT / "result.json").read_text())["report"]["tasks"][0]["task"] == "mock-basket"
 
 
+def cassette_tree(route: str, filename: str, blob: str) -> dict[str, Any]:
+    entries = {
+        "root": {"path": "bench", "type": "tree", "sha": "bench"},
+        "bench": {"path": "cassettes", "type": "tree", "sha": "cassettes"},
+        "cassettes": {"path": filename, "type": "blob", "mode": "100644", "sha": blob},
+    }
+    return {"truncated": False, "tree": [entries[route.rsplit("/", 1)[1]]]}
+
+
+@pytest.mark.parametrize("empty_directory", [False, True])
+def test_partial_retry_requires_the_replay_miss_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, empty_directory: bool
+) -> None:
+    misses = tmp_path / "replay-misses"
+    if empty_directory:
+        misses.mkdir()
+    env = {"REPO": REPO, "PR": "7", "SHA": SHA, "GH_TOKEN": "t", "MISSES_DIR": str(misses)}
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("COVERED_TASKS", '["mock-basket"]')
+    with pytest.raises(ValueError, match="does not have a replay miss for every task"):
+        refill.plan()
+
+
 def publish_split(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -389,6 +413,7 @@ def publish_split(
     lose_response: int | None = None,
     wrong_blob: bool = False,
     lose_body: bool = False,
+    unchanged: bool = False,
 ) -> tuple[int, list, str]:
     """`publish` of three cassettes, one per commit, with GitHub refusing commit number `refuse_commit`."""
     tasks = ["mock-basket", "mock-swatch", "mock-sign-in"]
@@ -404,10 +429,11 @@ def publish_split(
         monkeypatch.setenv(name, value)
     # Room for the largest file's base64 alone, so each commit takes one file.
     largest = max(4 * math.ceil((artifact / f"{task}.jsonl").stat().st_size / 3) for task in tasks)
-    monkeypatch.setattr(refill, "COMMIT_PAYLOAD_LIMIT", largest)
+    monkeypatch.setattr(refill, "COMMIT_PAYLOAD_LIMIT", largest * (2 if unchanged else 1))
     commits: list[dict[str, Any]] = []
     posted: list[str] = []
     head = sha
+    omitted: dict[str, str] = {}
 
     def gh(*args: str, token: str, body: Any = None) -> Any:
         nonlocal head
@@ -424,18 +450,32 @@ def publish_split(
         if args[0].endswith("/pulls/7"):
             repo = {"full_name": REPO}
             return {"state": "open", "head": {"sha": head, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
+        if "/git/trees/" in args[0]:
+            filename, oid = next(iter(omitted.items()))
+            return cassette_tree(args[0], filename, "0" * 40 if wrong_blob else oid)
         if args[0].endswith(f"/commits/{head}?per_page=100"):
             sent = commits[-1]
             files = []
             for item in sent["fileChanges"]["additions"]:
                 data = base64.b64decode(item["contents"])
                 oid = hashlib.sha1(f"blob {len(data)}\0".encode() + data, usedforsecurity=False).hexdigest()
-                files.append({"filename": item["path"], "sha": "0" * 40 if wrong_blob else oid, "status": "modified"})
+                name = Path(item["path"]).name
+                if unchanged and name == "mock-basket.jsonl":
+                    omitted[name] = oid
+                    continue
+                files.append(
+                    {
+                        "filename": item["path"],
+                        "sha": "0" * 40 if wrong_blob and not unchanged else oid,
+                        "status": "modified",
+                    }
+                )
             return [
                 {
                     "commit": {
                         "message": sent["message"]["headline"] + "\n\n" + sent["message"]["body"],
                         "verification": {"verified": True},
+                        "tree": {"sha": "root"},
                     },
                     "committer": {"login": "web-flow"},
                     "parents": [{"sha": sent["expectedHeadOid"]}],
@@ -491,6 +531,24 @@ def test_a_committed_batch_whose_response_was_lost_is_reported_and_followed_by_t
     assert all(oid[:12] in comment for oid in ("1" * 40, "2" * 40, "3" * 40))
 
 
+@pytest.mark.parametrize("wrong_blob", [False, True])
+def test_a_lost_response_checks_an_unchanged_cassette_in_the_commit_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wrong_blob: bool
+) -> None:
+    code, commits, comment = publish_split(
+        tmp_path, monkeypatch, lose_response=1, unchanged=True, wrong_blob=wrong_blob
+    )
+    assert len(commits[0]["fileChanges"]["additions"]) == 2
+    if wrong_blob:
+        assert code == 1
+        assert len(commits) == 1
+        assert "GitHub's commit result could not be verified" in comment
+    else:
+        assert code == 0
+        assert commits[1]["expectedHeadOid"] == "1" * 40
+        assert all(oid[:12] in comment for oid in ("1" * 40, "2" * 40))
+
+
 def test_a_moved_branch_with_another_blob_is_not_treated_as_the_expected_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -502,17 +560,18 @@ def test_a_moved_branch_with_another_blob_is_not_treated_as_the_expected_batch(
 
 
 @pytest.mark.parametrize(
-    ("retry", "unrelated", "head_replay"),
+    ("retry", "unrelated", "head_replay", "unchanged"),
     [
-        (True, False, None),
-        (False, False, None),
-        (True, True, None),
-        (True, False, "cancelled"),
-        (True, False, "success"),
+        (True, False, None, False),
+        (False, False, None, False),
+        (True, True, None, False),
+        (True, False, "cancelled", False),
+        (True, False, "success", False),
+        (True, False, None, True),
     ],
 )
 def test_manual_retry_only_reuses_ci_after_verified_cassette_commits(
-    monkeypatch: pytest.MonkeyPatch, retry: bool, unrelated: bool, head_replay: str | None
+    monkeypatch: pytest.MonkeyPatch, retry: bool, unrelated: bool, head_replay: str | None, unchanged: bool
 ) -> None:
     head = "b" * 40
     monkeypatch.setenv("REPO", REPO)
@@ -540,11 +599,21 @@ def test_manual_retry_only_reuses_ci_after_verified_cassette_commits(
             return {"artifacts": [{"name": "replay-misses", "expired": False}]}
         if route.endswith(f"/git/blobs/{blob}"):
             return {"encoding": "base64", "content": base64.encodebytes(data).decode()}
-        commit = {"message": f"{refill.REFILL_SUBJECT}mock-basket", "verification": {"verified": True}}
+        if "/git/trees/" in route:
+            return cassette_tree(route, "mock-basket.jsonl", blob)
+        commit = {
+            "message": f"{refill.REFILL_SUBJECT}mock-basket",
+            "verification": {"verified": True},
+            "tree": {"sha": "root"},
+        }
         if route.endswith(f"/commits/{head}"):
             return {"commit": commit}
         if route.endswith(f"/commits/{head}?per_page=100"):
-            files = [{"filename": "bench/cassettes/mock-basket.jsonl", "status": "modified", "sha": blob}]
+            files = (
+                []
+                if unchanged
+                else [{"filename": "bench/cassettes/mock-basket.jsonl", "status": "modified", "sha": blob}]
+            )
             if unrelated:
                 files.append({"filename": "unrelated.py", "status": "modified"})
             return [{"commit": commit, "committer": {"login": "web-flow"}, "parents": [{"sha": SHA}], "files": files}]
@@ -607,7 +676,7 @@ def test_a_partial_retry_stops_at_an_ancestor_with_a_passing_replay(
         assert resolved == ("7", {"mock-basket", "mock-swatch"})
         assert checked == [middle, SHA]
     else:
-        assert resolved == ("", {"mock-basket"})
+        assert resolved == ("", set())
         assert checked == [middle]
 
 

@@ -479,7 +479,14 @@ def read_commit(repo: str, sha: str, token: str) -> dict[str, Any]:
     return {**pages[0], "files": files}
 
 
-def refill_commit_tasks(commit: Mapping[str, Any]) -> dict[str, str]:
+def tree_entries(repo: str, sha: str, token: str) -> dict[str, dict[str, str]]:
+    tree = gh(f"repos/{repo}/git/trees/{sha}", token=token)
+    if tree["truncated"]:
+        raise ValueError("GitHub returned an incomplete cassette tree")
+    return {entry["path"]: entry for entry in tree["tree"]}
+
+
+def refill_commit_tasks(repo: str, commit: Mapping[str, Any], token: str) -> dict[str, str]:
     """Identify a GitHub-signed refill by its single parent, subject and cassette-only file changes."""
     subject = commit["commit"]["message"].split("\n", 1)[0]
     if (
@@ -494,13 +501,31 @@ def refill_commit_tasks(commit: Mapping[str, Any]) -> dict[str, str]:
         return {}
     files = commit["files"]
     expected = {f"bench/cassettes/{task}.jsonl" for task in tasks}
+    changed = {file["filename"]: file for file in files}
     if (
-        len(files) != len(expected)
-        or {file["filename"] for file in files} != expected
+        len(tasks) != len(expected)
+        or len(files) != len(changed)
+        or not changed.keys() <= expected
         or any(file["status"] not in {"added", "modified"} for file in files)
     ):
         return {}
-    return {Path(file["filename"]).stem: file["sha"] for file in files}
+    blobs = {Path(path).stem: file["sha"] for path, file in changed.items()}
+    missing = set(tasks) - blobs.keys()
+    if missing:
+        # An unchanged addition is absent from the diff, so verify it in the exact commit tree.
+        tree = commit["commit"]["tree"]["sha"]
+        for directory in ("bench", "cassettes"):
+            entry = tree_entries(repo, tree, token).get(directory)
+            if entry is None or entry["type"] != "tree":
+                return {}
+            tree = entry["sha"]
+        cassettes = tree_entries(repo, tree, token)
+        for task in missing:
+            entry = cassettes.get(f"{task}.jsonl")
+            if entry is None or entry["mode"] not in {"100644", "100755"} or entry["type"] != "blob":
+                return {}
+            blobs[task] = entry["sha"]
+    return blobs
 
 
 def git_blob_oid(data: bytes) -> str:
@@ -532,14 +557,14 @@ def retry_from_partial(repo: str, number: str, head: str, token: str) -> tuple[s
     covered: dict[str, str] = {}
     while attempted:
         commit = read_commit(repo, sha, token)
-        tasks = refill_commit_tasks(commit)
+        tasks = refill_commit_tasks(repo, commit, token)
         if not tasks or tasks.keys() & covered.keys():
             break
         covered.update(tasks)
         sha = commit["parents"][0]["sha"]
         run_id = replay_ci(repo, sha, token)
         if run_id == "":
-            return run_id, set(covered)
+            return run_id, set()
         if run_id is not None and sha in attempted:
             verify_refill_blobs(repo, covered, token)
             return run_id, set(covered)
@@ -581,8 +606,8 @@ def plan() -> int:
         return 0
     tasks = missed_tasks(Path(env["MISSES_DIR"]))
     covered = set(json.loads(env.get("COVERED_TASKS", "[]")))
-    if tasks and not covered.issubset(tasks):
-        raise ValueError("the partial refill changed a task the selected CI run did not miss")
+    if not covered.issubset(tasks):
+        raise ValueError("the selected CI run does not have a replay miss for every task in the partial refill")
     tasks = [task for task in tasks if task not in covered]
     facts, _ = pull_facts(repo, number, token)
     existing = find_comment(repo, number, token)
@@ -657,17 +682,15 @@ def recover_commit(
     ):
         return None
     commit = read_commit(repo, facts.head_sha, token)
-    if (
-        [entry["sha"] for entry in commit["parents"]] != [parent]
-        or commit["commit"]["message"].rstrip("\n") != message.rstrip("\n")
-        or not refill_commit_tasks(commit)
-    ):
+    if [entry["sha"] for entry in commit["parents"]] != [parent] or commit["commit"]["message"].rstrip(
+        "\n"
+    ) != message.rstrip("\n"):
         return None
     expected = {}
     for addition in additions:
         data = base64.b64decode(addition["contents"])
-        expected[addition["path"]] = git_blob_oid(data)
-    if {file["filename"]: file["sha"] for file in commit["files"]} != expected:
+        expected[Path(addition["path"]).stem] = git_blob_oid(data)
+    if refill_commit_tasks(repo, commit, token) != expected:
         return None
     return {"oid": facts.head_sha, "url": commit["html_url"]}
 
