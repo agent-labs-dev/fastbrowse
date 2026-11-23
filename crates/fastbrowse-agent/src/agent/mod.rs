@@ -632,6 +632,7 @@ impl Agent {
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
                 let reporting = ledger.for_answer();
                 let steps = state.executed_steps();
+                let kept = state.committed_steps();
                 // A draft rejected as the run stopped is a rewrite's to correct: written without the rejection, after a
                 // stall had spent the recovery that would have sent it back, this was the first request byte for byte,
                 // and it returned the rejected draft again (#1377).
@@ -647,6 +648,7 @@ impl Agent {
                         true,
                         self.screenshot(state.output_intent),
                         &steps,
+                        &kept,
                     )
                     .await
                     .map(|reviewed| reviewed.answer)

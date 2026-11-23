@@ -213,6 +213,11 @@ pub struct HistoryEntry {
     /// own form, and no others.
     #[serde(skip)]
     pub form: Option<Form>,
+    /// The step was sent and made a change the site keeps: an irreversible commit by the authorization classification,
+    /// or a reversible change such as a saved setting. Kept out of what models are shown, and the only steps the
+    /// coverage check is told of.
+    #[serde(skip)]
+    pub committed: bool,
     /// The document that supplied the action, kept private so form changes cannot cross document instances.
     #[serde(skip)]
     pub document_key: Option<String>,
@@ -386,6 +391,7 @@ impl HistoryEntry {
             submitted: None,
             commit: None,
             form: None,
+            committed: false,
             document_key: None,
             control_id: None,
             form_id: None,
@@ -415,6 +421,19 @@ impl HistoryEntry {
             shown["form"] = submitted.told(target, observation).into();
         }
         shown
+    }
+
+    /// The entry as the coverage check is told of a step the site keeps: what was done, not what it showed. An
+    /// effect names controls and counts the answer does not state, and a count there read as a missing fact (#1467).
+    pub fn kept(&self) -> Value {
+        let shown = self.shown();
+        let mut kept = serde_json::Map::new();
+        for field in ["operation", "target", "outcome"] {
+            if let Some(value) = shown.get(field) {
+                kept.insert(field.into(), value.clone());
+            }
+        }
+        Value::Object(kept)
     }
 
     /// The entry as shown with its control's card, for a question that sends the card among its images.

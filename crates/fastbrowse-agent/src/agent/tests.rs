@@ -10407,6 +10407,37 @@ async fn test_a_task_over_named_pages_reads_its_range_from_the_task() {
 }
 
 #[test]
+fn test_committed_steps_are_the_commits_without_what_they_showed() {
+    let mut state = composition_repair_state();
+    state.history.push(HistoryEntry {
+        effect: Some("Show 3 Replies appeared".into()),
+        ..executed(Some(Operation::Click), Some("Hide 3 Replies"), true)
+    });
+    state.history.push(HistoryEntry {
+        effect: Some("Reply (3) shown".into()),
+        text: Some("Thanks".into()),
+        committed: true,
+        ..executed(Some(Operation::Click), Some("Post"), true)
+    });
+    assert_eq!(state.committed_steps(), [json!({"operation": "click", "target": "Post", "outcome": "executed"})]);
+}
+
+#[test]
+fn test_a_reversible_change_the_site_keeps_is_a_committed_step_but_not_a_commit() {
+    let mut state = composition_repair_state();
+    state.history.push(executed(Some(Operation::Click), Some("Save"), true));
+    state.record_kept_step(false, true);
+    assert_eq!(state.committed_steps(), [json!({"operation": "click", "target": "Save", "outcome": "executed"})]);
+    assert_eq!(state.commits, 0);
+    state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+    state.record_kept_step(true, false);
+    assert_eq!(state.commits, 1);
+    state.history.push(executed(Some(Operation::Click), Some("Expand"), true));
+    state.record_kept_step(false, false);
+    assert_eq!(state.committed_steps().len(), 2);
+}
+
+#[test]
 fn test_executed_steps_lists_only_acting_steps() {
     let mut state = composition_repair_state();
     for operation in [Operation::Read, Operation::Scroll, Operation::ScrollUp, Operation::Hover, Operation::Wait] {

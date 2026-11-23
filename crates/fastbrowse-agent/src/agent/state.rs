@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use fastbrowse_core::decision::{Answer, DecisionError};
 use fastbrowse_core::llm::{Generation, LLMError};
-use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
+use fastbrowse_core::models::{
+    Attachment, Authorization, Evidence, Status, StepChoice, StepOutcome, StepResult, WallKind,
+};
 use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
@@ -556,6 +558,28 @@ impl RunState {
     /// The steps this run carried out that act on a page, as the models deciding steps are shown them.
     pub fn executed_steps(&self) -> Vec<serde_json::Value> {
         self.history.iter().filter(|entry| entry.changed_site()).map(HistoryEntry::shown).collect()
+    }
+
+    /// The steps this run sent that commit a change the site keeps, as the coverage check is told of them.
+    pub fn committed_steps(&self) -> Vec<serde_json::Value> {
+        self.history.iter().filter(|entry| entry.committed).map(HistoryEntry::kept).collect()
+    }
+
+    /// Marks the step just sent as one the run made, for the coverage check to be told of: an irreversible commit, or a
+    /// reversible change the site keeps, such as a saved setting. Only a commit opens the conditions later commits
+    /// are checked against.
+    /// Returns whether a commit was taken.
+    pub fn record_kept_step(&mut self, committed: bool, keeps: bool) -> bool {
+        if !(committed || keeps) || self.history.last().is_none_or(|entry| entry.outcome != StepOutcome::Executed) {
+            return false;
+        }
+        if committed {
+            self.commits += 1;
+        }
+        if let Some(last) = self.history.last_mut() {
+            last.committed = true;
+        }
+        committed
     }
 
     pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {

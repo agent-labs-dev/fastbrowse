@@ -331,6 +331,7 @@ impl Agent {
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), self.model_task(state), state.ledger.clone());
             let steps = state.executed_steps();
+            let kept = state.committed_steps();
             let reviewed = self
                 .trace
                 .phase(
@@ -345,6 +346,7 @@ impl Agent {
                         intent != OutputIntent::CarriedOut,
                         self.screenshot(intent),
                         &steps,
+                        &kept,
                     ),
                 )
                 .await?;
@@ -353,11 +355,12 @@ impl Agent {
         } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
             let (notes, task, ledger) = (state.notes.clone(), self.model_task(state), state.ledger.clone());
             let steps = state.executed_steps();
+            let kept = state.committed_steps();
             let reviewed = match self
                 .trace
                 .phase(
                     "coverage",
-                    draft_reviewed(&*self.jev, &task, self.screenshot(intent), &notes, Some(&ledger), &steps),
+                    draft_reviewed(&*self.jev, &task, self.screenshot(intent), &notes, Some(&ledger), &steps, &kept),
                 )
                 .await?
             {
@@ -375,6 +378,7 @@ impl Agent {
                         true,
                         self.screenshot(intent),
                         &steps,
+                        &kept,
                     );
                     Some(self.trace.phase("compose", written).await?)
                 }
