@@ -246,6 +246,7 @@ impl Agent {
                 page_changed: false,
                 detail: Some(error),
                 moved: false,
+                landed: None,
             });
         }
         Ok(ActResult {
@@ -254,6 +255,7 @@ impl Agent {
             page_changed: result.page_changed,
             detail: None,
             moved: false,
+            landed: None,
         })
     }
 }

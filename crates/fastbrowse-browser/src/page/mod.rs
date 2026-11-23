@@ -19,12 +19,12 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{Edges, JEV_IMAGE_SIDE};
-use fastbrowse_core::models::{Artifact, ArtifactKind, Link, Operation, SourceControl};
+use fastbrowse_core::models::{Artifact, ArtifactKind, Held, Link, Operation, SourceControl};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::json as json_document;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, Media, Observation,
-    Page, PageResult,
+    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, DOWNLOAD_SOURCE, Dialog, FillReceiver, Media,
+    Observation, Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
@@ -273,6 +273,9 @@ struct SnapshotBlock {
     #[serde(default)]
     heading_path: Vec<String>,
     control_context: Option<SourceControl>,
+    /// The editable fields this block is the value of or holds, as indexes into the frame's `held`.
+    #[serde(default)]
+    held: Vec<usize>,
     frame_path: Option<String>,
     #[serde(default)]
     source_path: String,
@@ -283,6 +286,13 @@ struct SnapshotBlock {
     /// The block is a record's whole text, its textless parts named.
     #[serde(default)]
     whole_record: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotHeld {
+    element: String,
+    value: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -304,6 +314,11 @@ struct CaptureSnapshot {
     /// The frame document's MIME type, as `document.contentType` gives it.
     #[serde(default)]
     content_type: String,
+    /// The frame document's key, as an observation of it names it.
+    document_key: String,
+    /// Each editable field the blocks name, by the id the observation gives it and its value as the page holds it.
+    #[serde(default)]
+    held: Vec<SnapshotHeld>,
     /// The served text of a JSON document, as Chrome renders it into the body's first `pre`.
     #[serde(default)]
     json_text: Option<String>,
@@ -397,6 +412,9 @@ pub(crate) struct PageState {
     /// The frame session whose new-tab link a background run's click held when a dialog the click opened blocked
     /// reading it back. The dialog step reads it once the dialog is answered.
     pub(crate) held_link: Option<String>,
+    /// For the fill just made: the editable that held focus as its text was inserted, named as the observation names
+    /// a control. Taken by `act` once the fill is done.
+    pub(crate) fill_receiver: Option<FillReceiver>,
 }
 
 pub struct CdpPage {
@@ -1190,6 +1208,16 @@ impl CdpPage {
                 }
                 continue;
             }
+            // A field's identity is the one the observation gives it: its frame's key and its node's id.
+            let held: Vec<Held> = frame
+                .raw
+                .held
+                .iter()
+                .map(|field| Held {
+                    element: format!("{frame_key}:{}", field.element),
+                    value: field.value.as_str().into(),
+                })
+                .collect();
             for block in &frame.raw.blocks {
                 let start = offset;
                 let found: Vec<(String, String)> =
@@ -1212,7 +1240,21 @@ impl CdpPage {
                     start: int(start),
                     end: int(end),
                     heading_path: block.heading_path.clone(),
-                    control_context: block.control_context.clone(),
+                    // A block that only holds an editable field is no control of its own, but its quotes may be typed text.
+                    control_context: if block.held.is_empty() {
+                        block.control_context.clone()
+                    } else {
+                        let mut control = block.control_context.clone().unwrap_or_else(|| SourceControl {
+                            role: "editable".into(),
+                            label: String::new(),
+                            context: None,
+                            document: None,
+                            held: Vec::new(),
+                        });
+                        control.document = Some(frame.raw.document_key.clone());
+                        control.held = block.held.iter().filter_map(|index| held.get(*index).cloned()).collect();
+                        Some(control)
+                    },
                     href: block.href.clone(),
                     links,
                     whole_record: block.whole_record,

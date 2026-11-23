@@ -315,6 +315,18 @@ pub struct Notes {
     source_blocks: HashMap<CaptureIdentity, Arc<[SourceBlock]>>,
     /// Where code blanked a secret value in each capture's text.
     masked: HashMap<CaptureIdentity, Arc<[(i64, i64)]>>,
+    /// Each step that typed into a control, in order.
+    typed: Vec<Typing>,
+}
+
+/// A step's typing: its number among the run's steps that could change the site, where the browser reported the text
+/// landed (its document, and the control as the observation names it), and the text.
+#[derive(Clone)]
+struct Typing {
+    step: usize,
+    document: String,
+    element: String,
+    text: String,
 }
 
 impl fmt::Debug for Notes {
@@ -330,6 +342,40 @@ impl Notes {
             notes.add(fact);
         }
         notes
+    }
+
+    /// Step number `step` typed `text` into the control `element` of the document `document`.
+    pub fn remember_typing(&mut self, step: usize, document: &str, element: &str, text: &str) {
+        self.typed.push(Typing {
+            step,
+            document: document.to_string(),
+            element: element.to_string(),
+            text: text.to_string(),
+        });
+    }
+
+    /// The last step before this quote's read that typed into an editable field its block holds, when that typing is
+    /// exactly the value the field held when read, compared as typed and as held, whitespace and all. The field is the same one by its
+    /// document and id, never by its URL (a same-document navigation keeps the document) or the quote's words; a value
+    /// the typing did not leave (the site replaced it, or another source wrote it) is not the run's typing.
+    pub fn typed_by_step(&self, evidence: &Evidence) -> Option<usize> {
+        let control = evidence.control_context.as_ref()?;
+        let document = control.document.as_deref()?;
+        let taken = self.steps_taken(evidence)?;
+        control
+            .held
+            .iter()
+            .filter_map(|held| {
+                self.typed
+                    .iter()
+                    .rev()
+                    // Only the field's latest typing counts: a value an earlier typing left that a later one replaced
+                    // came back from the site, not from the run.
+                    .find(|typed| typed.step <= taken && typed.document == document && typed.element == held.element)
+                    .filter(|typed| *typed.text == *held.value)
+                    .map(|typed| typed.step)
+            })
+            .max()
     }
 
     /// Record one read: its capture, taken once `steps_taken` of the run's steps that could change the site were taken,
@@ -1219,8 +1265,13 @@ mod tests {
     fn test_equal_quoted_values_from_different_controls_keep_separate_evidence() {
         let mut notes = Notes::default();
         for position in ["1 of 2", "2 of 2"] {
-            let control =
-                SourceControl { role: "figure".into(), label: "Avatar".into(), context: Some(position.into()) };
+            let control = SourceControl {
+                role: "figure".into(),
+                label: "Avatar".into(),
+                context: Some(position.into()),
+                document: None,
+                held: Vec::new(),
+            };
             let evidence = Evidence { control_context: Some(control), ..span("capture", 0, 4) };
             assert!(notes.add(Fact::read("fact", evidence, FactReader::JevChoice)));
         }

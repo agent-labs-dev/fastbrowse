@@ -23,7 +23,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::answers::{context_limit, request_bytes};
+use super::answers::{TYPED, context_limit, request_bytes};
 use super::reduction::{GroupReads, Within, group_text, select_extremes};
 use super::text::{SpanKind, currency, spans};
 use crate::batches::evaluate_batches;
@@ -418,8 +418,10 @@ fn distinct(
     Some(kept)
 }
 
-/// Every note read, once each: a superseded read is a past state, and a note whose whole text a note before it
-/// already gave is the same record read again, from a later visit or another listing of it. Within one capture the
+/// Every note read, once each. A note holding what the run typed stays a candidate, marked `typed_by_step`, so the
+/// decision model judges whether the task's own input belongs in the tally; a typed and an untyped note of the same
+/// text are both kept. A superseded read is a past state, and a note whose whole text a note before it already gave
+/// is the same record read again, from a later visit or another listing of it. Within one capture the
 /// same text twice is two records, such as a row two tables both hold, so a note is keyed by its text and which
 /// occurrence of that text it is on its capture. A note from a table says
 /// which of its page's tables it is in, counted by code, since a task names a table by its place on the page and a
@@ -435,23 +437,26 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
         .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact_id(fact), evidence)))
         .filter(|(id, _)| !notes.superseded(id))
         .collect();
-    // Where each text was noted on each capture, in page order.
-    let mut starts: HashMap<(&str, String), BTreeSet<i64>> = HashMap::new();
+    // A draft must not shift the occurrence number of an identical published record.
+    let mut starts: HashMap<(&str, String, bool), BTreeSet<i64>> = HashMap::new();
     for (_, evidence) in &live {
-        let key = (evidence.capture_sha256.as_str(), text::squash(&evidence.quote));
+        let key =
+            (evidence.capture_sha256.as_str(), text::squash(&evidence.quote), notes.typed_by_step(evidence).is_some());
         starts.entry(key).or_default().insert(evidence.start);
     }
     let mut seen = HashSet::new();
     live.into_iter()
-        .filter(|(_, evidence)| {
+        .filter_map(|(id, evidence)| {
             let quote = text::squash(&evidence.quote);
-            let place = starts[&(evidence.capture_sha256.as_str(), quote.clone())].range(..evidence.start).count();
-            !deduplicate || seen.insert((quote, place))
-        })
-        .map(|(id, evidence)| {
+            let typed = notes.typed_by_step(evidence).is_some();
+            let occurrence =
+                starts[&(evidence.capture_sha256.as_str(), quote.clone(), typed)].range(..evidence.start).count();
+            if deduplicate && !seen.insert((quote, occurrence, typed)) {
+                return None;
+            }
             let span = (evidence.capture_sha256.clone(), evidence.start, evidence.end);
             let (literal, page) = (evidence.rendered_text, address(&evidence.url));
-            Candidate {
+            Some(Candidate {
                 id,
                 quote: evidence.quote.clone(),
                 note: shown(notes, evidence),
@@ -460,10 +465,8 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
                 page,
                 whole_record: notes.whole_record(evidence),
                 source_kind: notes.source_kind(evidence),
-                occurrence: starts[&(evidence.capture_sha256.as_str(), text::squash(&evidence.quote))]
-                    .range(..evidence.start)
-                    .count(),
-            }
+                occurrence,
+            })
         })
         .collect()
 }
@@ -471,6 +474,9 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
 /// A note as a membership question shows it.
 fn shown(notes: &Notes, evidence: &fastbrowse_core::models::Evidence) -> serde_json::Value {
     let mut note = json!({"quote": evidence.quote, "page": evidence.url, "headings": evidence.heading_path});
+    if let Some(step) = notes.typed_by_step(evidence) {
+        note["typed_by_step"] = step.into();
+    }
     let blocks = notes.table_blocks(evidence);
     if let Some(block) = blocks.iter().find(|block| block.start <= evidence.start && evidence.start < block.end) {
         let count = blocks.last().map_or(0, |last| last.table + 1);
@@ -496,7 +502,12 @@ fn membership_state(task: &str, notes: &Notes, page: &str) -> serde_json::Value 
         .collect();
     // Named for what it holds: listed as the page's "notes", the labels left once its records were taken out read as
     // the records, and Jev called "Login" one quote and every quote none.
-    json!({"task": task, "labels_on_the_page": context})
+    let typed = context.iter().any(|note| !typed_rule(note).is_empty());
+    let mut state = json!({"task": task, "labels_on_the_page": context});
+    if typed {
+        state["typing_provenance"] = TYPED.trim_start().into();
+    }
+    state
 }
 
 type Answers = IndexMap<String, Answer>;
@@ -565,6 +576,7 @@ fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&ser
     } else {
         ""
     };
+    let typed = if example.is_some_and(|example| !typed_rule(example).is_empty()) { TYPED } else { typed_rule(note) };
     let example = example.map_or(String::new(), |example| {
         format!(
             " The claim counts entries such as this one: {}. A note is one only when it is an entry of that same kind, not a passage that mentions one.",
@@ -572,11 +584,16 @@ fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&ser
         )
     });
     let question = format!(
-        "Is this note exactly one whole {of}? A note holding several is not one, and nor is its tags, label or heading alone, or a value a page states across several, such as a total.{example}{proof}"
+        "Is this note exactly one whole {of}? A note holding several is not one, and nor is its tags, label or heading alone, or a value a page states across several, such as a total.{example}{proof}{typed}"
     );
     let yes = format!("The note is exactly one whole {of}.");
     let no = format!("The note is no {of}, several, or only part of one.");
     Question::Noul(NoulQuestion::new(format!("{UNTRUSTED}\n{question} Note: {}", dumps(note)), Some(&yes), Some(&no)))
+}
+
+/// What a note's typed_by_step means, told only when one has it.
+fn typed_rule(note: &serde_json::Value) -> &'static str {
+    if note.get("typed_by_step").is_some() { TYPED } else { "" }
 }
 
 const NO_VALUE: &str = "none";
@@ -622,7 +639,8 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     }
     Question::Choice(ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
+            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record.{} Note: {}",
+            typed_rule(note),
             dumps(note)
         ),
         criteria,
@@ -1204,7 +1222,15 @@ async fn select_records(
     let records: Vec<usize> = records
         .iter()
         .copied()
-        .filter(|note| seen.insert((groups[note].clone(), text::squash(&found[*note].quote), found[*note].occurrence)))
+        .filter(|note| {
+            let candidate = &found[*note];
+            seen.insert((
+                groups[note].clone(),
+                text::squash(&candidate.quote),
+                candidate.occurrence,
+                candidate.note.get("typed_by_step").is_some(),
+            ))
+        })
         .collect();
     let missing = |note: usize| Unworked::Notes {
         reason: format!(
@@ -2541,6 +2567,109 @@ mod tests {
             assert_eq!(result, (mode != "invalid").then(|| records.clone()));
             assert_eq!(jev.questions.load(std::sync::atomic::Ordering::Relaxed), 155);
         }
+    }
+
+    /// A value the run typed into an editable note stays a candidate, marked so the decision model judges whether the
+    /// task's own input belongs in the tally (#1481).
+    #[test]
+    fn a_note_the_run_typed_is_offered_and_marked() {
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::models::{FactReader, SourceControl};
+        use fastbrowse_core::page::BlockKind;
+
+        let mut captured =
+            capture(&[(BlockKind::Paragraph, "Item A £10"), (BlockKind::Paragraph, "Notes: Item B £99")]);
+        captured.blocks[1].control_context = Some(SourceControl {
+            role: "textarea".into(),
+            label: "Notes".into(),
+            context: None,
+            document: Some("doc-1".into()),
+            held: vec![fastbrowse_core::models::Held { element: "main:7".into(), value: "Item B £99".into() }],
+        });
+        let page = Page::new(&captured);
+        let note = |index: usize| {
+            let block = &captured.blocks[index];
+            Fact::read("note", evidence(&page, block, block.start, block.end), FactReader::JevChoice)
+        };
+        let mut notes = Notes::new([note(0), note(1)]);
+        notes.remember_capture(&captured, 1);
+        assert_eq!(candidates(&notes).len(), 2);
+        notes.remember_typing(1, "doc-1", "main:7", "Item B £99");
+        let found = candidates(&notes);
+        assert_eq!(found.len(), 2);
+        assert!(found[0].note.get("typed_by_step").is_none());
+        assert_eq!(found[1].note["typed_by_step"], 1);
+        assert!(typed_rule(&found[0].note).is_empty());
+        assert!(typed_rule(&found[1].note).contains("typed_by_step N holds text that step N of this run typed"));
+    }
+
+    /// A typed draft and an identical published listing are independent evidence: dedup keeps both, marked apart.
+    #[test]
+    fn a_typed_note_and_an_identical_untyped_note_are_both_candidates() {
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::models::{FactReader, Held, SourceControl};
+        use fastbrowse_core::page::BlockKind;
+
+        let mut draft = capture(&[(BlockKind::Paragraph, "Price: $25"), (BlockKind::Paragraph, "Price: $25")]);
+        draft.blocks[0].control_context = Some(SourceControl {
+            role: "editable".into(),
+            label: String::new(),
+            context: None,
+            document: Some("doc-1".into()),
+            held: vec![Held { element: "main:7".into(), value: "Price: $25".into() }],
+        });
+        let published = capture(&[(BlockKind::Paragraph, "Listing"), (BlockKind::Paragraph, "Price: $25")]);
+        let mut notes = Notes::default();
+        for (captured, index) in [(&draft, 0), (&draft, 1), (&published, 1)] {
+            let page = Page::new(captured);
+            let block = &captured.blocks[index];
+            notes.add(Fact::read("note", evidence(&page, block, block.start, block.end), FactReader::JevChoice));
+            notes.remember_capture(captured, 1);
+        }
+        notes.remember_typing(1, "doc-1", "main:7", "Price: $25");
+        let found = candidates(&notes);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].note["typed_by_step"], 1);
+        assert!(found[1].note.get("typed_by_step").is_none());
+        assert_eq!(found[1].occurrence, 0);
+        let all = candidates_from(&notes, false);
+        assert_eq!(all.iter().map(|note| note.occurrence).collect::<Vec<_>>(), [0, 0, 0]);
+    }
+
+    /// Two fills of one value leave one draft: the same typed reading is not counted twice for being typed again.
+    #[test]
+    fn a_value_typed_twice_is_one_candidate() {
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::models::{FactReader, Held, SourceControl};
+        use fastbrowse_core::page::BlockKind;
+
+        let mut notes = Notes::default();
+        for step in [1, 2] {
+            let visit = format!("Visit {step}");
+            let mut draft = capture(&[(BlockKind::Paragraph, visit.as_str()), (BlockKind::Paragraph, "Price: $25")]);
+            draft.blocks[1].control_context = Some(SourceControl {
+                role: "editable".into(),
+                label: String::new(),
+                context: None,
+                document: Some("doc-1".into()),
+                held: vec![Held { element: "main:7".into(), value: "Price: $25".into() }],
+            });
+            let page = Page::new(&draft);
+            let block = &draft.blocks[1];
+            notes.add(Fact::read("note", evidence(&page, block, block.start, block.end), FactReader::JevChoice));
+            notes.remember_capture(&draft, step);
+            notes.remember_typing(step, "doc-1", "main:7", "Price: $25");
+        }
+        assert_eq!(candidates(&notes).len(), 1);
     }
 
     #[tokio::test]

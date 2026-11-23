@@ -1071,6 +1071,8 @@ mod tests {
                         role: "figure".into(),
                         label: "Avatar".into(),
                         context: Some((*position).into()),
+                        document: None,
+                        held: Vec::new(),
                     }),
                     ..base.clone()
                 },

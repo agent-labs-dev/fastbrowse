@@ -174,6 +174,24 @@ pub struct SourceControl {
     pub label: String,
     #[serde(default)]
     pub context: Option<String>,
+    /// The document those controls were read from (its `document_key`): ids are numbered within a document, so the
+    /// same id after a reload names another control. The run's own bookkeeping, held in process: never part of the
+    /// protocol, so never written or read.
+    #[serde(skip)]
+    pub document: Option<String>,
+    /// The editable fields this block is the value of, or holds or sits in (a native field, or a contenteditable host
+    /// a paragraph, row or heading contains), each as the observation names it, with the value the page held. A quote
+    /// from the block may be text a run typed into one of them. Held as `document` is, and unwritten.
+    #[serde(skip)]
+    pub held: Vec<Held>,
+}
+
+/// An editable field as a capture read it: its identity as the observation names a control, and its value exactly as
+/// the page held it, before the capture's whitespace collapse.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Held {
+    pub element: String,
+    pub value: std::sync::Arc<str>,
 }
 
 impl Schema for SourceControl {

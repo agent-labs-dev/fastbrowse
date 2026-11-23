@@ -79,6 +79,7 @@ impl Page for FormPage {
                 page_changed: true,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }

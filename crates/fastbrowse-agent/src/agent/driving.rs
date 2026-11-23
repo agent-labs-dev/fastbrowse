@@ -1044,6 +1044,7 @@ impl Agent {
                 page_changed: false,
                 detail: Some(text),
                 moved: false,
+                landed: None,
             };
         } else {
             let built = match state.built.take() {
@@ -1346,6 +1347,14 @@ impl Agent {
             form,
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
+        if let (Some(entry), Some(landed)) = (state.history.last(), &act.landed)
+            && let Some(text) = &entry.text
+            && entry.changed_site()
+        {
+            // The control is the one the browser reported the text in, which a later read of that control reports.
+            let step = state.history.iter().filter(|entry| entry.changed_site()).count();
+            state.notes.remember_typing(step, &landed.document, &landed.element, text);
+        }
         if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {
             self.event("typed", || {
                 Map::from_iter([("step".into(), state.steps.len().into()), ("value".into(), value.into())])
@@ -1768,6 +1777,15 @@ impl Agent {
                     role: mask(&context.role),
                     label: mask(&context.label),
                     context: context.context.as_deref().map(mask),
+                    document: context.document.clone(),
+                    held: context
+                        .held
+                        .iter()
+                        .map(|held| fastbrowse_core::models::Held {
+                            element: held.element.clone(),
+                            value: mask(&held.value).into(),
+                        })
+                        .collect(),
                 }),
                 href: block.href.as_deref().map(mask),
                 // An address can carry a token in its query, and a link's text is page text like the rest.

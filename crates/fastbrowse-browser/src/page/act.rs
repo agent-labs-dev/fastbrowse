@@ -8,7 +8,7 @@ use std::time::Duration;
 use data_encoding::BASE64;
 use fastbrowse_core::keys;
 use fastbrowse_core::models::{Attachment, Operation, StepFailure, StepOutcome};
-use fastbrowse_core::page::{ActResult, Action, DragPath, NATIVE_DATE_INPUT_TYPES, Observation};
+use fastbrowse_core::page::{ActResult, Action, DragPath, FillReceiver, NATIVE_DATE_INPUT_TYPES, Observation};
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
@@ -398,6 +398,7 @@ impl CdpPage {
             page_changed,
             detail: Some(detail.to_owned()),
             moved: false,
+            landed: None,
         };
         let Some(last) = self.last().filter(|last| last.page_key == observation.page_key) else {
             return Ok(result(StepOutcome::Stale, false, "observation is out of date", None));
@@ -553,6 +554,12 @@ impl CdpPage {
             None => None,
         };
         let (outcome, mut detail, failure) = dispatched?;
+        let landed = match action.operation {
+            Operation::Fill => {
+                self.state.lock().unwrap().fill_receiver.take().filter(|_| outcome == StepOutcome::Executed)
+            }
+            _ => None,
+        };
         if outcome == StepOutcome::Executed
             // The page's own script can answer for the listener, so the address is checked here too.
             && let Some(url) = held.filter(|url| url.starts_with("http://") || url.starts_with("https://"))
@@ -571,6 +578,7 @@ impl CdpPage {
                         page_changed: true,
                         detail: Some(format!("opened a new tab, now active, whose page failed to load: {error}")),
                         moved: true,
+                        landed: None,
                     });
                 }
                 Ok(()) => {}
@@ -581,6 +589,7 @@ impl CdpPage {
                 page_changed: true,
                 detail: Some("opened a new tab, now active".into()),
                 moved: true,
+                landed: None,
             });
         }
         if outcome != StepOutcome::Executed {
@@ -590,6 +599,7 @@ impl CdpPage {
                 page_changed: self.session.pending_dialog().is_some(),
                 detail,
                 moved: false,
+                landed: None,
             });
         }
         if action.operation == Operation::Click
@@ -611,6 +621,7 @@ impl CdpPage {
                 page_changed: true,
                 detail: Some("opened a new tab, now active".into()),
                 moved: true,
+                landed: None,
             });
         }
         let moved = self.moved_by_input(document);
@@ -631,7 +642,7 @@ impl CdpPage {
                 })
             });
         }
-        Ok(ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: changed, detail, moved })
+        Ok(ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: changed, detail, moved, landed })
     }
 
     /// Whether a download landed since `since`, waiting the capture's own task out briefly.
@@ -1124,7 +1135,7 @@ impl CdpPage {
         };
         local_id = handed;
         if !secret && native_date {
-            return self.fill_native_date(session_id, local_id, text).await;
+            return self.fill_native_date(target, local_id, text).await;
         }
         let mut suggests = false;
         for attempt in 0..2 {
@@ -1151,6 +1162,9 @@ impl CdpPage {
             if let Some(refusal) = refusal {
                 return Ok(refusal);
             }
+            // The receiver is read before the text goes in: an input handler that advances focus would otherwise name
+            // the next field, not the one that took the text.
+            let receiver = self.focused_editable(target).await;
             if secret {
                 // Sealed before the renderer can insert, and not earlier: a fill refused before this point typed
                 // nothing, so no frame of it can show the secret.
@@ -1198,6 +1212,7 @@ impl CdpPage {
             };
             suggests = wants;
             if landed {
+                self.state.lock().unwrap().fill_receiver = receiver;
                 break;
             }
             // An editor that took focus after the hand-off looked, and so never got the text, is typed into once more,
@@ -1225,12 +1240,30 @@ impl CdpPage {
         Ok((StepOutcome::Executed, None, None))
     }
 
+    /// The editable the page holds focus in, named as the observation names a control: the field text inserted now
+    /// goes to, which a page that hands focus to another editor makes a different one from the field asked for. It
+    /// is looked for through shadow roots and same-origin frames, whose elements the capture numbers in this
+    /// document's registry. None when focus is in no such editable, or the page cannot be asked.
+    async fn focused_editable(&self, target: &Target) -> Option<FillReceiver> {
+        let script = "(() => { let e = document.activeElement; \
+             for (let inner = null; (inner = e?.shadowRoot?.activeElement ?? \
+                 (['IFRAME', 'FRAME'].includes(e?.tagName) ? e.contentDocument?.activeElement : null)); ) e = inner; \
+             const registry = window.__fastbrowse; \
+             if (!registry || !e || !(e.isContentEditable || ['INPUT', 'TEXTAREA'].includes(e.tagName))) return null; \
+             if (!registry.ids.has(e)) registry.ids.set(e, registry.next++); \
+             return [registry.ids.get(e), String(performance.timeOrigin)]; })()";
+        let result = self.evaluate(&target.0, script).await.ok()?;
+        let [id, document] = result.as_array()?.as_slice() else { return None };
+        Some(FillReceiver { element: format!("{}:{}", target.1, id.as_i64()?), document: document.as_str()?.into() })
+    }
+
     /// Commit an ISO value to a native date/time input the way its own picker would.
     ///
     /// Typed keystrokes land in whichever locale-formatted segment the picker's shadow UI has focused, so the value the
     /// field writer produces (told the type's form by `native_date_form`) is set directly through the property setter
     /// React and friends also patch over, then the input/change events a form's own handlers expect to see.
-    async fn fill_native_date(&self, session_id: &str, local_id: i64, value: &str) -> Result<Outcome, BrowserError> {
+    async fn fill_native_date(&self, target: &Target, local_id: i64, value: &str) -> Result<Outcome, BrowserError> {
+        let session_id = target.0.as_str();
         let script = format!(
             "((id, value) => {{ const e = window.__fastbrowse?.nodes.get(id); \
              if (!e?.isConnected) return null; \
@@ -1238,13 +1271,18 @@ impl CdpPage {
              setter.call(e, value); \
              e.dispatchEvent(new Event('input', {{bubbles: true}})); \
              e.dispatchEvent(new Event('change', {{bubbles: true}})); \
-             return e.value === value; }})({local_id}, {})",
+             return e.value === value ? String(performance.timeOrigin) : false; }})({local_id}, {})",
             py_json(&json!(value))
         );
         let result = self.session.input_window(session_id, self.evaluate(session_id, &script)).await?;
         Ok(match result {
             Value::Null => (StepOutcome::Stale, Some("target disconnected".into()), Some(StepFailure::TargetGone)),
-            Value::Bool(true) => (StepOutcome::Executed, None, None),
+            Value::String(document) => {
+                // The value was set on this field directly, so it is the one that took it.
+                self.state.lock().unwrap().fill_receiver =
+                    Some(FillReceiver { element: format!("{}:{local_id}", target.1), document });
+                (StepOutcome::Executed, None, None)
+            }
             _ => (
                 StepOutcome::Failed,
                 Some("field did not retain the supplied ISO value".into()),

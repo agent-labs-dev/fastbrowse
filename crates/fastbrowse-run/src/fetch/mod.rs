@@ -539,6 +539,7 @@ impl Page for FetchedPage {
                 page_changed: true,
                 detail: None,
                 moved: true,
+                landed: None,
             })
         })
     }
