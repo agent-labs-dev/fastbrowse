@@ -410,6 +410,8 @@ pub(crate) struct RunState {
     /// as quotes from a capture of that page. Held only in the step's effect, a CurseForge save's own notice could not
     /// be cited, and the true answer "the site said the changes were saved" failed its citation check at 0.23 (#1483).
     pub sent_notice: Vec<String>,
+    /// What the page showed before and after that step alike: lines of it are not the notice.
+    pub sent_unchanged: Vec<String>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
     /// Jev's word that the task tells the agent not to take some action, asked once the gate first asks about one.
@@ -583,8 +585,8 @@ impl RunState {
 
     /// The site's reply to a sent commit, quoted from the capture it shows on: notes a claim can cite, kept as context
     /// rather than as a read of the page, so it neither supersedes nor keeps whole what was read there.
-    pub fn record_sent_notice(&mut self, capture: &Capture, lines: &[String]) -> bool {
-        let quotes = crate::retrieval::line_quotes(capture, lines);
+    pub fn record_sent_notice(&mut self, capture: &Capture, lines: &[String], unchanged: &[String]) -> bool {
+        let quotes = crate::retrieval::line_quotes(capture, lines, unchanged);
         if quotes.is_empty() {
             return false;
         }
@@ -926,6 +928,7 @@ impl RunState {
             look: None,
             replied: false,
             sent_notice: Vec::new(),
+            sent_unchanged: Vec::new(),
             downloads_forbidden: None,
             prohibits: None,
             edits: None,

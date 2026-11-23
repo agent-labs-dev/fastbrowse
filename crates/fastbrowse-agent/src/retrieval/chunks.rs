@@ -42,9 +42,11 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
 /// stripped, and each line of the page quoted once. The last, because `added_text` names the last listed of a piece
 /// the page already showed: the first would quote an element that was there before the step. A line found only in a
 /// typed observation, a document title or a kept download is not quoted: none of them is text the page showed.
-pub(crate) fn line_quotes(capture: &Capture, lines: &[String]) -> Vec<Evidence> {
+/// `unchanged` is the text the page showed before the step and after it: a line of only that is never the reply.
+pub(crate) fn line_quotes(capture: &Capture, lines: &[String], unchanged: &[String]) -> Vec<Evidence> {
     let page = Page::new(capture);
     let mut wanted: Vec<&str> = lines.iter().map(|line| text::strip(line)).filter(|line| !line.is_empty()).collect();
+    let known: Vec<&str> = unchanged.iter().map(|line| text::strip(line)).filter(|line| !line.is_empty()).collect();
     let mut quotes = Vec::new();
     let spans: Vec<_> = super::text::splitlines(&page.chars).into_iter().collect();
     // A line the added text fills is that text's quote. Only when none does, the line holding it beside text the page
@@ -58,7 +60,12 @@ pub(crate) fn line_quotes(capture: &Capture, lines: &[String]) -> Vec<Evidence> 
             while end > start && page.chars[end as usize - 1].is_whitespace() {
                 end -= 1;
             }
-            let Some(run) = added_run(&wanted, page.slice(start, end), whole) else { continue };
+            let line = page.slice(start, end);
+            // A line made of text the page showed before the step is not the page's reply, whatever it contains.
+            if !whole && added_run(&known, line, true).is_some() {
+                continue;
+            }
+            let Some(run) = added_run(&wanted, line, whole) else { continue };
             let Some(block) = capture.blocks.iter().find(|block| {
                 block.start <= start
                     && end <= block.end

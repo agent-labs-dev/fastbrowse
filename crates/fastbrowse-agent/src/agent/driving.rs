@@ -111,10 +111,11 @@ impl Agent {
             }
             self.note_effect(state, &observation);
             let notice = std::mem::take(&mut state.sent_notice);
+            let unchanged = std::mem::take(&mut state.sent_unchanged);
             if !notice.is_empty() {
                 // A failed capture loses only the quotes: the step's effect still records what the page added.
                 if let Ok(capture) = self.capture().await {
-                    self.record_sent_notice(state, &capture, &notice);
+                    self.record_sent_notice(state, &capture, &notice, &unchanged);
                 }
             }
             self.settle(state, &observation).await?;
@@ -1616,8 +1617,14 @@ impl Agent {
 
     /// A sent notice's capture is kept as a read's is: cited but never kept, a result quoting the notice carried no
     /// capture artifact to verify the quote against.
-    pub(super) fn record_sent_notice(&self, state: &mut RunState, capture: &Capture, lines: &[String]) {
-        if state.record_sent_notice(capture, lines) {
+    pub(super) fn record_sent_notice(
+        &self,
+        state: &mut RunState,
+        capture: &Capture,
+        lines: &[String],
+        unchanged: &[String],
+    ) {
+        if state.record_sent_notice(capture, lines, unchanged) {
             self.seen().read_captures.entry(capture.sha256.clone()).or_insert_with(|| capture.text.clone());
         }
     }
@@ -1659,6 +1666,7 @@ impl Agent {
             last.for_step = sighted.clone();
         }
         state.sent_notice.clear();
+        state.sent_unchanged.clear();
         let Some(before) = state.acted_from.take() else { return };
         state.settle_change(observation);
         let landed = read_key(observation);
@@ -1713,6 +1721,7 @@ impl Agent {
             let added = fastbrowse_core::effects::added_text(&before, observation);
             state.replied = (state.committing || keeping || last.look.is_some()) && !added.is_empty();
             if state.committing || keeping {
+                state.sent_unchanged = fastbrowse_core::effects::unchanged_text(&before, observation);
                 state.sent_notice = added;
             }
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)

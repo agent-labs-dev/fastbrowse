@@ -135,6 +135,16 @@ fn shows(control: &Control, choice: &str) -> bool {
 ///
 /// The viewport's text and the text outside it are read together, so scrolling a piece into view adds nothing.
 pub fn added_text(before: &Observation, after: &Observation) -> Vec<String> {
+    split_text(before, after).0
+}
+
+/// The pieces of `after`'s text that `before` showed too: what a step left as it was.
+pub fn unchanged_text(before: &Observation, after: &Observation) -> Vec<String> {
+    split_text(before, after).1
+}
+
+/// `after`'s text pieces, in order, as (added, unchanged).
+fn split_text(before: &Observation, after: &Observation) -> (Vec<String>, Vec<String>) {
     fn pieces(observation: &Observation) -> impl Iterator<Item = &str> {
         [&observation.viewport_text, &observation.offscreen_text]
             .into_iter()
@@ -146,16 +156,17 @@ pub fn added_text(before: &Observation, after: &Observation) -> Vec<String> {
     for piece in pieces(before) {
         *told.entry(piece).or_default() += 1;
     }
-    pieces(after)
-        .filter(|piece| match told.get_mut(piece) {
+    let (mut added, mut kept) = (Vec::new(), Vec::new());
+    for piece in pieces(after) {
+        match told.get_mut(piece) {
             Some(left) if *left > 0 => {
                 *left -= 1;
-                false
+                kept.push(piece.to_string());
             }
-            _ => true,
-        })
-        .map(str::to_string)
-        .collect()
+            _ => added.push(piece.to_string()),
+        }
+    }
+    (added, kept)
 }
 
 /// What changed from `before` to `after`. With `chosen`, the option clicked in between, a field showing it counts as
