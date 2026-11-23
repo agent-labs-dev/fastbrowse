@@ -287,14 +287,15 @@ impl Submitted {
     fn told(&self, target: Option<&Control>, observation: &Observation) -> String {
         let same_page = (&observation.url, &observation.document_key) == (&self.document.0, &self.document.1);
         let same_frame = same_page && target.is_some_and(|t| t.frame_id == self.frame_id);
-        let same_id = target.and_then(|t| t.form_id.as_ref()) == Some(&self.form_id);
+        let current_form = target.and_then(|t| t.form_id.as_ref());
+        let same_id = current_form == Some(&self.form_id);
         let frame_document = target.and_then(|t| t.frame_document_key.as_ref());
         let frame_reloaded = match (self.frame_document_key.as_ref(), frame_document) {
             (Some(previous), Some(current)) => previous != current,
             // Older observations lack the receiving document, so a changed id could be a reload.
             _ => !same_id,
         };
-        let which = if same_frame && self.frame_id.is_some() && frame_reloaded {
+        let which = if same_frame && self.frame_id.is_some() && current_form.is_some() && frame_reloaded {
             "an earlier form whose relationship to the current form is unknown"
         } else if same_frame && same_id {
             "the same form the action now asked about submits"
