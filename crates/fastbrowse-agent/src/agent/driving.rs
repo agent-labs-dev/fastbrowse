@@ -114,7 +114,7 @@ impl Agent {
             if !notice.is_empty() {
                 // A failed capture loses only the quotes: the step's effect still records what the page added.
                 if let Ok(capture) = self.capture().await {
-                    state.record_sent_notice(&capture, &notice);
+                    self.record_sent_notice(state, &capture, &notice);
                 }
             }
             self.settle(state, &observation).await?;
@@ -1612,6 +1612,14 @@ impl Agent {
                 .await?;
         }
         Ok(())
+    }
+
+    /// A sent notice's capture is kept as a read's is: cited but never kept, a result quoting the notice carried no
+    /// capture artifact to verify the quote against.
+    pub(super) fn record_sent_notice(&self, state: &mut RunState, capture: &Capture, lines: &[String]) {
+        if state.record_sent_notice(capture, lines) {
+            self.seen().read_captures.entry(capture.sha256.clone()).or_insert_with(|| capture.text.clone());
+        }
     }
 
     /// Record on the last action what it did, which the next choice and recovery both read.

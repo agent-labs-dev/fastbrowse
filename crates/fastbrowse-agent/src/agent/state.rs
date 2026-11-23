@@ -583,10 +583,10 @@ impl RunState {
 
     /// The site's reply to a sent commit, quoted from the capture it shows on: notes a claim can cite, kept as context
     /// rather than as a read of the page, so it neither supersedes nor keeps whole what was read there.
-    pub fn record_sent_notice(&mut self, capture: &Capture, lines: &[String]) {
+    pub fn record_sent_notice(&mut self, capture: &Capture, lines: &[String]) -> bool {
         let quotes = crate::retrieval::line_quotes(capture, lines);
         if quotes.is_empty() {
-            return;
+            return false;
         }
         let steps_taken = self.history.iter().filter(|entry| entry.changed_site()).count();
         self.notes.remember_capture(capture, steps_taken);
@@ -594,6 +594,7 @@ impl RunState {
             let text = quote.quote.clone();
             self.notes.add(Fact::read(&text, quote, fastbrowse_core::models::FactReader::JevChoice));
         }
+        true
     }
 
     /// The notes with the pages read for one fact whole. A task over some pages of a list leaves out what was read on

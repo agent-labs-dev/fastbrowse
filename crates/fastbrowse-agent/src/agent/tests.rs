@@ -12,16 +12,17 @@ use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
     Artifact, ArtifactKind, Authorization, BudgetResource, BudgetStop, CostBasis, CostComponent, CostLine, Decider,
-    Event, EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
+    Event, EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, RunResult, Status, StepOutcome,
+    StepResult,
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Failure, Media, Observation, Page,
     PageResult, Unread,
 };
-use fastbrowse_core::py::dump::Dump;
+use fastbrowse_core::py::{dump::Dump, sha256_hex};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::acting::{Carried, IN_RECORD, gate_questions};
 use super::driving::edit_progress;
@@ -40,6 +41,18 @@ struct NoPage;
 impl Page for NoPage {
     fn artifacts(&self) -> Vec<Artifact> {
         Vec::new()
+    }
+
+    fn keep_capture<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        let artifact = Artifact {
+            kind: ArtifactKind::Capture,
+            name: name.into(),
+            mime_type: "text/plain; charset=utf-8".into(),
+            size_bytes: text.len() as i64,
+            sha256: sha256_hex(text.as_bytes()),
+            uri: format!("memory://{name}"),
+        };
+        Box::pin(async move { Ok(Some(artifact)) })
     }
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
@@ -773,6 +786,38 @@ fn test_the_reply_to_a_sent_commit_is_a_note_a_claim_can_cite() {
                 .all(|evidence| evidence.rendered_text && evidence.capture_sha256 == page.sha256)
         );
     }
+}
+
+#[tokio::test]
+async fn a_sent_notice_capture_is_kept_for_its_citation() {
+    let agent = agent();
+    let page = capture(&[(BlockKind::Paragraph, "Changes saved successfully")]);
+    let mut state = run_state();
+    agent.record_sent_notice(&mut state, &page, &["Changes saved successfully".into()]);
+    let mut result = RunResult {
+        status: Status::Complete,
+        budget: None,
+        answer: None,
+        data: Value::Null,
+        evidence: vec![state.notes.evidence().values().next().expect("sent notice evidence").clone()],
+        steps: Vec::new(),
+        cost: super::breakdown(Vec::new()),
+        artifacts: Vec::new(),
+        citations: Vec::new(),
+        error: None,
+        failure_kind: None,
+        final_url: None,
+        final_frame: None,
+        recordings: Vec::new(),
+        wall: None,
+        browser: None,
+    };
+
+    agent.keep_captures(&mut result).await;
+
+    let uri = result.evidence[0].capture_artifact.as_deref().expect("sent notice capture artifact");
+    let artifact = result.artifacts.iter().find(|artifact| artifact.uri == uri).expect("named capture artifact");
+    assert_eq!(artifact.sha256, result.evidence[0].capture_sha256);
 }
 
 #[tokio::test]
