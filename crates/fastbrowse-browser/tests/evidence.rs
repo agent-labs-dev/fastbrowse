@@ -281,6 +281,138 @@ async fn test_an_open_modal_is_named_and_the_page_behind_it_leaves() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_dialog_without_aria_modal_is_modal_when_the_page_behind_it_is_inert() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // CurseForge's "Delete media": a plain role="dialog" in a portal beside the app root, which goes inert.
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<div id="app"><a href="/a">Alpha</a><button>Edit</button></div>' +
+          '<div class="portal"><div role="dialog"><h2>Delete media</h2><button>Cancel</button><button>OK</button></div></div>';
+        document.querySelector('#app').setAttribute('aria-hidden', 'true');
+        "#,
+    )
+    .await;
+    let open = h.observe().await;
+    assert_eq!(open.modal.as_deref(), Some(""));
+    let labels: Vec<&str> = open.controls.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["Cancel", "OK"]);
+    // A dialog beside only a decorative icon, or one saying it is not modal, leaves the page behind it alone.
+    eval_active(
+        &h.session,
+        r#"
+        document.querySelector('#app').removeAttribute('aria-hidden');
+        document.querySelector('.portal').insertAdjacentHTML('beforebegin', '<svg aria-hidden="true"></svg>');
+        "#,
+    )
+    .await;
+    assert_eq!(h.observe().await.modal, None);
+    eval_active(
+        &h.session,
+        "document.querySelector('#app').setAttribute('aria-hidden', 'true'); document.querySelector('[role=dialog]').setAttribute('aria-modal', 'false')",
+    )
+    .await;
+    assert_eq!(h.observe().await.modal, None);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_modal_with_no_dialog_role_is_modal_when_the_page_behind_it_is_aria_hidden() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // CurseForge's gallery edit drawer: a role="presentation" MUI modal root in <body>, no dialog role anywhere, with
+    // the app root, a hidden iframe and scripts as its siblings.
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<div id="app" aria-hidden="true"><a href="/a">Alpha</a><button>Edit</button></div>' +
+          '<iframe aria-hidden="true"></iframe><script></script>' +
+          '<div role="presentation"><div><label>Title <input></label><button>Apply</button><button>Cancel</button></div></div>';
+        "#,
+    )
+    .await;
+    let open = h.observe().await;
+    assert_eq!(open.modal.as_deref(), Some(""));
+    let labels: Vec<&str> = open.controls.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["Title", "Apply", "Cancel"]);
+    // A named dialog inside names the modal.
+    eval_active(
+        &h.session,
+        "document.querySelector('[role=presentation] div').setAttribute('role', 'dialog'); document.querySelector('[role=presentation] div').setAttribute('aria-label', 'Edit media')",
+    )
+    .await;
+    assert_eq!(h.observe().await.modal.as_deref(), Some("Edit media"));
+    // Once the page behind it is no longer hidden, nothing is modal.
+    eval_active(&h.session, "document.querySelector('#app').removeAttribute('aria-hidden')").await;
+    assert_eq!(h.observe().await.modal, None);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_dormant_aria_hidden_section_does_not_make_the_page_modal() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // A responsive menu kept aria-hidden and not drawn while closed, beside the page's usable content.
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<aside aria-hidden="true" style="display:none"><button>Menu item</button></aside>' +
+          '<main><button>Continue</button></main>';
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    assert_eq!(obs.modal, None);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_carousel_with_aria_hidden_clones_is_not_modal() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // Slick-style clones are aria-hidden and hold links beside the visible slide, while the page's own navigation
+    // stays usable outside the carousel.
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<nav><a href="/home">Home</a></nav>' +
+          '<div class="slick"><div><a href="/one">Slide one</a></div><div aria-hidden="true"><a href="/c" tabindex="-1">Clone</a></div></div>';
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    assert_eq!(obs.modal, None);
+    let labels: Vec<&str> = obs.controls.iter().map(|c| c.label.as_str()).collect();
+    assert!(labels.contains(&"Home") && labels.contains(&"Slide one"), "{labels:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_duplicate_fields_keep_their_value_change_across_a_redraw() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    let page = |value: &str| {
+        format!(
+            "document.body.innerHTML = '<form><label>Name <input value=\"{value}\"></label></form><form><label>Name <input></label></form>'"
+        )
+    };
+    eval_active(&h.session, &page("")).await;
+    let before = h.observe().await;
+    // Both forms are rebuilt, so every control gets a new id and the two fields share their name.
+    eval_active(&h.session, &page("Ada")).await;
+    let after = h.observe().await;
+    let done = fastbrowse_core::effects::effect(&before, &after, None, false);
+    assert_eq!(
+        done.set,
+        [(after.controls[0].id.clone(), fastbrowse_core::effects::Setting::Value(Some("Ada".into())))]
+    );
+    assert!(done.shown.is_empty(), "{}", done.summary);
+    assert!(!done.summary.contains("removed"), "{}", done.summary);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_drawing_below_the_fold_does_not_ask_for_a_screenshot() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");

@@ -32,6 +32,7 @@ impl CdpPage {
                 page_changed: false,
                 detail: Some(format!("the point is not on control {control}")),
                 moved: false,
+                landed: None,
             });
         }
         let before = self.fingerprint().await?;
@@ -52,6 +53,7 @@ impl CdpPage {
                 if opened { "opened a new tab, now active" } else { "clicked where the screenshot shows it" }.into(),
             ),
             moved: opened,
+            landed: None,
         })
     }
 

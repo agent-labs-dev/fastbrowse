@@ -856,6 +856,7 @@ impl DeskpilotPage {
             page_changed: false,
             detail,
             moved: false,
+            landed: None,
         };
         match sent {
             Ok(Some(refused)) => Ok(outcome(StepOutcome::Failed, Some(refused))),
@@ -873,6 +874,7 @@ impl DeskpilotPage {
                     page_changed: changed,
                     detail,
                     moved: false,
+                    landed: None,
                 })
             }
             Err(ToolError::Refused { code, message }) => match code.as_str() {
@@ -901,6 +903,7 @@ impl DeskpilotPage {
                     page_changed: false,
                     detail: Some("the window did not change".to_string()),
                     moved: false,
+                    landed: None,
                 });
             }
         }
@@ -918,6 +921,7 @@ impl DeskpilotPage {
                     page_changed: true,
                     detail: Some("a window opened since this observation".to_string()),
                     moved: false,
+                    landed: None,
                 });
             }
             if let Ok(Err(error)) = opened {
@@ -931,6 +935,7 @@ impl DeskpilotPage {
                     page_changed: false,
                     detail: Some("the window list did not answer".to_string()),
                     moved: false,
+                    landed: None,
                 });
             }
         }
@@ -943,6 +948,7 @@ impl DeskpilotPage {
                 page_changed: false,
                 detail: Some("the window was read again since this observation".to_string()),
                 moved: false,
+                landed: None,
             });
         }
         // Only an action that sends input to the app can be what closes it: a wait sends nothing, and a tab switch
@@ -962,6 +968,7 @@ impl DeskpilotPage {
                 page_changed: true,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         } else {
             let remaining = |deadline: Instant| deadline.saturating_duration_since(Instant::now());
@@ -1109,6 +1116,7 @@ impl Page for DeskpilotPage {
                     page_changed: false,
                     detail: Some("deskpilot cannot tell which control a point is on".into()),
                     moved: false,
+                    landed: None,
                 });
             }
             if self.still_closed().await? {
