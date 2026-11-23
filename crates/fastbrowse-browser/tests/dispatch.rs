@@ -2276,11 +2276,15 @@ async fn test_a_real_dnd_kit_card_is_lifted_moved_and_dropped_by_keys() {
 }
 
 /// A picked-up card moves by transform while the DOM keeps its order: each arrow must still read as a new page state,
-/// or a reorder longer than the stall budget is cut off.
-#[tokio::test]
-async fn test_moving_a_picked_up_card_reaches_a_new_page_state() {
+/// or a reorder longer than the stall budget is cut off, whatever the page calls its cards.
+async fn check_sortable_moves_reach_new_states(role_description: &str) {
     let Some(h) = harness().await else { return };
     h.goto("/dndkit-sortable.html").await;
+    eval_active(
+        &h.page,
+        &format!("document.querySelectorAll('[aria-roledescription]').forEach(e => e.setAttribute('aria-roledescription', '{role_description}')); true"),
+    )
+    .await;
     let mut seen = Vec::new();
     for key in ["Space", "ArrowDown", "ArrowDown"] {
         let now = h.observe().await;
@@ -2293,6 +2297,16 @@ async fn test_moving_a_picked_up_card_reaches_a_new_page_state() {
     assert_ne!(seen[0], seen[1], "the first ArrowDown moves the card");
     assert_ne!(seen[1], seen[2], "the second ArrowDown moves it again");
     h.close().await;
+}
+
+#[tokio::test]
+async fn test_moving_a_picked_up_card_reaches_a_new_page_state() {
+    check_sortable_moves_reach_new_states("sortable").await;
+}
+
+#[tokio::test]
+async fn test_moving_a_picked_up_card_with_a_custom_role_description_reaches_a_new_page_state() {
+    check_sortable_moves_reach_new_states("draggable").await;
 }
 
 /// A tree's child group is a separate set from its parent's siblings.

@@ -2085,8 +2085,9 @@
 
   // "First" and "last" are places in a list, which a label does not state. The page's own `aria-posinset` and
   // `aria-setsize` say it where present; otherwise the place among the visible items of the nearest list container.
-  // A sortable's items sit in a plain container, and a tree's child group is its own set.
-  const SORTABLE = '[aria-roledescription="sortable"]';
+  // A custom widget's items name themselves with an `aria-roledescription` (a sortable card, a slide) and sit in a plain
+  // container, whatever the page calls them or in which language. A tree's child group is its own set.
+  const SORTABLE = '[aria-roledescription]';
   const SET_ITEM = `li,[role="listitem"],[role="option"],[role="row"],[role="treeitem"],${SORTABLE}`;
   const SET_LIST = 'ul,ol,[role="list"],[role="listbox"],[role="grid"],[role="tree"],[role="tree"] [role="group"]';
   const setOwner = i => (i.matches(SORTABLE) ? i.parentElement : i.parentElement?.closest(SET_LIST));
