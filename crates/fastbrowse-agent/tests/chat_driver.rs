@@ -347,3 +347,17 @@ async fn test_a_secret_is_typed_by_name_and_its_value_never_reaches_the_driver()
     assert!(sent[0].iter().any(|message| message.content.contains("by name: pw")), "{:?}", sent[0]);
     assert!(sent.iter().flatten().all(|message| !message.content.contains("hunter2")));
 }
+
+#[tokio::test]
+async fn test_done_reads_the_page_in_front_of_it_and_ends_in_one_turn() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "done"}]})]);
+    let result = run(page, driver.clone()).await;
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    assert_eq!(driver.sent.lock().unwrap().len(), 1);
+    assert!(
+        result.steps.iter().any(|step| step.operation == fastbrowse_core::models::Operation::Read),
+        "{:?}",
+        result.steps
+    );
+}

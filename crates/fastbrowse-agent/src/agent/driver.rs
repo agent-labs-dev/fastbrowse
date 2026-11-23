@@ -40,6 +40,8 @@ pub(super) struct Chat {
     planned_on: Option<(String, String)>,
     /// What code tells the model before the next page: a refusal, a stall, a dropped plan.
     pub(super) notices: Vec<String>,
+    /// The page state last read, as its url, document and page key, so `done` reads the page in front of it only once.
+    read_on: Option<(String, String, String)>,
 }
 
 /// One action the model asks for.
@@ -112,9 +114,9 @@ Tools:
 gave; back() goes back.
 - wait() waits until the page changes, for a page that is still loading or checking the browser.
 - read() records what the current page shows as evidence. The final answer is written only from pages you read, so \
-read each page that shows part of the answer, after it shows it.
-- done() ends the run once the task is carried out and the pages you read show the answer. It is refused when what was \
-read does not support it, and you are told so.
+read each earlier page that shows part of the answer, while it shows it.
+- done() reads the current page, then ends the run once the task is carried out and the pages read show the answer. \
+It is refused when they do not support it, and you are told so.
 - give_up(status, reason) ends the run when the task cannot be finished: needs_login (a sign-in no secret covers), \
 needs_input (a value the task does not give), blocked (a bot check), unavailable (the site is down or the thing does \
 not exist), stuck (nothing left to try).
@@ -222,6 +224,11 @@ fn decision(operation: Operation, target: Option<Control>, url: Option<String>, 
 
 fn page_of(observation: &Observation) -> (String, String) {
     (observation.url.clone(), observation.document_key.clone())
+}
+
+/// A page state as read: a date picked in place keeps the url and document but changes the page key.
+fn read_key(observation: &Observation) -> (String, String, String) {
+    (observation.url.clone(), observation.document_key.clone(), observation.page_key.clone())
 }
 
 /// What the action acts on, for a refusal that names it.
@@ -381,12 +388,19 @@ impl Agent {
         let on = |id: &Option<String>| id.as_deref().map(control);
         let made = match &act {
             Act::Done => {
+                // Done means the page in front of the model shows the task done. Ending on it unread made every run spend a
+                // refused done and a read turn: the check judged only what was read, and the model saw the answer but had
+                // not read it.
+                if state.chat.read_on.as_ref() != Some(&read_key(observation)) {
+                    Box::pin(self.step(state, observation, &decision(Operation::Read, None, None, None))).await?;
+                    state.chat.read_on = Some(read_key(observation));
+                }
                 let finished = self.finish(state, observation, output_schema, until).await?;
                 if finished.is_none() {
                     state.chat.queue.clear();
                     state.chat.notices.push(
-                        "done was refused: what was read does not show the task done. Read the page that shows it, \
-                         or carry out what is left."
+                        "done was refused: what was read, this page included, does not show the task done. Read the page \
+                         that shows it, or carry out what is left."
                             .into(),
                     );
                 }
@@ -431,7 +445,12 @@ impl Agent {
             return Ok(None);
         };
         match Box::pin(self.step(state, observation, &decision)).await {
-            Ok(()) => Ok(None),
+            Ok(()) => {
+                if decision.operation == Operation::Read {
+                    state.chat.read_on = Some(read_key(observation));
+                }
+                Ok(None)
+            }
             Err(Flow::Unsure(unsure)) => {
                 state.chat.queue.clear();
                 state.chat.notices.push(format!("{act:?} was refused: {}", self.redact(&unsure.reason)));
