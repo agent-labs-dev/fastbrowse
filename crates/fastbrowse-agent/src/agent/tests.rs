@@ -11441,9 +11441,17 @@ async fn test_a_press_copied_from_a_task_that_names_no_key_is_not_made() {
     let mut state = run_state();
     state.task = "Make the document's text bold, then save the document.".into();
     state.edits = Some(Edits::Allowed);
-    let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(editor))).await;
-    let Err(Flow::Unsure(unsure)) = result else { panic!("words that are no key were pressed: {result:?}") };
-    assert!(unsure.reason.contains("no key"), "{}", unsure.reason);
+    let decision = code_decision(Operation::Press, Some(editor));
+    for carried in [false, true] {
+        if carried {
+            let mut last = executed(Some(Operation::Press), Some("Editor"), true);
+            last.text = Some("Backspace".into());
+            state.history.push(last);
+        }
+        let result = agent.action(&mut state, &page, &decision).await;
+        let Err(Flow::Unsure(unsure)) = result else { panic!("words that are no key were pressed: {result:?}") };
+        assert!(unsure.reason.contains("no key"), "{}", unsure.reason);
+    }
 }
 
 #[tokio::test]

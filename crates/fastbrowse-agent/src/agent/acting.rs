@@ -1413,7 +1413,7 @@ impl Agent {
             }
             Chosen::Instead(TASK_KEY) => {
                 let decision = Decision { target: Some(carried.clone()), ..decision.clone() };
-                Ok(Some(self.text_with_scope(state, observation, &decision, carried, true).await?))
+                self.task_key(state, observation, &decision, carried).await.map(Some)
             }
             Chosen::Instead(_) => Ok(None),
         }
