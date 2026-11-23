@@ -2639,14 +2639,19 @@ impl Agent {
         } else if holds("refused")? {
             Carried::Refused
         } else {
-            // Spanned from the masked task, as the header above is: the clauses become choice labels, and a
-            // resolved secret sitting in one reached Jev unmasked while the header beside it was masked (#1534).
-            // Masking blanks at equal length, so the clauses and their indices are the task's own.
-            let steps = spans(&task, SpanKind::Str);
-            let criteria = steps
+            // The clauses are spanned from the task as it stands and cut from the masked task at the same
+            // offsets: a resolved secret sitting in a clause reached Jev unmasked while the header beside it
+            // was masked (#1534). Masking blanks at equal length, so the boundaries are the task's own, a
+            // secret holding a sentence delimiter cannot redraw them, and one spanning two clauses is still
+            // blanked whole rather than left in pieces either side of the cut.
+            let steps = spans(&state.task, SpanKind::Str);
+            let masked: Vec<char> = task.chars().collect();
+            let labels: Vec<String> =
+                steps.iter().map(|(start, end, _)| masked[*start..*end].iter().collect()).collect();
+            let criteria = labels
                 .iter()
                 .enumerate()
-                .map(|(index, (_, _, step))| (index.to_string(), JsonValue::from(step.clone())))
+                .map(|(index, label)| (index.to_string(), JsonValue::from(label.clone())))
                 .collect();
             // Asked which clause is undone without saying which kind, Jev named the one asking to be told the answer, 3
             // times in 3, on a run that had not yet written what that answer was to be read from (#1186), and recovery
@@ -2660,10 +2665,10 @@ impl Agent {
                 )
                 .await?;
             let index = picked.parse::<usize>().map_err(|_| DecisionError::failed("expected an undone task step"))?;
-            let Some((_, _, step)) = steps.get(index) else {
+            let Some(label) = labels.get(index) else {
                 return Err(DecisionError::failed("expected an undone task step").into());
             };
-            Carried::Undone(step.clone())
+            Carried::Undone(label.clone())
         })
     }
 

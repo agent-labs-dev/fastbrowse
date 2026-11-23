@@ -3005,6 +3005,27 @@ async fn test_the_done_check_masks_a_secret_in_the_undone_clause_labels() {
     assert_eq!(step, labels[0][0]);
 }
 
+/// A secret holding a sentence delimiter must not redraw the clauses: masking first would blank the full stop
+/// inside it and merge the steps either side of it into one choice.
+#[tokio::test]
+async fn test_the_done_check_masks_a_secret_holding_a_sentence_delimiter() {
+    let page = observation(&[]);
+    let mut state = run_state();
+    state.task = "Enter the code pass. word in the box. Then press Submit.".into();
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("code", "pass. word", None);
+    let carried = agent.actions_done(&mut state, &page).await.unwrap();
+    let labels = jev.6.lock().unwrap();
+    assert_eq!(labels.len(), 1, "{labels:?}");
+    assert_eq!(labels[0].len(), 3, "{labels:?}");
+    for label in &labels[0] {
+        assert!(!label.contains("pass"), "{label}");
+    }
+    let Carried::Undone(step) = carried else { panic!("expected an undone step, got {carried:?}") };
+    assert_eq!(step, labels[0][0]);
+}
+
 /// Shown the run's start beside "Tidy it up for me.", Jev judged a form posting to /list/delete reversible on an
 /// unauthorized run: the gate asks about the caller's task, never where the run opened.
 #[tokio::test]
