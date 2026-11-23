@@ -226,11 +226,13 @@ fn a_read_keeps_the_last_unfinished_step_in_the_next_decision() {
     let request = crate::policy::build_request(&observed, &controls, &context, &Default::default(), 64);
     assert_eq!(request.state["unfinished_step"], step);
     assert_eq!(request.state["answered_in_notes"], true);
+    assert_eq!(state.read_note(), "Read this content. The notes hold evidence for the requested answer.");
     assert!(request.state.get("problem").is_none());
     assert!(request.questions["operation"].dump_json().contains("last completion check"));
     assert!(request.questions["click_target"].dump_json().contains("If unfinished_step still needs work"));
 
     state.undone = None;
+    assert_eq!(state.read_note(), "Read this content. The notes hold evidence that answers the task.");
     let context = agent.context(&state, &observed, Vec::new(), false, false).unwrap();
     let request = crate::policy::build_request(&observed, &controls, &context, &Default::default(), 64);
     assert!(request.state.get("unfinished_step").is_none());
