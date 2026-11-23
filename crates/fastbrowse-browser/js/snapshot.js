@@ -2035,6 +2035,22 @@
     }
     return '';
   };
+  // A control whose label is its own can still belong to one record of several: CurseForge puts "Hide 3 Replies" in a
+  // comment's list item beside its card, so it never met a twin, took the section heading "Comments" from the fallback
+  // below, and a run read another comment's counter as the count of the replies it asked about (#1467). The record's
+  // other controls are named by that record, so a control sharing it is named the same way. A record holding no other
+  // control, as a navigation list's items do, names nothing about a lone control, and a lone record is no choice among
+  // several.
+  const RECORD = 'article,li,[role="listitem"]';
+  for (const c of controls) {
+    if (c.context) continue;
+    const element = registry.nodes.get(c.id);
+    const record = element.closest(RECORD);
+    if (!record?.parentElement || [...record.parentElement.children].filter(e => e.matches(RECORD)).length < 2) continue;
+    if (![...record.querySelectorAll('*')].some(e => e !== element && controlByElement.has(e))) continue;
+    const context = contextOf(element, new Map(), c.label);
+    if (context) c.context = context;
+  }
   for (const c of controls) {
     if (!c.context) {
       const context = nearestHeading(registry.nodes.get(c.id), c.label);
