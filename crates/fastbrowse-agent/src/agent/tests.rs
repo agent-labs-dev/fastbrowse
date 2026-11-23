@@ -1917,7 +1917,7 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     let controls = [comment, top.clone(), text, post.clone()];
     let page = observation(&controls);
     assert_eq!(crate::policy::Submitted::of(Operation::Fill, &controls[2], &page), None, "a fill submits nothing");
-    // Form ids are numbered per document: the same id on another page is another form.
+    // A new document at the same address may have reloaded the same form.
     let elsewhere = Observation { document_key: "later-document".into(), ..page.clone() };
     for (target, seen) in [(&top, &page), (&post, &page), (&post, &elsewhere)] {
         state.history.push(HistoryEntry {
@@ -1937,7 +1937,12 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
         actions[1]["form"],
         "the same form the action now asked about submits; in it, 'Comment text area' holds 'Thanks for the log'"
     );
-    assert!(actions[2]["form"].as_str().is_some_and(|form| form.starts_with("a different form")), "{actions}");
+    assert!(
+        actions[2]["form"]
+            .as_str()
+            .is_some_and(|form| form.starts_with("a form from an earlier document at this address")),
+        "{actions}"
+    );
     let mut password = in_form(Control::new("p", "textbox", "Password", [Operation::Fill]), "top");
     (password.sensitive, password.value) = (true, Some("hunter2".into()));
     let signed = observation(&[password, top.clone()]);

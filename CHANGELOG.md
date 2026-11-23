@@ -12,6 +12,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - Steps fit pictures and text to the decision model's context. When a screenshot would overflow the step budget, the agent drops it before cutting page text or controls. OpenRouter decision model pins, including catalog aliases, use the listed context, price and image support. Question names are encoded for each decision wire and restored in the answers.
+- After an overlay changes, the agent sees which previously covered actions are available again. When checking whether a form was already sent, it keeps the earlier submission in view across reloads.
+- A read keeps the facts needed to derive an answer, such as the values used to choose a winner, even when the requested answer only names the result.
+
 - Install Chrome extension 0.1.2 for the full command set. Extension 0.1.1 can still run tasks and releases request interception when the run closes.
 
 - **A drawn surface can receive a drag path.** A canvas, image or video the page draws on, such as a signature pad, can now receive a complete press, movement and release path chosen from the current screenshot, including Shift, while ordinary drags between controls keep their existing drop-target flow ([#1306](https://github.com/agent-labs-dev/fastbrowse/issues/1306)).
