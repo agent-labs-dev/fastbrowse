@@ -73,14 +73,15 @@ pub(crate) fn line_quotes(capture: &Capture, lines: &[String]) -> Vec<Evidence> 
 
 /// The consecutive added pieces that read as `line` once whitespace is left out. An observation lists each DOM text
 /// node on its own line, while a capture joins the inline content around it, so "Changes <strong>saved</strong>
-/// successfully" is three added pieces and one captured line.
+/// successfully" is three added pieces and one captured line. The last such run, as the capture is read from its end:
+/// a later line that reads like one of the notice's pieces must take its own piece, not the notice's.
 fn added_run(wanted: &[&str], line: &str) -> Option<std::ops::Range<usize>> {
     let squeezed = |text: &str| text.split_whitespace().collect::<String>();
     let line = squeezed(line);
     if line.is_empty() {
         return None;
     }
-    (0..wanted.len()).find_map(|from| {
+    (0..wanted.len()).rev().find_map(|from| {
         let mut joined = String::new();
         for (at, piece) in wanted.iter().enumerate().skip(from) {
             joined.push_str(&squeezed(piece));
