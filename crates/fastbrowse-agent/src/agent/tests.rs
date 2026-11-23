@@ -11263,6 +11263,20 @@ fn a_page_a_commit_loaded_is_not_offered_as_a_reload() {
     assert_eq!(run_state().reload_target(&at("https://example.test/p?token=\u{2022}\u{2022}\u{2022}", &[])), None);
 }
 
+/// A committing checkbox or menu is observed by its own step, not by note_effect, so the document it loaded was never
+/// recorded and an unsubscribe endpoint it navigated to was offered as a reload that sends the commit again.
+#[test]
+fn a_document_a_committing_setting_loaded_is_not_offered_as_a_reload() {
+    let before = Observation { document_key: "form".into(), ..at("https://example.test/prefs", &[]) };
+    let landed = Observation { document_key: "done".into(), ..at("https://example.test/unsubscribe?id=3", &[]) };
+    let mut state = run_state();
+    super::driving::note_commit(&mut state.behind_dialog, &mut state.committed_documents, &before, &landed, true);
+    assert_eq!(state.reload_target(&landed), None);
+    let mut state = run_state();
+    super::driving::note_commit(&mut state.behind_dialog, &mut state.committed_documents, &before, &landed, false);
+    assert!(state.reload_target(&landed).is_some());
+}
+
 #[test]
 fn a_read_the_step_chose_keeps_the_steps_word_that_the_page_holds_evidence() {
     // Counting quotes across ten pages, the step chose to read page 10 judging it showed what the task needs (0.89), and

@@ -1,5 +1,6 @@
 //! The loop and its step: observe, judge what the last action did, decide, gate and act.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::time::Instant;
 
@@ -1304,6 +1305,15 @@ impl Agent {
                     uncover(&mut state.idle);
                 }
                 state.acted_from = None;
+                // This branch observes the landed page itself, so note_effect never sees it: a committing checkbox
+                // that navigates to its result must still withhold that document from reload.
+                note_commit(
+                    &mut state.behind_dialog,
+                    &mut state.committed_documents,
+                    observation,
+                    &landed,
+                    state.committing && result.outcome == StepOutcome::Executed,
+                );
                 let showing = state.showing.take();
                 state.note_shown(observation, &landed, &done.shown, showing);
                 state.settle_change(&landed);
@@ -1664,20 +1674,7 @@ impl Agent {
         let Some(last) = state.history.last_mut() else { return };
         let waited = last.operation == Some(Operation::Wait);
         let sent = state.committing && last.outcome == StepOutcome::Executed;
-        if observation.dialog.is_some() {
-            // The opener is kept whether or not it committed: a confirm opened by a reversible click and accepted to
-            // save in place was compared with the dialog's empty document and held the unchanged editor as reloaded.
-            let (_, committed) = state.behind_dialog.get_or_insert_with(|| (before.document_key.clone(), false));
-            *committed |= sent;
-        } else {
-            let (from, committed) = state
-                .behind_dialog
-                .take()
-                .map_or_else(|| (before.document_key.clone(), sent), |(from, committed)| (from, committed || sent));
-            if committed && observation.document_key != from {
-                state.committed_documents.insert(observation.document_key.clone());
-            }
-        }
+        note_commit(&mut state.behind_dialog, &mut state.committed_documents, &before, observation, sent);
         let done = if last.operation == Some(Operation::SwitchTab) {
             // Another tab's controls were there all along: compared with the tab left, every one read as added.
             Effect {
@@ -2154,6 +2151,29 @@ fn same_control(chosen: &Control, now: &Control) -> bool {
         ..now.clone()
     };
     fingerprint == *chosen
+}
+
+/// Remember the document a committing step loaded, so it is never offered as a reload that would send the commit again.
+/// The opener is kept whether or not it committed: a confirm opened by a reversible click and accepted to save in place
+/// was compared with the dialog's empty document and held the unchanged editor as reloaded.
+pub(super) fn note_commit(
+    behind_dialog: &mut Option<(String, bool)>,
+    committed_documents: &mut HashSet<String>,
+    before: &Observation,
+    observation: &Observation,
+    sent: bool,
+) {
+    if observation.dialog.is_some() {
+        let (_, committed) = behind_dialog.get_or_insert_with(|| (before.document_key.clone(), false));
+        *committed |= sent;
+    } else {
+        let (from, committed) = behind_dialog
+            .take()
+            .map_or_else(|| (before.document_key.clone(), sent), |(from, committed)| (from, committed || sent));
+        if committed && observation.document_key != from {
+            committed_documents.insert(observation.document_key.clone());
+        }
+    }
 }
 
 #[cfg(test)]
