@@ -571,7 +571,6 @@ jobs:
             test ! -f "$run_out.verified.json" || cp "$run_out.verified.json" "$mirror/parallax-verify.json"
             kill "$mirror_pid" 2> /dev/null || true
             wait "$mirror_pid" 2> /dev/null || true
-            # The arms share one journal outside their run directories; each mirror keeps a copy as its arm ended.
             test "$status" -eq 0 || exit "$status"
           done
       - name: Report the final progress

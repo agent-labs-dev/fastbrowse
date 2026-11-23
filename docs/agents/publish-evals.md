@@ -18,7 +18,7 @@ The campaign workflow installs the harness checkout first, then installs the
 measured fastbrowse SHA. Keep that order, the `harness_sha`, and the pool GCP
 service account unchanged.
 
-The provider keys enforce spend limits for each campaign group.
+Spend limits are configured on provider keys and are shared by campaign groups that use the same key.
 
 ```sh
 uv run --project evals --no-sync parallax run fastbrowse \
