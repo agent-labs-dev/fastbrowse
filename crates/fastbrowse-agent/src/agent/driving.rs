@@ -1415,7 +1415,12 @@ impl Agent {
         self.record_step(state, step, false, frame).await?;
         match progressed {
             Some(progressed) => {
-                let stalled = Idle { action: withheld(decision), outcome: act.outcome, refused };
+                let covered_target_id = decision
+                    .target
+                    .as_ref()
+                    .filter(|_| act.outcome == StepOutcome::Covered)
+                    .map(|target| target.id.clone());
+                let stalled = Idle { action: withheld(decision), outcome: act.outcome, covered_target_id, refused };
                 self.count_progress(state, progressed, observation, stalled, Status::Stuck).await
             }
             None => {

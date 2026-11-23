@@ -31,6 +31,8 @@ pub(super) const DRAWN_UNREAD: &str = "This page shows a canvas, picture or vide
 pub(crate) struct Idle {
     pub action: Withheld,
     pub outcome: StepOutcome,
+    /// The observed target of a covered action, distinct from any later control with the same label.
+    pub covered_target_id: Option<String>,
     /// Why a failed action was not performed, in the words of the browser or app that refused it. Told only that a
     /// click on a row out of view "did not move the task on", a desktop run pressed OK next and submitted the
     /// dialog's default row; deskpilot had said to scroll the row into view (#1403).
@@ -39,7 +41,7 @@ pub(crate) struct Idle {
 
 impl Idle {
     pub(super) fn performed(action: Withheld) -> Idle {
-        Idle { action, outcome: StepOutcome::Executed, refused: None }
+        Idle { action, outcome: StepOutcome::Executed, covered_target_id: None, refused: None }
     }
 
     /// What is true of the action, stated after its name when an ask leaves it out.
@@ -190,7 +192,11 @@ pub(super) fn uncover(idle: &mut Vec<Idle>, before: &Observation, after: &Observ
         }
         if same_page
             && let Some((operation, Some(label))) = &idle.action
-            && after.controls.iter().any(|control| takes(control, *operation) && describe(control) == *label)
+            && let Some(id) = &idle.covered_target_id
+            && after
+                .controls
+                .iter()
+                .any(|control| control.id == *id && takes(control, *operation) && describe(control) == *label)
         {
             available.push(format!("{operation} {}", text::repr(label)));
         }

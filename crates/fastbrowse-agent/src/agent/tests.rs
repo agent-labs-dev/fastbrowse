@@ -421,6 +421,7 @@ async fn test_a_wait_is_told_how_far_a_playing_clock_moved() {
         state.idle.push(super::recovery::Idle {
             action: Some((Operation::Click, Some("Next".into()))),
             outcome: StepOutcome::Covered,
+            covered_target_id: None,
             refused: None,
         });
         state.history.push(executed(Some(operation), Some("Theme"), false));
@@ -2238,6 +2239,7 @@ fn test_an_action_refused_is_left_out_with_the_refusal_its_page_gave() {
     state.idle.push(super::recovery::Idle {
         action: Some((Operation::Click, Some(super::helpers::describe(&page.controls[0])))),
         outcome: StepOutcome::Failed,
+        covered_target_id: None,
         refused: Some(refusal.into()),
     });
     let mut offered = page.clone();
@@ -7358,7 +7360,7 @@ async fn test_a_covered_link_is_offered_again_once_close_removes_its_cover() {
 #[tokio::test]
 async fn a_covered_action_stays_in_history_when_closing_the_overlay_changes_the_route() {
     let covered = Observation { document_key: "app".into(), ..header_under_dialog(false) };
-    let uncovered = Observation { url: "https://example.com/#closed".into(), document_key: "app".into(), ..header() };
+    let uncovered = Observation { url: "https://example.test/#closed".into(), document_key: "app".into(), ..header() };
     let page = Scripted::new(
         covered.clone(),
         vec![
@@ -7373,6 +7375,28 @@ async fn a_covered_action_stays_in_history_when_closing_the_overlay_changes_the_
     take(&agent, &mut state, Operation::Click, Some("Close")).await;
     let effect = state.history.last().unwrap().effect.as_deref().unwrap();
     assert!(effect.contains("Previously covered, with the target still on the page: click 'Contact us'"), "{effect}");
+}
+
+#[tokio::test]
+async fn a_replacement_control_with_the_same_label_does_not_continue_a_covered_action() {
+    let covered = Observation { document_key: "app".into(), ..header_under_dialog(false) };
+    let mut replacement = button("Contact us");
+    replacement.id = "replacement".into();
+    let next = Observation { document_key: "app".into(), ..at("https://example.test/#closed", &[replacement]) };
+    let page = Scripted::new(
+        covered.clone(),
+        vec![
+            (Operation::Click, StepOutcome::Covered, covered.clone()),
+            (Operation::Click, StepOutcome::Executed, next),
+        ],
+    );
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &covered).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Contact us")).await;
+    take(&agent, &mut state, Operation::Click, Some("Close")).await;
+    let effect = state.history.last().unwrap().effect.as_deref().unwrap();
+    assert!(!effect.contains("Previously covered"), "{effect}");
 }
 
 #[tokio::test]
