@@ -419,6 +419,22 @@ impl Agent {
         for notice in state.chat.notices.drain(..) {
             content += &format!("Note: {notice}\n");
         }
+        // The browser's own solver clears a CAPTCHA by itself, which the page does not say: shown PyPI's search
+        // challenge with nothing more, the driver gave up the run as blocked.
+        if let Some(solve) = self.page.captcha_solve().filter(|solve| solve.url == observation.url) {
+            content += &if solve.working {
+                format!(
+                    "Note: the browser's own CAPTCHA solver is working on this page's {} CAPTCHA; wait() lets it \
+                     finish.\n",
+                    solve.vendor
+                )
+            } else {
+                format!(
+                    "Note: the browser's own CAPTCHA solver could not solve this page's {} CAPTCHA.\n",
+                    solve.vendor
+                )
+            };
+        }
         // Links to pages already read are marked, so the model sees which pages of a list it has covered.
         let mut shown = observation.clone();
         state.mark_links(&mut shown);
@@ -488,11 +504,18 @@ impl Agent {
                     &message[..start]
                 );
             }
-            if !fits(&chat.messages, &page) && !shown.offscreen_text.is_empty() {
-                let viewport = Observation { offscreen_text: String::new(), ..shown.clone() };
+            // A thread of 2923 comments rendered 3.2 MB of controls alone, past the driver model's context with its
+            // offscreen text left out, so what lies outside the viewport goes as a whole: controls and text.
+            let offscreen = shown.controls.iter().any(|control| control.offscreen);
+            if !fits(&chat.messages, &page) && (offscreen || !shown.offscreen_text.is_empty()) {
+                let viewport = Observation {
+                    offscreen_text: String::new(),
+                    controls: shown.controls.iter().filter(|control| !control.offscreen).cloned().collect(),
+                    ..shown.clone()
+                };
                 page = self.redact(&render(&viewport, seen))
-                    + "\nThe text outside the viewport is left out: with it the page is longer than your context. \
-                       Scroll, or read() the page, to see it.";
+                    + "\nThe controls and text outside the viewport are left out: with them the page is longer than \
+                       your context. Scroll, or read() the page, to see them.";
             }
         }
         chat.pages.push((chat.messages.len(), content.len()));

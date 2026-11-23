@@ -11,7 +11,7 @@ use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSch
 use fastbrowse_core::models::{
     Artifact, CostBasis, CostComponent, CostLine, LLMPurpose, Limits, RunResult, Status, StepOutcome,
 };
-use fastbrowse_core::page::{ActResult, Action, Capture, Observation, Page, PageResult};
+use fastbrowse_core::page::{ActResult, Action, CaptchaSolve, Capture, Observation, Page, PageResult};
 use fastbrowse_core::telemetry::Ledger;
 use serde_json::{Value, json};
 
@@ -23,6 +23,10 @@ struct DatePage {
     http: bool,
     /// The page's text below the viewport.
     offscreen: String,
+    /// How many "reply" links the page has below the viewport.
+    replies: usize,
+    /// The CAPTCHA vendor the browser's solver is working on, on this page.
+    solving: Option<String>,
     /// The page's text before its date field is opened, when it differs from after.
     before: Option<String>,
     acted: Mutex<Vec<Action>>,
@@ -38,6 +42,11 @@ impl DatePage {
             json!({"id": "main:note", "frame_id": null, "role": "textbox", "label": "Note", "operations": ["fill"],
                    "sensitive": false, "offscreen": false}),
         ];
+        for reply in 0..self.replies {
+            controls
+                .push(json!({"id": format!("main:reply-{reply}"), "frame_id": null, "role": "link", "label": "reply",
+                                 "operations": ["click"], "sensitive": false, "offscreen": true}));
+        }
         if self.open.load(std::sync::atomic::Ordering::SeqCst) {
             controls.push(json!({"id": "main:popup-next", "frame_id": null, "role": "link", "label": "Next",
                                  "operations": ["click"], "sensitive": false, "offscreen": false}));
@@ -53,6 +62,11 @@ impl Page for DatePage {
 
     fn artifacts(&self) -> Vec<Artifact> {
         Vec::new()
+    }
+
+    fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        let vendor = self.solving.clone()?;
+        Some(CaptchaSolve { url: "https://example.test/".into(), vendor, working: true })
     }
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
@@ -445,7 +459,7 @@ async fn test_a_plan_made_on_a_fetched_page_is_told_it_never_ran_once_a_browser_
         limits: Some(Limits { max_steps: Some(10), ..Default::default() }),
         ..Default::default()
     };
-    agent.run("Open the date field.", options()).await;
+    let _ = agent.run("Open the date field.", options()).await;
     let resume = agent.resume().expect("a browser handoff");
     let browser = Agent::new(Arc::new(DatePage::default()), Arc::new(ScriptedJev::new(Vec::new())), driver.clone())
         .with_chat(true);
@@ -473,9 +487,9 @@ async fn test_the_driver_opens_an_address_it_wrote_itself() {
     );
 }
 
-/// The first request's messages as JSON bytes, with a page whose text below the viewport is `offscreen`.
-async fn first_request_bytes(offscreen: &str) -> i64 {
-    let page = Arc::new(DatePage { offscreen: offscreen.into(), ..DatePage::default() });
+/// The first request's messages as JSON bytes, on `page`.
+async fn first_request_bytes(page: DatePage) -> i64 {
+    let page = Arc::new(page);
     let driver = Driver::new([give_up()]);
     run(page, driver.clone()).await;
     serde_json::to_vec(&driver.sent.lock().unwrap()[0]).unwrap().len() as i64
@@ -484,7 +498,7 @@ async fn first_request_bytes(offscreen: &str) -> i64 {
 #[tokio::test]
 async fn test_a_conversation_past_the_models_context_drops_the_pages_it_moved_on_from() {
     let offscreen = "comment ".repeat(4000);
-    let first = first_request_bytes(&offscreen).await;
+    let first = first_request_bytes(DatePage { offscreen: offscreen.clone(), ..DatePage::default() }).await;
     let page = Arc::new(DatePage { offscreen: offscreen.clone(), ..DatePage::default() });
     let turns = [json!({"next": "", "actions": [{"tool": "click", "id": "1"}]}), give_up()];
     let driver = Arc::new(Driver { context: Some(first + 25_000), ..Arc::into_inner(Driver::new(turns)).unwrap() });
@@ -500,13 +514,16 @@ async fn test_a_conversation_past_the_models_context_drops_the_pages_it_moved_on
 #[tokio::test]
 async fn test_a_page_longer_than_the_models_context_is_shown_without_its_text_outside_the_viewport() {
     let offscreen = "comment ".repeat(4000);
-    let first = first_request_bytes(&offscreen).await;
+    let first = first_request_bytes(DatePage { offscreen: offscreen.clone(), ..DatePage::default() }).await;
     let page = Arc::new(DatePage { offscreen, ..DatePage::default() });
     let driver =
         Arc::new(Driver { context: Some(first - 20_000), ..Arc::into_inner(Driver::new([give_up()])).unwrap() });
     run(page, driver.clone()).await;
     let told = driver.told(0);
-    assert!(!told.contains("comment comment") && told.contains("The text outside the viewport is left out"), "{told}");
+    assert!(
+        !told.contains("comment comment") && told.contains("The controls and text outside the viewport are left out"),
+        "{told}"
+    );
     assert!(told.contains("Pick a date"), "{told}");
 }
 
@@ -535,4 +552,25 @@ async fn test_a_read_tells_the_driver_every_page_read_so_far() {
     run(page, driver.clone()).await;
     let told = driver.told(1);
     assert!(told.contains("pages read so far: https://example.test/"), "{told}");
+}
+
+#[tokio::test]
+async fn test_a_page_whose_controls_outrun_the_models_context_is_shown_without_those_outside_the_viewport() {
+    let first = first_request_bytes(DatePage { replies: 2000, ..DatePage::default() }).await;
+    let page = Arc::new(DatePage { replies: 2000, ..DatePage::default() });
+    let driver =
+        Arc::new(Driver { context: Some(first - 20_000), ..Arc::into_inner(Driver::new([give_up()])).unwrap() });
+    run(page, driver.clone()).await;
+    let told = driver.told(0);
+    assert!(!told.contains(r#"link "reply""#) && told.contains("outside the viewport are left out"), "{told}");
+    assert!(told.contains(r#"textbox "Date""#), "{told}");
+}
+
+#[tokio::test]
+async fn test_the_driver_is_told_the_browser_is_solving_a_captcha_on_the_page() {
+    let page = Arc::new(DatePage { solving: Some("cloudflare".into()), ..DatePage::default() });
+    let driver = Driver::new([give_up()]);
+    run(page, driver.clone()).await;
+    let told = driver.told(0);
+    assert!(told.contains("CAPTCHA solver is working on this page's cloudflare CAPTCHA; wait()"), "{told}");
 }
