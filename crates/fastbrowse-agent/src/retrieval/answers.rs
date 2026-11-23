@@ -832,7 +832,7 @@ fn estimated_context_bytes(messages: &[Message]) -> usize {
 }
 
 /// The bytes of a request for `schema`, envelope included, as `estimated_context_bytes` counts them.
-pub(super) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -> usize {
+pub(crate) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -> usize {
     let schema_json = schema.json_schema();
     let envelope = json!({
         "model": "",
@@ -845,7 +845,7 @@ pub(super) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -
     serde_json::to_vec(&envelope).expect("a request is serializable").len()
 }
 
-pub(super) fn context_limit(context: i64) -> Result<usize> {
+pub(crate) fn context_limit(context: i64) -> Result<usize> {
     usize::try_from(context).map_err(|_| {
         AgentError::Llm(LLMError::failed(
             fastbrowse_core::llm::FaultClass::Request,

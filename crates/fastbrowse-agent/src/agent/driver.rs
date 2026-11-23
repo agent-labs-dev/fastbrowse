@@ -47,6 +47,9 @@ pub(super) struct Chat {
     /// frame (`main:47`), and the model wrote back `47`, a control that did not exist, on 4 of 5 calendar runs.
     numbers: HashMap<String, usize>,
     ids: Vec<String>,
+    /// Each earlier turn's message and where its page render starts in it, so a conversation that outgrows the
+    /// model's context can drop the pages the model has moved on from, as browser-use keeps only the latest state.
+    pages: Vec<(usize, usize)>,
 }
 
 impl Chat {
@@ -417,9 +420,10 @@ impl Agent {
         for control in &mut shown.controls {
             control.id = chat.number(&control.id);
         }
-        content += &render(&shown, &seen);
+        let content = self.redact(&content);
+        let page = self.redact(&render(&shown, &seen));
+        self.fit(&mut state.chat, &content, page, &shown, &seen).await?;
         state.chat.seen = observation.controls.iter().map(|control| control.id.clone()).collect();
-        state.chat.messages.push(Message::user(self.redact(&content)));
         let generation =
             self.llm.generate_value(LLMPurpose::Action, &state.chat.messages, &Actions, Some(&state.ledger)).await?;
         state.ledger.record([generation.cost])?;
@@ -442,6 +446,47 @@ impl Agent {
         state.chat.planned_on = Some(page_of(observation));
         state.chat.planned_ids = state.chat.seen.clone();
         Ok(first)
+    }
+
+    /// Appends the turn's message, `content` then `page`, kept within the driver model's context window, the limit its
+    /// provider lists. Every page shown in full overflowed it once a long comment thread opened (hn-comments: a refused
+    /// request billed $1.66). Earlier pages go first, each left as its title and address, since the model acts on the
+    /// page in front of it; then this page's text outside the viewport, which a scroll or `read` still reaches.
+    async fn fit(
+        &self,
+        chat: &mut Chat,
+        content: &str,
+        mut page: String,
+        shown: &Observation,
+        seen: &HashSet<String>,
+    ) -> Step<()> {
+        if let Some(limit) = self.llm.context_tokens(LLMPurpose::Action).await {
+            let limit = crate::retrieval::context_limit(limit)?;
+            let fits = |messages: &[Message], page: &str| {
+                let mut messages = messages.to_vec();
+                messages.push(Message::user(format!("{content}{page}")));
+                crate::retrieval::request_bytes(&messages, &Actions) <= limit
+            };
+            while !fits(&chat.messages, &page) {
+                let Some((at, start)) = chat.pages.first().copied() else { break };
+                chat.pages.remove(0);
+                let message = &mut chat.messages[at].content;
+                let header = message[start..].lines().next().unwrap_or_default().to_string();
+                *message = format!(
+                    "{}{header}\n(this page is no longer shown, to keep the conversation within your context)",
+                    &message[..start]
+                );
+            }
+            if !fits(&chat.messages, &page) && !shown.offscreen_text.is_empty() {
+                let viewport = Observation { offscreen_text: String::new(), ..shown.clone() };
+                page = self.redact(&render(&viewport, seen))
+                    + "\nThe text outside the viewport is left out: with it the page is longer than your context. \
+                       Scroll, or read() the page, to see it.";
+            }
+        }
+        chat.pages.push((chat.messages.len(), content.len()));
+        chat.messages.push(Message::user(format!("{content}{page}")));
+        Ok(())
     }
 
     /// One line per step the model has not been told of: what it did, and whether the page changed.

@@ -21,6 +21,8 @@ struct DatePage {
     open: std::sync::atomic::AtomicBool,
     /// Fetched over HTTP, so its scripts never ran.
     http: bool,
+    /// The page's text below the viewport.
+    offscreen: String,
     acted: Mutex<Vec<Action>>,
 }
 
@@ -54,11 +56,12 @@ impl Page for DatePage {
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         let open = self.open.load(std::sync::atomic::Ordering::SeqCst);
         let controls = self.controls();
+        let offscreen = self.offscreen.clone();
         Box::pin(async move {
             Ok(serde_json::from_value(json!({
                 "url": "https://example.test/", "title": "Pick a date",
                 "page_key": if open { "open" } else { "closed" }, "document_key": "doc",
-                "captured_at": "2026-11-18T00:00:00Z", "viewport_text": "Pick a date", "tabs": [],
+                "captured_at": "2026-11-18T00:00:00Z", "viewport_text": "Pick a date", "offscreen_text": offscreen, "tabs": [],
                 "controls": controls
             }))
             .unwrap())
@@ -134,11 +137,13 @@ impl Page for DatePage {
 struct Driver {
     turns: Mutex<VecDeque<Value>>,
     sent: Mutex<Vec<Vec<Message>>>,
+    /// The context window the driver model's provider lists, in tokens.
+    context: Option<i64>,
 }
 
 impl Driver {
     fn new(turns: impl IntoIterator<Item = Value>) -> Arc<Driver> {
-        Arc::new(Driver { turns: Mutex::new(turns.into_iter().collect()), sent: Mutex::new(Vec::new()) })
+        Arc::new(Driver { turns: Mutex::new(turns.into_iter().collect()), sent: Mutex::new(Vec::new()), context: None })
     }
 
     /// The last user message of turn `n`.
@@ -164,6 +169,10 @@ impl LLMClient for Driver {
             let data = schema.validate_json(&turn.to_string()).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
         })
+    }
+
+    fn context_tokens(&self, _: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
+        Box::pin(async move { self.context })
     }
 }
 
@@ -453,4 +462,41 @@ async fn test_the_driver_opens_an_address_it_wrote_itself() {
         "{:?}",
         result.steps
     );
+}
+
+/// The first request's messages as JSON bytes, with a page whose text below the viewport is `offscreen`.
+async fn first_request_bytes(offscreen: &str) -> i64 {
+    let page = Arc::new(DatePage { offscreen: offscreen.into(), ..DatePage::default() });
+    let driver = Driver::new([give_up()]);
+    run(page, driver.clone()).await;
+    serde_json::to_vec(&driver.sent.lock().unwrap()[0]).unwrap().len() as i64
+}
+
+#[tokio::test]
+async fn test_a_conversation_past_the_models_context_drops_the_pages_it_moved_on_from() {
+    let offscreen = "comment ".repeat(4000);
+    let first = first_request_bytes(&offscreen).await;
+    let page = Arc::new(DatePage { offscreen: offscreen.clone(), ..DatePage::default() });
+    let turns = [json!({"next": "", "actions": [{"tool": "click", "id": "1"}]}), give_up()];
+    let driver = Arc::new(Driver { context: Some(first + 25_000), ..Arc::into_inner(Driver::new(turns)).unwrap() });
+    run(page, driver.clone()).await;
+    let sent = driver.sent.lock().unwrap();
+    assert!(sent[0][1].content.contains(&offscreen), "the first page fits in full");
+    let earlier = &sent[1][1].content;
+    assert!(!earlier.contains("comment comment") && earlier.contains("is no longer shown"), "{earlier}");
+    assert!(earlier.contains(r#"Page: "Pick a date" https://example.test/"#), "{earlier}");
+    assert!(sent[1].last().unwrap().content.contains(&offscreen), "the page in front of the model stays whole");
+}
+
+#[tokio::test]
+async fn test_a_page_longer_than_the_models_context_is_shown_without_its_text_outside_the_viewport() {
+    let offscreen = "comment ".repeat(4000);
+    let first = first_request_bytes(&offscreen).await;
+    let page = Arc::new(DatePage { offscreen, ..DatePage::default() });
+    let driver =
+        Arc::new(Driver { context: Some(first - 20_000), ..Arc::into_inner(Driver::new([give_up()])).unwrap() });
+    run(page, driver.clone()).await;
+    let told = driver.told(0);
+    assert!(!told.contains("comment comment") && told.contains("The text outside the viewport is left out"), "{told}");
+    assert!(told.contains("Pick a date"), "{told}");
 }
