@@ -347,13 +347,15 @@ fn form_changes(
     let mut opener = None;
     for entry in history.iter().rev().filter(|entry| entry.outcome == StepOutcome::Executed) {
         if entry.document_key.as_deref().is_some_and(|key| key != document_key)
-            || entry.form_id.as_deref().is_some_and(|id| Some(id) != form_id)
+            || entry.form_id.as_deref().is_some_and(|id| Some(id) != form_id || entry.frame_id != target.frame_id)
         {
             continue;
         }
         if opener.is_none()
             && entry.operation == Some(Operation::Click)
-            && form_id.is_some_and(|id| entry.opened_forms.iter().any(|opened| opened == id))
+            && form_id.is_some_and(|id| {
+                entry.opened_forms.iter().any(|(frame, opened)| *frame == target.frame_id && opened == id)
+            })
         {
             opener = entry.target.as_deref();
             // A page that reuses one form for several records keeps its document and form ids, so fills from before

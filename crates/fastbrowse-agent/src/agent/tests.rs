@@ -12016,7 +12016,7 @@ fn test_a_save_states_what_the_run_replaced_and_what_it_opened() {
         ..typed_into(&describe(&title))
     };
     let opened = HistoryEntry {
-        opened_forms: vec!["dialog".into()],
+        opened_forms: vec![(None, "dialog".into())],
         ..executed(Some(Operation::Click), Some("Edit (Guide tracker card)"), true)
     };
     let history = [executed(Some(Operation::Click), Some("Unrelated"), true), opened, filled];
@@ -12132,7 +12132,7 @@ fn a_click_records_a_form_opener_only_when_the_form_appears_after_it() {
     agent().note_effect(&mut state, &after);
 
     let entry = state.history.last().expect("the click history");
-    assert_eq!(entry.opened_forms, vec!["form"]);
+    assert_eq!(entry.opened_forms, vec![(None, "form".to_string())]);
     assert_eq!(entry.document_key.as_deref(), Some("after"));
 }
 
@@ -12147,7 +12147,7 @@ fn a_save_ignores_fills_from_before_the_form_was_last_opened() {
         ..typed_into(&describe(&field))
     };
     let open = |card: &str| HistoryEntry {
-        opened_forms: vec!["form".into()],
+        opened_forms: vec![(None, "form".into())],
         ..executed(Some(Operation::Click), Some(card), true)
     };
     // The same modal, reopened for another card: its form and document ids did not change.
@@ -12158,4 +12158,64 @@ fn a_save_ignores_fills_from_before_the_form_was_last_opened() {
     assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
     assert!(action.contains("clicking 'Edit second'"), "{action}");
     assert!(!action.contains("First"), "{action}");
+}
+
+#[test]
+fn a_save_ignores_fills_and_openings_from_another_frame_with_the_same_form_id() {
+    let in_frame = |frame: &str, control: Control| Control {
+        form_id: Some("form".into()),
+        frame_id: Some(frame.into()),
+        ..control
+    };
+    let field = in_frame("second", holding("Caption", "Second card"));
+    let apply = in_frame("second", Control { submit_semantics: Some("{}".into()), ..button("Apply") });
+    let first_fill = HistoryEntry {
+        form_id: Some("form".into()),
+        frame_id: Some("first".into()),
+        text: Some("First new".into()),
+        before: Some("First old".into()),
+        ..typed_into(&describe(&field))
+    };
+    let first_open = HistoryEntry {
+        opened_forms: vec![(Some("first".into()), "form".into())],
+        ..executed(Some(Operation::Click), Some("Edit first"), true)
+    };
+    let second_open = HistoryEntry {
+        opened_forms: vec![(Some("second".into()), "form".into())],
+        ..executed(Some(Operation::Click), Some("Edit second"), true)
+    };
+    let second_fill = HistoryEntry {
+        frame_id: Some("second".into()),
+        text: Some("Second new".into()),
+        before: Some("Second old".into()),
+        ..first_fill.clone()
+    };
+    let history = [first_open, first_fill, second_open, second_fill];
+    let (_, action, _) =
+        gate_questions(&history, Operation::Click, &apply, None, &[field, apply.clone()], "document", None);
+    assert!(action.contains("which held 'Second old', with 'Second new'"), "{action}");
+    assert!(action.contains("clicking 'Edit second'"), "{action}");
+    assert!(!action.contains("First"), "{action}");
+}
+
+#[test]
+fn a_form_opened_in_another_frame_is_recorded_though_one_with_its_id_exists_elsewhere() {
+    let in_frame = |frame: &str| Control {
+        form_id: Some("form".into()),
+        frame_id: Some(frame.into()),
+        ..holding("Title", "Current image")
+    };
+    let before = Observation { document_key: "before".into(), ..observation(&[button("Edit"), in_frame("first")]) };
+    let after = Observation {
+        document_key: "after".into(),
+        ..observation(&[button("Edit"), in_frame("first"), in_frame("second")])
+    };
+    let mut state = run_state();
+    state.acted_from = Some(before);
+    state.history.push(executed(Some(Operation::Click), Some("Edit"), true));
+
+    agent().note_effect(&mut state, &after);
+
+    let entry = state.history.last().expect("the click history");
+    assert_eq!(entry.opened_forms, vec![(Some("second".to_string()), "form".to_string())]);
 }

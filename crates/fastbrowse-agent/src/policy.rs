@@ -216,9 +216,12 @@ pub struct HistoryEntry {
     /// The form instance the action targeted, kept private so same-label fields cannot cross form instances.
     #[serde(skip)]
     pub form_id: Option<String>,
+    #[serde(skip)]
+    /// The frame `form_id` is local to: two frames can each hold a form with the same id.
+    pub frame_id: Option<String>,
     /// Form instances that appeared after this action, kept private so an unrelated click is not called the opener.
     #[serde(skip)]
-    pub opened_forms: Vec<String>,
+    pub opened_forms: Vec<(Option<String>, String)>,
 }
 
 /// The scope of a form or field group. A local form id can be reused in other frames or documents.
@@ -366,6 +369,7 @@ impl HistoryEntry {
             form: None,
             document_key: None,
             form_id: None,
+            frame_id: None,
             opened_forms: Vec::new(),
         }
     }

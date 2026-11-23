@@ -1384,6 +1384,7 @@ impl Agent {
             form,
             document_key: Some(observation.document_key.clone()),
             form_id: decision.target.as_ref().and_then(|target| target.form_id.clone()),
+            frame_id: decision.target.as_ref().and_then(|target| target.frame_id.clone()),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let (Some(entry), Some(landed)) = (state.history.last(), &act.landed)
@@ -1702,10 +1703,15 @@ impl Agent {
             last.opened_forms = observation
                 .controls
                 .iter()
-                .filter_map(|control| control.form_id.as_deref())
-                .filter(|form| !before.controls.iter().any(|control| control.form_id.as_deref() == Some(*form)))
-                .map(str::to_string)
+                .filter_map(|control| Some((control.frame_id.clone(), control.form_id.clone()?)))
+                .filter(|(frame, form)| {
+                    !before
+                        .controls
+                        .iter()
+                        .any(|control| control.frame_id == *frame && control.form_id.as_deref() == Some(form.as_str()))
+                })
                 .collect();
+            last.opened_forms.dedup();
             if !last.opened_forms.is_empty() {
                 last.document_key = Some(observation.document_key.clone());
             }
