@@ -84,6 +84,16 @@ async function adoptTab(conn, run, tabId) {
   try {
     await addToGroup(run, tabId);
     await chrome.debugger.attach({ tabId }, '1.3');
+  } catch (error) {
+    // A refused group or attach left the tab owned by the run until it ended (#1314): a tab it opened stayed open and
+    // a tab of the user's stayed grouped. Undo it now, so the failure leaves nothing behind.
+    if (!run.released) {
+      run.tabs.delete(tabId);
+      // The adopted marker stays: a stop that lands meanwhile releases this tab again, and without it the user's tab
+      // would be closed as one the run opened.
+      await releaseTab(run, tabId);
+    }
+    throw error;
   } finally {
     // Stopped meanwhile: the release may have passed this tab before the attach landed, so undo it here.
     if (run.released) await releaseTab(run, tabId);
@@ -157,6 +167,7 @@ const ops = {
     ownedTab(conn, tabId);
     if (!(await allowedMethods()).has(method)) throw new Error(`${method} is not relayed by the fastbrowse extension`);
     if (method === 'Fetch.enable' && !sessionId) fetchParams.set(tabId, params);
+    if (method === 'Fetch.disable' && !sessionId) fetchParams.delete(tabId);
     const target = sessionId ? { tabId, sessionId } : { tabId };
     return (await chrome.debugger.sendCommand(target, method, params || {})) ?? {};
   },

@@ -325,10 +325,7 @@ def official_receipts(repo: str, candidate: Candidate) -> list[str]:
 
 def campaign_candidate(repo: str, campaign: str, tree: str, fixture_id: int) -> tuple[Candidate, list[str]]:
     """A successful candidate stage has checked the private tracking readback before exporting public figures."""
-    for run in _runs(repo, "benchmark-campaign.yml", "--status", "completed"):
-        if run["displayTitle"].split()[-1:] != [campaign]:
-            continue
-        run_id = int(run["databaseId"])
+    for run_id in completed_campaign_run_ids(repo, campaign):
         metadata = json.loads(_gh("api", f"repos/{repo}/actions/runs/{run_id}"))
         if metadata["path"] != ".github/workflows/benchmark-campaign.yml":
             continue
@@ -355,24 +352,37 @@ def campaign_candidate(repo: str, campaign: str, tree: str, fixture_id: int) -> 
     raise GateError("no complete official campaign candidate on the release tree")
 
 
+def completed_campaign_run_ids(repo: str, campaign: str) -> list[int]:
+    # Active benchmark development can push the release baseline outside the first page. Keep the
+    # status filter local so the API can page past its search limit for filtered run requests.
+    raw = _gh(
+        "api",
+        f"repos/{repo}/actions/workflows/benchmark-campaign.yml/runs?per_page=100",
+        "--paginate",
+        "--jq",
+        '.workflow_runs[] | select(.status == "completed") | {id, display_title, created_at}',
+    )
+    runs = (json.loads(line) for line in raw.splitlines())
+    matching = (run for run in runs if run["display_title"].split()[-1:] == [campaign])
+    return [run["id"] for run in sorted(matching, key=lambda run: (run["created_at"], run["id"]), reverse=True)]
+
+
 def campaign_rows(repo: str, campaign: str) -> tuple[list[dict[str, Any]], list[str]]:
     """Each task's rows from the newest finished run of `campaign` that measured it `MIN_RUNS` times or more, and a
     line per run used naming the commits it measured and how many tasks it supplied. An older run never supplies a
     task a newer one measured, even at another task version."""
     chosen: dict[tuple[str, str], list[dict[str, Any]]] = {}
     used: list[str] = []
-    for run in _runs(repo, "benchmark-campaign.yml", "--status", "completed"):
-        if run["displayTitle"].split()[-1:] != [campaign]:
-            continue
+    for run_id in completed_campaign_run_ids(repo, campaign):
         fresh = {
             (task.suite, task.task): rows
-            for task, rows in rows_by_task(run_rows(repo, int(run["databaseId"]))).items()
+            for task, rows in rows_by_task(run_rows(repo, run_id)).items()
             if (task.suite, task.task) not in chosen and len(rows) >= MIN_RUNS
         }
         if fresh:
             chosen.update(fresh)
             shas = sorted({row["run"]["git_sha"][:8] for rows in fresh.values() for row in rows})
-            used.append(f"run {run['databaseId']} on {', '.join(shas)}: {len(fresh)} tasks")
+            used.append(f"run {run_id} on {', '.join(shas)}: {len(fresh)} tasks")
     if not chosen:
         raise GateError(f"no finished campaign {campaign} measured any task {MIN_RUNS} times")
     return [row for rows in chosen.values() for row in rows], used

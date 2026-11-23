@@ -334,6 +334,25 @@ fn parse_cover(value: &Value) -> Result<Cover, BrowserError> {
 
 /// `[fingerprint, live guard, hit-test point, popup announced, opens a window, address, connected]`.
 /// The address is the active page's own `location.href`, read in the same evaluation.
+/// How `before_action` finds the point to act on: none, a point a press can land on, or a hover's point, where a
+/// control nested in the target still lies inside it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Hit {
+    Skip,
+    Press,
+    Hover,
+}
+
+impl Hit {
+    fn of(operation: Operation) -> Self {
+        match operation {
+            Operation::Hover => Self::Hover,
+            op if op.is_targeted() && op != Operation::Blur => Self::Press,
+            _ => Self::Skip,
+        }
+    }
+}
+
 type TargetState = (String, Option<String>, Point, bool, bool, String, bool);
 
 fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
@@ -428,13 +447,13 @@ impl CdpPage {
         let pointer_first = matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover);
         let mut drawn = pointer_first && target.as_ref().is_some_and(|t| t.0 == active);
         if self.session.pending_dialog().is_none() {
-            let hit_test = action.operation.is_targeted() && action.operation != Operation::Blur;
+            let hit = Hit::of(action.operation);
             // The frame wait runs on the page's own timers, which a page can replace with ones that never fire; past
             // this bound the page counts as hung, and the agent reopens it once rather than end the run on one slow frame.
             let measured = if drawn {
                 match timeout(
                     secs(MEASURE_DRAWN_SECONDS),
-                    self.before_action(target.as_ref(), hit_test, false, false, true, true),
+                    self.before_action(target.as_ref(), hit, false, false, true, true),
                 )
                 .await
                 {
@@ -449,13 +468,13 @@ impl CdpPage {
                     }
                 }
             } else {
-                self.before_action(target.as_ref(), hit_test, false, false, true, false).await
+                self.before_action(target.as_ref(), hit, false, false, true, false).await
             };
             let measured = match measured {
                 Err(BrowserError::Script) => {
                     // A page can replace those timers with ones that throw while leaving the renderer responsive.
                     drawn = false;
-                    self.before_action(target.as_ref(), hit_test, false, false, true, false).await?
+                    self.before_action(target.as_ref(), hit, false, false, true, false).await?
                 }
                 other => other?,
             };
@@ -466,7 +485,7 @@ impl CdpPage {
                         && self.left_suggesting_field(target).await? =>
                 {
                     drawn = false;
-                    self.before_action(Some(target), hit_test, false, false, true, false).await?
+                    self.before_action(Some(target), hit, false, false, true, false).await?
                 }
                 _ => measured,
             };
@@ -490,8 +509,8 @@ impl CdpPage {
         {
             cursor.glide(x, y).await;
             // The glide gives the page time to change. Never deliver a click using its earlier measurement.
-            let hit_test = action.operation.is_targeted() && action.operation != Operation::Blur;
-            let fresh = self.before_action(Some(target), hit_test, false, false, true, false).await?;
+            let hit = Hit::of(action.operation);
+            let fresh = self.before_action(Some(target), hit, false, false, true, false).await?;
             if fresh.1 != target.3 || !matches!(fresh.2, Point::At(fx, fy) if fx == x && fy == y) {
                 return Ok(result(
                     StepOutcome::Stale,
@@ -1821,7 +1840,7 @@ impl CdpPage {
             // Only the first point was measured in a call that waited for its frame; a later one may have scrolled.
             self.move_to(&target.0, point, drawn).await?;
             drawn = false;
-            let check = self.before_action(Some(target), true, prepare_fill, true, scroll, false);
+            let check = self.before_action(Some(target), Hit::Press, prepare_fill, true, scroll, false);
             let checked = tokio::select! {
                 checked = check => {
                     if self.session.pending_dialog().is_some() {
@@ -2038,7 +2057,7 @@ impl CdpPage {
     /// arrives, and following it moves the pointer onto the next slot.
     /// The rest of the target's live state comes back with the point, as `before_action` gives it.
     async fn drop_point(&self, drop: &Target, first: bool) -> Result<(TargetState, bool), BrowserError> {
-        let state = self.before_action(Some(drop), true, false, false, first, false).await?;
+        let state = self.before_action(Some(drop), Hit::Press, false, false, first, false).await?;
         if state.2 != Point::Covered || self.cover(&drop.0, drop.2).await? != Cover::None {
             return Ok((state, false));
         }
@@ -2100,7 +2119,7 @@ impl CdpPage {
     async fn drag_path(&self, target: &Target, path: &DragPath) -> Result<Outcome, BrowserError> {
         // No scroll: the path was drawn against the target where the screenshot showed it, which `reveal` settled.
         let (_, guard, point, _, _, _, connected) =
-            self.before_action(Some(target), true, false, false, false, false).await?;
+            self.before_action(Some(target), Hit::Press, false, false, false, false).await?;
         if guard != target.3 || !connected || matches!(point, Point::Gone | Point::Unsettled) {
             return Ok((StepOutcome::Stale, Some("drag target disconnected".into()), None));
         }
@@ -2350,7 +2369,7 @@ impl CdpPage {
     pub(crate) async fn before_action(
         &self,
         target: Option<&Target>,
-        hit_test: bool,
+        hit: Hit,
         prepare_fill: bool,
         after_move: bool,
         scroll: bool,
@@ -2380,10 +2399,11 @@ impl CdpPage {
         script
             .push_str(&format!("const guard = r?.guardKey ? r.guardKey(r.nodes.get({local_id}), {local_id}) : null; "));
         script.push_str(&format!(
-            "const point = {} && guard === {} ? ({HIT_TEST_JS})({local_id}, {}) : null; ",
-            py_json(&json!(hit_test)),
+            "const point = {} && guard === {} ? ({HIT_TEST_JS})({local_id}, {}, null, null, {}) : null; ",
+            py_json(&json!(hit != Hit::Skip)),
             py_json(&json!(guard)),
-            py_json(&json!(scroll))
+            py_json(&json!(scroll)),
+            py_json(&json!(hit == Hit::Hover))
         ));
         if prepare_fill {
             script.push_str(&format!(

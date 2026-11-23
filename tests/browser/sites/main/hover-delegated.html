@@ -1,0 +1,70 @@
+<!doctype html>
+<html><head><title>Gallery</title>
+<style>.card { width: 240px; margin: 8px; padding: 8px; border: 1px solid #999; display: block; }
+.card img { width: 200px; height: 60px; display: block; background: #ccd; }</style></head>
+<body>
+  <h1>Gallery</h1>
+  <div id="root"></div>
+  <p id="status"></p>
+  <script>
+    // Imitates how React 18 wires hover: no element carries a listener, the root alone listens for mouseover and
+    // mouseout, and each element's current props sit on a `__reactProps$<id>` expando. mouseenter is not a
+    // browser event at the root: React derives it from a mouseover and the element the pointer came from.
+    const KEY = '__reactProps$k3j9x2q1m';
+    const root = document.getElementById('root');
+    const caption = { c1: 'Minimap tracker', c2: 'Walk to the boat', c3: 'Dungeon map', c4: 'Text only capture' };
+    let hovered = null;
+    const props = (el, p) => { el[KEY] = p; };
+    const cards = {};
+    for (const id of Object.keys(caption)) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.setAttribute('role', 'button');
+      card.tabIndex = 0;
+      const enter = id === 'c4' ? 'onMouseEnterCapture' : 'onMouseEnter';
+      props(card, { onClick: () => { document.getElementById('status').textContent = 'Open ' + id; }, [enter]: () => { hovered = id; render(); }, onMouseLeave: () => { hovered = null; render(); } });
+      const text = document.createElement('span');
+      text.textContent = caption[id];
+      const handle = document.createElement('button');
+      handle.textContent = 'Drag';
+      if (id !== 'c4') {
+        const img = document.createElement('img');
+        img.alt = '';
+        img.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><rect width="200" height="60" fill="#89a"/></svg>');
+        card.append(img);
+      }
+      card.append(text, handle);
+      card.addEventListener('click', card[KEY].onClick);
+      cards[id] = card;
+      root.append(card);
+    }
+    // Reconciles in place, as React does: a card's buttons come and go, the card itself stays.
+    function render() {
+      for (const [id, card] of Object.entries(cards)) {
+        const shown = card.querySelector('.act');
+        if (hovered !== id) { card.querySelectorAll('.act').forEach(b => b.remove()); continue; }
+        if (shown) continue;
+        for (const name of ['Edit', 'Delete']) {
+          const b = document.createElement('button');
+          b.className = 'act';
+          b.textContent = name;
+          props(b, { onClick: e => { e.stopPropagation(); document.getElementById('status').textContent = name + ' ' + id; } });
+          b.addEventListener('click', b[KEY].onClick);
+          card.append(b);
+        }
+      }
+    }
+    const ancestors = el => { const out = []; for (; el && el !== root; el = el.parentElement) out.push(el); return out; };
+    root.addEventListener('mouseover', e => {
+      const from = new Set(ancestors(e.relatedTarget));
+      for (const el of ancestors(e.target).reverse()) if (!from.has(el)) {
+        el[KEY]?.onMouseEnterCapture?.();
+        el[KEY]?.onMouseEnter?.();
+      }
+    });
+    root.addEventListener('mouseout', e => {
+      const to = new Set(ancestors(e.relatedTarget));
+      for (const el of ancestors(e.target)) if (!to.has(el)) el[KEY]?.onMouseLeave?.();
+    });
+  </script>
+</body></html>

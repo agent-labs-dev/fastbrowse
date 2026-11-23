@@ -1424,6 +1424,75 @@ async fn test_controls_a_script_adds_under_the_pointer_are_reached_by_hovering_t
     h.close().await;
 }
 
+/// A card that keeps a link on screen and holds no picture was never offered a hover, though its script listens for
+/// the pointer entering it and renders its remove button only then.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_card_whose_script_listens_for_the_pointer_is_offered_a_hover() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/hover-listened.html").await;
+    let obs = h.observe().await;
+    assert!(!obs.controls.iter().any(|c| c.label == "Remove"));
+    let hovers: Vec<&Control> = obs.controls.iter().filter(|c| c.operations.contains(&Operation::Hover)).collect();
+    assert_eq!(hovers.len(), 3, "{:?}", obs.controls);
+    let card = hovers.iter().find(|c| c.label.starts_with("Battle")).expect("hover target for the second card");
+    assert_eq!(act(&h.page, hover(card), &obs).await.outcome, StepOutcome::Executed);
+    let revealed = h.observe().await;
+    let remove = revealed.controls.iter().find(|c| c.label == "Remove").expect("remove button after the hover");
+    assert_eq!(act(&h.page, click(remove), &revealed).await.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("Removed t2"));
+    // A card filled by its link has no point of its own, yet the pointer over the link is inside the card.
+    h.goto("/hover-listened.html").await;
+    let again = h.observe().await;
+    let filled = again
+        .controls
+        .iter()
+        .find(|c| c.label.starts_with("Credits") && c.operations.contains(&Operation::Hover))
+        .expect("hover target for the card its link fills");
+    assert_eq!(act(&h.page, hover(filled), &again).await.outcome, StepOutcome::Executed);
+    let shown = h.observe().await;
+    assert!(shown.controls.iter().any(|c| c.label == "Remove"), "{:?}", shown.controls);
+    h.close().await;
+}
+
+/// React delegates hover to its root, so no card carries a listener: the cards' handlers sit in `__reactProps$*`.
+/// The run edits the second card, not the one the pointer last rested on.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_card_whose_hover_a_framework_delegates_to_its_root_is_offered_a_hover() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/hover-delegated.html").await;
+    let obs = h.observe().await;
+    assert!(!obs.controls.iter().any(|c| c.label == "Edit"));
+    let hovers: Vec<&Control> = obs.controls.iter().filter(|c| c.operations.contains(&Operation::Hover)).collect();
+    assert_eq!(hovers.len(), 4, "{:?}", obs.controls);
+    let first = hovers.iter().find(|c| c.label.contains("Minimap")).expect("hover target for the first card");
+    assert_eq!(act(&h.page, hover(first), &obs).await.outcome, StepOutcome::Executed);
+    let obs = h.observe().await;
+    let second = obs.controls.iter().find(|c| c.operations.contains(&Operation::Hover) && c.label.contains("Walk"));
+    assert_eq!(
+        act(&h.page, hover(second.expect("hover target for the second card")), &obs).await.outcome,
+        StepOutcome::Executed
+    );
+    let revealed = h.observe().await;
+    let edits: Vec<&Control> = revealed.controls.iter().filter(|c| c.label == "Edit").collect();
+    assert_eq!(edits.len(), 1, "{:?}", revealed.controls);
+    assert_eq!(act(&h.page, click(edits[0]), &revealed).await.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("Edit c2"));
+    let capture = revealed
+        .controls
+        .iter()
+        .find(|c| c.operations.contains(&Operation::Hover) && c.label.contains("Text only capture"))
+        .expect("capture-phase hover target");
+    assert_eq!(act(&h.page, hover(capture), &revealed).await.outcome, StepOutcome::Executed);
+    let capture_revealed = h.observe().await;
+    let capture_edit =
+        capture_revealed.controls.iter().find(|c| c.label == "Edit").expect("the capture card's revealed Edit");
+    assert_eq!(act(&h.page, click(capture_edit), &capture_revealed).await.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("Edit c4"));
+    h.close().await;
+}
+
 /// GitHub's repository list draws each card's license as a law icon beside "BSD-3-Clause" in a row of twin spans.
 /// The icon is aria-hidden decoration, yet the badge was offered as a hover target on every card, and a run asked
 /// for httpx's license hovered one instead of opening the repository.
