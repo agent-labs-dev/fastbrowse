@@ -123,6 +123,9 @@ class Observation(Frozen):
     viewport_text: str
     """The visible text in the viewport of every frame the observation read; a cross-origin frame's text follows the
     page's own under a `[Frame: origin]` line."""
+    viewport_key: str = ""
+    """Identity of the place the viewport shows, from the page's and its scroll containers' scroll positions, so text
+    that updates by itself does not make a place look new and a textless place is still told apart."""
     offscreen_text: str = ""
     """The visible text outside the viewport, from every frame the observation read in the same order and form: what
     a read takes in that `viewport_text` leaves out."""
