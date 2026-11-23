@@ -2220,3 +2220,21 @@ async fn test_a_wait_sees_a_change_made_after_the_observation_it_was_decided_on(
     }
     h.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_list_sorted_by_the_pages_pointer_script_is_reordered_by_a_drag() {
+    let Some(h) = harness().await else { return };
+    h.goto("/sortable.html").await;
+    let obs = h.observe().await;
+    // Nothing in the markup says the handles are dragged; their grab cursor does.
+    for label in ["Alpha", "Delta"] {
+        assert!(find(&obs, label).operations.contains(&Operation::Drag), "{label}: {:?}", find(&obs, label).operations);
+    }
+    let result = h.page.act(&drag(find(&obs, "Alpha"), find(&obs, "Charlie")), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(
+        eval_active(&h.page, "document.getElementById('order').textContent").await,
+        json!("Bravo, Charlie, Alpha, Delta")
+    );
+    h.close().await;
+}

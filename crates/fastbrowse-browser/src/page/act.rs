@@ -1913,6 +1913,17 @@ impl CdpPage {
         points.extend(std::iter::repeat_n((end_x, end_y), 5));
         let duration = Duration::from_secs_f64(DRAG_STEP_SECONDS * f64::from(DRAG_STEPS + 5));
         self.trace_action_cursor(&points, duration).await;
+        // A page's own pointer script (a sortable list) moves its items as the pointer passes them, so the destination
+        // slides out from under the pointer by design and the place it stood is where the item belongs. Only a native
+        // drag, whose drop lands on the control the last dragover reached, is held to the control it was checked on.
+        let native = self
+            .evaluate(
+                session_id,
+                &format!("window.__fastbrowse?.nodes.get({})?.getAttribute('draggable') === 'true'", target.2),
+            )
+            .await
+            .ok()
+            .is_some_and(|value| value == Value::Bool(true));
         let press = json!({"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1, "buttons": 1});
         self.input(self.session.send("Input.dispatchMouseEvent", press, Some(session_id))).await?;
         let mut held = self.held(session_id, (start_x, start_y), 0);
@@ -1930,7 +1941,7 @@ impl CdpPage {
             )
             .await?;
             sleep(secs(DRAG_STEP_SECONDS)).await;
-            if step == 1 {
+            if step == 1 && native {
                 let (_, _, landed, _, _, _, _) =
                     self.before_action(Some(&drop), true, false, false, false, false).await?;
                 if !matches!(landed, Point::At(..)) {
@@ -1943,6 +1954,15 @@ impl CdpPage {
         // Hover styling can shift the destination's point (a border, a nudge, a placeholder above it). The release
         // follows the control, but only to a point the hit test confirms with the pointer already resting on it.
         let mut at = (end_x, end_y);
+        if !native {
+            for _ in 0..2 {
+                self.drag_move(session_id, at.0, at.1, 0).await?;
+                sleep(secs(DRAG_STEP_SECONDS)).await;
+            }
+            self.release(session_id, at.0, at.1, 0).await?;
+            held.done();
+            return Ok((StepOutcome::Executed, None, None));
+        }
         for _ in 0..2 {
             // Chrome drops on the target its last dragover reached, not on what lies under the pointer now, and takes a
             // newly entered target only after the dragover a further move sends. Two moves at rest bring Chrome's target
