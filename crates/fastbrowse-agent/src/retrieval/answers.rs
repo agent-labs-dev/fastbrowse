@@ -2469,14 +2469,21 @@ pub(crate) async fn draft_reviewed(
     if claims.is_empty() {
         return Ok(None);
     }
-    let questions = IndexMap::from([
-        ("coverage".to_string(), coverage_question(task, screenshot, None, &claims, notes, &[], committed)),
-        ("exact".to_string(), exact_question(task, &claims, notes)),
-    ]);
     let state = json!({"task": task, "pages_read": pages_read(notes)});
     let tokens = jev.profile().fit(None).tokens;
-    // One question cannot be split across requests, so one too long for Jev is not sent: the draft is written up.
     let state_chars = text::len(&dumps(&state)) as i64;
+    // The committed steps go in only while the question still fits, as on the composed path: they help coverage tell an
+    // action from a missing fact, but are not needed to judge it, so a run whose answer fits is not left unverified by
+    // them.
+    let mut coverage = coverage_question(task, screenshot, None, &claims, notes, &[], committed);
+    if state_chars > tokens.input_chars(&[coverage.dump_json()]) {
+        coverage = coverage_question(task, screenshot, None, &claims, notes, &[], &[]);
+    }
+    let questions = IndexMap::from([
+        ("coverage".to_string(), coverage),
+        ("exact".to_string(), exact_question(task, &claims, notes)),
+    ]);
+    // One question cannot be split across requests, so one too long for Jev is not sent: the draft is written up.
     if questions.values().any(|question| state_chars > tokens.input_chars(&[question.dump_json()])) {
         let problem = "The answer read exceeds the decision model's input limits for checking task coverage.";
         let answer = ComposedAnswer { problem: Some(problem.into()), ..assemble_answer(&claims, notes, &[]) };
@@ -6016,6 +6023,25 @@ mod tests {
         let asked = jev.asked.lock().unwrap();
         let Question::Noul(coverage) = &asked[0]["coverage"] else { panic!("coverage is asked") };
         assert!(coverage.instructions.contains("\"target\": \"Delete\""), "{}", coverage.instructions);
+    }
+
+    /// Committed steps are told to coverage only while they fit: a pick that fits alone, beside a step too long for
+    /// Jev's input, was left unverified without coverage being asked.
+    #[tokio::test]
+    async fn a_pick_that_fits_is_asked_coverage_without_steps_too_long_to_fit() {
+        let limit = fastbrowse_core::decision::DecisionProfile::jev().max_largest_tokens as usize * 4;
+        let notes = Notes::new([Fact { answers: true, ..fact(0, "Record B: 34".into()) }]);
+        let jev = Support::new(true);
+        let kept = [json!({"operation": "fill", "target": "x".repeat(limit), "outcome": "executed"})];
+        let Some(Draft::Reviewed(reviewed)) =
+            draft_reviewed(&jev, "Report record B", Screenshot::Absent, &notes, None, &kept).await.unwrap()
+        else {
+            panic!("a pick Jev holds stands as the answer");
+        };
+        assert!(reviewed.answer.problem.is_none(), "{:?}", reviewed.answer.problem);
+        let asked = jev.asked.lock().unwrap();
+        let Question::Noul(coverage) = &asked[0]["coverage"] else { panic!("coverage is asked") };
+        assert!(!coverage.instructions.contains("The run carried out these steps"));
     }
 
     /// A pick Jev holds to cover the task but leaves its exactness unjudged has not been shown to state only what was
