@@ -412,6 +412,9 @@ pub(crate) struct RunState {
     pub idle: Vec<Idle>,
     /// The page the last action was taken on, until the next observation says what it did.
     pub acted_from: Option<Observation>,
+    /// The last action's effect was judged already, by its pixels or by the setting it changed, so the next observation
+    /// is not diffed against `acted_from` for it; what the action sent is still recorded from there.
+    pub judged_effect: bool,
     /// Jev's word, comparing the viewport before and after a click placed by sight, that the click changed what the
     /// page shows as the step meant. Pixels a drawn surface redraws change no element, so the DOM cannot say.
     pub drawn_changed: Option<bool>,
@@ -879,6 +882,7 @@ impl RunState {
             landing: None,
             idle: Vec::new(),
             acted_from: None,
+            judged_effect: false,
             drawn_changed: None,
             sighted: None,
             followed: None,
@@ -957,6 +961,7 @@ impl RunState {
             landing: None,
             idle: Vec::new(),
             acted_from: None,
+            judged_effect: false,
             drawn_changed: None,
             sighted: None,
             keeping: false,
