@@ -1607,7 +1607,11 @@ impl Agent {
         // A step taken in a dialog was sent from the page that opened it: compared with the dialog's empty document,
         // a confirmed save read as a load, ended the facts it owed and dropped the fills it carried.
         let opener = before.dialog.as_ref().and(state.behind_dialog.as_ref()).map(|(opener, _)| opener.clone());
+        // An alert is closed by a step that is neither committing nor lasting, but the save that opened it is still
+        // owed its stale-view fact: the dialog check returned before recording it.
+        let owed = before.dialog.is_some() && state.behind_dialog.as_ref().is_some_and(|(_, sent)| *sent);
         let before = opener.as_ref().unwrap_or(before);
+        let sending = state.committing || keeping || owed;
         let open = observation.dialog.is_some();
         // A load since a change ends the page's not having been loaded. A page loaded again at the same address can
         // still lack what was typed, as CurseForge serves its copy from before a post for about a minute, so with
@@ -1627,7 +1631,7 @@ impl Agent {
             kept.loaded = true;
         }
         let history_len = state.history.len();
-        let typed = if state.committing || keeping {
+        let typed = if sending {
             let page = super::helpers::page_text(before);
             super::helpers::typed_before_send(&state.history, state.last_send, &state.sent_fills, before)
                 .into_iter()
@@ -1653,7 +1657,7 @@ impl Agent {
         let Some(last) = state.history.last() else { return };
         let sent = state.committing && last.outcome == StepOutcome::Executed;
         note_commit(&mut state.behind_dialog, &mut state.committed_documents, before, observation, sent);
-        if !(state.committing || keeping)
+        if !sending
             || last.outcome != StepOutcome::Executed
             || last.operation == Some(Operation::SwitchTab)
             || observation.dialog.is_some()
