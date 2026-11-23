@@ -2308,9 +2308,9 @@
   // one containment test per collected control. A role="dialog" that says aria-modal="false" stays non-modal.
   const hiddenSelector = '[aria-hidden="true"],[inert]';
   // A control is drawn or not by its own rendering: a wrapper with no box (display:contents) still draws its controls,
-  // and a rendered wrapper can hold only a display:none panel.
+  // and a rendered wrapper can hold only a display:none or fully transparent panel.
   const holdsDrawnControl = e =>
-    [e, ...e.querySelectorAll(SELECTOR)].some(c => c.matches(SELECTOR) && visibilityOf(c, { checkVisibilityCSS: true }));
+    [e, ...e.querySelectorAll(SELECTOR)].some(c => c.matches(SELECTOR) && visibilityOf(c, { checkOpacity: true, checkVisibilityCSS: true }));
   // Element.contains stops at a shadow root, but the capture walks open ones, so containment climbs through each host.
   const containsAcrossShadow = (root, e) => {
     for (let n = e; n; n = n.getRootNode().host) if (root.contains(n)) return true;
