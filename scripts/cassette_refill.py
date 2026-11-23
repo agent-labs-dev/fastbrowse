@@ -398,21 +398,29 @@ class GitHubGatewayTimeout(RuntimeError):
 
 def gh(*args: str, token: str, body: Any = None) -> Any:
     """One GitHub REST or GraphQL call as `token`; the body, if any, goes in on stdin."""
+    # A GraphQL mutation can commit even if the gateway loses its response. Read the HTTP status line
+    # directly because gh can render the same status with or without a server message on stderr.
+    with_status = args[0] == "graphql"
     done = subprocess.run(
-        ["gh", "api", *args, *(["--input", "-"] if body is not None else [])],
+        ["gh", "api", *args, *(["--include"] if with_status else []), *(["--input", "-"] if body is not None else [])],
         input=json.dumps(body) if body is not None else None,
         capture_output=True,
         text=True,
         env={**os.environ, "GH_TOKEN": token},
         check=False,
     )
+    response = done.stdout
+    status = []
+    if with_status:
+        headers, _, response = response.partition("\n\n")
+        status = headers.partition("\n")[0].split(maxsplit=2)
     if done.returncode != 0:
         stderr = done.stderr.strip()
         error = f"gh api {args[0]} failed: {stderr[:500]}"
-        if stderr.splitlines()[-1:] == ["gh: HTTP 504"]:
+        if len(status) >= 2 and status[0].startswith("HTTP/") and status[1] == "504":
             raise GitHubGatewayTimeout(error)
         raise RuntimeError(error)
-    return json.loads(done.stdout) if done.stdout.strip() else None
+    return json.loads(response) if response.strip() else None
 
 
 def output(**values: str) -> None:

@@ -474,17 +474,36 @@ def test_plan_uses_the_exact_refill_commit_and_ci_head(
 
 
 @pytest.mark.parametrize(
-    ("stderr", "expected"),
-    [("gh: HTTP 504", refill.GitHubGatewayTimeout), ("gh: HTTP 422", RuntimeError)],
+    ("status", "stderr", "expected"),
+    [
+        ("HTTP/2.0 504 Gateway Timeout", "gh: HTTP 504", refill.GitHubGatewayTimeout),
+        ("HTTP/2.0 504 Gateway Timeout", "gh: Gateway Timeout (HTTP 504)", refill.GitHubGatewayTimeout),
+        ("HTTP/2.0 422 Unprocessable Entity", "gh: HTTP 422", RuntimeError),
+        ("HTTP/2.0 200 OK", "gh: An error message mentioned HTTP 504", RuntimeError),
+        ("", "gh: could not connect", RuntimeError),
+    ],
 )
 def test_gh_distinguishes_a_gateway_timeout_from_an_http_rejection(
-    monkeypatch: pytest.MonkeyPatch, stderr: str, expected: type[RuntimeError]
+    monkeypatch: pytest.MonkeyPatch, status: str, stderr: str, expected: type[RuntimeError]
 ) -> None:
-    result = subprocess.CompletedProcess(["gh"], 1, stdout="", stderr=stderr + "\n")
-    monkeypatch.setattr(refill.subprocess, "run", lambda *args, **kwargs: result)
+    stdout = f'{status}\nContent-Type: application/json\n\n{{"message":"failure"}}' if status else ""
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert command == ["gh", "api", "graphql", "--include"]
+        return subprocess.CompletedProcess(command, 1, stdout=stdout, stderr=stderr + "\n")
+
+    monkeypatch.setattr(refill.subprocess, "run", run)
     with pytest.raises(expected) as raised:
         refill.gh("graphql", token="test")
     assert type(raised.value) is expected
+
+
+def test_gh_decodes_the_graphql_body_after_response_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = subprocess.CompletedProcess(
+        ["gh"], 0, stdout='HTTP/2.0 200 OK\nContent-Type: application/json\n\n{"data":{"commit":1}}', stderr=""
+    )
+    monkeypatch.setattr(refill.subprocess, "run", lambda *args, **kwargs: result)
+    assert refill.gh("graphql", token="test") == {"data": {"commit": 1}}
 
 
 def publish_split(
