@@ -12,6 +12,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - A claim that an item is the first, second or third of a list is now evidenced. Asked for the first three links of a page's list in order, the composer wrote "The third example link is 'Add/Remove Elements'" citing a note that held only that link's text, the support check judged the place unsupported at 0.38, dropped the claim, and the run ended `unverified`. A captured block now carries `item_place` (the item's `position` and `count`, from `aria-posinset` and `aria-setsize`, or counted among the rendered items of its list in a browser capture and a fetched page alike), the composer's note shows it as `list_position` and `list_size`, and the check's quote and instructions state that those give the item's place. The composer is told to state a place only from them. Refs #1108.
+- A selected table cell keeps its row as evidence. When a later column marks that row with a status or icon, the answer check can use it ([#1513](https://github.com/agent-labs-dev/fastbrowse/issues/1513)).
 
 ## [0.12.0] - 2026-11-23
 
