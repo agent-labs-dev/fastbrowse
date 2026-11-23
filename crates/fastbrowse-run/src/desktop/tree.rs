@@ -475,14 +475,15 @@ fn texts_in(element: &Element, window: Size) -> (String, String) {
     (shown.join("\n"), hidden.join("\n"))
 }
 
-/// Where the text the window shows sits, which is what a scroll changes. The accessibility tree reports no scroll
-/// position and the snapshot id is new on every observation, so a scrolled place is told by which text elements show
-/// and where. The text itself is no part of it: a clock or progress label that ticks while the run scrolls back over a
-/// place it has seen would make each visit look new, and a scroll would never be withdrawn as a stall.
+/// Which text the window shows and where it sits, which is what a scroll changes. The accessibility tree reports no
+/// scroll position and the snapshot id is new on every observation, so a scrolled place is told by its text elements.
+/// Coordinates alone are not enough: scrolling by whole rows of equal height leaves every coordinate where it was while
+/// the rows change. A label that ticks while the run is on one place reads as a new place, which only renews the
+/// stall budget; withholding a scroll that showed unseen rows would cost the run its progress.
 fn places(root: &Element) -> String {
     fn walk(element: &Element, window: Size, out: &mut String) {
         if own_text(element).is_some() && element.showing(window) {
-            out.push_str(&format!("{},{};", element.x, element.y));
+            out.push_str(&format!("{},{},{};", element.x, element.y, own_text(element).unwrap_or_default()));
         }
         for child in &element.children {
             walk(child, window, out);
@@ -756,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn a_places_key_follows_where_text_sits_and_not_what_it_says() {
+    fn a_places_key_follows_what_text_shows_and_where() {
         let (window, mut root) = form();
         let at = |root: &mut Element, y: i64, text: &str| {
             let label = &mut root.children[0].children[0];
@@ -764,11 +765,11 @@ mod tests {
             label.text = Some(text.into());
             observation(&window, root, &[]).viewport_key
         };
-        let first = at(&mut root, 10, "12:00");
-        // A ticking label is the same place; the same text at another height is a scrolled one.
-        assert_eq!(first, at(&mut root, 10, "12:01"));
-        assert_ne!(first, at(&mut root, 40, "12:00"));
-        assert_eq!(first, at(&mut root, 10, "12:02"));
+        let first = at(&mut root, 10, "Row 1");
+        assert_eq!(first, at(&mut root, 10, "Row 1"));
+        // Rows of equal height scroll under the same coordinates: other text is another place.
+        assert_ne!(first, at(&mut root, 10, "Row 2"));
+        assert_ne!(first, at(&mut root, 40, "Row 1"));
     }
 
     #[test]
