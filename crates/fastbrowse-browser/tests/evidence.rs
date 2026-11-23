@@ -350,6 +350,27 @@ async fn test_a_modal_with_no_dialog_role_is_modal_when_the_page_behind_it_is_ar
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_carousel_with_aria_hidden_clones_is_not_modal() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // Slick-style clones are aria-hidden and hold links beside the visible slide, while the page's own navigation
+    // stays usable outside the carousel.
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<nav><a href="/home">Home</a></nav>' +
+          '<div class="slick"><div><a href="/one">Slide one</a></div><div aria-hidden="true"><a href="/c" tabindex="-1">Clone</a></div></div>';
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    assert_eq!(obs.modal, None);
+    let labels: Vec<&str> = obs.controls.iter().map(|c| c.label.as_str()).collect();
+    assert!(labels.contains(&"Home") && labels.contains(&"Slide one"), "{labels:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_drawing_below_the_fold_does_not_ask_for_a_screenshot() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");

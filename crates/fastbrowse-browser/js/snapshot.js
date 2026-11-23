@@ -2289,21 +2289,27 @@
   // controls leave the observation while staying in the document: Google Flights' Stops filter took 145 controls
   // out and put them back on closing, and a run told each by name in every later step.
   // Most modals never say aria-modal and need no dialog role: MUI, Radix, react-aria and Headless UI mark the page
-  // behind a modal aria-hidden or inert instead ("aria-hide others"), usually the app root beside the portal that
-  // holds the modal. Content that is aria-hidden or inert and still holds controls is how a page tells assistive tech
-  // that only its siblings are usable, since a page that hid interactive content from them while it stayed usable
-  // would break ARIA. So a visible sibling of such content, holding controls and not itself hidden, is the modal.
-  // CurseForge's "Delete media" dialog and its gallery edit drawer (a role="presentation" root, no dialog role) are
-  // both this shape; unrecognised, the controls they hid were reported as removed. A role="dialog" that says
-  // aria-modal="false" stays non-modal. The hidden subtree must hold a control, so a decorative icon does not count.
+  // behind a modal aria-hidden or inert instead ("aria-hide others"). A modal is what leaves every other control on
+  // the page hidden from use, so an element is one when the controls the capture collected, which are exactly the
+  // ones not hidden, all lie inside it, and some control sits in hidden content outside it. A page that hid
+  // interactive content from assistive tech while it stayed usable would break ARIA, and the test says nothing
+  // about how the page looks. CurseForge's "Delete media" dialog and its gallery edit drawer (a role="presentation"
+  // root, no dialog role) are both this shape; unrecognised, the controls they hid were reported as removed. A
+  // carousel's aria-hidden clones are not: the page's other controls stay outside the visible slide. The candidate is
+  // the sibling of the outermost hidden content, so a dialog and its backdrop controls count as inside. The check is
+  // one containment test per collected control. A role="dialog" that says aria-modal="false" stays non-modal.
   const hiddenSelector = '[aria-hidden="true"],[inert]';
   const holdsControls = e => e.matches(SELECTOR) || !!e.querySelector(SELECTOR);
   const dialogSelector = '[role="dialog"],[role="alertdialog"]';
   const found = new Set(renderFact('query', document, 'dialog:modal,[aria-modal="true"]'));
+  const usable = controls
+    .filter(c => !registry.scrollAxes?.has(c.id))
+    .map(c => registry.nodes.get(c.id))
+    .filter(Boolean);
   for (const hidden of renderFact('query', document, hiddenSelector)) {
     if (hidden.parentElement?.closest(hiddenSelector) || !holdsControls(hidden)) continue;
     for (const sibling of hidden.parentElement?.children || []) {
-      if (sibling === hidden || sibling.matches(hiddenSelector) || !holdsControls(sibling)) continue;
+      if (sibling === hidden || sibling.matches(hiddenSelector) || !usable.length || !usable.every(e => sibling.contains(e))) continue;
       const dialog = sibling.matches(dialogSelector) ? sibling : sibling.querySelector(dialogSelector);
       if (dialog?.getAttribute('aria-modal') !== 'false') found.add(sibling);
     }
