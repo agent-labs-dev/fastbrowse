@@ -110,12 +110,11 @@ impl Agent {
                 continue;
             }
             self.note_effect(state, &observation);
-            let notice = std::mem::take(&mut state.sent_notice);
-            let unchanged = std::mem::take(&mut state.sent_unchanged);
-            if !notice.is_empty() {
+            let shown = std::mem::take(&mut state.sent_text);
+            if shown.iter().any(|piece| piece.added) {
                 // A failed capture loses only the quotes: the step's effect still records what the page added.
                 if let Ok(capture) = self.capture().await {
-                    self.record_sent_notice(state, &capture, &notice, &unchanged);
+                    self.record_sent_notice(state, &capture, &shown);
                 }
             }
             self.settle(state, &observation).await?;
@@ -1621,10 +1620,9 @@ impl Agent {
         &self,
         state: &mut RunState,
         capture: &Capture,
-        lines: &[String],
-        unchanged: &[String],
+        shown: &[fastbrowse_core::effects::ShownPiece],
     ) {
-        if state.record_sent_notice(capture, lines, unchanged) {
+        if state.record_sent_notice(capture, shown) {
             self.seen().read_captures.entry(capture.sha256.clone()).or_insert_with(|| capture.text.clone());
         }
     }
@@ -1665,8 +1663,7 @@ impl Agent {
         {
             last.for_step = sighted.clone();
         }
-        state.sent_notice.clear();
-        state.sent_unchanged.clear();
+        state.sent_text.clear();
         let Some(before) = state.acted_from.take() else { return };
         state.settle_change(observation);
         let landed = read_key(observation);
@@ -1718,11 +1715,11 @@ impl Agent {
             // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
-            let added = fastbrowse_core::effects::added_text(&before, observation);
-            state.replied = (state.committing || keeping || last.look.is_some()) && !added.is_empty();
+            let shown = fastbrowse_core::effects::shown_text(&before, observation);
+            state.replied =
+                (state.committing || keeping || last.look.is_some()) && shown.iter().any(|piece| piece.added);
             if state.committing || keeping {
-                state.sent_unchanged = fastbrowse_core::effects::unchanged_text(&before, observation);
-                state.sent_notice = added;
+                state.sent_text = shown;
             }
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {

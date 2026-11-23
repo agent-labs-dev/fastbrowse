@@ -774,8 +774,8 @@ fn test_the_reply_to_a_sent_commit_is_a_note_a_claim_can_cite() {
         state.keeping = sent;
         state.history.push(executed(Some(Operation::Click), Some("Save"), true));
         agent().note_effect(&mut state, &saved);
-        let notice = std::mem::take(&mut state.sent_notice);
-        state.record_sent_notice(&page, &notice, &[]);
+        let shown = std::mem::take(&mut state.sent_text);
+        state.record_sent_notice(&page, &shown);
         let quotes: Vec<String> = state.notes.evidence().values().map(|evidence| evidence.quote.clone()).collect();
         assert_eq!(quotes, quoted, "sent: {sent}");
         assert!(
@@ -793,7 +793,9 @@ fn test_the_reply_to_a_sent_commit_is_a_note_a_claim_can_cite() {
 #[test]
 fn test_a_repeated_notice_is_quoted_at_the_line_that_was_added() {
     let page = capture(&[(BlockKind::Paragraph, "Saved\nEdited\nSaved")]);
-    let quotes = crate::retrieval::line_quotes(&page, &["Saved".into()], &[]);
+    let shown = |text: &str, added| fastbrowse_core::effects::ShownPiece { text: text.into(), added };
+    let quotes =
+        crate::retrieval::line_quotes(&page, &[shown("Saved", false), shown("Edited", false), shown("Saved", true)]);
     assert_eq!(quotes.len(), 1);
     assert_eq!(quotes[0].start, "Saved\nEdited\n".chars().count() as i64 + page.blocks[0].start);
 }
@@ -803,7 +805,8 @@ async fn a_sent_notice_capture_is_kept_for_its_citation() {
     let agent = agent();
     let page = capture(&[(BlockKind::Paragraph, "Changes saved successfully")]);
     let mut state = run_state();
-    agent.record_sent_notice(&mut state, &page, &["Changes saved successfully".into()], &[]);
+    let shown = [fastbrowse_core::effects::ShownPiece { text: "Changes saved successfully".into(), added: true }];
+    agent.record_sent_notice(&mut state, &page, &shown);
     let mut result = RunResult {
         status: Status::Complete,
         budget: None,

@@ -23,6 +23,8 @@ thiserror = "2.0.21"
 # A task-local marks a decision the page redrew under, whose new requests are neither sent nor counted.
 tokio = { version = "1.54.1", default-features = false, features = ["rt"] }
 serde_path_to_error = "0.1.20"
+# Lines up the text before and after a step, so a repeated piece is told added or kept by where it stands.
+similar = { version = "3.2.0", default-features = false }
 
 # Publish recipes only after the complete JSON has reached disk.
 tempfile = "3.27.0"
