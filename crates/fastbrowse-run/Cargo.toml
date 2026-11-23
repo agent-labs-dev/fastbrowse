@@ -28,8 +28,8 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 shlex = "2.0.1"
 # `desktop` speaks to `deskpilot mcp` over its stdin and stdout.
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "fs", "process", "io-util"] }
-url = "2.5.8"
+url = "2.5.9"
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net", "io-util"] }
-url = "2.5.8"
+url = "2.5.9"
