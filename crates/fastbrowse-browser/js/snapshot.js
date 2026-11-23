@@ -1636,9 +1636,11 @@
     for (const child of parent?.children || []) counts.set(twinKey(child), (counts.get(twinKey(child)) || 0) + 1);
     return counts;
   });
+  const CARD_RECORDS = 'article,li,[role="listitem"],tr,[role="row"]';
   const isCard = memo(e =>
-    e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
+    e.matches(CARD_RECORDS) ||
     (!!e.getAttribute('class') && twinCounts(e.parentElement).get(twinKey(e)) > 1));
+  const cardCount = memo(parent => [...(parent?.children || [])].filter(isCard).length);
   // A landmark or section owns its headings. A weather panel beside a search form must not name the search
   // field just because both sit in the same app shell.
   const isolatesTitle = memo(e =>
@@ -2144,6 +2146,51 @@
     }
     return '';
   };
+  // A control whose label is its own can still belong to one record of several: a comment's "Hide 3 Replies" sits in
+  // its list item beside the comment card, so it never met a twin, took the section heading "Comments" from the
+  // fallback below, and a run read another comment's counter as the count of the replies it asked about (#1467). Such
+  // a control is named by the nearest card that repeats among its siblings (a list item, a row, or a class-styled
+  // card), even when it is the card's only control. Card counts are kept per parent: a sibling scan per control was
+  // quadratic on a long list.
+  const recordOf = memo(element => {
+    // A lone card inside a repeating one is still a record of its own: the only reply under a comment is named by
+    // that reply, not by the comment it answers, so it is kept while the climb looks for the repeating card around it.
+    let lone = null;
+    for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+      if (!isCard(e)) continue;
+      if (cardCount(e.parentElement) > 1) return lone || e;
+      lone ||= e;
+    }
+    return null;
+  });
+  // The repeating card around a record, for a record that names nothing.
+  const recordAbove = card => {
+    for (let e = card.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+      if (isCard(e) && cardCount(e.parentElement) > 1) return e;
+    }
+    return null;
+  };
+  // A card names a control by a title of its own. A comment's layout rows repeat their class inside every comment and
+  // hold a bare line ("Actions") where the comment holds its author's heading, so a card with no title leaves the name
+  // to the repeating record around it; only when none has a title does the innermost record's first line name it.
+  const titleOf = (card, element, label) => {
+    const aria = (card.getAttribute('aria-label') || '').trim();
+    return aria && aria !== label ? aria : sectionOf(card, element, label, true);
+  };
+  for (const c of controls) {
+    if (c.context) continue;
+    const element = registry.nodes.get(c.id);
+    const record = recordOf(element);
+    if (!record) continue;
+    let context = '';
+    // A lone record is a record of its own (the only reply names itself, not the comment it answers); only a repeating
+    // card can be a layout row that defers to the record around it.
+    for (let card = record; card && !context; card = cardCount(card.parentElement) > 1 ? recordAbove(card) : null) {
+      context = titleOf(card, element, c.label);
+    }
+    context ||= nameOf(record, element, c.label, true);
+    if (context) c.context = context;
+  }
   for (const c of controls) {
     if (!c.context) {
       const context = nearestHeading(registry.nodes.get(c.id), c.label);

@@ -802,3 +802,43 @@ async fn test_a_posted_comment_is_named_in_the_effect_of_the_click_that_posted_i
     );
     h.close().await;
 }
+
+/// CurseForge's "Hide N Replies" counter sits in a comment's list item beside its card. Its label is its own, so it
+/// met no twin and took the section heading "Comments" for both counters; a run read the counter of another comment
+/// as the count of the replies it asked about (#1467). Each counter is named by the comment it belongs to, as that
+/// comment's Reply button is, and a navigation list's links, alone in their items, are not.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_reply_counter_is_named_by_the_comment_it_belongs_to() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let comment = |author: &str, when: &str, counter: &str, replies: &str| {
+        format!(
+            "<li><div class=comment><b>{author}</b><time>{when}</time><p>Text by {author}.</p>\
+             <button type=button>Reply</button></div><button type=button>{counter}</button>\
+             <div><ul>{replies}</ul></div></li>"
+        )
+    };
+    let nested =
+        [comment("cjber", "11 hours ago", "Hide 3 Replies", ""), comment("Serzath", "1 day ago", "Hide 1 Replies", "")]
+            .concat();
+    let html = format!(
+        "<nav><ul><li><a href=#a>Files</a></li><li><a href=#b>Issues</a></li></ul></nav>\
+         <section aria-label=Comments><ul>{}{}</ul></section>",
+        comment("Kal66", "7 days ago", "Hide 4 Replies", &nested),
+        comment("Pinnnnnnnnnn", "8 days ago", "Hide 2 Replies", &comment("Lone", "2 days ago", "Hide 5 Replies", ""))
+    );
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(&html).unwrap())).await;
+    let observation = h.observe().await;
+    let context = |label: &str| find(&observation, label).context.clone().unwrap_or_default();
+    for (label, author) in [
+        ("Hide 4 Replies", "Kal66"),
+        ("Hide 3 Replies", "cjber"),
+        ("Hide 1 Replies", "Serzath"),
+        ("Hide 2 Replies", "Pinnnnnnnnnn"),
+        ("Hide 5 Replies", "Lone"),
+    ] {
+        assert!(context(label).starts_with(author), "{label} is named {:?}, not for {author}", context(label));
+    }
+    assert_eq!(context("Files"), "");
+    h.close().await;
+}
