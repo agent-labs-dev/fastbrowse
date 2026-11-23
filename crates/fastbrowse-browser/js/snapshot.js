@@ -2307,7 +2307,15 @@
   // the sibling of the outermost hidden content, so a dialog and its backdrop controls count as inside. The check is
   // one containment test per collected control. A role="dialog" that says aria-modal="false" stays non-modal.
   const hiddenSelector = '[aria-hidden="true"],[inert]';
-  const holdsControls = e => e.matches(SELECTOR) || !!e.querySelector(SELECTOR);
+  // A control is drawn or not by its own rendering: a wrapper with no box (display:contents) still draws its controls,
+  // and a rendered wrapper can hold only a display:none panel.
+  const holdsDrawnControl = e =>
+    [e, ...e.querySelectorAll(SELECTOR)].some(c => c.matches(SELECTOR) && visibilityOf(c, { checkVisibilityCSS: true }));
+  // Element.contains stops at a shadow root, but the capture walks open ones, so containment climbs through each host.
+  const containsAcrossShadow = (root, e) => {
+    for (let n = e; n; n = n.getRootNode().host) if (root.contains(n)) return true;
+    return false;
+  };
   const dialogSelector = '[role="dialog"],[role="alertdialog"]';
   const found = new Set(renderFact('query', document, 'dialog:modal,[aria-modal="true"]'));
   const usable = controls
@@ -2315,11 +2323,11 @@
     .map(c => registry.nodes.get(c.id))
     .filter(Boolean);
   for (const hidden of renderFact('query', document, hiddenSelector)) {
-    // The page behind a modal is still drawn; a menu or template kept aria-hidden while dormant is not rendered, and
-    // would otherwise make the whole usable page look like a modal sitting over it.
-    if (hidden.parentElement?.closest(hiddenSelector) || !holdsControls(hidden) || !visibilityOf(hidden, { checkVisibilityCSS: true })) continue;
+    // The page behind a modal is still drawn; a menu or template kept aria-hidden while dormant holds no drawn
+    // control, and would otherwise make the whole usable page look like a modal sitting over it.
+    if (hidden.parentElement?.closest(hiddenSelector) || !holdsDrawnControl(hidden)) continue;
     for (const sibling of hidden.parentElement?.children || []) {
-      if (sibling === hidden || sibling.matches(hiddenSelector) || !usable.length || !usable.every(e => sibling.contains(e))) continue;
+      if (sibling === hidden || sibling.matches(hiddenSelector) || !usable.length || !usable.every(e => containsAcrossShadow(sibling, e))) continue;
       const dialog = sibling.matches(dialogSelector) ? sibling : sibling.querySelector(dialogSelector);
       if (dialog?.getAttribute('aria-modal') !== 'false') found.add(sibling);
     }
