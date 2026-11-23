@@ -29,6 +29,8 @@ impl DatePage {
                    "sensitive": false, "offscreen": false}),
             json!({"id": "inline-next", "frame_id": null, "role": "link", "label": "Next", "operations": ["click"],
                    "sensitive": false, "offscreen": false}),
+            json!({"id": "note", "frame_id": null, "role": "textbox", "label": "Note", "operations": ["fill"],
+                   "sensitive": false, "offscreen": false}),
         ];
         if self.open.load(std::sync::atomic::Ordering::SeqCst) {
             controls.push(json!({"id": "popup-next", "frame_id": null, "role": "link", "label": "Next",
@@ -85,7 +87,8 @@ impl Page for DatePage {
             Ok(ActResult {
                 outcome: StepOutcome::Executed,
                 failure: None,
-                page_changed: opens,
+                // A note taking text changes the page's text but no control on it.
+                page_changed: opens || action.target_id.as_deref() == Some("note"),
                 detail: None,
                 moved: false,
                 landed: None,
@@ -360,4 +363,19 @@ async fn test_done_reads_the_page_in_front_of_it_and_ends_in_one_turn() {
         "{:?}",
         result.steps
     );
+}
+
+#[tokio::test]
+async fn test_a_plan_keeps_running_while_a_field_takes_text_and_no_control_appears_or_goes() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([
+        json!({"next": "", "actions": [
+            {"tool": "type", "id": "note", "text": "hello"}, {"tool": "click", "id": "inline-next"}
+        ]}),
+        give_up(),
+    ]);
+    run(page.clone(), driver.clone()).await;
+    let acted: Vec<_> = page.acted.lock().unwrap().iter().map(|action| action.target_id.clone()).collect();
+    assert_eq!(acted, [Some("note".into()), Some("inline-next".into())]);
+    assert_eq!(driver.sent.lock().unwrap().len(), 2, "both actions ran from one turn");
 }

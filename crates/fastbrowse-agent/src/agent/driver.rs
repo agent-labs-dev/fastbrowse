@@ -36,8 +36,9 @@ pub(super) struct Chat {
     reported: usize,
     /// Actions the model planned past the first, run while the page they were planned on stays.
     queue: VecDeque<Act>,
-    /// The page the queue was planned on, as its url and document.
+    /// The page the queue was planned on, as its url and document, and the ids of the controls it had.
     planned_on: Option<(String, String)>,
+    planned_ids: HashSet<String>,
     /// What code tells the model before the next page: a refusal, a stall, a dropped plan.
     pub(super) notices: Vec<String>,
     /// The page state last read, as its url, document and page key, so `done` reads the page in front of it only once.
@@ -102,9 +103,10 @@ the page you last saw: it is what your last action opened or loaded. Controls in
 as a popup, menu or calendar a control opened, are listed under their own heading.
 
 Answer first with `next`: in one or two sentences, what your last actions changed on the page and what you will do \
-next and why. Then the actions to take, in order. They run one after another and stop at the first that changes the page, \
-so plan several only when each acts on a control already listed (filling a form's fields, then submitting it). \
-Act only on ids listed in the current page. Check what each action did in the next turn before relying on it.
+next and why. Then the actions to take, in order: every action you can already take on the controls listed, such as \
+filling each field of a form and then submitting it, in one turn. They run one after another while the page keeps \
+the same controls; once an action opens, closes or loads something, the rest are not run and you see the new page. \
+Act only on ids listed in the current page. Check what the actions did in the next turn before relying on them.
 
 Tools:
 - click(id); type(id, text) replaces the field's text; select(id, option) picks one of the listed options exactly.
@@ -291,14 +293,16 @@ impl Chat {
 }
 
 impl Agent {
-    /// The next planned action, while the page it was planned on stays and its target is still on it. A plan made for
-    /// one page is dropped once the page changes, and the model is told, since the ids it named may now mean other
-    /// controls or none.
+    /// The next planned action, while the page it was planned on keeps the same controls. A plan is dropped once a
+    /// control appears or goes, or the document changes, and the model is told: after a popup or redraw the ids it named
+    /// may mean other controls. A field taking a value changes the page but no control, and dropping the plan there ran
+    /// one field of a form per turn.
     fn queued(&self, state: &mut RunState, observation: &Observation) -> Option<Act> {
         let chat = &mut state.chat;
         let next = chat.queue.front()?;
-        let changed = state.history.last().is_some_and(|entry| entry.page_changed)
-            || chat.planned_on.as_ref() != Some(&page_of(observation));
+        let changed = chat.planned_on.as_ref() != Some(&page_of(observation))
+            || observation.controls.len() != chat.planned_ids.len()
+            || observation.controls.iter().any(|control| !chat.planned_ids.contains(&control.id));
         let gone = target_of(next).is_some_and(|id| !observation.controls.iter().any(|control| control.id == id));
         if changed || gone {
             let dropped = chat.queue.len();
@@ -362,6 +366,7 @@ impl Agent {
         let first = actions.pop_front().ok_or_else(|| LLMError::schema("actions holds no action"))?;
         state.chat.queue = actions;
         state.chat.planned_on = Some(page_of(observation));
+        state.chat.planned_ids = state.chat.seen.clone();
         Ok(first)
     }
 
