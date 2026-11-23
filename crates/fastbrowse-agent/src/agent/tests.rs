@@ -3391,7 +3391,7 @@ async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
 async fn test_the_done_check_masks_a_secret_in_the_undone_clause_labels() {
     let page = observation(&[]);
     let mut state = run_state();
-    state.task = "Enter the code private-token in the box. Then press Submit.".into();
+    state.raw_task = "Enter the code private-token in the box. Then press Submit.".into();
     let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
     agent.redactor().register("token", "private-token", None);
@@ -3415,7 +3415,7 @@ async fn test_the_done_check_masks_a_secret_in_the_undone_clause_labels() {
 async fn test_the_done_check_masks_a_secret_holding_a_sentence_delimiter() {
     let page = observation(&[]);
     let mut state = run_state();
-    state.task = "Enter the code pass. word in the box. Then press Submit.".into();
+    state.raw_task = "Enter the code pass. word in the box. Then press Submit.".into();
     let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
     agent.redactor().register("code", "pass. word", None);
