@@ -1043,6 +1043,7 @@ impl Agent {
         let facts_before = state.notes.facts().len();
         let label = decision_label(decision);
         let mut typed: Option<String> = None;
+        let mut destination = None;
         let mut effect_now: Option<String> = None;
         let mut setting = false;
         let mut set: Vec<FieldChange> = Vec::new();
@@ -1220,6 +1221,13 @@ impl Agent {
             if executed && let Some(text) = &action.text {
                 typed = Some(if action.secret { "<secret>".to_string() } else { self.mask(text) });
             }
+            if executed
+                && action.operation == Operation::Drag
+                && let Some(id) = &action.destination_id
+            {
+                // The resulting label or page text may change without naming the control the drag was sent to.
+                destination = observation.controls.iter().find(|control| &control.id == id).map(describe);
+            }
             changed = result.page_changed;
             // A read takes in the whole page, so scrolling leaves it as read.
             // Showing another tab leaves the one it left as it was.
@@ -1367,6 +1375,7 @@ impl Agent {
             Some(self.mask(held.value.as_deref().unwrap_or_default()))
         });
         state.history.push(HistoryEntry {
+            destination,
             text: typed,
             before,
             effect: effect_now,

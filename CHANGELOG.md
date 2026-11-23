@@ -12,6 +12,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 ## [Unreleased]
 
 - A selected table cell keeps its row as evidence. When a later column marks that row with a status or icon, the answer check can use it ([#1513](https://github.com/agent-labs-dev/fastbrowse/issues/1513)).
+- The completion check sees which control a drag was sent to, alongside what the page showed afterward ([#1519](https://github.com/agent-labs-dev/fastbrowse/issues/1519)).
 
 ## [0.12.0] - 2026-11-23
 
