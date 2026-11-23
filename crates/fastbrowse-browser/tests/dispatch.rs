@@ -2349,6 +2349,104 @@ async fn test_a_tall_sortable_card_moving_past_a_short_card_reports_progress() {
     h.close().await;
 }
 
+/// In a wrapping grid a card lifted one column to the right is second, not counted past the next row's cards.
+#[tokio::test]
+async fn test_a_lifted_grid_card_moves_one_column_not_one_column_per_row() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = '<div id=cards style="display:grid;grid-template-columns:100px 100px 100px;gap:10px">'
+          + ['One','Two','Three','Four','Five','Six'].map(n =>
+            `<button aria-roledescription="draggable" aria-pressed="false" style="height:50px">${n}</button>`).join('')
+          + '</div>';
+        cards.addEventListener('keydown', e => {
+          if (e.code === 'Space') { e.target.setAttribute('aria-pressed', 'true'); e.preventDefault(); }
+          if (e.key === 'ArrowRight' && e.target.getAttribute('aria-pressed') === 'true') {
+            e.target.style.transform = 'translateX(110px)';
+            e.target.nextElementSibling.style.transform = 'translateX(-110px)';
+            e.preventDefault();
+          }
+          if (e.key === 'ArrowDown' && e.target.getAttribute('aria-pressed') === 'true') {
+            // One takes Four's slot; Two, Three and Four each shift back one slot.
+            const [, two, three, four] = cards.children;
+            e.target.style.transform = 'translateY(60px)';
+            two.style.transform = 'translateX(-110px)';
+            three.style.transform = 'translateX(-110px)';
+            four.style.transform = 'translate(220px, -60px)';
+            e.preventDefault();
+          }
+        });
+        true
+    "#,
+    )
+    .await;
+    let labels = ["One", "Two", "Three", "Four", "Five", "Six"];
+    for key in ["Space", "ArrowRight"] {
+        let before = h.observe().await;
+        let card = find(&before, "One");
+        let action =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&action, &before).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+    }
+    let after = h.observe().await;
+    let positions: Vec<_> = labels.iter().map(|label| find(&after, label).item_position).collect();
+    assert_eq!(positions, [Some(2), Some(1), Some(3), Some(4), Some(5), Some(6)]);
+    let before = h.observe().await;
+    let card = find(&before, "One");
+    let action =
+        Action { target_id: Some(card.id.clone()), text: Some("ArrowDown".into()), ..Action::new(Operation::Press) };
+    assert_eq!(h.page.act(&action, &before).await.expect("press").outcome, StepOutcome::Executed);
+    let after = h.observe().await;
+    let positions: Vec<_> = labels.iter().map(|label| find(&after, label).item_position).collect();
+    h.close().await;
+    assert_eq!(positions, [Some(4), Some(1), Some(2), Some(3), Some(5), Some(6)]);
+}
+
+/// A list item moved by transform while its keyboard handle is a child button: the item carries the transform, so its
+/// place, and with it the page state, must still change.
+#[tokio::test]
+async fn test_a_lifted_list_item_moves_when_its_keyboard_handle_is_a_child_button() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = '<ul id=cards>' + ['One','Two','Three','Four','Five','Six'].map(n =>
+          `<li style="height:50px"><button aria-roledescription="draggable" aria-pressed="false">${n}</button></li>`).join('')
+          + '</ul>';
+        cards.addEventListener('keydown', e => {
+          if (e.code === 'Space') { e.target.setAttribute('aria-pressed', 'true'); e.preventDefault(); }
+          if (e.key === 'ArrowDown' && e.target.getAttribute('aria-pressed') === 'true') {
+            const item = e.target.closest('li');
+            item.style.transform = 'translateY(50px)';
+            item.nextElementSibling.style.transform = 'translateY(-50px)';
+            e.preventDefault();
+          }
+        });
+        true
+    "#,
+    )
+    .await;
+    let mut lifted = None;
+    for key in ["Space", "ArrowDown"] {
+        let before = h.observe().await;
+        let card = find(&before, "One");
+        let action =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&action, &before).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+        if key == "Space" {
+            lifted = Some(fastbrowse_core::effects::state_key(&h.observe().await));
+        }
+    }
+    let after = h.observe().await;
+    h.close().await;
+    assert_ne!(lifted.expect("lifted"), fastbrowse_core::effects::state_key(&after), "moving the item is progress");
+    assert_eq!(find(&after, "One").item_position, Some(2));
+    assert_eq!(find(&after, "Two").item_position, Some(1));
+}
+
 /// A described control inside a list item reports the item's place, so a DOM reorder still reads as progress.
 #[tokio::test]
 async fn test_a_described_button_inside_a_list_item_reports_reorder_progress() {

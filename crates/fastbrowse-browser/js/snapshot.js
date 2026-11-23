@@ -2102,26 +2102,64 @@
     const members = list
       ? [...list.querySelectorAll(SET_ITEM)].filter(i => setOwner(i) === list && visible(i))
       : [];
-    // A picked-up sortable card moves by transform while the DOM keeps its order, so the order a person sees is the
-    // one stated: otherwise every arrow press leaves the page looking unchanged. The card has passed a neighbour once
-    // its leading edge, in the direction it travels, reaches that neighbour's far edge: a library may seat a tall card
-    // by an edge rather than its centre. Neighbours are read at the slots the layout gave them, since they slide to
-    // new ones over an animation.
+    // A picked-up sortable card moves by transform while the DOM keeps its order, and the library states its order
+    // nowhere else a page reliably carries (its live announcement is prose in the page's language), so the order a
+    // person sees is the one stated: otherwise every arrow press leaves the page looking unchanged. Neighbours are read
+    // at the slots the layout gave them, since they slide to new ones over an animation. The held item is drawn at its
+    // own slot moved by every translation between the pressed handle and the item, wherever the page put it.
+    // Rows and columns are told apart by centres, since the edges of two cells that touch are read from different
+    // sources (a box, a transform string) and do not compare exactly. The item has passed a neighbour in a row before
+    // its own, or a neighbour beside it in its row on the side it moved to; where it covers a neighbour's centre, it has
+    // passed that neighbour once its edge leading on the axis it travelled reaches that centre, so a tall card seated by
+    // the edge it leads with counts, and a wrapping grid's slots run in rows.
     const held = members.find(i => i.matches(PRESSED) || i.querySelector(PRESSED));
     let siblings = members;
     if (held) {
-      const carried = new DOMMatrix(styleProperty(held.matches(PRESSED) ? held : held.querySelector(PRESSED), 'transform'));
-      const vertical = Math.abs(carried.m42) >= Math.abs(carried.m41);
-      const travel = Math.sign(vertical ? carried.m42 : carried.m41);
-      const near = i => (vertical ? i.offsetTop : i.offsetLeft);
-      const far = i => near(i) + (vertical ? i.offsetHeight : i.offsetWidth);
-      const shift = vertical ? carried.m42 : carried.m41;
+      // A library slides the lifted item to its new place over a transition, and the page is read while it runs: the
+      // place it holds is where the transition ends, not the frame it is passing through.
+      const settled = e =>
+        e.getAnimations().map(a => a.effect?.getKeyframes().at(-1)?.transform).filter(Boolean).at(-1) ??
+        styleProperty(e, 'transform');
+      const moved = (from, to) => {
+        let x = 0;
+        let y = 0;
+        for (let e = from; e; e = e.parentElement) {
+          const m = new DOMMatrix(settled(e));
+          x += m.m41;
+          y += m.m42;
+          if (e === to) break;
+        }
+        return [x, y];
+      };
+      // The box the layout gave an item, before its own transform: a library may also scale a lifted card to the
+      // slot it hovers, and a scale about the transform origin moves every edge, so the scale is undone as well as the
+      // translation. Sortable libraries scale and translate; they do not rotate.
+      const slot = (e, [dx, dy] = [0, 0]) => {
+        const box = boxOf(e);
+        const m = new DOMMatrix(styleProperty(e, 'transform'));
+        const [ox, oy] = styleProperty(e, 'transformOrigin').split(' ').map(Number.parseFloat);
+        const left = box.left - m.e - ox * (1 - m.a) + dx;
+        const top = box.top - m.f - oy * (1 - m.d) + dy;
+        return { left, top, right: left + box.width / m.a, bottom: top + box.height / m.d };
+      };
+      const shift = moved(held.matches(PRESSED) ? held : held.querySelector(PRESSED), held);
+      const vertical = Math.abs(shift[1]) >= Math.abs(shift[0]);
+      const drawn = slot(held, shift);
+      const mid = box => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
+      const above = (a, b) => mid(a).y < b.top && mid(b).y > a.bottom;
+      const side = (a, b) => (mid(a).x < b.left ? -1 : mid(a).x > b.right ? 1 : 0);
+      const reaches = (j, forward) =>
+        vertical ? (forward ? drawn.bottom >= mid(j).y : drawn.top <= mid(j).y)
+          : forward ? drawn.right >= mid(j).x : drawn.left <= mid(j).x;
+      const passed = (j, forward) =>
+        forward
+          ? above(j, drawn) || (!above(drawn, j) && (side(j, drawn) < 0 || (side(j, drawn) === 0 && reaches(j, true))))
+          : above(drawn, j) || (!above(j, drawn) && (side(j, drawn) > 0 || (side(j, drawn) === 0 && reaches(j, false))));
       const at = members.indexOf(held);
-      const passed = members.filter((i, k) =>
-        travel > 0 ? k > at && near(held) + shift + (far(held) - near(held)) >= far(i) : travel < 0 && k < at && near(held) + shift <= near(i),
-      ).length;
+      const after = members.filter((i, k) => k > at && passed(slot(i), true)).length;
+      const before = members.filter((i, k) => k < at && passed(slot(i), false)).length;
       siblings = members.filter(i => i !== held);
-      siblings.splice(at + (travel > 0 ? passed : -passed), 0, held);
+      siblings.splice(at + after - before, 0, held);
     }
     const declared = Number.parseInt(item.getAttribute('aria-posinset'), 10);
     // `aria-setsize="-1"` says the list's size is unknown (a virtualised feed); counting the rendered items instead
