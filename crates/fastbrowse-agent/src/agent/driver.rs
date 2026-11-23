@@ -50,6 +50,13 @@ pub(super) struct Chat {
     /// Each earlier turn's message and where its page render starts in it, so a conversation that outgrows the
     /// model's context can drop the pages the model has moved on from, as browser-use keeps only the latest state.
     pages: Vec<(usize, usize)>,
+    /// Each page state the model was shown, as captured then: a value it saw before an action moved on, such as an
+    /// order's total on the page Finish replaces, was not on the page done is called on, and the run ended
+    /// unverified with the total in its conversation (saucedemo-checkout).
+    shown: Vec<fastbrowse_core::page::Capture>,
+    /// The addresses read so far, in order: a page the model was shown but never read looked the same to it as one
+    /// read, and a count over every page left out the first (stretch-quotes-top-authors).
+    read_pages: indexmap::IndexSet<String>,
 }
 
 impl Chat {
@@ -175,8 +182,8 @@ back() goes back.
 - read() records what the current page shows as evidence. The final answer is written only from pages you read, so \
 read each earlier page that shows part of the answer, while it shows it.
 - done(quotes) ends the run once the task is carried out and the pages read show the answer. quotes are the passages \
-of the current page's visible text that show it, each copied exactly, one per passage; give every one the answer \
-needs, or none to have the page read for you. It is refused when what was read does not support the answer, or a \
+of text that show it, from the current page or any page shown to you before, each copied exactly, one per passage; \
+give every one the answer needs, or none to have the current page read for you. It is refused when what was read does not support the answer, or a \
 quote is not on the page, and you are told so.
 - give_up(status, reason) ends the run when the task cannot be finished: needs_login (a sign-in no secret covers), \
 needs_input (a value the task does not give), blocked (a bot check), unavailable (the site is down or the thing does \
@@ -423,6 +430,10 @@ impl Agent {
         let content = self.redact(&content);
         let page = self.redact(&render(&shown, &seen));
         self.fit(&mut state.chat, &content, page, &shown, &seen).await?;
+        let capture = self.capture().await?;
+        if !state.chat.shown.iter().any(|shown| shown.sha256 == capture.sha256) {
+            state.chat.shown.push(capture);
+        }
         state.chat.seen = observation.controls.iter().map(|control| control.id.clone()).collect();
         let generation =
             self.llm.generate_value(LLMPurpose::Action, &state.chat.messages, &Actions, Some(&state.ledger)).await?;
@@ -506,6 +517,10 @@ impl Agent {
             if let Some(note) = &entry.note {
                 out += &format!("; {note}");
             }
+            if entry.operation == Some(Operation::Read) {
+                let read: Vec<&str> = state.chat.read_pages.iter().map(String::as_str).collect();
+                out += &format!("; pages read so far: {}", read.join(", "));
+            }
             out.push('\n');
         }
         state.chat.reported = state.history.len();
@@ -534,14 +549,16 @@ impl Agent {
                 // date of a date, day and month shown as three blocks.
                 if !quotes.is_empty() && state.chat.read_on.as_ref() != Some(&read_key(observation)) {
                     let capture = self.capture().await?;
-                    let missing = self.read_quoted(state, capture, observation, quotes);
+                    let earlier = std::mem::take(&mut state.chat.shown);
+                    let missing = self.read_quoted(state, capture, &earlier, observation, quotes);
+                    state.chat.shown = earlier;
                     if !missing.is_empty() {
                         state.chat.queue.clear();
                         let missing: Vec<String> =
                             missing.iter().map(|quote| self.redact(&format!("{quote:?}"))).collect();
                         state.chat.notices.push(format!(
-                            "done was refused: the current page does not show {} word for word. Quote the page's text \
-                             exactly, or carry out what is left.",
+                            "done was refused: no page shown to you in this run shows {} word for word. Quote a page's \
+                             text exactly, or carry out what is left.",
                             missing.join(", ")
                         ));
                         return Ok(None);
@@ -583,7 +600,10 @@ impl Agent {
             Act::GiveUp { status, reason } => {
                 return Err(Stop::new(status.status(), "Chat/give-up", self.redact(reason)).into());
             }
-            Act::Read => Some(decision(Operation::Read, None, None, None)),
+            Act::Read => {
+                state.chat.read_pages.insert(observation.url.clone());
+                Some(decision(Operation::Read, None, None, None))
+            }
             Act::Back => Some(decision(Operation::Back, None, None, None)),
             Act::Wait => Some(decision(Operation::Wait, None, None, None)),
             Act::Goto { url } => Some(decision(Operation::Navigate, None, Some(url.clone()), None)),

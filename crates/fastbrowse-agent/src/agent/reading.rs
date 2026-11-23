@@ -8,7 +8,7 @@ use serde_json::Map;
 use super::Agent;
 use super::helpers::read_sources;
 use super::state::{RunState, Step, tab_key};
-use fastbrowse_core::models::FactReader;
+use fastbrowse_core::models::{Evidence, FactReader};
 
 use crate::memory::{Fact, address};
 use crate::retrieval::{PageRead, read_page};
@@ -95,43 +95,62 @@ impl Agent {
         Ok(Some((done, progressed)))
     }
 
-    /// Read `quotes` off `capture` as the facts that answer the task, returning those the page does not hold verbatim.
-    /// The driver saw the page and names what answers; a Jev read picks one passage, and kept "Date: 12/04/2026" from a
-    /// page whose date, day and month were three blocks, so done was refused with the answer on screen.
+    /// Read `quotes` as the facts that answer the task, each off `capture` or else the latest of `earlier`, the pages
+    /// the driver was shown before, returning those no page holds verbatim. The driver saw the page and names what
+    /// answers; a Jev read picks one passage, and kept "Date: 12/04/2026" from a page whose date, day and month were
+    /// three blocks, so done was refused with the answer on screen.
     pub(super) fn read_quoted(
         &self,
         state: &mut RunState,
         capture: Capture,
+        earlier: &[Capture],
         observation: &Observation,
         quotes: &[String],
     ) -> Vec<String> {
-        let (found, missing): (Vec<_>, Vec<_>) = quotes
-            .iter()
-            .map(|quote| (quote, crate::retrieval::quoted(&capture, quote)))
-            .partition(|(_, e)| e.is_some());
-        let missing: Vec<String> = missing.into_iter().map(|(quote, _)| quote.clone()).collect();
+        let mut missing = Vec::new();
+        let mut current = Vec::new();
+        let mut before: Vec<(usize, Vec<Fact>)> = Vec::new();
+        // The fact is the evidence's text, which for a table row is the row under its header.
+        let fact = |evidence: Evidence| Fact::read(&evidence.quote.clone(), evidence, FactReader::LlmQuote).answering();
+        for quote in quotes {
+            if let Some(evidence) = crate::retrieval::quoted(&capture, quote) {
+                current.push(fact(evidence));
+            } else if let Some((at, evidence)) = earlier
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(at, page)| crate::retrieval::quoted(page, quote).map(|evidence| (at, evidence)))
+            {
+                match before.iter_mut().find(|(page, _)| *page == at) {
+                    Some((_, facts)) => facts.push(fact(evidence)),
+                    None => before.push((at, vec![fact(evidence)])),
+                }
+            } else {
+                missing.push(quote.clone());
+            }
+        }
         if !missing.is_empty() {
             return missing;
         }
+        // Several quotes are parts of one answer, written up together.
+        let compose = quotes.len() > 1;
+        before.sort_by_key(|(at, _)| *at);
+        for (at, facts) in before {
+            let page = &earlier[at];
+            self.seen().read_captures.entry(page.sha256.clone()).or_insert_with(|| page.text.clone());
+            state.record_read(page, facts, compose);
+        }
         let tries = state.begin_read(observation);
         let known = read_sources(&state.notes);
-        let facts: Vec<Fact> = found
-            .into_iter()
-            // The fact is the evidence's text, which for a table row is the row under its header.
-            .filter_map(|(_, evidence)| {
-                evidence.map(|evidence| Fact::read(&evidence.quote.clone(), evidence, FactReader::LlmQuote).answering())
-            })
-            .collect();
-        // Several quotes are parts of one answer, written up together.
-        let compose = facts.len() > 1;
         self.end_read(
             state,
             capture,
             observation,
             tries,
             known,
-            PageRead { facts, compose, finished: true, for_steps: false },
+            PageRead { facts: current, compose, finished: true, for_steps: false },
         );
+        state.compose |= compose;
         Vec::new()
     }
 

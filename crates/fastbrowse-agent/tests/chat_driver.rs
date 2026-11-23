@@ -23,6 +23,8 @@ struct DatePage {
     http: bool,
     /// The page's text below the viewport.
     offscreen: String,
+    /// The page's text before its date field is opened, when it differs from after.
+    before: Option<String>,
     acted: Mutex<Vec<Action>>,
 }
 
@@ -77,12 +79,15 @@ impl Page for DatePage {
     }
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
-        let text = "Pick a date";
+        let text = match &self.before {
+            Some(before) if !self.open.load(std::sync::atomic::Ordering::SeqCst) => before.clone(),
+            _ => "Pick a date".to_string(),
+        };
         Box::pin(async move {
             Ok(serde_json::from_value(json!({
                 "url": "https://example.test/", "title": "Pick a date", "captured_at": "2026-11-18T00:00:00Z",
                 "sha256": fastbrowse_core::py::sha256_hex(text.as_bytes()), "text": text,
-                "blocks": [{"source_id": "p", "frame_id": null, "kind": "paragraph", "start": 0, "end": text.len()}]
+                "blocks": [{"source_id": "p", "frame_id": null, "kind": "paragraph", "start": 0, "end": text.chars().count()}]
             }))
             .unwrap())
         })
@@ -411,7 +416,11 @@ async fn test_a_done_quoting_words_the_page_does_not_show_is_refused_and_told_ba
     let driver = Driver::new([json!({"next": "", "actions": [{"tool": "done", "quotes": ["Pick a day"]}]}), give_up()]);
     let result = run(page, driver.clone()).await;
     assert_eq!(result.status, Status::Stuck);
-    assert!(driver.told(1).contains(r#"does not show "Pick a day" word for word"#), "{}", driver.told(1));
+    assert!(
+        driver.told(1).contains(r#"no page shown to you in this run shows "Pick a day" word for word"#),
+        "{}",
+        driver.told(1)
+    );
 }
 
 #[tokio::test]
@@ -499,4 +508,31 @@ async fn test_a_page_longer_than_the_models_context_is_shown_without_its_text_ou
     let told = driver.told(0);
     assert!(!told.contains("comment comment") && told.contains("The text outside the viewport is left out"), "{told}");
     assert!(told.contains("Pick a date"), "{told}");
+}
+
+#[tokio::test]
+async fn test_done_may_quote_a_page_the_driver_was_shown_before_an_action_replaced_it() {
+    let page = Arc::new(DatePage { before: Some("Total: $43.18".into()), ..DatePage::default() });
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "click", "id": "1"}]}),
+        json!({"next": "", "actions": [{"tool": "done", "quotes": ["Total: $43.18"]}]}),
+        give_up(),
+        give_up(),
+    ]);
+    run(page, driver.clone()).await;
+    let sent = driver.sent.lock().unwrap();
+    assert!(sent.len() >= 2, "the driver took its second turn");
+    for turn in sent.iter().skip(2) {
+        let told = &turn.last().unwrap().content;
+        assert!(!told.contains("word for word"), "the earlier page's total was refused: {told}");
+    }
+}
+
+#[tokio::test]
+async fn test_a_read_tells_the_driver_every_page_read_so_far() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "read"}]}), give_up()]);
+    run(page, driver.clone()).await;
+    let told = driver.told(1);
+    assert!(told.contains("pages read so far: https://example.test/"), "{told}");
 }
