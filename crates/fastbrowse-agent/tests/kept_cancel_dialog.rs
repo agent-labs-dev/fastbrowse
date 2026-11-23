@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 struct ConfirmPage {
     stage: Mutex<usize>,
     saved_before_dialog: bool,
+    kind: &'static str,
 }
 
 impl ConfirmPage {
@@ -40,7 +41,7 @@ impl ConfirmPage {
         serde_json::from_value(json!({
             "url": "https://example.test/settings", "title": "Settings",
             "document_key": if dialog { "" } else { "d1" },
-            "dialog": if dialog { json!({"kind": "confirm", "message": "Save reply?", "default_prompt": null}) } else { Value::Null },
+            "dialog": if dialog { json!({"kind": self.kind, "message": "Save reply?", "default_prompt": null}) } else { Value::Null },
             "page_key": format!("stage-{stage}"), "captured_at": "2026-11-22T00:00:00Z",
             "viewport_text": text, "controls": controls, "tabs": []
         }))
@@ -163,7 +164,7 @@ impl DecisionClient for Watching {
 
 #[tokio::test]
 async fn cancelling_a_confirm_leaves_no_stale_page_fact() {
-    let page = Arc::new(ConfirmPage { stage: Mutex::new(0), saved_before_dialog: false });
+    let page = Arc::new(ConfirmPage { stage: Mutex::new(0), saved_before_dialog: false, kind: "confirm" });
     let jev = Arc::new(Watching {
         stop_at: 4,
         inner: ScriptedJev::new(steps("fill Description = Thanks; click Save; dialog = dismiss").unwrap()),
@@ -181,4 +182,25 @@ async fn cancelling_a_confirm_leaves_no_stale_page_fact() {
     assert_eq!(decisions.len(), 4);
     let facts = decisions[3]["page_facts"].to_string();
     assert!(!facts.contains("changed what the site keeps"), "a cancelled save kept nothing: {facts}");
+}
+
+#[tokio::test]
+async fn dismissing_an_alert_keeps_the_stale_page_fact_of_the_save_it_reported() {
+    let page = Arc::new(ConfirmPage { stage: Mutex::new(0), saved_before_dialog: false, kind: "alert" });
+    let jev = Arc::new(Watching {
+        stop_at: 4,
+        inner: ScriptedJev::new(steps("fill Description = Thanks; click Save; dialog = dismiss").unwrap()),
+        decisions: Mutex::new(Vec::new()),
+    });
+    let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
+    let _ = agent
+        .run(
+            "Thanks is the reply to post; confirm its save",
+            RunOptions { authorization: Some(Authorization { irreversible_actions: true }), ..Default::default() },
+        )
+        .await;
+    let decisions = jev.decisions.lock().unwrap();
+    assert_eq!(decisions.len(), 4);
+    let facts = decisions[3]["page_facts"].to_string();
+    assert!(facts.contains("has not been loaded since"), "the alert's save already happened: {facts}");
 }
