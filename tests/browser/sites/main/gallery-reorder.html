@@ -1,0 +1,11 @@
+<!doctype html>
+<title>Gallery</title>
+<h1>Gallery</h1>
+<button id="reorder" onclick="document.getElementById('dialog').hidden = false">Reorder gallery</button>
+<div id="dialog" role="dialog" aria-label="Reorder Media" hidden>
+  <p>Reorder Media</p>
+  <button onclick="document.getElementById('dialog').hidden = true">Cancel</button>
+</div>
+<ul id="cards">
+  <li id="card">Test image <button onclick="fetch('/deleted', {method: 'POST', body: 'Test image'}); document.getElementById('card').remove()">delete</button></li>
+</ul>
