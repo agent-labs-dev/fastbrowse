@@ -12423,6 +12423,39 @@ fn a_save_acknowledged_by_an_alert_still_keeps_what_it_sent() {
     assert_eq!(kept_values(kept), vec![("Description", "Thanks")]);
 }
 
+/// The same for a reversible save that was judged lasting, not committing.
+#[test]
+fn a_lasting_save_acknowledged_by_an_alert_still_keeps_what_it_sent() {
+    let field = Control::new("description", "textbox", "Description", [Operation::Fill]);
+    let save = button("Save");
+    let page = Observation {
+        document_key: "d1".into(),
+        viewport_text: "Older replies".into(),
+        ..at("https://example.test/thread", &[field, save])
+    };
+    let alert = Observation {
+        page_key: "dialog:alert".into(),
+        document_key: String::new(),
+        dialog: Some(fastbrowse_core::page::Dialog {
+            kind: "alert".into(),
+            message: "Your reply was saved".into(),
+            default_prompt: None,
+        }),
+        ..page.clone()
+    };
+    let mut state = run_state();
+    state.history.push(filled("Description", "Thanks"));
+    state.keeping = true;
+    state.acted_from = Some(page.clone());
+    state.history.push(executed(Some(Operation::Click), Some("Save"), true));
+    agent().note_effect(&mut state, &alert);
+    state.acted_from = Some(alert);
+    state.history.push(executed(Some(Operation::Dialog), None, true));
+    agent().note_effect(&mut state, &page);
+    let kept = state.kept.as_ref().expect("the save is kept");
+    assert_eq!(kept_values(kept), vec![("Description", "Thanks")]);
+}
+
 /// A short reply already on the page in an older reply was taken as the new one showing, so a reload that served the
 /// copy from before the post ended the check.
 #[test]

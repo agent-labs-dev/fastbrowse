@@ -1609,7 +1609,7 @@ impl Agent {
         let opener = before.dialog.as_ref().and(state.behind_dialog.as_ref()).map(|(opener, _)| opener.clone());
         // An alert is closed by a step that is neither committing nor lasting, but the save that opened it is still
         // owed its stale-view fact: the dialog check returned before recording it.
-        let owed = before.dialog.is_some() && state.behind_dialog.as_ref().is_some_and(|(_, sent)| *sent);
+        let owed = before.dialog.is_some() && std::mem::take(&mut state.dialog_owes_send);
         let before = opener.as_ref().unwrap_or(before);
         let sending = state.committing || keeping || owed;
         let open = observation.dialog.is_some();
@@ -1657,6 +1657,10 @@ impl Agent {
         let Some(last) = state.history.last() else { return };
         let sent = state.committing && last.outcome == StepOutcome::Executed;
         note_commit(&mut state.behind_dialog, &mut state.committed_documents, before, observation, sent);
+        // A reversible save classified as lasting is owed the fact too, but only an irreversible one is a commit.
+        if open && sending && last.outcome == StepOutcome::Executed {
+            state.dialog_owes_send = true;
+        }
         if !sending
             || last.outcome != StepOutcome::Executed
             || last.operation == Some(Operation::SwitchTab)

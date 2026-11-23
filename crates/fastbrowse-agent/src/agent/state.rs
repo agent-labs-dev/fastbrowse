@@ -519,6 +519,8 @@ pub(crate) struct RunState {
     /// alert is not itself committing: a GET that unsubscribed and then said so in an alert lost its hold once the
     /// alert closed, and was offered again as a reload; a confirmed save read as a load and lost its pending fills.
     pub behind_dialog: Option<(Observation, bool)>,
+    /// A committing or lasting step opened a dialog, so the step that closes it still owes the page's stale-view fact.
+    pub dialog_owes_send: bool,
     /// Every change the run made that the site keeps, since the last document loaded: the page may not show them yet.
     pub kept: Option<Kept>,
     /// The history length when the run last left a page, so a send's typed values start after it.
@@ -896,6 +898,7 @@ impl RunState {
             commits: 0,
             committed_documents: HashSet::new(),
             behind_dialog: None,
+            dialog_owes_send: false,
             kept: None,
             last_send: 0,
             sent_fills: HashMap::new(),
@@ -1005,6 +1008,7 @@ impl RunState {
             commits: 0,
             committed_documents: HashSet::new(),
             behind_dialog: None,
+            dialog_owes_send: false,
             kept: None,
             last_send: 0,
             sent_fills: HashMap::new(),
