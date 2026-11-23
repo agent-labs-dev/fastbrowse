@@ -2309,6 +2309,47 @@ async fn test_moving_a_picked_up_card_with_a_custom_role_description_reaches_a_n
     check_sortable_moves_reach_new_states("draggable").await;
 }
 
+/// A described control inside a list item reports the item's place, so a DOM reorder still reads as progress.
+#[tokio::test]
+async fn test_a_described_button_inside_a_list_item_reports_reorder_progress() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = '<ul id=cards>' + ['One','Two','Three','Four','Five','Six']
+          .map(n => `<li><button aria-roledescription="draggable">${n}</button></li>`).join('') + '</ul>';
+        let lifted = false;
+        document.getElementById('cards').addEventListener('keydown', e => {
+          if (e.code === 'Space') { lifted = !lifted; e.preventDefault(); }
+          const item = e.target.closest('li');
+          if (lifted && e.key === 'ArrowDown' && item.nextElementSibling) {
+            item.nextElementSibling.after(item);
+            e.target.focus();
+          }
+        });
+        true
+    "#,
+    )
+    .await;
+    let mut previous = None;
+    for key in ["Space", "ArrowDown", "ArrowDown", "ArrowDown", "ArrowDown", "ArrowDown"] {
+        let before = h.observe().await;
+        let card = find(&before, "One");
+        let press =
+            Action { target_id: Some(card.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+        assert_eq!(h.page.act(&press, &before).await.expect("press").outcome, StepOutcome::Executed, "{key}");
+        let state = fastbrowse_core::effects::state_key(&h.observe().await);
+        if key != "Space"
+            && let Some(previous) = &previous
+        {
+            assert_ne!(previous, &state, "a successful ArrowDown must renew the stall budget");
+        }
+        previous = Some(state);
+    }
+    h.close().await;
+}
+
 /// A tree's child group is a separate set from its parent's siblings.
 #[tokio::test]
 async fn test_tree_positions_are_relative_to_their_sibling_group() {
