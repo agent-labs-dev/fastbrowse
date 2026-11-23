@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-23
+
 - After an iframe reload, the form submission check tells Jev that the earlier form's relationship to the current form is unknown ([#1496](https://github.com/agent-labs-dev/fastbrowse/issues/1496)).
 - A commit the task orders after earlier steps ("click Reorder gallery and Cancel, then delete the image") is no longer refused as depending on an unshown condition ([#1006](https://github.com/agent-labs-dev/fastbrowse/issues/1006)). The check that judges a conditional commit saw only the page, which cannot show a dialog that was opened and cancelled, so it read the "then" as values given for later and answered the same request differently from one attempt to the next. Its questions now state the steps the run took, in order, and what the action takes from the task (it types no text), and ask for a site response only where the task waits for one; Jev still decides.
 
@@ -54,8 +56,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A list of values the composer wrote as bare quotes is no longer rejected for want of context ([#1453](https://github.com/agent-labs-dev/fastbrowse/issues/1453)). A run that listed five titles wrote each claim as a copied title alone, and the exact check, which reads a claim as the context for a copied text's role, rejected the long ones at 0.01 and ended the run `unverified`. The composer is now told that a claim is never a bare quote: prose beside each quoted value says what it is, which record and which field the task asks about, because the check judges a quote only through its claim. Replaying the recorded request, the check's score for the same five titles went from 0.01-0.04 to 0.57-0.81.
 
 - A save is now asked about with what it changes ([#1446](https://github.com/agent-labs-dev/fastbrowse/issues/1446)). An authorized run filled a gallery's edit dialog on a card the task never named and saved it, replacing that card's caption, and the authorization questions for the Apply click said only that its form held the new title, so Jev judged the save requested at 0.71 to 0.82. The questions for a control that submits a form now say, from the run's own steps, each field of that form the run filled with the value it held before and the value typed, and the control the run clicked to open the form. Asked again with those facts, the same request judges the save requested at 0.24 to 0.45.
-
-## [0.12.0] - 2026-11-20
 
 - A run that stops with a rejected answer writes it once more told what was rejected ([#1377](https://github.com/agent-labs-dev/fastbrowse/issues/1377)). When an earlier stall had spent the run's recovery, a rejected draft could not send the run back, and the answer written as it stopped was the first request again, byte for byte: it cited the page's title for a question about its heading a second time and ended `unverified`. That last answer is now a rewrite of the rejected draft, checked like any other, and ends `complete` when it holds; a run with an output schema then draws its `data` from that answer.
 
