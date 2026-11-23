@@ -96,6 +96,7 @@ impl Page for ConfirmPage {
                 failure: None,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }

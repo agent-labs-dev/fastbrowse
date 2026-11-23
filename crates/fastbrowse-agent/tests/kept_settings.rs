@@ -73,6 +73,7 @@ impl Page for SettingsPage {
                 failure: None,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }

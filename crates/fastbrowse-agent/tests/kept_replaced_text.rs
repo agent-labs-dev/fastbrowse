@@ -84,6 +84,7 @@ impl Page for ReplacementPage {
                 failure: None,
                 detail: None,
                 moved: false,
+                landed: None,
             })
         })
     }
