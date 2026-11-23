@@ -79,6 +79,7 @@ const WRITTEN: &str = "write";
 const NO_VALUE: &str = "none";
 /// A press whose key the task states, which is copied from the task rather than picked from the role's keys.
 const TASK_KEY: &str = "task";
+const OTHER_CONTROL: &str = "elsewhere";
 const TASK_KEY_SAID: &str = "The task gives the key or key chord to press, and it is none of these.";
 /// The task asks nothing of the field: it is left as it is, and is no input the run lacks. Asked as one with NO_VALUE,
 /// a blank optional field Jev reached for read as a value the caller had to give (#935).
@@ -626,7 +627,20 @@ impl Agent {
                     let reason = format!("{} can only receive a key press in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
-                let chord = self.key(state, observation, decision, target).await?;
+                let carried = if decision.replayed { None } else { self.carried_on(state, observation, target) };
+                let carried_key = match carried {
+                    Some(control) => self.carried_key(state, observation, decision, control, target).await?,
+                    None => None,
+                };
+                let (target, chord) = match (carried, carried_key) {
+                    (Some(control), Some(key)) => (control, key),
+                    _ => (target, self.key(state, observation, decision, target).await?),
+                };
+                // A key carried to another control is authorized as a press in that control: asked about the control
+                // Jev named, a key that commits in the lifted item was judged as a press on a harmless card.
+                let pressed = (decision.target.as_ref().is_none_or(|named| named.id != target.id))
+                    .then(|| Decision { target: Some(target.clone()), ..decision.clone() });
+                let decision = pressed.as_ref().unwrap_or(decision);
                 self.gate_key_edit(state, observation, decision, target, &chord).await?;
                 let fact = format!("\nThe exact key chord to press is {}.\n", text::repr(&chord));
                 self.gate_irreversible_with_fact(state, observation, decision, Some(&fact)).await?;
@@ -1463,25 +1477,7 @@ impl Agent {
         if decision.replayed && self.recorded_key(state, observation, target).is_some() {
             return self.task_key(state, observation, decision, target).await;
         }
-        let options: Vec<String> = press_keys(&target.role).iter().map(|key| key.to_string()).collect();
-        let mut question = format!(
-            "Which key should be pressed in {}? Each is named as a W3C UI Events key value; a {} supports the ones listed \
-             first, and the standard keys follow.",
-            text::repr(&describe(target)),
-            target.role
-        );
-        // A widget states its own keys (a draggable card: Space picks it up, an arrow moves it, Space drops it), and
-        // the recent actions say how far the sequence has got.
-        if let Some(role_description) = &target.role_description {
-            question.push_str(&format!(" The page calls it {}.", text::repr(role_description)));
-        }
-        if let Some(description) = &target.description {
-            question.push_str(&format!(" The page describes it: {}", text::repr(description)));
-        }
-        // An arrow moves the item one place in its list, so which place it holds is part of what the key does.
-        if let Some((position, count)) = item_place(target) {
-            question.push_str(&format!(" It is item {position} of the {count} items in its list."));
-        }
+        let (question, options) = key_question(target, "");
         match self.choose_among(state, observation, &question, &options, &[(TASK_KEY, TASK_KEY_SAID)]).await? {
             Chosen::Option(key) => {
                 state.text_source = Some(RecipeText::Literal(key.clone()));
@@ -1509,6 +1505,87 @@ impl Agent {
                 text::repr(&describe(target))
             ))
             .into()),
+        }
+    }
+
+    /// The control the last press acted on, when it changed the page and still holds keyboard focus: a widget that a
+    /// press set going (a sortable item picked up by Space) is carried on by keys pressed in that control, and a press
+    /// elsewhere moves focus away from it. The press target and the operation are chosen apart from the key, and for
+    /// "move it to be first" Jev named the destination as the control to press (#1466); asked here which key the
+    /// focused control takes next, with "elsewhere" as an answer, it is told what its own last press did and where
+    /// focus is. Jev still decides: the answer "elsewhere" leaves the press on the control it chose.
+    fn carried_on<'a>(&self, state: &RunState, observation: &'a Observation, target: &Control) -> Option<&'a Control> {
+        let last = state.history.last()?;
+        if last.operation != Some(Operation::Press) || last.outcome != StepOutcome::Executed || !last.page_changed {
+            return None;
+        }
+        // Jev may name the lifted control itself as the target: the key is still asked with what its last press did and
+        // whether it has moved, or "Space" read as a fresh pick-up and dropped it where it was (#1466). A different
+        // control must hold focus to be carried on.
+        observation.controls.iter().find(|control| {
+            (control.id == target.id || control.focused == Some(true))
+                && control.operations.contains(&Operation::Press)
+                && last.target.as_deref() == Some(describe(control).as_str())
+        })
+    }
+
+    /// The key Jev says to press in the control the last press set going, or None when the next key is for another
+    /// control.
+    async fn carried_key(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        carried: &Control,
+        target: &Control,
+    ) -> Step<Option<String>> {
+        let Some(last) = state.history.last() else { return Ok(None) };
+        let mut did = format!(
+            "The last action pressed {} in {}",
+            text::repr(last.text.as_deref().unwrap_or_default()),
+            text::repr(&describe(carried))
+        );
+        if let Some(effect) = &last.effect {
+            did.push_str(&format!(" and {}", effect.trim_end_matches('.')));
+        }
+        // Code compares the places: Jev does not count, and without this nothing says the item is still where it was.
+        let moved = match (last.place, item_place(carried)) {
+            (Some((from, _)), Some((now, count))) if from == now => {
+                format!(" Since the press that set it going, it has not moved: it is still item {now} of the {count}.")
+            }
+            (Some((from, _)), Some((now, count))) => {
+                format!(
+                    " Since the press that set it going, it has moved from item {from} to item {now} of the {count}."
+                )
+            }
+            _ => String::new(),
+        };
+        // The target is this control, so the key cannot be for another one. A key the task states is copied from it,
+        // as `key` does: a second press in a control whose first changed the page was offered only the role's keys.
+        // The other control is named: "a different control" alone left Jev nothing to weigh the lifted item against.
+        let elsewhere = format!(
+            "The next key is for {}, the control chosen to press, not this one.",
+            text::repr(&describe(target))
+        );
+        let mut instead = vec![(TASK_KEY, TASK_KEY_SAID)];
+        let focus = if carried.id == target.id {
+            ""
+        } else {
+            instead.push((OTHER_CONTROL, elsewhere.as_str()));
+            " That control still holds keyboard focus, and a press in another control moves focus away from it."
+        };
+        let preface = format!("{did}.{focus}{moved} ");
+        let (question, options) = key_question(carried, &preface);
+        match self.choose_among(state, observation, &question, &options, &instead).await? {
+            Chosen::Option(key) => {
+                state.text_source = Some(RecipeText::Literal(key.clone()));
+                Ok(Some(key))
+            }
+            Chosen::Instead(TASK_KEY) => {
+                let decision = Decision { target: Some(carried.clone()), ..decision.clone() };
+                self.task_key(state, observation, &decision, carried).await.map(Some)
+            }
+            Chosen::Instead(_) => Ok(None),
         }
     }
 
@@ -2932,6 +3009,29 @@ fn steps_taken(history: &[HistoryEntry]) -> String {
         return String::new();
     }
     format!("The steps this run has already taken, in order:\n{}", steps.concat())
+}
+
+/// The question for the key pressed in `target`, and the keys it offers. A widget states its own keys (a draggable
+/// card: Space picks it up, an arrow moves it, Space drops it), and the recent actions say how far the sequence has got.
+fn key_question(target: &Control, preface: &str) -> (String, Vec<String>) {
+    let options: Vec<String> = press_keys(&target.role).iter().map(|key| key.to_string()).collect();
+    let mut question = format!(
+        "{preface}Which key should be pressed in {}? Each is named as a W3C UI Events key value; a {} supports the ones \
+         listed first, and the standard keys follow.",
+        text::repr(&describe(target)),
+        target.role
+    );
+    if let Some(role_description) = &target.role_description {
+        question.push_str(&format!(" The page calls it {}.", text::repr(role_description)));
+    }
+    if let Some(description) = &target.description {
+        question.push_str(&format!(" The page describes it: {}", text::repr(description)));
+    }
+    // An arrow moves the item one place in its list, so which place it holds is part of what the key does.
+    if let Some((position, count)) = item_place(target) {
+        question.push_str(&format!(" It is item {position} of the {count} items in its list."));
+    }
+    (question, options)
 }
 
 #[cfg(test)]

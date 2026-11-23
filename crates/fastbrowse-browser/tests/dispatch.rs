@@ -2629,6 +2629,35 @@ async fn test_tree_positions_are_relative_to_their_sibling_group() {
     h.close().await;
 }
 
+/// A press focuses the control it names (#1466): a Space on the destination card, while another is picked up, moves
+/// focus off the picked-up card and the sortable drops it where it was.
+#[tokio::test]
+async fn test_a_press_on_another_card_drops_the_picked_up_one_in_place() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dndkit-sortable.html").await;
+    let order = || eval_active(&h.page, "document.getElementById('order').textContent");
+    let press = |card: &'static str, key: &'static str| {
+        let h = &h;
+        async move {
+            let now = h.observe().await;
+            let target = find(&now, card);
+            let action =
+                Action { target_id: Some(target.id.clone()), text: Some(key.into()), ..Action::new(Operation::Press) };
+            let result = h.page.act(&action, &now).await.expect("press");
+            assert_eq!(result.outcome, StepOutcome::Executed, "{card} {key}: {result:?}");
+        }
+    };
+    press("Test image", "Space").await;
+    let lifted = h.observe().await;
+    assert_eq!(find(&lifted, "Test image").checked, Some(true), "the picked-up card is shown checked");
+    assert!(find(&lifted, "Test image").focused == Some(true), "and focused");
+    press("Second image", "Space").await;
+    let after = h.observe().await;
+    assert_ne!(find(&after, "Test image").checked, Some(true), "the picked-up card was let go");
+    assert_eq!(order().await, json!("Test image,Second image,Third image"));
+    h.close().await;
+}
+
 /// The same list moved with the pointer, as its PointerSensor takes it: the last card dragged onto the first. The card
 /// declares itself a draggable, so it is offered as a drag source though it carries no `draggable` attribute.
 #[tokio::test]

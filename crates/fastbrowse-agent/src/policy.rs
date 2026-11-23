@@ -250,6 +250,11 @@ pub struct HistoryEntry {
     /// posted." notice. Kept out of what models are shown: it states which text on a later page this step put there.
     #[serde(skip)]
     pub put: Option<(String, Vec<String>)>,
+    /// Which item of its list the control the step acted on was (position, count) when it acted, so a later question
+    /// can say whether the item has moved since: after a press that lifts a sortable item, the item's own place is
+    /// the only sign of whether the keys that follow have moved it yet.
+    #[serde(skip)]
+    pub place: Option<(u32, u32)>,
 }
 
 /// The scope of a form or field group. A local form id can be reused in other frames or documents.
@@ -414,6 +419,7 @@ impl HistoryEntry {
             frame_id: None,
             opened_forms: Vec::new(),
             put: None,
+            place: None,
         }
     }
 

@@ -11958,6 +11958,143 @@ async fn test_the_key_question_carries_what_the_page_says_about_a_draggable_card
         && q.contains("To pick up a draggable item, press the space bar.")));
 }
 
+/// A press that set a widget going leaves focus on that control, and a press elsewhere moves focus away from it (#1466):
+/// the next key is asked in the focused control, as what its own last press did, with "elsewhere" an answer. A sortable
+/// item picked up by Space is moved and dropped by keys pressed on it, though Jev chose another card to press.
+#[tokio::test]
+async fn test_the_next_key_is_asked_in_the_control_the_last_press_set_going() {
+    let mut lifted = Control::new("a", "button", "Test image", [Operation::Click, Operation::Press]);
+    lifted.focused = Some(true);
+    lifted.checked = Some(true);
+    let destination = Control::new("b", "button", "Barrens", [Operation::Click, Operation::Press]);
+    let page = observation(&[lifted.clone(), destination.clone()]);
+    let jev = Arc::new(FirstChoice { wants: Some("ArrowUp"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let mut last = executed(Some(Operation::Press), Some("Test image"), true);
+    last.text = Some("Space".into());
+    last.effect = Some("changed Test image checked: False -> True".into());
+    state.history.push(last);
+    let action = agent
+        .action(&mut state, &page, &code_decision(Operation::Press, Some(destination.clone())))
+        .await
+        .expect("action");
+    assert_eq!((action.target_id.as_deref(), action.text.as_deref()), (Some("a"), Some("ArrowUp")));
+    {
+        let asked = jev.asked.lock().unwrap();
+        assert!(asked.iter().any(|q| {
+            q.contains("The last action pressed 'Space' in 'Test image' and changed Test image")
+                && q.contains("still holds keyboard focus")
+                && q.contains("Which key should be pressed in 'Test image'")
+        }));
+        // The key is authorized as a press in the control it goes to, not the card Jev named.
+        let gate = asked.iter().find(|q| q.contains("The exact key chord to press is 'ArrowUp'")).expect("a gate");
+        assert!(gate.contains("press the element labelled 'Test image'"), "{gate}");
+    }
+    // "elsewhere" leaves the press on the control Jev chose.
+    let jev =
+        Arc::new(FirstChoice { wants: Some("the control chosen to press"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let mut last = executed(Some(Operation::Press), Some("Test image"), true);
+    last.text = Some("Space".into());
+    state.history.push(last);
+    let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(destination))).await;
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in 'Barrens'")), "{asked:?}");
+}
+
+/// Jev named the lifted control itself as the target (#1466): the key is still asked with what the last press did and
+/// whether the item has moved, and the control need not be reported focused.
+#[tokio::test]
+async fn test_the_key_for_the_control_the_last_press_acted_on_is_asked_with_where_it_stands() {
+    let mut lifted = Control::new("a", "button", "Test image", [Operation::Click, Operation::Press]);
+    lifted.item_position = Some(6);
+    lifted.item_count = Some(6);
+    let page = observation(std::slice::from_ref(&lifted));
+    let jev = Arc::new(FirstChoice { wants: Some("ArrowUp"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let mut last = executed(Some(Operation::Press), Some("Test image"), true);
+    last.text = Some("Space".into());
+    last.place = Some((6, 6));
+    state.history.push(last);
+    let action = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(lifted))).await.expect("action");
+    assert_eq!(action.text.as_deref(), Some("ArrowUp"));
+    let asked = jev.asked.lock().unwrap();
+    assert!(
+        asked.iter().any(|q| q.contains("The last action pressed 'Space' in 'Test image'")
+            && q.contains("it has not moved: it is still item 6 of the 6.")
+            && !q.contains("a press in another control")),
+        "{asked:?}"
+    );
+}
+
+/// Jev does not count, so code says whether the lifted item has moved since the press that lifted it.
+#[tokio::test]
+async fn test_the_carried_key_question_says_whether_the_item_has_moved() {
+    let destination = Control::new("b", "button", "Barrens", [Operation::Click, Operation::Press]);
+    let asked_with = |lift: Option<(u32, u32)>, now: Option<u32>| {
+        let mut lifted = Control::new("a", "button", "Test image", [Operation::Click, Operation::Press]);
+        lifted.focused = Some(true);
+        lifted.item_position = now;
+        lifted.item_count = now.map(|_| 6);
+        let page = observation(&[lifted, destination.clone()]);
+        let destination = destination.clone();
+        async move {
+            let jev = Arc::new(FirstChoice { wants: Some("ArrowUp"), noul: Some(0.0), ..Default::default() });
+            let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+            let mut state = run_state();
+            state.edits = Some(Edits::Allowed);
+            let mut last = executed(Some(Operation::Press), Some("Test image"), true);
+            last.text = Some("Space".into());
+            last.place = lift;
+            state.history.push(last);
+            let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(destination))).await;
+            let asked = jev.asked.lock().unwrap();
+            asked
+                .iter()
+                .find(|q| q.contains("Which key should be pressed in 'Test image'"))
+                .cloned()
+                .unwrap_or_default()
+        }
+    };
+    let unmoved = asked_with(Some((6, 6)), Some(6)).await;
+    assert!(
+        unmoved.contains("Since the press that set it going, it has not moved: it is still item 6 of the 6."),
+        "{unmoved}"
+    );
+    let moved = asked_with(Some((6, 6)), Some(2)).await;
+    assert!(moved.contains("it has moved from item 6 to item 2 of the 6."), "{moved}");
+    let unknown = asked_with(None, Some(6)).await;
+    assert!(!unknown.contains("Since the press that set it going"), "{unknown}");
+    let unseen = asked_with(Some((6, 6)), None).await;
+    assert!(!unseen.contains("Since the press that set it going"), "{unseen}");
+}
+
+/// A second press in a control whose first changed the page still takes a chord the task states: the carried key
+/// question offered only the role's keys.
+#[tokio::test]
+async fn test_the_carried_key_question_still_takes_a_chord_the_task_gives() {
+    let editor = Control::new("e", "textbox", "Editor", [Operation::Click, Operation::Press]);
+    let page = observation(std::slice::from_ref(&editor));
+    let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits = Some(Edits::Allowed);
+    let mut last = executed(Some(Operation::Press), Some("Editor"), true);
+    last.text = Some("Backspace".into());
+    state.history.push(last);
+    let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(editor))).await;
+    let asked = jev.asked.lock().unwrap();
+    let picked =
+        asked.iter().position(|q| q.contains("The last action pressed 'Backspace'")).expect("the key question");
+    assert!(asked.len() > picked + 1, "the chord is copied from the task: {asked:?}");
+}
+
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.
 #[tokio::test]
 async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
@@ -11987,9 +12124,17 @@ async fn test_a_press_copied_from_a_task_that_names_no_key_is_not_made() {
     let mut state = run_state();
     state.task = "Make the document's text bold, then save the document.".into();
     state.edits = Some(Edits::Allowed);
-    let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(editor))).await;
-    let Err(Flow::Unsure(unsure)) = result else { panic!("words that are no key were pressed: {result:?}") };
-    assert!(unsure.reason.contains("no key"), "{}", unsure.reason);
+    let decision = code_decision(Operation::Press, Some(editor));
+    for carried in [false, true] {
+        if carried {
+            let mut last = executed(Some(Operation::Press), Some("Editor"), true);
+            last.text = Some("Backspace".into());
+            state.history.push(last);
+        }
+        let result = agent.action(&mut state, &page, &decision).await;
+        let Err(Flow::Unsure(unsure)) = result else { panic!("words that are no key were pressed: {result:?}") };
+        assert!(unsure.reason.contains("no key"), "{}", unsure.reason);
+    }
 }
 
 /// A press on a text field copies its chord from the task, asked as a key chord: asked what should be typed into the
