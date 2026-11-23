@@ -434,17 +434,34 @@ impl Agent {
                 // A click's action is only its gates, which see the task, the origin and the history but never the
                 // notes, so it is built while the page is read.
                 let beside = matches!(decision.operation, Operation::Click | Operation::Enter);
-                let built = if beside {
+                let beside_read = if beside {
                     let building = async |state: &mut RunState| self.build(state, &observation, &decision).await;
                     self.read_beside(state, capture.clone(), &observation, shows, building).await?
                 } else {
                     None
                 };
-                match built {
-                    Some(built) => state.built = Some(built),
+                let (built, progressed) = match beside_read {
+                    Some((built, progressed)) => (Some(built), progressed),
                     None => {
-                        self.trace.phase("read", self.read(state, capture, &observation, shows)).await?;
+                        let read = self.trace.phase("read", self.read(state, capture, &observation, shows)).await?;
+                        (None, read)
                     }
+                };
+                // The decision was made before this read, so it did not see what the read took from the page: a
+                // reload chosen on a fresh load whose saved line only the read held was made twice (#1438). It is made
+                // again with the notes. Done is not, since finishing is judged against them. Nor is the first step,
+                // which has no earlier action whose result the read could show. The page then counts as read, so the
+                // second decision adds nothing more unless the page changes.
+                // A gate that already stopped the run for a person is not taken back.
+                let stopped = built.as_ref().is_some_and(|built| built.is_err());
+                if progressed && decision.operation != Operation::Done && !state.steps.is_empty() && !stopped {
+                    self.event("decision_after_read", || Map::from_iter([("step".into(), state.steps.len().into())]));
+                    state.built = None;
+                    Self::discard_decision(state);
+                    continue;
+                }
+                if built.is_some() {
+                    state.built = built;
                 }
             }
             if decision.operation == Operation::Done {
@@ -640,9 +657,17 @@ impl Agent {
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
         self.event("redecide", || Map::from_iter([("url".into(), observation.url.clone().into())]));
         state.redecided = true;
-        // Nothing was sent, so the commit the gate cleared is not one the run has made.
+        Self::discard_decision(state);
+    }
+
+    /// Nothing was sent: the commit the gate cleared is not one the run has made, and a pictured target or look left
+    /// set would be attached to the previous action by the next observation.
+    fn discard_decision(state: &mut RunState) {
         state.committing = false;
         state.keeping = false;
+        state.sighted = None;
+        state.look = None;
+        state.choices.clear();
     }
 
     /// `work`'s result, or `Redrawn` when the page redrew under it: `target`, or with none any control offered.
@@ -1059,6 +1084,12 @@ impl Agent {
                 }
             };
             state.redecided = false;
+            if state.committing {
+                // What this commits can still be redirecting or awaiting a 3-D Secure check when the run ends, and
+                // closing the tab would abort it (#748). Handed over here, not when built: a read can discard the built
+                // action, and the tab would stay handed over for a commit never sent.
+                self.page.hand_over_tab();
+            }
             if action.operation == Operation::Fill
                 && action.text.as_deref().is_none_or(str::is_empty)
                 && require(decision.target.as_ref())?.value.as_deref().is_none_or(str::is_empty)
@@ -1595,7 +1626,11 @@ impl Agent {
         // page to diff, kept the step, and the next click on the map was shown as made for it instead.
         let sighted = std::mem::take(&mut state.sighted);
         let keeping = std::mem::take(&mut state.keeping);
-        if let Some(last) = state.history.last_mut() {
+        // An observation with no action since the last one (a decision made again after a read) has no click to
+        // name, so it leaves the step the previous observation gave that click.
+        if (sighted.is_some() || state.acted_from.is_some())
+            && let Some(last) = state.history.last_mut()
+        {
             last.for_step = sighted.clone();
         }
         let Some(before) = state.acted_from.take() else { return };
