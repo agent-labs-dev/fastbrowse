@@ -2048,23 +2048,41 @@ pub(super) fn pick_stale(picked: &Picked, observation: &Observation) -> Option<&
     let Some(now) = observation.controls.iter().find(|c| c.id == target.id) else {
         return Some("target_gone");
     };
-    // A pick made for a link, a field or a box in one state was carried to the same control after its href, value or
-    // checked state changed, and acted on what Jev never chose. Focus, viewport visibility and the agent's own marks
-    // (read, shown by, pictured, which turns on the controls around it) change without changing what the action does.
-    let fingerprint = Control {
-        id: target.id.clone(),
-        operations: target.operations.clone(),
-        focused: target.focused,
-        offscreen: target.offscreen,
-        already_read: target.already_read,
-        shown_by: target.shown_by.clone(),
-        pictured: target.pictured,
-        ..now.clone()
-    };
-    if fingerprint != *target {
+    if !same_control(target, now) {
         return Some("target_changed");
     }
-    (!now.operations.contains(&picked.decision.operation)).then_some("operation_gone")
+    // A drag acts on its drop target too: the same source over another destination is another action.
+    if let Some(destination) = picked.decision.destination.as_ref() {
+        let Some(now) = observation.controls.iter().find(|c| c.id == destination.id) else {
+            return Some("target_gone");
+        };
+        if !same_control(destination, now) {
+            return Some("target_changed");
+        }
+    }
+    // The browser's list omits what the policy derives: a key in a field that takes a fill, leaving a focused one.
+    let offered = crate::policy::takes(now, picked.decision.operation)
+        || (picked.decision.operation == Operation::Blur && fastbrowse_core::effects::leavable(now));
+    (!offered).then_some("operation_gone")
+}
+
+/// Whether `now` is the control Jev chose as `chosen`. A pick made for a link, a field or a box in one state was
+/// carried to the same control after its href, value or checked state changed, and acted on what Jev never chose.
+/// Focus, viewport visibility and the agent's own marks (read, other site, shown by, pictured, which turn on the
+/// controls around it) change without changing what the action does.
+fn same_control(chosen: &Control, now: &Control) -> bool {
+    let fingerprint = Control {
+        id: chosen.id.clone(),
+        operations: chosen.operations.clone(),
+        focused: chosen.focused,
+        offscreen: chosen.offscreen,
+        already_read: chosen.already_read,
+        other_site: chosen.other_site,
+        shown_by: chosen.shown_by.clone(),
+        pictured: chosen.pictured,
+        ..now.clone()
+    };
+    fingerprint == *chosen
 }
 
 #[cfg(test)]
