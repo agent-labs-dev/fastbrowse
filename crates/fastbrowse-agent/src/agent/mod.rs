@@ -1106,7 +1106,7 @@ impl Agent {
                 .into_iter()
                 .collect(),
             page_facts,
-            reload: state.reload_target(&observation.url),
+            reload: state.reload_target(observation),
             screenshot: None,
             looks: IndexMap::new(),
             ahead: self.ahead(state, observation),
@@ -1253,7 +1253,7 @@ impl Agent {
                 "The site failed: {} It has stood for {stood} steps. A failure is not the task's answer, and neither is an empty result shown beside it.",
                 failure.message()
             );
-            if failure.url == observation.url && state.reload_target(&observation.url).is_some() {
+            if failure.url == observation.url && state.reload_target(observation).is_some() {
                 fact += " This page's own address is offered to navigate to, which reloads it; a retry control the page offers, or another route, may also get past the failure.";
             }
             facts.push(fact);

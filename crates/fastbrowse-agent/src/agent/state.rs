@@ -479,10 +479,12 @@ pub(crate) struct RunState {
     /// Commits this run has carried out, each counted once the page after it did not fail. A later commit is checked
     /// against the page and the run's own steps, so one the task asks for once is not sent again (#882).
     pub commits: usize,
-    /// Addresses whose document a committing action loaded. A task that asked to reload the page it was on could not
-    /// (#1433), so every page offers its own address; one a commit loaded is held back, since a GET that commits is
-    /// sent again by reopening it.
-    pub committed_at: HashSet<String>,
+    /// Documents a committing action loaded, by `document_key`. A task that asked to reload the page it was on could
+    /// not (#1433), so every page offers its own address; one showing a document a commit loaded is held back, since
+    /// a GET that commits is sent again by reopening it. Kept by document, not address: a fragment link left the
+    /// document under a new address that was offered, and the same address loaded afresh in another tab lifted the
+    /// hold on the committing tab.
+    pub committed_documents: HashSet<String>,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
@@ -534,14 +536,15 @@ impl RunState {
         self.surface_judged.as_ref().filter(|(judged, _)| judged == page && !self.page_failed).map(|(_, odds)| *odds)
     }
 
-    /// The address of the page at `url`, which opening again reloads, unless a commit loaded the document there: opening
-    /// that address again can send the commit again. An address with a secret blanked out is not the page's own: a
+    /// The address of `page`, which opening again reloads, unless a commit loaded the document it shows: opening that
+    /// address again can send the commit again. An address with a secret blanked out is not the page's own: a
     /// browser's address is percent-encoded, so the mark is only ever the redactor's, and opening it opens another
     /// page, while the real address would put the secret in a model's action.
-    pub fn reload_target(&self, url: &str) -> Option<String> {
+    pub fn reload_target(&self, page: &Observation) -> Option<String> {
+        let url = &page.url;
         (fastbrowse_core::navigation::valid_address(url)
             && !url.contains(fastbrowse_core::safety::MASK)
-            && !self.committed_at.contains(url))
+            && !self.committed_documents.contains(&page.document_key))
         .then(|| url.to_owned())
     }
 
@@ -846,7 +849,7 @@ impl RunState {
             committing: false,
             dialog_form: None,
             commits: 0,
-            committed_at: HashSet::new(),
+            committed_documents: HashSet::new(),
             redecided: false,
             last_page: None,
             surface_judged: None,
@@ -949,7 +952,7 @@ impl RunState {
             committing: false,
             dialog_form: None,
             commits: 0,
-            committed_at: HashSet::new(),
+            committed_documents: HashSet::new(),
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),
             followed: None,

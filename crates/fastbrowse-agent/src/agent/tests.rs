@@ -11150,6 +11150,34 @@ fn a_known_page_is_offered_to_navigate_to_beside_this_pages_own_as_a_reload() {
     );
 }
 
+/// The hold followed the address: a fragment link left the commit's document under a new one, which was offered, and the
+/// same address loaded in another tab lifted it, so switching back offered the committing document again.
+#[test]
+fn a_commit_loaded_document_stays_withheld_under_a_fragment_or_after_another_tab_loads_its_address() {
+    let mut state = run_state();
+    let committed = Observation { document_key: "reply".into(), ..at("https://example.test/unsubscribe?id=3", &[]) };
+    state.committing = true;
+    state.acted_from =
+        Some(Observation { document_key: "settings".into(), ..at("https://example.test/settings", &[]) });
+    state.history.push(executed(Some(Operation::Click), Some("Unsubscribe"), true));
+    agent().note_effect(&mut state, &committed);
+    state.committing = false;
+    let details = Observation { url: "https://example.test/unsubscribe?id=3#details".into(), ..committed.clone() };
+    state.acted_from = Some(committed.clone());
+    state.history.push(executed(Some(Operation::Click), Some("Details"), true));
+    agent().note_effect(&mut state, &details);
+    assert_eq!(state.reload_target(&details), None, "a fragment link keeps the commit's document");
+    let fresh = Observation { document_key: "tab-b".into(), ..committed.clone() };
+    state.acted_from = Some(Observation { document_key: "home".into(), ..at("https://example.test/", &[]) });
+    state.history.push(executed(Some(Operation::Click), Some("Unsubscribe link"), true));
+    agent().note_effect(&mut state, &fresh);
+    assert!(state.reload_target(&fresh).is_some(), "a load that sent nothing is reloadable");
+    state.acted_from = Some(fresh);
+    state.history.push(executed(Some(Operation::SwitchTab), None, true));
+    agent().note_effect(&mut state, &committed);
+    assert_eq!(state.reload_target(&committed), None, "the first tab still shows the commit's document");
+}
+
 /// A commit that loaded a new document can be sent again by opening its address, as a GET that unsubscribes is, so
 /// that page does not offer itself as a reload; one saved in place keeps the offer.
 #[test]
@@ -11160,7 +11188,7 @@ fn a_page_a_commit_loaded_is_not_offered_as_a_reload() {
         state.acted_from = Some(Observation { document_key: "form".into(), ..at("https://example.test/edit", &[]) });
         state.history.push(executed(Some(Operation::Click), Some("Save"), true));
         agent().note_effect(&mut state, &to);
-        state.reload_target(&to.url)
+        state.reload_target(&to)
     };
     let saved = Observation { document_key: "form".into(), ..at("https://example.test/edit", &[]) };
     assert_eq!(commit(saved).as_deref(), Some("https://example.test/edit"));
@@ -11170,25 +11198,18 @@ fn a_page_a_commit_loaded_is_not_offered_as_a_reload() {
     // nothing.
     let pushed = Observation { document_key: "form".into(), ..at("https://example.test/done?id=4", &[]) };
     assert_eq!(commit(pushed).as_deref(), Some("https://example.test/done?id=4"));
-    // A link that loads the commit's address afresh makes it reloadable again.
+    // The same address loaded afresh, in this tab or another, is reloadable; the commit's document, reached by a
+    // fragment link under another address or by switching back to its tab, is not.
     let mut state = run_state();
-    state.committed_at.insert("https://example.test/done?id=3".into());
-    state.acted_from = Some(Observation { document_key: "elsewhere".into(), ..at("https://example.test/", &[]) });
-    state.history.push(executed(Some(Operation::Click), Some("Done"), true));
-    let again = Observation { document_key: "fresh".into(), ..at("https://example.test/done?id=3", &[]) };
-    agent().note_effect(&mut state, &again);
-    assert_eq!(state.reload_target(&again.url).as_deref(), Some("https://example.test/done?id=3"));
-    // Switching back to the commit's tab shows the document it loaded, which reloading would send again.
-    let mut state = run_state();
-    state.committed_at.insert("https://example.test/done?id=3".into());
-    state.acted_from = Some(Observation { document_key: "other-tab".into(), ..at("https://example.test/", &[]) });
-    state.history.push(executed(Some(Operation::SwitchTab), None, true));
-    let back = Observation { document_key: "done".into(), ..at("https://example.test/done?id=3", &[]) };
-    agent().note_effect(&mut state, &back);
-    assert_eq!(state.reload_target(&back.url), None);
-    assert_eq!(run_state().reload_target("about:blank"), None);
+    state.committed_documents.insert("done".into());
+    let done = |document_key: &str, url: &str| Observation { document_key: document_key.into(), ..at(url, &[]) };
+    let fresh = done("fresh", "https://example.test/done?id=3");
+    assert_eq!(state.reload_target(&fresh).as_deref(), Some("https://example.test/done?id=3"));
+    assert_eq!(state.reload_target(&done("done", "https://example.test/done?id=3")), None);
+    assert_eq!(state.reload_target(&done("done", "https://example.test/done?id=3#details")), None);
+    assert_eq!(run_state().reload_target(&at("about:blank", &[])), None);
     // Opening an address with its secret blanked opens another page.
-    assert_eq!(run_state().reload_target("https://example.test/p?token=\u{2022}\u{2022}\u{2022}"), None);
+    assert_eq!(run_state().reload_target(&at("https://example.test/p?token=\u{2022}\u{2022}\u{2022}", &[])), None);
 }
 
 #[test]

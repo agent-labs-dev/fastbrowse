@@ -1662,18 +1662,6 @@ impl Agent {
             state.arrived_by = Some((landed, href));
         }
         let Some(last) = state.history.last_mut() else { return };
-        // A page reached again by a load that sends nothing holds that load's document, which opening its address
-        // again repeats: a save that redirected to /settings withheld its reload for the rest of the run, after a
-        // link had loaded /settings afresh. Back can restore the commit's own document, and a tab switch shows a tab's
-        // document as it was loaded, so both keep the withholding: a switch away and back offered a committing load's
-        // own address as a reload.
-        if !state.committing
-            && last.outcome == StepOutcome::Executed
-            && !matches!(last.operation, Some(Operation::Back | Operation::SwitchTab))
-            && observation.document_key != before.document_key
-        {
-            state.committed_at.remove(&observation.url);
-        }
         let waited = last.operation == Some(Operation::Wait);
         let done = if last.operation == Some(Operation::SwitchTab) {
             // Another tab's controls were there all along: compared with the tab left, every one read as added.
@@ -1697,7 +1685,7 @@ impl Agent {
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
             if state.committing && observation.document_key != before.document_key {
-                state.committed_at.insert(observation.url.clone());
+                state.committed_documents.insert(observation.document_key.clone());
             }
             state.replied = (state.committing || keeping || last.look.is_some())
                 && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
