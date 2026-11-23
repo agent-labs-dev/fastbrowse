@@ -1361,7 +1361,17 @@ async fn review_composition(
                 .map(|context| (index, context))
         })
         .collect();
-    let slots = contexts.iter().map(|(index, (_, slot))| (*index, slot.clone())).collect();
+    let slots = claims
+        .iter()
+        .enumerate()
+        .filter(|(_, claim)| claim.composition.is_some() && claim.tally.is_some())
+        .map(|(index, _)| {
+            let slot = contexts
+                .get(&index)
+                .map_or(tally::OutputSlot::WinnerFields, |(_, slot)| tally::OutputSlot::Numeric(slot.clone()));
+            (index, slot)
+        })
+        .collect();
     let tallied: Vec<(usize, &Tally, &str, &[String])> = claims
         .iter()
         .enumerate()
@@ -2577,6 +2587,52 @@ mod tests {
         assert_eq!(checked.claims.len(), 1);
         assert_eq!(checked.claims[0].text, "Winner at £210");
         assert_eq!(checked.claims[0].evidence_ids, items[1].sources);
+    }
+
+    #[tokio::test]
+    async fn a_winner_field_needs_source_units_but_no_display_unit() {
+        let task = "Name the author of the highest-priced record";
+        for (prices, numeric, problem) in [
+            ("£1|£210", false, None),
+            ("£1|£210", true, Some("in the unit the notes give it")),
+            ("£1|USD 210", false, Some("incompatible units")),
+        ] {
+            let (first, second) = prices.split_once('|').unwrap();
+            let notes = Notes::new([
+                fact(0, format!("record {first} by Lesser")),
+                fact(1, format!("record {second} by Winner")),
+            ]);
+            let items = initial_items(&notes, false);
+            let tally = tallied("", "210", Op::Max, "record", Some("price"), vec![]).tally;
+            let mut parts = vec![json!({"computed": true, "field": "author"})];
+            if numeric {
+                parts.extend([json!({"prose": " at "}), json!({"computed": true})]);
+            }
+            let claim = bind_claim(&items, json!(parts), tally);
+            let checked = review_composition(
+                &Tallying::new("record", prices),
+                &READS,
+                task,
+                None,
+                vec![claim],
+                &notes,
+                None,
+                false,
+                Screenshot::Absent,
+                false,
+                &[],
+            )
+            .await
+            .unwrap();
+            if let Some(problem) = problem {
+                assert!(checked.claims.is_empty(), "{:?}", checked.claims);
+                assert!(checked.rejection.as_deref().unwrap().contains(problem), "{:?}", checked.rejection);
+            } else {
+                assert!(checked.problem.is_none(), "{:?}", checked.rejection);
+                assert_eq!(checked.claims[0].text, "Winner");
+                assert_eq!(checked.claims[0].evidence_ids, items[1].sources);
+            }
+        }
     }
 
     #[test]
