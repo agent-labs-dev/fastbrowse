@@ -306,7 +306,7 @@ Jev, the decision model, has settings of its own:
 | `FASTBROWSE_DECISION_BASE_URL` | retargets the selected source, and turns off automatic failover |
 | `FASTBROWSE_DECISION_MODEL` | pins the decision model, and turns off automatic failover |
 | `FASTBROWSE_DECISION_API_KEY` | the key for a decision host that takes one |
-| `FASTBROWSE_ACTION_PICKER` | `llm` has the run's LLM pick each browser action instead of Jev, an ablation for measuring the picker; every other decision stays with Jev. `jev` is the default |
+| `FASTBROWSE_ACTION_PICKER` | `llm` has the run's LLM pick each browser action instead of Jev, an ablation for measuring the picker; every other decision stays with Jev. `chat` has one LLM conversation drive a browser run: each turn it is told what its previous actions did and shown the page's controls, with those new since its last look marked, and it answers with the actions to take; authorization, secrets and the done check stay with code and Jev. `jev` is the default |
 
 [Jev routing](jev.md#provider-failover) gives the provider order and failover, and
 [other decision hosts](jev.md#other-decision-hosts) lists each host with its key and models.

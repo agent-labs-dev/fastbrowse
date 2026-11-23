@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `FASTBROWSE_ACTION_PICKER=chat` has one LLM conversation drive a browser run, as browser-use does. Each turn it is told what its last actions did and shown the page's controls, with the ones new since its last look marked, so a date field's popup shows as new controls instead of a page the next step knows nothing about ([#1538](https://github.com/agent-labs-dev/fastbrowse/issues/1538)). Authorization, secrets, the done check and the stall rule work as they do with Jev picking.
+- A readonly field is captured as readonly, and a change inside a same-origin iframe counts as a page change.
 - A selected table cell keeps its row as evidence. When a later column marks that row with a status or icon, the answer check can use it ([#1513](https://github.com/agent-labs-dev/fastbrowse/issues/1513)).
 - The completion check sees which control a drag was sent to, alongside what the page showed afterward ([#1519](https://github.com/agent-labs-dev/fastbrowse/issues/1519)).
 

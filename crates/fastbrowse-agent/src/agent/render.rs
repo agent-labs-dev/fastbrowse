@@ -66,6 +66,11 @@ pub(super) fn line(control: &Control, new: bool) -> String {
         Some(false) => states.push("collapsed".into()),
         None => {}
     }
+    // A readonly date field is opened by a click, not typed in: told only that it can be clicked, a chooser saw no
+    // reason to open it before acting on the calendar beside it.
+    if control.read_only {
+        states.push("readonly".into());
+    }
     if control.offscreen {
         states.push("offscreen".into());
     }
