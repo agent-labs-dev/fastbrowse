@@ -156,13 +156,20 @@ impl Page for DatePage {
 struct Driver {
     turns: Mutex<VecDeque<Value>>,
     sent: Mutex<Vec<Vec<Message>>>,
+    /// The messages each compose call was sent.
+    composed: Mutex<Vec<Vec<Message>>>,
     /// The context window the driver model's provider lists, in tokens.
     context: Option<i64>,
 }
 
 impl Driver {
     fn new(turns: impl IntoIterator<Item = Value>) -> Arc<Driver> {
-        Arc::new(Driver { turns: Mutex::new(turns.into_iter().collect()), sent: Mutex::new(Vec::new()), context: None })
+        Arc::new(Driver {
+            turns: Mutex::new(turns.into_iter().collect()),
+            sent: Mutex::new(Vec::new()),
+            composed: Mutex::new(Vec::new()),
+            context: None,
+        })
     }
 
     /// The last user message of turn `n`.
@@ -179,6 +186,9 @@ impl LLMClient for Driver {
         schema: &'a dyn ResponseSchema,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        if purpose == LLMPurpose::Compose {
+            self.composed.lock().unwrap().push(messages.to_vec());
+        }
         if purpose != LLMPurpose::Action {
             return ScriptedLLM.generate_value(purpose, messages, schema, ledger);
         }
@@ -596,4 +606,22 @@ async fn test_the_driver_is_told_a_check_that_bars_one_way_leaves_the_others() {
     run(Arc::new(DatePage::default()), driver.clone()).await;
     let system = &driver.sent.lock().unwrap()[0][0].content;
     assert!(system.contains("a check that bars one way, such as a search, leaves the others"), "{system}");
+}
+
+#[tokio::test]
+async fn test_a_done_after_a_read_of_the_same_page_still_cites_its_quotes() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "read"}]}),
+        json!({"next": "", "actions": [{"tool": "done", "quotes": ["a date"]}]}),
+        give_up(),
+        give_up(),
+    ]);
+    run(page, driver.clone()).await;
+    let composed = driver.composed.lock().unwrap();
+    let notes: Vec<String> = composed.iter().flatten().map(|message| message.content.clone()).collect();
+    assert!(
+        notes.iter().any(|note| note.contains(r#""a date""#)),
+        "the driver's quote was not composed from: {notes:?}"
+    );
 }

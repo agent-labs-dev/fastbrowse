@@ -39,7 +39,7 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
     }
 }
 
-/// The first span of `capture` that is `quote` exactly and lies inside one block, cut as code cuts any quote. A model
+/// The first span of `capture` that is `quote` exactly and lies in blocks of one source, cut as code cuts any quote. A model
 /// that saw the page cites its words; code finds them, so a claim rests on page text whatever the model wrote.
 ///
 /// A quote of a table row's cells starts at its block, which the capture opens with the table's header: cut alone,
@@ -54,10 +54,20 @@ pub(crate) fn quoted(capture: &Capture, quote: &str) -> Option<Evidence> {
     capture.text.match_indices(quote).find_map(|(at, _)| {
         let start = capture.text[..at].chars().count() as i64;
         let end = start + length;
-        let block = capture
-            .blocks
-            .iter()
-            .find(|block| block.kind != BlockKind::DocumentTitle && block.start <= start && end <= block.end)?;
+        // A quote may run across blocks of one source: saucedemo draws "Total: $" and "43.18" as two, so the total
+        // as the driver read it lay in no single block and done was refused with it on screen.
+        let covered: Vec<&Block> =
+            capture.blocks.iter().filter(|block| block.start < end && start < block.end).collect();
+        let block = *covered.first()?;
+        let one_source = covered.iter().all(|other| {
+            !matches!(other.kind, BlockKind::DocumentTitle | BlockKind::Observation)
+                && other.source_id == block.source_id
+                && other.frame_id == block.frame_id
+                && other.source_url == block.source_url
+        });
+        if !one_source || block.start > start || covered.last()?.end < end {
+            return None;
+        }
         let start = tables
             .iter()
             .find(|table| table.start == block.start && table.start < table.row && table.row <= start)
@@ -134,5 +144,21 @@ mod tests {
         assert_eq!((row.start, row.quote.as_str()), (0, text));
         let header = quoted(&page, "| Team | Year |").expect("on the page");
         assert_eq!(header.quote, "| Team | Year |", "a quote of the header itself is cut as written");
+    }
+
+    #[test]
+    fn a_quote_may_run_across_blocks_of_one_source_but_not_into_another() {
+        let text = "Total: $\n43.18\nAd";
+        let page: Capture = serde_json::from_value(serde_json::json!({
+            "url": "https://example.test/", "title": "t", "captured_at": "2026-11-18T00:00:00Z", "sha256": "s",
+            "text": text, "blocks": [
+                {"source_id": "main", "frame_id": null, "kind": "paragraph", "start": 0, "end": 8},
+                {"source_id": "main", "frame_id": null, "kind": "paragraph", "start": 9, "end": 14},
+                {"source_id": "ad", "frame_id": "f", "kind": "paragraph", "start": 15, "end": 17}]
+        }))
+        .unwrap();
+        let total = quoted(&page, "Total: $\n43.18").expect("one source's blocks");
+        assert_eq!((total.start, total.end), (0, 14));
+        assert!(quoted(&page, "43.18\nAd").is_none(), "a quote into another frame's block is not one passage");
     }
 }

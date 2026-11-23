@@ -579,7 +579,9 @@ impl Agent {
                 // refused done and a read turn: the check judged only what was read, and the model saw the answer but had
                 // not read it. The model names what answers; a Jev read of the page picks one passage, and kept only the
                 // date of a date, day and month shown as three blocks.
-                if !quotes.is_empty() && state.chat.read_on.as_ref() != Some(&read_key(observation)) {
+                // Quotes are cut whether or not the page was read: skipped on a page the driver had read() first, its
+                // quotes of a Hacker News thread gave way to the read's 28 picks of "upvote", and the answer was those.
+                if !quotes.is_empty() {
                     let capture = self.capture().await?;
                     let earlier = std::mem::take(&mut state.chat.shown);
                     let missing = self.read_quoted(state, capture, &earlier, observation, quotes);
