@@ -2549,7 +2549,7 @@ async fn completion_is_told_the_destination_of_an_executed_drag_between_controls
         let mut state = run_state();
         let mut decision = code_decision(Operation::Drag, Some(source.clone()));
         decision.destination = Some(destination.clone());
-        let live = if outcome == "stale" { observation(&[source.clone()]) } else { observed.clone() };
+        let live = if outcome == "stale" { observation(std::slice::from_ref(&source)) } else { observed.clone() };
         let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
         let agent = Agent::new(Arc::new(FinishPage(live)), jev.clone(), Arc::new(ScriptedLLM));
         state.built = Some(Ok(super::driving::Watched::Done(Action {
