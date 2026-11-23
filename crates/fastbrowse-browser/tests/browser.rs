@@ -1441,6 +1441,17 @@ async fn test_a_card_whose_script_listens_for_the_pointer_is_offered_a_hover() {
     let remove = revealed.controls.iter().find(|c| c.label == "Remove").expect("remove button after the hover");
     assert_eq!(act(&h.page, click(remove), &revealed).await.outcome, StepOutcome::Executed);
     assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("Removed t2"));
+    // A card filled by its link has no point of its own, yet the pointer over the link is inside the card.
+    h.goto("/hover-listened.html").await;
+    let again = h.observe().await;
+    let filled = again
+        .controls
+        .iter()
+        .find(|c| c.label.starts_with("Credits") && c.operations.contains(&Operation::Hover))
+        .expect("hover target for the card its link fills");
+    assert_eq!(act(&h.page, hover(filled), &again).await.outcome, StepOutcome::Executed);
+    let shown = h.observe().await;
+    assert!(shown.controls.iter().any(|c| c.label == "Remove"), "{:?}", shown.controls);
     h.close().await;
 }
 
