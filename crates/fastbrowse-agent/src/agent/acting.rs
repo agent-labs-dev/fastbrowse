@@ -1133,7 +1133,10 @@ impl Agent {
         let recent_actions = state.history.iter().map(|entry| entry.shown_beside(target, observation)).collect();
         let page = self.condition_page(state, observation, recent_actions);
         let questions = IndexMap::from([
-            ("met".to_string(), Question::Choice(met_question(action))),
+            (
+                "met".to_string(),
+                Question::Choice(met_question(action, HistoryEntry::has_unperformed_actions(&state.history))),
+            ),
             ("values".to_string(), Question::Choice(values_question(action))),
             ("happened".to_string(), Question::Choice(happened_question(action))),
         ]);
