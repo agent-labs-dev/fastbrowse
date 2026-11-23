@@ -76,8 +76,10 @@ async def test_a_key_at_its_limit_names_the_status_the_host_and_the_likely_cause
 async def test_the_gateway_is_asked_a_boolean_and_answers_a_probability() -> None:
     sent: list[httpx.Request] = []
     async with _http(_answers("probability", 0.1), sent=sent) as http:
-        failure = await judge(GatewayJev(http, api_key="k"), task="t", answer="34.25", claims=CLAIMS)
-    assert failure is not None
+        failure = await judge(
+            GatewayJev(http, api_key="k"), task="t", answer="34.25", data={"total": 34.25}, claims=CLAIMS
+        )
+    assert failure == f"the output does not hold: {CLAIMS[0].statement}"
     assert str(sent[0].url) == "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"
     assert sent[0].headers["ai-model-id"] == "typesafe-ai/jev-1.14.0"
     body = json.loads(sent[0].content)

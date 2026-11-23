@@ -367,12 +367,13 @@ async def main(argv: list[str]) -> int:
         os.umask(0o077)
     campaign = _FixtureBudget(args.out.with_suffix(".budget.json"), args.budget) if args.budget is not None else None
     rows: list[dict[str, object]] = []
+    attempts_path = args.out.with_suffix(".attempts.jsonl")
     with (
         fixture_server() as (base_url, recorder),
         chrome() as cdp_url,
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
-        args.out.with_suffix(".attempts.jsonl").open("a", encoding="utf-8") as attempts,
+        attempts_path.open("a", encoding="utf-8") as attempts,
     ):
         for repeat in range(args.repeat):
             for suite, task in chosen:
@@ -441,7 +442,7 @@ async def main(argv: list[str]) -> int:
                     # Only the stop rule and the last step's operation and outcome: never a target or page text.
                     print(
                         f"      repeat {repeat} of {task.id}: stop reason {row['failure_kind']}, "
-                        f"last step {row['last_step']}, {row['steps']} steps",
+                        f"last step {row['last_step']}, {row['steps']} steps. Attempt in {attempts_path}",
                         flush=True,
                     )
                 used = cast("int", row["steps"])
