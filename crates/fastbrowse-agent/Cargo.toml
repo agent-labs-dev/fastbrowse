@@ -23,7 +23,7 @@ fastbrowse-clients = { workspace = true }
 tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
 # A pictograph such as an emoji is part of a value, not punctuation around it.
 unicode-properties = { version = "0.1.5", default-features = false, features = ["general-category"] }
-url = "2.5.8"
+url = "2.5.9"
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "test-util"] }
