@@ -1124,7 +1124,7 @@ mod tests {
         let task = "Save, reload and confirm the saved description ends with the new line";
         let asked = |captured: &Capture| {
             let candidates = read_candidates(captured, None);
-            let (_, questions) = read_request(&Page::new(captured), task, "2026-11-17", &candidates, None, false);
+            let (_, questions) = read_request(&Page::new(captured), task, "2026-11-17", &candidates, None, false, None);
             let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
             question.instructions.clone()
         };
