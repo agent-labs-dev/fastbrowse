@@ -1939,6 +1939,7 @@ impl Agent {
         Ok((begins, ends, picks))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn copy_words(
         &self,
         entry: Entry,

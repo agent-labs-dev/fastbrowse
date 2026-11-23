@@ -324,16 +324,13 @@ mod tests {
         fn edges<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
             Box::pin(async move {
                 assert_eq!(ids, ["drawing-pad".to_string()]);
-                Ok(self
-                    .surface_revealed
-                    .load(Ordering::Relaxed)
-                    .then(|| {
-                        IndexMap::from([(
-                            "drawing-pad".to_string(),
-                            Edges { left: 0.1, top: 0.1, right: 0.5, bottom: 0.5 },
-                        )])
-                    })
-                    .unwrap_or_default())
+                if !self.surface_revealed.load(Ordering::Relaxed) {
+                    return Ok(IndexMap::new());
+                }
+                Ok(IndexMap::from([(
+                    "drawing-pad".to_string(),
+                    Edges { left: 0.1, top: 0.1, right: 0.5, bottom: 0.5 },
+                )]))
             })
         }
         fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {

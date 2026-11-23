@@ -1857,6 +1857,7 @@
   // from assistive technology is decoration, not a picture: GitHub's license badge (a law icon beside
   // "BSD-3-Clause") was offered as a hover target on every repository card, and the run hovered one instead of
   // opening the repository. Only the outermost such card is offered.
+  const holding = new Set();
   // A disabled control is shown, not handled, so a card holding only one is still a card whose controls hover reveals.
   const inert = new Set(controls.filter(c => c.disabled).map(c => registry.nodes.get(c.id)));
   for (const e of offered) {
