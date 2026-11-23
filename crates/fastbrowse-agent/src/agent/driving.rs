@@ -1609,6 +1609,30 @@ impl Agent {
         Ok(())
     }
 
+    /// A load since a change ends the page's not having been loaded. A page loaded again at the same address can
+    /// still lack what was typed, as CurseForge serves its copy from before a post for about a minute, so with
+    /// typed values to check the fact stays, worded for a loaded page; any other load ends it.
+    /// A loaded copy that shows every value has nothing left to check, on this step or any later one: kept, a later
+    /// step that hid one (collapsing the replies) was told the page still came from before the send. Leaving the
+    /// page's address ends the check too, so a route left and returned to is not told it again.
+    /// Run on every observation, not only after an action: a document that arrives while the run reads is a load
+    /// too, and no later step compares against the one before it.
+    fn settle_kept(state: &mut RunState, observation: &Observation) {
+        if observation.dialog.is_some() {
+            return;
+        }
+        let Some(kept) = state.kept.as_mut() else { return };
+        let loads = observation.document_key != kept.document;
+        if kept.url != observation.url
+            || ((kept.loaded || loads) && super::helpers::kept_absent(kept, observation).is_empty())
+        {
+            state.kept = None;
+        } else if loads {
+            kept.loaded = true;
+            kept.document = observation.document_key.clone();
+        }
+    }
+
     /// Record on the last action what it did, which the next choice and recovery both read.
     /// What a lasting or committing step sent, kept until a loaded page shows it, and the fills it used up.
     fn note_sent(state: &mut RunState, before: &Observation, observation: &Observation, keeping: bool) {
@@ -1621,23 +1645,6 @@ impl Agent {
         let before = opener.as_ref().unwrap_or(before);
         let sending = state.committing || keeping || owed;
         let open = observation.dialog.is_some();
-        // A load since a change ends the page's not having been loaded. A page loaded again at the same address can
-        // still lack what was typed, as CurseForge serves its copy from before a post for about a minute, so with
-        // typed values to check the fact stays, worded for a loaded page; any other load ends it.
-        // A loaded copy that shows every value has nothing left to check, on this step or any later one: kept, a later
-        // step that hid one (collapsing the replies) was told the page still came from before the send. Leaving the
-        // page's address ends the check too, so a route left and returned to is not told it again.
-        let loads = !open && observation.document_key != before.document_key;
-        let ends = !open
-            && state.kept.as_ref().is_some_and(|kept| {
-                kept.url != observation.url
-                    || ((kept.loaded || loads) && super::helpers::kept_absent(kept, observation).is_empty())
-            });
-        if ends {
-            state.kept = None;
-        } else if loads && let Some(kept) = state.kept.as_mut() {
-            kept.loaded = true;
-        }
         let history_len = state.history.len();
         let typed = if sending {
             let page = super::helpers::page_text(before);
@@ -1690,6 +1697,7 @@ impl Agent {
                 *kept = Kept::default();
             }
             kept.url = observation.url.clone();
+            kept.document = observation.document_key.clone();
             kept.steps.push(described);
             kept.typed.retain(|earlier| typed.iter().all(|(sent, ..)| *sent != earlier.field));
             // Only the fields this send carried are used up: advancing past every fill dropped a title typed
@@ -1741,6 +1749,7 @@ impl Agent {
         {
             last.for_step = sighted.clone();
         }
+        Self::settle_kept(state, observation);
         let Some(before) = state.acted_from.take() else { return };
         if std::mem::take(&mut state.judged_effect) {
             // Its effect is stated already, but what it sent still needs checking: a switch saved by its click, or a

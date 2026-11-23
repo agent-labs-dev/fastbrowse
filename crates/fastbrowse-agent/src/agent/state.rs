@@ -301,6 +301,9 @@ pub struct Kept {
     /// Whether the page has been loaded again at `url` since: a site can serve its copy from before a send for a
     /// while, so a loaded page can still lack what was typed.
     pub loaded: bool,
+    /// The document the page showed at the last observation: a load is a change from it, whichever step or read
+    /// the run was taking when the document arrived.
+    pub document: String,
 }
 
 /// A value a send carried, and how often the page showed it before it was typed: a short reply such as "Thanks"
