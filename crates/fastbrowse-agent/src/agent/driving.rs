@@ -109,6 +109,8 @@ impl Agent {
             if self.settle_blank(state, &raw).await? {
                 continue;
             }
+            // Read before the effect is recorded, which consumes the flag: the record is what coverage is told later.
+            let keeps = state.keeping;
             self.note_effect(state, &observation);
             self.settle(state, &observation).await?;
             let origin = origin_of(&raw.url);
@@ -275,8 +277,7 @@ impl Agent {
             }
             // Going back from a commit that failed sends it again.
             let committed = std::mem::take(&mut state.committing);
-            // A change the site keeps is one the run made even when it can be undone, such as a saved setting.
-            let keeps = state.keeping;
+            // `keeps` is a change the site keeps that the run made even when it can be undone, such as a saved setting.
             if committed
                 && state.page_failed
                 && let Some(failure) = &state.site_failure
