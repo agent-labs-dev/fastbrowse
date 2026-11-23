@@ -1063,7 +1063,7 @@ pub async fn compose(
     ledger: Option<&Ledger>,
     steps: &[Value],
 ) -> Result<ComposedAnswer> {
-    Ok(compose_reviewed(jev, llm, task, notes, ledger, None, true, Screenshot::Absent, steps).await?.answer)
+    Ok(compose_reviewed(jev, llm, task, notes, ledger, None, true, Screenshot::Absent, steps, &[]).await?.answer)
 }
 
 pub(crate) struct ReviewedComposition {
@@ -1128,6 +1128,7 @@ pub(crate) async fn compose_reviewed(
     reports: bool,
     screenshot: Screenshot,
     steps: &[Value],
+    committed: &[Value],
 ) -> Result<ReviewedComposition> {
     let items = initial_items(notes, !steps.is_empty());
     // A claim that passed is kept by code as it was written: asked to keep it, the composer typed it again and changed
@@ -1168,9 +1169,21 @@ pub(crate) async fn compose_reviewed(
     // A composed answer is held to what the task asks to be told as a pick is: a source part inserts its note's
     // entire text, and unchecked, a whole release record of 16 fields stood in for "httpx", and a rewrite repeated
     // "The site received the file Received stocktake.txt (34 bytes)." after that check rejected it.
-    let reviewed =
-        review_composition(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, screenshot, true, steps)
-            .await?;
+    let reviewed = review_composition(
+        jev,
+        llm,
+        task,
+        columns.as_deref(),
+        claims,
+        notes,
+        ledger,
+        reports,
+        screenshot,
+        true,
+        steps,
+        committed,
+    )
+    .await?;
     let CheckedClaims { claims, problem, rejection, denies_steps } = reviewed;
     let claims = if numbers { numbered(claims) } else { claims };
     if !reports {
@@ -1226,6 +1239,15 @@ fn judged(answer: Option<&Answer>) -> Option<bool> {
 /// the task asks for, every draft of it (#898). Code writes every answer as claims, so the question says the form is
 /// not judged. Citation links use the answer renderer here too: text alone was rejected for a task asking for
 /// citations even though the caller's answer included them (#1041).
+///
+/// `committed` is the steps the run sent that the site keeps, as operation, target and outcome: without them "delete it
+/// and confirm the deletion" read the confirmation as a fact the answer must state (0.53 against 0.84 once stated,
+/// #1451). Every step with its effect was too much: a thread's "Hide 3 Replies" control made Jev compare that 3 with
+/// the answer's two claims and judge a complete answer incomplete. Five replays on Jev 1.14 of a read-only run's three
+/// clicks scored 0.35 to 0.55 as sent, 0.43 to 0.55 with the effects removed, 0.85 to 0.88 with only the step that
+/// reads, and 0.86 to 0.89 with none; a reply run's three steps scored 0.38 to 0.42, 0.73 to 0.82 with only the Post
+/// step and no effect, and 0.60 to 0.74 with none (#1467). A step the site does not keep is no fact the answer must
+/// state either, so it is not told.
 fn coverage_question(
     task: &str,
     screenshot: Screenshot,
@@ -1233,19 +1255,18 @@ fn coverage_question(
     claims: &[Claim],
     notes: &Notes,
     steps: &[Value],
+    committed: &[Value],
 ) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
             "{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form. Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values.{} A claim that a requested value is not shown or does not exist answers that request; whether it holds is checked separately.{} Task: {} Answer: {}",
             if screenshot == Screenshot::Attached { format!(" {SCREENSHOT_ATTACHED}") } else { String::new() },
-            // Without the steps, "delete it and confirm the deletion" read the confirmation as a fact the answer
-            // must state, though the run had clicked the confirm button (0.53 against 0.84 once stated, #1451).
-            if steps.is_empty() {
+            if committed.is_empty() {
                 String::new()
             } else {
                 format!(
                     " The run carried out these steps: {}. An action the run took is not a fact the answer must state.",
-                    dumps(&json!(steps))
+                    dumps(&json!(committed))
                 )
             },
             dumps(&json!(task)),
@@ -1299,6 +1320,7 @@ async fn review_claims(
         Screenshot::Absent,
         false,
         steps,
+        &[],
     )
     .await
 }
@@ -1316,6 +1338,7 @@ async fn review_composition(
     screenshot: Screenshot,
     exact: bool,
     steps: &[Value],
+    committed: &[Value],
 ) -> Result<CheckedClaims> {
     if claims.is_empty() {
         // A draft with no claim gives none of what the task asks to be told, so it fails coverage without asking and
@@ -1593,9 +1616,9 @@ async fn review_composition(
         // The steps go in only while the question still fits beside the report; else coverage is judged without them,
         // as the claim checks are above, and the actions check names the steps as too large.
         let report_chars = text::len(&dumps(&json!({"task": task, "pages_read": pages_read(notes)}))) as i64;
-        let mut coverage = coverage_question(task, screenshot, columns, &claims, notes, steps);
+        let mut coverage = coverage_question(task, screenshot, columns, &claims, notes, steps, committed);
         if report_chars > tokens.input_chars(&[coverage.dump_json()]) {
-            coverage = coverage_question(task, screenshot, columns, &claims, notes, &[]);
+            coverage = coverage_question(task, screenshot, columns, &claims, notes, &[], &[]);
         }
         questions.insert("coverage".into(), coverage);
     }
@@ -2446,7 +2469,7 @@ pub(crate) async fn draft_reviewed(
         return Ok(None);
     }
     let questions = IndexMap::from([
-        ("coverage".to_string(), coverage_question(task, screenshot, None, &claims, notes, &[])),
+        ("coverage".to_string(), coverage_question(task, screenshot, None, &claims, notes, &[], &[])),
         ("exact".to_string(), exact_question(task, &claims, notes)),
     ]);
     let state = json!({"task": task, "pages_read": pages_read(notes)});
@@ -2497,6 +2520,8 @@ mod tests {
 
     use super::*;
     use crate::memory::Fact;
+    use crate::policy::HistoryEntry;
+    use fastbrowse_core::models::{Operation, StepOutcome};
 
     /// One row of a table, as the composer writes it.
     fn row(cells: &[&str], evidence_ids: Vec<String>) -> Claim {
@@ -2532,6 +2557,7 @@ mod tests {
             false,
             Screenshot::Absent,
             false,
+            &[],
             &[],
         )
         .await
@@ -3226,6 +3252,7 @@ mod tests {
             Screenshot::Absent,
             true,
             &[],
+            &[],
         )
         .await
         .unwrap();
@@ -3285,6 +3312,7 @@ mod tests {
             Screenshot::Absent,
             false,
             &[],
+            &[],
         )
         .await
         .unwrap();
@@ -3312,6 +3340,7 @@ mod tests {
             false,
             Screenshot::Absent,
             false,
+            &[],
             &[],
         )
         .await
@@ -3485,6 +3514,7 @@ mod tests {
             true,
             Screenshot::Absent,
             &[],
+            &[],
         )
         .await;
         assert!(reviewed.is_ok(), "{:?}", reviewed.err());
@@ -3640,6 +3670,7 @@ mod tests {
             true,
             Screenshot::Absent,
             false,
+            &[],
             &[],
         )
         .await
@@ -4698,6 +4729,7 @@ mod tests {
                 Screenshot::Absent,
                 true,
                 &[],
+                &[],
             )
             .await
             .unwrap();
@@ -4723,7 +4755,7 @@ mod tests {
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("Record B: 34", vec!["e0".into()])]);
         let reviewed =
-            compose_reviewed(&jev, &llm, "Report B and C", &notes, None, None, true, Screenshot::Absent, &[])
+            compose_reviewed(&jev, &llm, "Report B and C", &notes, None, None, true, Screenshot::Absent, &[], &[])
                 .await
                 .unwrap();
         assert_eq!(reviewed.answer.claims.len(), 1);
@@ -4746,10 +4778,20 @@ mod tests {
             let jev = Support::new(false);
             let mut llm = RecordingLlm::new(None);
             llm.claims = Some(written);
-            let reviewed =
-                compose_reviewed(&jev, &llm, "Change my password", &notes, None, None, false, Screenshot::Absent, &[])
-                    .await
-                    .unwrap();
+            let reviewed = compose_reviewed(
+                &jev,
+                &llm,
+                "Change my password",
+                &notes,
+                None,
+                None,
+                false,
+                Screenshot::Absent,
+                &[],
+                &[],
+            )
+            .await
+            .unwrap();
             assert_eq!((reviewed.answer.problem, reviewed.rejection), (None, None));
             assert!(reviewed.answer.claims.is_empty());
         }
@@ -4764,6 +4806,7 @@ mod tests {
             None,
             true,
             Screenshot::Absent,
+            &[],
             &[],
         )
         .await;
@@ -4800,6 +4843,7 @@ mod tests {
                 false,
                 Screenshot::Absent,
                 &steps,
+                &[],
             )
             .await
             .unwrap();
@@ -4838,6 +4882,7 @@ mod tests {
             Some(&feedback),
             true,
             Screenshot::Absent,
+            &[],
             &[],
         )
         .await
@@ -4898,6 +4943,7 @@ mod tests {
                 Screenshot::Absent,
                 true,
                 &[],
+                &[],
             )
             .await
             .unwrap();
@@ -4951,6 +4997,7 @@ mod tests {
             Screenshot::Absent,
             true,
             &[],
+            &[],
         )
         .await
         .unwrap();
@@ -4967,6 +5014,7 @@ mod tests {
             Some(&rejection),
             true,
             Screenshot::Absent,
+            &[],
             &[],
         )
         .await
@@ -5043,6 +5091,7 @@ mod tests {
             Screenshot::Absent,
             true,
             &steps,
+            &[],
         )
         .await
         .unwrap();
@@ -5088,6 +5137,7 @@ mod tests {
             Screenshot::Absent,
             true,
             &steps,
+            &[],
         )
         .await
         .unwrap();
@@ -5137,9 +5187,10 @@ mod tests {
             vec!["e0".into(), "e1".into()],
         )]);
         let jev = Tallying::new("Book ", "£");
-        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, Some(&feedback), true, Screenshot::Absent, &[])
-            .await
-            .unwrap();
+        let reviewed =
+            compose_reviewed(&jev, &llm, task, &notes, None, Some(&feedback), true, Screenshot::Absent, &[], &[])
+                .await
+                .unwrap();
         assert_eq!(reviewed.answer.problem, None);
         let asked = jev.asked();
         assert!(asked.contains_key("claim0/record") && !asked.contains_key("claim0"), "{:?}", asked.keys());
@@ -5166,6 +5217,7 @@ mod tests {
                 reports,
                 Screenshot::Absent,
                 &create_click(),
+                &[],
             )
             .await
             .unwrap();
@@ -5203,6 +5255,7 @@ mod tests {
             true,
             Screenshot::Absent,
             &create_click(),
+            &[],
         )
         .await
         .unwrap();
@@ -5262,6 +5315,7 @@ mod tests {
                 true,
                 Screenshot::Absent,
                 &steps,
+                &[],
             )
             .await
             .unwrap();
@@ -5345,6 +5399,7 @@ mod tests {
             true,
             Screenshot::Absent,
             &steps,
+            &[],
         )
         .await
         .unwrap();
@@ -5424,7 +5479,9 @@ mod tests {
         let task = "Replace the description with New text., save it, and confirm the public page shows it.";
         for (steps, shown) in [(steps, true), (vec![], false)] {
             let (jev, llm) = (Support::new(true), RecordingLlm::new(None));
-            compose_reviewed(&jev, &llm, task, &notes, None, None, true, Screenshot::Absent, &steps).await.unwrap();
+            compose_reviewed(&jev, &llm, task, &notes, None, None, true, Screenshot::Absent, &steps, &[])
+                .await
+                .unwrap();
             let calls = llm.calls();
             let note = |label: &str| -> Value {
                 let line = calls[0][1].content.lines().find_map(|line| line.strip_prefix(label)).unwrap();
@@ -5446,7 +5503,7 @@ mod tests {
         let notes = Notes::new([fact(0, "Record B: 34".into())]);
         let jev = Support::new(true);
         let llm = RecordingLlm::new(None);
-        compose_reviewed(&jev, &llm, "Report B", &notes, None, None, true, Screenshot::Absent, &[]).await.unwrap();
+        compose_reviewed(&jev, &llm, "Report B", &notes, None, None, true, Screenshot::Absent, &[], &[]).await.unwrap();
         let asked = jev.asked.lock().unwrap();
         assert!(!asked.is_empty());
         assert!(asked.iter().all(|questions| !questions.contains_key("actions")));
@@ -5520,6 +5577,7 @@ mod tests {
             &claims,
             &notes,
             &steps,
+            &[],
         ) else {
             panic!("coverage is yes-or-no")
         };
@@ -5586,6 +5644,7 @@ mod tests {
                 &[],
                 &Notes::new([]),
                 &[],
+                &[],
             ) else {
                 panic!("coverage is yes-or-no")
             };
@@ -5617,6 +5676,7 @@ mod tests {
                 true,
                 screenshot,
                 &[],
+                &[],
             )
             .await
             .unwrap();
@@ -5631,7 +5691,7 @@ mod tests {
 
     #[test]
     fn coverage_question_states_the_steps_the_run_took() {
-        let steps = [json!({"action": "click", "target": "OK (Delete media)"})];
+        let steps = [json!({"operation": "click", "target": "OK (Delete media)", "outcome": "executed"})];
         let ask = |steps: &[Value]| {
             let Question::Noul(coverage) = coverage_question(
                 "Delete it and confirm the deletion",
@@ -5639,6 +5699,7 @@ mod tests {
                 None,
                 &[],
                 &Notes::default(),
+                &[],
                 steps,
             ) else {
                 panic!("coverage is a noul question");
@@ -5646,8 +5707,33 @@ mod tests {
             coverage.instructions
         };
         let with = ask(&steps);
-        assert!(with.contains("The run carried out these steps: [{\"action\": \"click\", \"target\": \"OK (Delete media)\"}]. An action the run took is not a fact the answer must state."), "{with}");
+        assert!(with.contains("The run carried out these steps: [{\"operation\": \"click\", \"target\": \"OK (Delete media)\", \"outcome\": \"executed\"}]. An action the run took is not a fact the answer must state."), "{with}");
         assert!(!ask(&[]).contains("The run carried out"));
+    }
+
+    #[test]
+    fn a_step_the_site_does_not_keep_is_not_stated_to_coverage() {
+        let mut collapse =
+            HistoryEntry::new(Some(Operation::Click), Some("Hide 3 Replies"), StepOutcome::Executed, true);
+        collapse.effect = Some("Show 3 Replies appeared".into());
+        let mut post = HistoryEntry::new(Some(Operation::Click), Some("Post"), StepOutcome::Executed, true);
+        post.effect = Some("Reply (3) shown".into());
+        post.commit = Some(crate::policy::Commit::Taken);
+        let kept: Vec<Value> = [collapse, post]
+            .iter()
+            .filter(|entry| entry.commit == Some(crate::policy::Commit::Taken))
+            .map(HistoryEntry::kept)
+            .collect();
+        assert_eq!(kept, [json!({"operation": "click", "target": "Post", "outcome": "executed"})]);
+        let Question::Noul(coverage) =
+            coverage_question("Reply to the thread", Screenshot::Absent, None, &[], &Notes::default(), &[], &kept)
+        else {
+            panic!("coverage is a noul question");
+        };
+        assert!(coverage.instructions.contains("\"target\": \"Post\""));
+        for unkept in ["Hide 3 Replies", "Show 3 Replies", "Reply (3)", "effect"] {
+            assert!(!coverage.instructions.contains(unkept), "{unkept}: {}", coverage.instructions);
+        }
     }
 
     #[test]
@@ -5658,6 +5744,7 @@ mod tests {
             None,
             &[],
             &Notes::new([]),
+            &[],
             &[],
         ) else {
             panic!("coverage is yes-or-no")
@@ -5743,6 +5830,7 @@ mod tests {
             true,
             Screenshot::Absent,
             &[],
+            &[],
         )
         .await
         .err()
@@ -5814,7 +5902,7 @@ mod tests {
         let jev = Support::new(true);
         let task = "List the gallery's captions as a numbered list";
         let reviewed =
-            compose_reviewed(&jev, &llm, task, &notes, None, None, true, Screenshot::Absent, &[]).await.unwrap();
+            compose_reviewed(&jev, &llm, task, &notes, None, None, true, Screenshot::Absent, &[], &[]).await.unwrap();
         assert_eq!(reviewed.answer.answer, "1. Dungeon entrances\n\n2. The Eastern Kingdoms");
         let asked = jev.asked.lock().unwrap();
         let Question::Noul(second) = &asked[0]["claim1"] else { panic!("support is yes-or-no") };
@@ -5839,6 +5927,7 @@ mod tests {
             None,
             true,
             Screenshot::Absent,
+            &[],
             &[],
         )
         .await

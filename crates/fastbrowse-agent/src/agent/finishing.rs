@@ -331,6 +331,7 @@ impl Agent {
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), self.model_task(state), state.ledger.clone());
             let steps = state.executed_steps();
+            let kept = state.committed_steps();
             let reviewed = self
                 .trace
                 .phase(
@@ -345,6 +346,7 @@ impl Agent {
                         intent != OutputIntent::CarriedOut,
                         self.screenshot(intent),
                         &steps,
+                        &kept,
                     ),
                 )
                 .await?;
@@ -362,6 +364,7 @@ impl Agent {
                 // answer from them now, and their claim check holds it to their quotes.
                 Some(Draft::Write(feedback)) => {
                     let steps = state.executed_steps();
+                    let kept = state.committed_steps();
                     let written = compose_reviewed(
                         &*self.jev,
                         &*self.llm,
@@ -372,6 +375,7 @@ impl Agent {
                         true,
                         self.screenshot(intent),
                         &steps,
+                        &kept,
                     );
                     Some(self.trace.phase("compose", written).await?)
                 }

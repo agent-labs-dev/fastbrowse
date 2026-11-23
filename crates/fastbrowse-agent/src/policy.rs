@@ -360,6 +360,19 @@ impl HistoryEntry {
         shown
     }
 
+    /// The entry as the coverage check is told of a step the site keeps: what was done, not what it showed. An
+    /// effect names controls and counts the answer does not state, and a count there read as a missing fact (#1467).
+    pub fn kept(&self) -> Value {
+        let shown = self.shown();
+        let mut kept = serde_json::Map::new();
+        for field in ["operation", "target", "outcome"] {
+            if let Some(value) = shown.get(field) {
+                kept.insert(field.into(), value.clone());
+            }
+        }
+        Value::Object(kept)
+    }
+
     /// The entry as shown with its control's card, for a question that sends the card among its images.
     pub fn seen(&self) -> Value {
         let mut shown = self.shown();

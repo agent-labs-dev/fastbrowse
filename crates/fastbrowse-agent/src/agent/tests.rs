@@ -9924,6 +9924,22 @@ async fn test_a_task_over_named_pages_reads_its_range_from_the_task() {
 }
 
 #[test]
+fn test_committed_steps_are_the_commits_without_what_they_showed() {
+    let mut state = composition_repair_state();
+    state.history.push(HistoryEntry {
+        effect: Some("Show 3 Replies appeared".into()),
+        ..executed(Some(Operation::Click), Some("Hide 3 Replies"), true)
+    });
+    state.history.push(HistoryEntry {
+        effect: Some("Reply (3) shown".into()),
+        text: Some("Thanks".into()),
+        commit: Some(crate::policy::Commit::Taken),
+        ..executed(Some(Operation::Click), Some("Post"), true)
+    });
+    assert_eq!(state.committed_steps(), [json!({"operation": "click", "target": "Post", "outcome": "executed"})]);
+}
+
+#[test]
 fn test_executed_steps_lists_only_acting_steps() {
     let mut state = composition_repair_state();
     for operation in [Operation::Read, Operation::Scroll, Operation::ScrollUp, Operation::Hover, Operation::Wait] {

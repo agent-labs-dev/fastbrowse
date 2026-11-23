@@ -545,6 +545,15 @@ impl RunState {
         self.history.iter().filter(|entry| entry.changed_site()).map(HistoryEntry::shown).collect()
     }
 
+    /// The steps this run sent that commit a change the site keeps, as the coverage check is told of them.
+    pub fn committed_steps(&self) -> Vec<serde_json::Value> {
+        self.history
+            .iter()
+            .filter(|entry| entry.commit == Some(crate::policy::Commit::Taken))
+            .map(HistoryEntry::kept)
+            .collect()
+    }
+
     pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {
         let (partial, sources, steps) = self.composition_partial.as_ref()?;
         let current = *sources == Self::composition_sources(notes) && *steps == self.executed_steps().len();
