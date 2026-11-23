@@ -1599,9 +1599,11 @@
     for (const child of parent?.children || []) counts.set(twinKey(child), (counts.get(twinKey(child)) || 0) + 1);
     return counts;
   });
+  const CARD_RECORDS = 'article,li,[role="listitem"],tr,[role="row"]';
   const isCard = memo(e =>
-    e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
+    e.matches(CARD_RECORDS) ||
     (!!e.getAttribute('class') && twinCounts(e.parentElement).get(twinKey(e)) > 1));
+  const cardCount = memo(parent => [...(parent?.children || [])].filter(isCard).length);
   // A landmark or section owns its headings. A weather panel beside a search form must not name the search
   // field just because both sit in the same app shell.
   const isolatesTitle = memo(e =>
@@ -2035,20 +2037,24 @@
     }
     return '';
   };
-  // A control whose label is its own can still belong to one record of several: CurseForge puts "Hide 3 Replies" in a
-  // comment's list item beside its card, so it never met a twin, took the section heading "Comments" from the fallback
-  // below, and a run read another comment's counter as the count of the replies it asked about (#1467). The record's
-  // other controls are named by that record, so a control sharing it is named the same way. A record holding no other
-  // control, as a navigation list's items do, names nothing about a lone control, and a lone record is no choice among
-  // several.
-  const RECORD = 'article,li,[role="listitem"]';
+  // A control whose label is its own can still belong to one record of several: a comment's "Hide 3 Replies" sits in
+  // its list item beside the comment card, so it never met a twin, took the section heading "Comments" from the
+  // fallback below, and a run read another comment's counter as the count of the replies it asked about (#1467). Such
+  // a control is named by the nearest card that repeats among its siblings (a list item, a row, or a class-styled
+  // card), even when it is the card's only control. Card counts are kept per parent: a sibling scan per control was
+  // quadratic on a long list.
+  const recordOf = memo(element => {
+    for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+      if (isCard(e) && cardCount(e.parentElement) > 1) return e;
+    }
+    return null;
+  });
   for (const c of controls) {
     if (c.context) continue;
     const element = registry.nodes.get(c.id);
-    const record = element.closest(RECORD);
-    if (!record?.parentElement || [...record.parentElement.children].filter(e => e.matches(RECORD)).length < 2) continue;
-    if (![...record.querySelectorAll('*')].some(e => e !== element && controlByElement.has(e))) continue;
-    const context = contextOf(element, new Map(), c.label);
+    const record = recordOf(element);
+    if (!record) continue;
+    const context = nameOf(record, element, c.label, true);
     if (context) c.context = context;
   }
   for (const c of controls) {
