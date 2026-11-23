@@ -86,7 +86,8 @@ pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTIO
 pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
 pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
 pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
-pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. A later question picks the element inside the group.";
+pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. Match each member ID to its element in the shared state for its context.
+A later question picks the element inside the group.";
 
 /// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
 const PRESS_ROLE_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, or the key or key chord the task gives in an editable field.";
@@ -1997,8 +1998,9 @@ fn group_question(operation: Operation, groups: &[Vec<Control>], rules: &str) ->
     choice(
         dumps(&json!({"rules": [rules, GROUP], "operation": operation.as_str()})),
         groups.iter().enumerate().map(|(i, group)| {
-            let labels: Vec<&str> = group.iter().map(|c| c.label.as_str()).collect();
-            (i.to_string(), Value::from(labels.join(" | ")))
+            // Two groups can contain controls with the same label. The ID connects each one to its context.
+            let members: Map<String, Value> = group.iter().map(|c| (c.id.clone(), c.label.clone().into())).collect();
+            (i.to_string(), Value::Object(members))
         }),
     )
 }
@@ -2626,6 +2628,25 @@ mod tests {
         assert_eq!(inner.criteria.keys().collect::<Vec<_>>(), ["b8", "b9", "b10", "b11"]);
         assert_eq!(decision.cost.len(), 2);
         assert!((decision.confidence() - 0.81).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_target_groups_link_equal_labels_to_their_own_context() {
+        let config = Config { observation: ObservationLimits { group_size: 1 }, ..Config::default() };
+        let mut page = observation((0..3).map(button).collect());
+        page.controls[0].label = "Open".into();
+        page.controls[0].context = Some("Billing".into());
+        page.controls[1].label = "Open".into();
+        page.controls[1].context = Some("Shipping".into());
+        let context = StepContext::new("Open Shipping");
+        let request = build_request(&page, &page.controls, &context, &config, 2);
+        let Question::Choice(question) = &request.questions["click_group"] else { panic!("a group choice") };
+        assert_eq!(question.criteria["0"], json!({"b0": "Open"}));
+        assert_eq!(question.criteria["1"], json!({"b1": "Open"}));
+        assert_eq!(request.state["elements"][0]["id"], "b0");
+        assert_eq!(request.state["elements"][0]["context"], "Billing");
+        assert_eq!(request.state["elements"][1]["id"], "b1");
+        assert_eq!(request.state["elements"][1]["context"], "Shipping");
     }
 
     #[test]
