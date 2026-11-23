@@ -1134,6 +1134,10 @@ impl Agent {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let recent_actions = state.history.iter().map(|entry| entry.shown_beside(target, observation)).collect();
         let page = self.condition_page(state, observation, recent_actions);
+        // The page cannot show a dialog that was opened and cancelled or a form that was posted and cleared, so the
+        // steps the run took are stated beside the page (#1006).
+        let action = format!("{action}{}", self.redact(&steps_taken(&state.history)));
+        let action = action.as_str();
         let questions = IndexMap::from([
             ("met".to_string(), Question::Choice(met_question(action))),
             ("values".to_string(), Question::Choice(values_question(action))),
@@ -2668,4 +2672,25 @@ fn takes(field: CredentialField) -> &'static str {
         CredentialField::Username => "an account name",
         CredentialField::Passkey => PASSKEY,
     }
+}
+
+/// The steps a run took, in order, as the facts a condition is judged against: a task says "then" of steps whose
+/// effect the page no longer shows. Empty when the run took none. A secret's value is never named.
+fn steps_taken(history: &[HistoryEntry]) -> String {
+    let steps: Vec<String> = history
+        .iter()
+        .filter(|entry| entry.outcome == StepOutcome::Executed)
+        .filter_map(|entry| {
+            let (operation, target) = (entry.operation?, entry.target.as_deref()?);
+            let typed = entry.text.as_deref().filter(|text| *text != "<secret>");
+            Some(match typed {
+                Some(text) => format!("- {operation} {} with {}\n", text::repr(target), text::repr(text)),
+                None => format!("- {operation} {}\n", text::repr(target)),
+            })
+        })
+        .collect();
+    if steps.is_empty() {
+        return String::new();
+    }
+    format!("The steps this run has already taken, in order:\n{}", steps.concat())
 }
