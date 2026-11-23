@@ -327,8 +327,8 @@ pub(crate) struct RunState {
     pub start_failure: Option<SiteFailure>,
     pub http_seen: HashSet<(String, String, i64)>,
     pub hint: Option<String>,
-    /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
-    /// next decision there, with the card of the target it chose.
+    /// Jev's pick when asked again after a stall, by the address it was asked on, taken as the next decision while
+    /// its target is still on the page, with the card of the target it chose.
     pub picked: Option<(String, Decision, Option<Look>)>,
     /// The action the next step carries out, built while the page was read.
     pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,

@@ -138,13 +138,13 @@ impl Agent {
             }
             // Jev's pick when it was asked again on this page is the decision here: asking once more would only ask
             // the same question without what went wrong.
-            let picked = state
-                .picked
-                .take()
-                .filter(|(key, ..)| *key == state_key(&observation))
-                .map(|(_, picked, look)| (picked, look))
-                .filter(|(picked, _)| {
-                    picked.target.as_ref().is_none_or(|target| observation.controls.iter().any(|c| c.id == target.id))
+            let picked =
+                state.picked.take().and_then(|(url, picked, look)| match pick_stale(&url, &picked, &observation) {
+                    None => Some((picked, look)),
+                    Some(reason) => {
+                        self.event("picked_dropped", || Map::from_iter([("reason".into(), reason.into())]));
+                        None
+                    }
                 });
             if picked.is_some()
                 && let Some(replay) = state.replay.as_mut()
@@ -2077,4 +2077,23 @@ mod recipe_tests {
         let step = recipe_step(&decision, &raw, &action, Some(source.clone()), |text| redactor.reveals(text)).unwrap();
         assert_eq!(step.text, Some(source));
     }
+}
+
+/// Why Jev's pick after a refusal no longer applies to the page as it is now, or `None` when it still does. The
+/// whole-page key it was once held by dropped a pick whenever an unrelated toast closed in between, and Jev was asked
+/// afresh without the refusal and picked the refused click again.
+pub(super) fn pick_stale(url: &str, picked: &Decision, observation: &Observation) -> Option<&'static str> {
+    if !fastbrowse_core::navigation::same_address(url, &observation.url) {
+        return Some("address_changed");
+    }
+    let target = picked.target.as_ref()?;
+    let Some(now) = observation.controls.iter().find(|c| c.id == target.id) else {
+        return Some("target_gone");
+    };
+    if (now.role.as_str(), now.label.as_str(), now.context.as_deref())
+        != (target.role.as_str(), target.label.as_str(), target.context.as_deref())
+    {
+        return Some("target_changed");
+    }
+    (!now.operations.contains(&picked.operation)).then_some("operation_gone")
 }

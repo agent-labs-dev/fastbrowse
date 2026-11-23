@@ -5156,6 +5156,29 @@ async fn test_jev_asked_again_is_shown_the_cards_of_pictured_controls() {
     assert!(look.is_some_and(|look| !look.before.is_empty() && look.after.is_none()));
 }
 
+/// After a refusal Jev's pick (hover on the card) was dropped because an "Edit successful" toast closed before the
+/// next step, so Jev was asked afresh without the refusal and picked the refused click again (#1471). The pick holds
+/// while its address and target are as they were, and is dropped, with the reason, only when they are not.
+#[tokio::test]
+async fn test_a_pick_after_a_refusal_outlives_an_unrelated_control_and_not_its_target() {
+    let card = Control::new("card", "button", "Card", [Operation::Hover]);
+    let toast = button("Edit successful");
+    let picked = code_decision(Operation::Hover, Some(card.clone()));
+    let url = "https://example.test/";
+    let stale = |page: &Observation| super::driving::pick_stale(url, &picked, page);
+
+    assert_eq!(stale(&observation(&[card.clone(), toast.clone()])), None);
+    assert_eq!(stale(&observation(&[card.clone()])), None);
+    assert_eq!(stale(&observation(&[toast.clone()])), Some("target_gone"));
+    assert_eq!(stale(&at("https://example.test/other", &[card.clone()])), Some("address_changed"));
+    let renamed = Control::new("card", "button", "Other card", [Operation::Hover]);
+    assert_eq!(stale(&observation(&[renamed])), Some("target_changed"));
+    let no_hover = Control::new("card", "button", "Card", [Operation::Click]);
+    assert_eq!(stale(&observation(&[no_hover])), Some("operation_gone"));
+    let done = code_decision(Operation::Done, None);
+    assert_eq!(super::driving::pick_stale(url, &done, &observation(&[toast])), None);
+}
+
 #[tokio::test]
 async fn test_past_the_recovery_budget_the_run_ends_with_the_reason() {
     let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];

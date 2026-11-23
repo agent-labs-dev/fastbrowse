@@ -1,7 +1,7 @@
 //! The stall rule's other half: Jev is asked again, told what went wrong, with the action that moved nothing left out
 //! of its options, until the rule's budget runs out and the run ends.
 
-use fastbrowse_core::effects::{leavable, state_key};
+use fastbrowse_core::effects::leavable;
 use fastbrowse_core::models::{Operation, Status, StepOutcome};
 use fastbrowse_core::page::{Control, Observation};
 use fastbrowse_core::py::text;
@@ -376,7 +376,7 @@ impl Agent {
             ])
         });
         let look = Look::of(&decision, &context.looks);
-        state.picked = Some((state_key(observation), decision, look));
+        state.picked = Some((observation.url.clone(), decision, look));
         Ok(())
     }
 }
