@@ -38,6 +38,36 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
     }
 }
 
+/// Each of `lines` as a quote of the capture's rendered text, cut at the first line of the page that reads as it once
+/// stripped, and each line of the page quoted once. A line found only in a typed observation, a document title or a
+/// kept download is not quoted: none of them is text the page showed.
+pub(crate) fn line_quotes(capture: &Capture, lines: &[String]) -> Vec<Evidence> {
+    let page = Page::new(capture);
+    let mut wanted: Vec<&str> = lines.iter().map(|line| text::strip(line)).filter(|line| !line.is_empty()).collect();
+    let mut quotes = Vec::new();
+    for (start, end) in super::text::splitlines(&page.chars) {
+        let (mut start, mut end) = (start as i64, end as i64);
+        while start < end && page.chars[start as usize].is_whitespace() {
+            start += 1;
+        }
+        while end > start && page.chars[end as usize - 1].is_whitespace() {
+            end -= 1;
+        }
+        let Some(at) = wanted.iter().position(|line| *line == page.slice(start, end)) else { continue };
+        let Some(block) = capture.blocks.iter().find(|block| {
+            block.start <= start
+                && end <= block.end
+                && !matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
+                && block.source_url.is_none()
+        }) else {
+            continue;
+        };
+        wanted.remove(at);
+        quotes.push(evidence(&page, block, start, end));
+    }
+    quotes
+}
+
 /// The page's rendered text, quoted block by block, for a page the run stops on without reading.
 pub fn page_quotes(capture: &Capture) -> Vec<Evidence> {
     // Each block's evidence looks at every other block, so a page of many blocks is long work (#1284).

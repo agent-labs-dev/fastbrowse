@@ -110,6 +110,13 @@ impl Agent {
                 continue;
             }
             self.note_effect(state, &observation);
+            let notice = std::mem::take(&mut state.sent_notice);
+            if !notice.is_empty() {
+                // A failed capture loses only the quotes: the step's effect still records what the page added.
+                if let Ok(capture) = self.capture().await {
+                    state.record_sent_notice(&capture, &notice);
+                }
+            }
             self.settle(state, &observation).await?;
             let origin = origin_of(&raw.url);
             let page = (raw.url.clone(), raw.document_key.clone());
@@ -1643,6 +1650,7 @@ impl Agent {
         {
             last.for_step = sighted.clone();
         }
+        state.sent_notice.clear();
         let Some(before) = state.acted_from.take() else { return };
         state.settle_change(observation);
         let landed = read_key(observation);
@@ -1694,8 +1702,11 @@ impl Agent {
             // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
-            state.replied = (state.committing || keeping || last.look.is_some())
-                && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
+            let added = fastbrowse_core::effects::added_text(&before, observation);
+            state.replied = (state.committing || keeping || last.look.is_some()) && !added.is_empty();
+            if state.committing || keeping {
+                state.sent_notice = added;
+            }
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)

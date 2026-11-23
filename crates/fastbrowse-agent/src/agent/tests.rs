@@ -747,6 +747,34 @@ async fn test_a_kept_change_answered_with_new_text_is_progress_and_saving_again_
     }
 }
 
+/// #1483: a CurseForge save's "Changes saved successfully" lived only in the step's effect, so the answer that the
+/// site said it saved failed its citation check. A sent commit's reply is quoted from the page; an unsent step's is not.
+#[test]
+fn test_the_reply_to_a_sent_commit_is_a_note_a_claim_can_cite() {
+    let editor = buttons_at(FILES, &["Save"]);
+    let saved = Observation { viewport_text: "Changes saved successfully".into(), ..editor.clone() };
+    let page =
+        capture(&[(BlockKind::Heading, "Description"), (BlockKind::Paragraph, "Edited\nChanges saved successfully")]);
+    for (sent, quoted) in [(true, vec!["Changes saved successfully"]), (false, vec![])] {
+        let mut state = run_state();
+        state.acted_from = Some(editor.clone());
+        state.keeping = sent;
+        state.history.push(executed(Some(Operation::Click), Some("Save"), true));
+        agent().note_effect(&mut state, &saved);
+        let notice = std::mem::take(&mut state.sent_notice);
+        state.record_sent_notice(&page, &notice);
+        let quotes: Vec<String> = state.notes.evidence().values().map(|evidence| evidence.quote.clone()).collect();
+        assert_eq!(quotes, quoted, "sent: {sent}");
+        assert!(
+            state
+                .notes
+                .evidence()
+                .values()
+                .all(|evidence| evidence.rendered_text && evidence.capture_sha256 == page.sha256)
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_going_back_to_a_page_state_after_new_evidence_is_progress() {
     let (agent, mut state) = left_the_list().await;
