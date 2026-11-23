@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use fastbrowse_core::citations::{TableBlock, table_blocks};
 use fastbrowse_core::models::{Evidence, FactReader};
-use fastbrowse_core::page::{BlockKind, Capture, DOWNLOAD_SOURCE, SourceField};
+use fastbrowse_core::page::{BlockKind, Capture, DOWNLOAD_SOURCE, ItemPlace, SourceField};
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{dumped_len, dumps, write_string};
@@ -292,6 +292,7 @@ struct SourceBlock {
     end: i64,
     kind: BlockKind,
     whole_record: bool,
+    item_place: Option<ItemPlace>,
     /// The span of each link's text inside the block.
     links: Vec<(i64, i64)>,
     fields: Vec<SourceField>,
@@ -411,6 +412,7 @@ impl Notes {
                 end: block.end,
                 kind: block.kind,
                 whole_record: block.whole_record,
+                item_place: block.item_place,
                 links: block.links.iter().map(|link| (link.start, link.end)).collect(),
                 fields: block.fields.clone(),
             });
@@ -435,6 +437,12 @@ impl Notes {
     pub fn whole_record(&self, evidence: &Evidence) -> bool {
         self.source_block(evidence)
             .is_some_and(|block| block.whole_record && block.start == evidence.start && block.end == evidence.end)
+    }
+
+    /// Where the list item a quote is, or sits inside, stands among its list's items: a claim that a value is the
+    /// third in a list is evidenced only when the quote says so.
+    pub fn item_place(&self, evidence: &Evidence) -> Option<ItemPlace> {
+        self.source_block(evidence)?.item_place
     }
 
     /// The type of the element the quote is: a link when it lies within one link's text, such as a list item that is
