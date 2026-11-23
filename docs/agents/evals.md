@@ -56,7 +56,8 @@ Keep the pool GCP service account and the `harness_sha` and `FASTBROWSE_SHA`
 install order intact.
 
 Before paid work, each workflow authenticates its OpenRouter credentials with
-`GET https://openrouter.ai/api/v1/key`. The provider keys enforce spend limits.
+`GET https://openrouter.ai/api/v1/key`. Configured provider key limits apply across runs sharing a key. Browser Use Cloud
+and fastbrowse-hosted benchmark keys have no per-key spend limit.
 
 Parallax writes `manifest.json`, `results.jsonl`, and trial artifacts.
 Resume a stopped run with `parallax run --resume RUN_DIR`. Environment

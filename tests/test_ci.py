@@ -95,11 +95,13 @@ def test_every_file_a_rust_crate_embeds_rebuilds_the_binaries() -> None:
         ('{"repeat": 0}', False),
         ('{"repeat": ""}', False),
         ('{"repeat": null}', False),
+        ('{"budget": 50}', False),
+        ('{"reserve": 3}', False),
     ],
 )
-def test_a_campaign_validates_repeat_when_the_payload_provides_it(payload: str, passes: bool) -> None:
+def test_a_campaign_validates_repeat_and_rejects_removed_spend_inputs(payload: str, passes: bool) -> None:
     workflow = Path(".github/workflows/benchmark-campaign.yml").read_text()
-    start = workflow.index("jq -e '(. // {}) | if has(\"repeat\")")
+    start = workflow.index("jq -e '(. // {}) | (has(\"budget\")")
     check = workflow[start : workflow.index('case "$REPEAT"', start)]
     result = subprocess.run(["bash", "-c", check], env={**os.environ, "PAYLOAD": payload}, capture_output=True)
     assert (result.returncode == 0) is passes

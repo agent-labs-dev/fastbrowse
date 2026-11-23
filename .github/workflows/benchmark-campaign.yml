@@ -214,6 +214,8 @@ jobs:
             jq -e --arg key "$key" '(. // {})[$key] | . == null or type == "boolean"' <<< "$PAYLOAD" > /dev/null \
               || { echo "::error::$key in client_payload must be true or false"; exit 1; }
           done
+          jq -e '(. // {}) | (has("budget") or has("reserve")) | not' <<< "$PAYLOAD" > /dev/null \
+            || { echo "::error::remove budget and reserve from client_payload; spend limits are set on provider keys"; exit 1; }
           jq -e '(. // {}) | if has("repeat") then (.repeat | tonumber? // 0 | . > 0) else true end' \
             <<< "$PAYLOAD" > /dev/null || { echo "::error::repeat in client_payload must be above 0"; exit 1; }
           case "$REPEAT" in
