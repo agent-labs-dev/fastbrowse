@@ -57,6 +57,7 @@ MARKER = "<!-- cassette-refill -->"
 """Identifies the one pull request comment the refill keeps up to date."""
 
 _ATTEMPTED = re.compile(r"<!-- cassette-refill-attempted: ([0-9a-f,]*) -->")
+_REFILL_SOURCE = re.compile(rf"^{TRAILER}: ([0-9a-f]{{40}})$", re.MULTILINE)
 
 
 # What the replay check found
@@ -114,8 +115,10 @@ def attempted_shas(comment: str) -> list[str]:
     return [sha for sha in found.group(1).split(",") if sha] if found else []
 
 
-def is_refill_commit(message: str) -> bool:
-    return any(line.startswith(f"{TRAILER}: ") for line in message.splitlines())
+def refill_source(message: str) -> str | None:
+    """The original head named by the terminal batch, which may survive a rebase."""
+    found = _REFILL_SOURCE.search(message)
+    return found.group(1) if found else None
 
 
 def refill_decision(
@@ -124,8 +127,8 @@ def refill_decision(
     """Whether to spend on a refill of `tasks` for the check run on `run_sha`.
 
     The guards come first and each stops everything after it: a branch of a fork is never run with the model key, a
-    closed or moved-on pull request is not worth the spend, and the refill neither refills its own commit nor tries
-    one head commit twice, so it cannot loop. `retry` is a maintainer's explicit rerun and lifts only the last.
+    closed or moved-on pull request is not worth the spend, and the refill only tries a head once.
+    `retry` is a maintainer's explicit rerun and lifts only the last guard.
     """
     if pull.head_repo != pull.base_repo:
         return Decision(
@@ -135,8 +138,6 @@ def refill_decision(
         return Decision(False, "the pull request is not open")
     if pull.head_sha != run_sha:
         return Decision(False, f"the check ran on {run_sha[:12]} but the branch is now at {pull.head_sha[:12]}")
-    if is_refill_commit(pull.head_message):
-        return Decision(False, "the branch head is itself a refill commit; a refill is never refilled")
     if not tasks:
         return Decision(False, "the replay check recorded no missed task")
     if not retry and pull.head_sha in set(attempted):
@@ -528,6 +529,33 @@ def refill_commit_tasks(repo: str, commit: Mapping[str, Any], token: str) -> dic
     return blobs
 
 
+def published_refill(repo: str, facts: PullFacts, comment: str, token: str) -> bool:
+    """Only the exact published tip is a refill of its own parent history."""
+    # A completed publication's last link names the terminal commit. A partial publication says "then stopped".
+    link = f"](https://github.com/{repo}/commit/{facts.head_sha}); CI runs again on it."
+    if any(
+        line.startswith("Committed the refilled cassettes as ") and line.endswith(link) for line in comment.splitlines()
+    ):
+        return True
+    original = refill_source(facts.head_message)
+    if original is None:
+        return False
+    # The status comment can be overwritten or the workflow can stop after pushing. In a split publication, each
+    # earlier batch is a signed cassette-only commit without a terminal trailer. The first non-batch ends the check.
+    sha = facts.head_sha
+    covered: set[str] = set()
+    while sha != original:
+        commit = read_commit(repo, sha, token)
+        if sha != facts.head_sha and refill_source(commit["commit"]["message"]) is not None:
+            return False
+        tasks = refill_commit_tasks(repo, commit, token)
+        if not tasks or tasks.keys() & covered:
+            return False
+        covered.update(tasks)
+        sha = commit["parents"][0]["sha"]
+    return True
+
+
 def git_blob_oid(data: bytes) -> str:
     blob = f"blob {len(data)}\0".encode() + data
     return hashlib.sha1(blob, usedforsecurity=False).hexdigest()
@@ -549,7 +577,7 @@ def retry_from_partial(repo: str, number: str, head: str, token: str) -> tuple[s
     facts, _ = pull_facts(repo, number, token)
     if not facts.open or facts.head_repo != repo or facts.base_repo != repo or facts.head_sha != head:
         return None, set()
-    if is_refill_commit(facts.head_message):
+    if refill_source(facts.head_message) is not None:
         return None, set()
     comment = find_comment(repo, number, token)
     attempted = set(attempted_shas(comment["body"])) if comment else set()
@@ -611,8 +639,11 @@ def plan() -> int:
     tasks = [task for task in tasks if task not in covered]
     facts, _ = pull_facts(repo, number, token)
     existing = find_comment(repo, number, token)
-    attempted = attempted_shas(existing["body"]) if existing else []
+    comment = existing["body"] if existing else ""
+    attempted = attempted_shas(comment)
     decision = refill_decision(facts, run_sha=sha, tasks=tasks, attempted=attempted, retry=env["RETRY"] == "true")
+    if decision.run and published_refill(repo, facts, comment, token):
+        decision = Decision(False, "the branch head is itself a published refill commit")
     summary(f"Refill {'runs' if decision.run else 'does not run'}: {decision.reason}.")
     output(run=str(decision.run).lower(), tasks=json.dumps(tasks))
     if decision.run:

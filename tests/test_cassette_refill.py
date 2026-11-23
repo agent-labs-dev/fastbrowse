@@ -89,13 +89,6 @@ def test_a_check_run_on_an_older_head_is_not_refilled() -> None:
     assert not decision.run and "now at" in decision.reason
 
 
-def test_the_refill_does_not_refill_its_own_commit() -> None:
-    verdict = refill.fill_verdict(None, ["mock-basket"], 1.0, 0)
-    message = refill.commit_message(["mock-basket"], "c" * 40, verdict)
-    assert refill.is_refill_commit(message)
-    assert not decide(pull(head_message=message)).run
-
-
 def test_a_head_commit_is_tried_once() -> None:
     assert not decide(pull(), attempted=[SHA]).run
     assert decide(pull(), attempted=["c" * 40]).run
@@ -104,7 +97,6 @@ def test_a_head_commit_is_tried_once() -> None:
 def test_a_maintainer_retry_lifts_only_the_attempted_guard() -> None:
     assert decide(pull(), attempted=[SHA], retry=True).run
     assert not decide(pull(head_repo="someone/fastbrowse"), attempted=[SHA], retry=True).run
-    assert not decide(pull(head_message=f"x\n\n{refill.TRAILER}: {SHA}\n"), retry=True).run
 
 
 def test_no_missed_task_means_no_spend() -> None:
@@ -406,6 +398,80 @@ def test_partial_retry_requires_the_replay_miss_records(
         refill.plan()
 
 
+@pytest.mark.parametrize(
+    ("rebased", "split", "comment_records_head", "retry", "run_head_matches", "runs"),
+    [
+        (False, False, False, False, True, False),
+        (False, True, False, False, True, False),
+        (True, False, False, False, True, True),
+        (True, True, False, False, True, True),
+        (True, False, True, True, True, False),
+        (True, True, False, True, False, False),
+    ],
+)
+def test_plan_uses_the_exact_refill_commit_and_ci_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    rebased: bool,
+    split: bool,
+    comment_records_head: bool,
+    retry: bool,
+    run_head_matches: bool,
+    runs: bool,
+) -> None:
+    source, head, middle, new_base = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+    base = new_base if rebased else source
+    terminal = f"{refill.REFILL_SUBJECT}mock-basket\n\n{refill.TRAILER}: {source}"
+    history = {
+        head: (middle if split else base, "mock-basket", terminal),
+        middle: (base, "mock-archive", f"{refill.REFILL_SUBJECT}mock-archive"),
+        new_base: ("e" * 40, "", "fix: update the base"),
+    }
+    comment_head = head if comment_records_head else "f" * 40
+    comment = (
+        f"{refill.MARKER}\n<!-- cassette-refill-attempted: {source} -->\n"
+        f"Committed the refilled cassettes as [{comment_head[:12]}]"
+        f"(https://github.com/{REPO}/commit/{comment_head}); CI runs again on it."
+    )
+    env = {
+        "REPO": REPO,
+        "PR": "7",
+        "SHA": head if run_head_matches else new_base,
+        "GH_TOKEN": "t",
+        "RETRY": str(retry).lower(),
+        "MISSES_DIR": str(tmp_path),
+        "COVERED_TASKS": "[]",
+        "RUN_URL": "test-run",
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    refill.record_misses(tmp_path, "mock-basket", [{"purpose": "done", "model": "jev"}])
+    facts = pull(head_sha=head, head_message=terminal)
+    monkeypatch.setattr(refill, "pull_facts", lambda *args: (facts, "branch"))
+    monkeypatch.setattr(refill, "find_comment", lambda *args: {"body": comment})
+    monkeypatch.setattr(refill, "summary", lambda *args: None)
+    outputs: dict[str, str] = {}
+    claims: list[str] = []
+    monkeypatch.setattr(refill, "output", lambda **values: outputs.update(values))
+    monkeypatch.setattr(refill, "upsert_comment", lambda repo, number, token, body: claims.append(body))
+
+    def read_commit(repo: str, sha: str, token: str) -> dict[str, Any]:
+        parent, task, message = history[sha]
+        return {
+            "commit": {"message": message, "verification": {"verified": True}},
+            "committer": {"login": "web-flow"},
+            "parents": [{"sha": parent}],
+            "files": [{"filename": f"bench/cassettes/{task}.jsonl", "status": "modified", "sha": "e" * 40}],
+        }
+
+    monkeypatch.setattr(refill, "read_commit", read_commit)
+    assert refill.plan() == 0
+    assert outputs["run"] == str(runs).lower()
+    assert bool(claims) == runs
+    if runs:
+        assert refill.attempted_shas(claims[0]) == [source, head]
+
+
 def publish_split(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -505,7 +571,7 @@ def test_a_refill_over_one_request_is_committed_as_a_chain_with_the_trailer_on_i
         ["bench/cassettes/mock-sign-in.jsonl"],
         ["bench/cassettes/mock-swatch.jsonl"],
     ]
-    trailers = [refill.is_refill_commit(c["message"]["body"]) for c in commits]
+    trailers = [refill.refill_source(c["message"]["body"]) is not None for c in commits]
     assert trailers == [False, False, True]
     assert f"{refill.TRAILER}: {'a' * 40}" in commits[-1]["message"]["body"]
     assert all(oid[:12] in comment for oid in ("1" * 40, "2" * 40, "3" * 40))
@@ -516,7 +582,7 @@ def test_a_split_refill_stopped_partway_says_what_it_committed_and_leaves_the_re
 ) -> None:
     code, commits, comment = publish_split(tmp_path, monkeypatch, refuse_commit=2)
     assert code == 1
-    assert not refill.is_refill_commit(commits[0]["message"]["body"])
+    assert refill.refill_source(commits[0]["message"]["body"]) is None
     assert "Committed [111111111111]" in comment and "refused" in comment
     assert "Nothing was committed" not in comment
 
