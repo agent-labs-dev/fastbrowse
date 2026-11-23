@@ -475,6 +475,24 @@ fn texts_in(element: &Element, window: Size) -> (String, String) {
     (shown.join("\n"), hidden.join("\n"))
 }
 
+/// Where the text the window shows sits, which is what a scroll changes. The accessibility tree reports no scroll
+/// position and the snapshot id is new on every observation, so a scrolled place is told by which text elements show
+/// and where. The text itself is no part of it: a clock or progress label that ticks while the run scrolls back over a
+/// place it has seen would make each visit look new, and a scroll would never be withdrawn as a stall.
+fn places(root: &Element) -> String {
+    fn walk(element: &Element, window: Size, out: &mut String) {
+        if own_text(element).is_some() && element.showing(window) {
+            out.push_str(&format!("{},{};", element.x, element.y));
+        }
+        for child in &element.children {
+            walk(child, window, out);
+        }
+    }
+    let mut out = String::new();
+    walk(root, Size::of(root), &mut out);
+    out
+}
+
 /// The window as an observation. `page_key` is the snapshot, which deskpilot refuses ids from once a newer one
 /// replaces it; a peek's observation has no snapshot and so can never be acted on. Every window of the run is a tab,
 /// as a browser's tabs are, with this one active, so the model moves between apps and dialogs as it moves between
@@ -498,9 +516,7 @@ pub fn observation(window: &Window, root: &Element, windows: &[Window]) -> Obser
         // One window is one document for as long as it is open: typing into it or its title changing is not leaving.
         document_key: window.address.clone(),
         controls,
-        // The accessibility tree reports no scroll position, and the snapshot id is new on every observation, so the
-        // visible text is the only identity a window's scrolled place has.
-        viewport_key: viewport_text.clone(),
+        viewport_key: places(root),
         viewport_text,
         offscreen_text,
         visual_content: false,
@@ -737,6 +753,22 @@ mod tests {
         assert_eq!(password.input_type.as_deref(), Some("password"));
         assert_eq!(observation.viewport_text, "Not submitted");
         assert_eq!(observation.offscreen_text, "Scrolled away");
+    }
+
+    #[test]
+    fn a_places_key_follows_where_text_sits_and_not_what_it_says() {
+        let (window, mut root) = form();
+        let at = |root: &mut Element, y: i64, text: &str| {
+            let label = &mut root.children[0].children[0];
+            label.y = y;
+            label.text = Some(text.into());
+            observation(&window, root, &[]).viewport_key
+        };
+        let first = at(&mut root, 10, "12:00");
+        // A ticking label is the same place; the same text at another height is a scrolled one.
+        assert_eq!(first, at(&mut root, 10, "12:01"));
+        assert_ne!(first, at(&mut root, 40, "12:00"));
+        assert_eq!(first, at(&mut root, 10, "12:02"));
     }
 
     #[test]
