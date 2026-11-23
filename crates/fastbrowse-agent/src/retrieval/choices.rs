@@ -142,6 +142,9 @@ fn read_groups(candidates: &[Candidate]) -> IndexMap<String, Vec<Candidate>> {
     groups.into_values().map(|group| (group[0].id.clone(), group)).collect()
 }
 
+/// What a candidate with `source_kind` observation is, said once to Jev when the question offers one.
+const OBSERVATION_EXPLAINED: &str = " A candidate whose source_kind is observation is a description code wrote of a control's state, not words the page showed: it states nothing about the page's content, so it never answers a task about what the page's text says. A task about content, such as confirming what was saved, is answered by that content, never by the state of a control.";
+
 fn read_request(
     page: &Page<'_>,
     task: &str,
@@ -154,6 +157,7 @@ fn read_request(
     let groups = read_groups(candidates);
     let mut criteria: IndexMap<String, Value> = IndexMap::new();
     let mut given = Sources::new();
+    let mut observed = false;
     for (key, group) in &groups {
         let value = group[0].value.to_str();
         let sources: Vec<Map<String, Value>> = group
@@ -166,6 +170,7 @@ fn read_request(
                         && block.start <= c.evidence.start
                         && c.evidence.end <= block.end
                 }) {
+                    observed |= block.kind == BlockKind::Observation;
                     source.insert("source_kind".into(), json!(block.kind));
                 }
                 source
@@ -187,6 +192,11 @@ fn read_request(
     );
     if groups.len() < candidates.len() {
         instructions.push_str(" Repeated values share one candidate with all their source contexts. A value answers only when a source states it for the requested record and field.");
+    }
+    // A "Save: disabled" candidate was picked as the answer to a task that asked to confirm a saved description (#1437):
+    // Jev was never told the candidate is code's description of a control, not a sentence of the page.
+    if observed {
+        instructions.push_str(OBSERVATION_EXPLAINED);
     }
     if blocks.is_some() {
         instructions
@@ -1103,6 +1113,24 @@ mod tests {
             })
             .collect();
         assert_eq!(question.criteria["c0"]["sources"], Value::Array(expected));
+    }
+
+    #[test]
+    fn a_control_state_observation_is_explained_to_jev_only_when_one_is_offered() {
+        let task = "Save, reload and confirm the saved description ends with the new line";
+        let asked = |captured: &Capture| {
+            let candidates = read_candidates(captured, None);
+            let (_, questions) = read_request(&Page::new(captured), task, "2026-11-17", &candidates, None, false);
+            let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
+            question.instructions.clone()
+        };
+        let with =
+            asked(&capture(&[(BlockKind::Paragraph, "Updated for 1.15."), (BlockKind::Observation, "Save: disabled")]));
+        assert!(with.contains("source_kind is observation is a description code wrote of a control's state"));
+        assert!(with.contains("never by the state of a control"));
+        assert!(
+            !asked(&capture(&[(BlockKind::Paragraph, "Updated for 1.15.")])).contains("source_kind is observation")
+        );
     }
 
     #[test]
