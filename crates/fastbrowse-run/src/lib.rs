@@ -1041,6 +1041,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             origins.clone(),
             on_event,
             &told,
+            chat,
         )
         .await?;
         if task.fetch || !read.needs_browser {
@@ -1375,6 +1376,7 @@ async fn fetched(
     origins: Option<Vec<String>>,
     on_event: EventHandler,
     told: &Told,
+    chat: bool,
 ) -> Result<Read, RunError> {
     if let Err(refusal) = check_browser_access(host.check_access.as_ref()).await {
         // The caller's own gate refused the run, which is an error result, not an error to the embedder. Python reports
@@ -1415,6 +1417,7 @@ async fn fetched(
     let agent = Agent::new(page, jev, llm)
         .with_redactor(redactor)
         .with_config(config.clone())
+        .with_chat(chat)
         .with_secrets(host.secrets.clone())
         .with_trace(trace)
         .with_events(Some(on_event));

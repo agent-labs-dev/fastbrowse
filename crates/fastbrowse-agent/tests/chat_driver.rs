@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 #[derive(Default)]
 struct DatePage {
     open: std::sync::atomic::AtomicBool,
+    /// Fetched over HTTP, so its scripts never ran.
+    http: bool,
     acted: Mutex<Vec<Action>>,
 }
 
@@ -41,6 +43,10 @@ impl DatePage {
 }
 
 impl Page for DatePage {
+    fn over_http(&self) -> bool {
+        self.http
+    }
+
     fn artifacts(&self) -> Vec<Artifact> {
         Vec::new()
     }
@@ -189,7 +195,7 @@ async fn test_a_plan_stops_at_the_page_change_and_the_next_turn_sees_the_popups_
     let page = Arc::new(DatePage::default());
     let driver = Driver::new([
         json!({"next": "", "actions": [{"tool": "click", "id": "1"}, {"tool": "click", "id": "2"}]}),
-        json!({"next": "", "actions": [{"tool": "click", "id": "4"}]}),
+        json!({"next": "", "actions": [{"tool": "click", "id": "*4"}]}),
         give_up(),
     ]);
     let result = run(page.clone(), driver.clone()).await;
@@ -397,4 +403,15 @@ async fn test_a_done_quoting_words_the_page_does_not_show_is_refused_and_told_ba
     let result = run(page, driver.clone()).await;
     assert_eq!(result.status, Status::Stuck);
     assert!(driver.told(1).contains(r#"does not show "Pick a day" word for word"#), "{}", driver.told(1));
+}
+
+#[tokio::test]
+async fn test_a_fetched_page_the_driver_waits_on_or_gives_up_on_goes_to_a_browser() {
+    for act in [json!({"tool": "wait"}), json!({"tool": "give_up", "status": "unavailable", "reason": "Loading..."})] {
+        let page = Arc::new(DatePage { http: true, ..Default::default() });
+        let driver = Driver::new([json!({"next": "", "actions": [act]})]);
+        let result = run(page, driver).await;
+        assert_ne!(result.status, Status::Unavailable, "{:?}", result.error);
+        assert_eq!(result.failure_kind.as_deref(), Some("NeedsBrowser"), "{:?}", result);
+    }
 }

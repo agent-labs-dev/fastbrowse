@@ -60,10 +60,12 @@ impl Chat {
         number.to_string()
     }
 
-    /// The control id the model named as `shown`, or `shown` itself when it names no number given out.
+    /// The control id the model named as `shown`, or `shown` itself when it names no number given out. The `*` the
+    /// page lines put before a new control's number is part of the line, not the id, and a model copied it: `*146`.
     fn id_of(&self, shown: &str) -> String {
         shown
             .trim()
+            .trim_start_matches('*')
             .parse::<usize>()
             .ok()
             .and_then(|n| self.ids.get(n.wrapping_sub(1)))
@@ -513,6 +515,14 @@ impl Agent {
                     );
                 }
                 return Ok(finished);
+            }
+            // A page fetched over HTTP has not run its scripts, so one still loading, checking the browser or looking
+            // empty is not the site's last word: a browser opens it before the run is given up on.
+            Act::GiveUp { reason, .. } if self.page.over_http() => {
+                return Err(self.page.needs_browser(self.redact(reason)).into());
+            }
+            Act::Wait if self.page.over_http() => {
+                return Err(self.page.needs_browser("the page needs its scripts run to finish loading".into()).into());
             }
             Act::GiveUp { status, reason } => {
                 return Err(Stop::new(status.status(), "Chat/give-up", self.redact(reason)).into());
