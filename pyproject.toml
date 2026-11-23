@@ -62,9 +62,9 @@ dev = [
     "pytest>=9.2,<10",
     "pytest-asyncio>=1.4.1,<2",
     "ruff>=0.17.3,<1",
-    "vale==3.26.0.1",
+    "vale==3.27.0.0",
     "pytest-timeout>=2.4,<3",
-    "ty==0.0.99",          # preview: pinned, and moved with the pre-commit hook
+    "ty==0.0.104",          # preview: pinned, and moved with the pre-commit hook
     "pre-commit>=4.7.0",
     "actionlint-py==1.7.12.25",
 ]
