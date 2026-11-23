@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use super::Agent;
 use super::recovery::withheld;
 use super::render::render;
-use super::state::{Flow, RunState, Step, Stop};
+use super::state::{FailureCause, Flow, RunState, Step, Stop};
 use crate::policy::{Decision, Given, ReadScope, Reduction};
 use crate::verification::RecordSchema;
 
@@ -251,6 +251,13 @@ impl Agent {
         output_schema: Option<&RecordSchema>,
         until: Option<&UntilCheck>,
     ) -> Step<RunResult> {
+        // The model judges whether a page failed by reading it, and nothing in this loop re-asks Jev, so a verdict a
+        // fetched attempt handed over stood for the whole run: a page that failed only without JavaScript skipped
+        // every read and ended the run unavailable while it showed the answer (quotes-js-page2).
+        state.page_failed = false;
+        if state.site_failure.as_ref().is_some_and(|failure| failure.cause == FailureCause::Reported) {
+            state.site_failure = None;
+        }
         loop {
             state.ledger.check(0.0)?;
             if let Some(stop) = super::out_of_browsing_time(state) {
