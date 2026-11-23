@@ -507,6 +507,7 @@ fn control_from_raw(
 ) -> Control {
     Control {
         id: control_id,
+        frame_document_key: frame_id.as_ref().map(|_| document_key.to_owned()),
         frame_id,
         frame_origin: c.frame_origin.clone(),
         // An iframe can navigate and reuse its local form ids while the top-level document stays put.
