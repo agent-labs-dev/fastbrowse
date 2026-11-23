@@ -388,6 +388,7 @@ def publish_split(
     refuse_commit: int | None = None,
     lose_response: int | None = None,
     wrong_blob: bool = False,
+    lose_body: bool = False,
 ) -> tuple[int, list, str]:
     """`publish` of three cassettes, one per commit, with GitHub refusing commit number `refuse_commit`."""
     tasks = ["mock-basket", "mock-swatch", "mock-sign-in"]
@@ -416,6 +417,8 @@ def publish_split(
                 return {"errors": [{"message": "refused"}]}
             head = str(len(commits)) * 40
             if len(commits) == lose_response:
+                if lose_body:
+                    return {"data": {"createCommitOnBranch": None}}
                 raise RuntimeError("gh api graphql failed: gh: HTTP 504")
             return {"data": {"createCommitOnBranch": {"commit": {"oid": head, "url": f"c/{head}"}}}}
         if args[0].endswith("/pulls/7"):
@@ -478,10 +481,11 @@ def test_a_split_refill_stopped_partway_says_what_it_committed_and_leaves_the_re
     assert "Nothing was committed" not in comment
 
 
+@pytest.mark.parametrize("lose_body", [False, True])
 def test_a_committed_batch_whose_response_was_lost_is_reported_and_followed_by_the_remaining_batches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lose_body: bool
 ) -> None:
-    code, commits, comment = publish_split(tmp_path, monkeypatch, lose_response=1)
+    code, commits, comment = publish_split(tmp_path, monkeypatch, lose_response=1, lose_body=lose_body)
     assert code == 0
     assert [c["expectedHeadOid"] for c in commits] == ["a" * 40, "1" * 40, "2" * 40]
     assert all(oid[:12] in comment for oid in ("1" * 40, "2" * 40, "3" * 40))
@@ -516,6 +520,8 @@ def test_manual_retry_only_reuses_ci_after_verified_cassette_commits(
     monkeypatch.setenv("INPUT_PR", "7")
     monkeypatch.setenv("RETRY", str(retry).lower())
     outputs = {}
+    data = b'{"cassette":1,"task":"mock-basket"}\n'
+    blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data, usedforsecurity=False).hexdigest()
 
     def gh(*args: str, token: str, body: Any = None) -> Any:
         route = args[0]
@@ -532,11 +538,13 @@ def test_manual_retry_only_reuses_ci_after_verified_cassette_commits(
             return [{"jobs": [{"name": "replay", "conclusion": "failure"}]}]
         if "/actions/runs/7/artifacts" in route:
             return {"artifacts": [{"name": "replay-misses", "expired": False}]}
+        if route.endswith(f"/git/blobs/{blob}"):
+            return {"encoding": "base64", "content": base64.encodebytes(data).decode()}
         commit = {"message": f"{refill.REFILL_SUBJECT}mock-basket", "verification": {"verified": True}}
         if route.endswith(f"/commits/{head}"):
             return {"commit": commit}
         if route.endswith(f"/commits/{head}?per_page=100"):
-            files = [{"filename": "bench/cassettes/mock-basket.jsonl", "status": "modified"}]
+            files = [{"filename": "bench/cassettes/mock-basket.jsonl", "status": "modified", "sha": blob}]
             if unrelated:
                 files.append({"filename": "unrelated.py", "status": "modified"})
             return [{"commit": commit, "committer": {"login": "web-flow"}, "parents": [{"sha": SHA}], "files": files}]
@@ -582,7 +590,7 @@ def test_a_partial_retry_stops_at_an_ancestor_with_a_passing_replay(
             "commit": {"message": f"{refill.REFILL_SUBJECT}{task}", "verification": {"verified": True}},
             "committer": {"login": "web-flow"},
             "parents": [{"sha": parent}],
-            "files": [{"filename": f"bench/cassettes/{task}.jsonl", "status": "modified"}],
+            "files": [{"filename": f"bench/cassettes/{task}.jsonl", "status": "modified", "sha": "d" * 40}],
         }
 
     def replay_ci(repo: str, sha: str, token: str) -> str | None:
@@ -593,6 +601,7 @@ def test_a_partial_retry_stops_at_an_ancestor_with_a_passing_replay(
     monkeypatch.setattr(refill, "find_comment", lambda *args: {"body": f"<!-- cassette-refill-attempted: {SHA} -->"})
     monkeypatch.setattr(refill, "read_commit", read_commit)
     monkeypatch.setattr(refill, "replay_ci", replay_ci)
+    monkeypatch.setattr(refill, "verify_refill_blobs", lambda *args: None)
     resolved = refill.retry_from_partial(REPO, "7", head, "t")
     if middle_run is None:
         assert resolved == ("7", {"mock-basket", "mock-swatch"})
@@ -600,6 +609,40 @@ def test_a_partial_retry_stops_at_an_ancestor_with_a_passing_replay(
     else:
         assert resolved == ("", {"mock-basket"})
         assert checked == [middle]
+
+
+def test_covered_task_blob_must_contain_a_valid_cassette(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b'{"cassette":1,"task":"another-task"}\n'
+    sha = hashlib.sha1(f"blob {len(data)}\0".encode() + data, usedforsecurity=False).hexdigest()
+
+    def gh(*args: str, token: str, body: Any = None) -> Any:
+        assert args == (f"repos/{REPO}/git/blobs/{sha}",)
+        return {"encoding": "base64", "content": base64.encodebytes(data).decode()}
+
+    monkeypatch.setattr(refill, "gh", gh)
+    with pytest.raises(ValueError, match="no version 1 cassette head line"):
+        refill.verify_refill_blobs(REPO, {"mock-basket": sha}, "t")
+
+
+def test_missing_branch_facts_report_a_read_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(refill, "gh", lambda *args, **kwargs: {"head": None})
+    with pytest.raises(ValueError, match="incomplete pull request facts"):
+        refill.pull_facts(REPO, "7", "t")
+
+
+def test_a_commit_file_list_at_the_rest_limit_cannot_verify_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(refill, "COMMIT_DIFF_FILE_LIMIT", 3)
+    monkeypatch.setattr(refill, "gh", lambda *args, **kwargs: [{"files": [{}, {}]}, {"files": [{}]}])
+    with pytest.raises(ValueError, match="prevents verifying all the changed files"):
+        refill.read_commit(REPO, SHA, "t")
+
+
+def test_batches_stay_below_the_commit_diff_file_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(refill, "COMMIT_DIFF_FILE_LIMIT", 3, raising=False)
+    paths = [tmp_path / f"cassette-{n}.jsonl" for n in range(3)]
+    for path in paths:
+        path.write_bytes(b"x")
+    assert refill.commit_batches(paths, 100) == [paths[:2], paths[2:]]
 
 
 def test_a_cassette_over_the_request_limit_on_its_own_is_refused_by_name(tmp_path: Path) -> None:

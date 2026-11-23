@@ -17,6 +17,7 @@ become code.
 
 import base64
 import hashlib
+import io
 import json
 import math
 import os
@@ -24,7 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -267,26 +268,31 @@ def validate_cassettes(directory: Path, tasks: Sequence[str]) -> list[Path]:
         raise ValueError(f"expected exactly {sorted(wanted)}, found {sorted(path.name for path in found)}")
     for path in found:
         with path.open(encoding="utf-8") as lines:
-            head = json.loads(next(lines, "null"))
-            if not isinstance(head, dict) or head.get("cassette") != CASSETTE_VERSION or head.get("task") != path.stem:
-                raise ValueError(f"{path.name}: no version {CASSETTE_VERSION} cassette head line for its task")
-            for number, line in enumerate(lines, 2):
-                if not line.strip():
-                    continue
-                exchange = json.loads(line)
-                if not isinstance(exchange, dict) or "request" not in exchange:
-                    raise ValueError(f"{path.name}:{number}: not an exchange")
-                wrong = sorted(
-                    name
-                    for name, kind in EXCHANGE_FIELDS.items()
-                    if not isinstance(exchange.get(name), kind) or isinstance(exchange.get(name), bool)
-                )
-                if wrong:
-                    raise ValueError(f"{path.name}:{number}: an exchange without a valid {', '.join(wrong)}")
-                status = exchange["status"]
-                if not 200 <= status < 300:
-                    raise ValueError(f"{path.name}:{number}: a recorded status of {status!r} is not an answer")
+            validate_cassette(lines, path.stem)
     return found
+
+
+def validate_cassette(lines: Iterator[str], task: str) -> None:
+    name = f"{task}.jsonl"
+    head = json.loads(next(lines, "null"))
+    if not isinstance(head, dict) or head.get("cassette") != CASSETTE_VERSION or head.get("task") != task:
+        raise ValueError(f"{name}: no version {CASSETTE_VERSION} cassette head line for its task")
+    for number, line in enumerate(lines, 2):
+        if not line.strip():
+            continue
+        exchange = json.loads(line)
+        if not isinstance(exchange, dict) or "request" not in exchange:
+            raise ValueError(f"{name}:{number}: not an exchange")
+        wrong = sorted(
+            name
+            for name, kind in EXCHANGE_FIELDS.items()
+            if not isinstance(exchange.get(name), kind) or isinstance(exchange.get(name), bool)
+        )
+        if wrong:
+            raise ValueError(f"{name}:{number}: an exchange without a valid {', '.join(wrong)}")
+        status = exchange["status"]
+        if not 200 <= status < 300:
+            raise ValueError(f"{name}:{number}: a recorded status of {status!r} is not an answer")
 
 
 # What the pull request is told
@@ -343,6 +349,22 @@ WORK = Path("artifacts/refill-work")
 # of every task, after a change to what every page states, was 90MB of cassettes and was never committed. The margin
 # leaves room for the rest of the request around the encoded files.
 COMMIT_PAYLOAD_LIMIT = 40 * 1024 * 1024
+# GitHub's REST Get a commit endpoint paginates its file list only up to 3,000 entries.
+# A diff at that limit cannot prove the batch did not change anything else.
+COMMIT_DIFF_FILE_LIMIT = 3000
+
+
+def commit_response(result: Any) -> dict[str, str]:
+    try:
+        if result.get("errors"):
+            raise RuntimeError(f"GitHub refused the commit: {result['errors'][0]['message']}")
+        commit = result["data"]["createCommitOnBranch"]["commit"]
+        oid, url = commit["oid"], commit["url"]
+        if isinstance(oid, str) and oid and isinstance(url, str) and url:
+            return {"oid": oid, "url": url}
+    except (AttributeError, IndexError, KeyError, TypeError) as error:
+        raise RuntimeError("GitHub returned no usable commit response") from error
+    raise RuntimeError("GitHub returned no usable commit response")
 
 
 def commit_batches(files: Sequence[Path], limit: int) -> list[list[Path]]:
@@ -353,7 +375,7 @@ def commit_batches(files: Sequence[Path], limit: int) -> list[list[Path]]:
         encoded = 4 * math.ceil(path.stat().st_size / 3)
         if encoded > limit:
             raise ValueError(f"{path.name} alone is over GitHub's request limit")
-        if not batches or size + encoded > limit:
+        if not batches or size + encoded > limit or len(batches[-1]) + 1 >= COMMIT_DIFF_FILE_LIMIT:
             batches.append([])
             size = 0
         batches[-1].append(path)
@@ -394,19 +416,20 @@ def summary(text: str) -> None:
 
 
 def pull_facts(repo: str, number: str, token: str) -> tuple[PullFacts, str]:
-    pull = gh(f"repos/{repo}/pulls/{number}", token=token)
-    sha = pull["head"]["sha"]
-    head_repo = (pull["head"]["repo"] or {}).get("full_name", "(deleted fork)")
-    message = gh(f"repos/{repo}/commits/{sha}", token=token)["commit"]["message"]
-    facts = PullFacts(
-        number=int(number),
-        open=pull["state"] == "open",
-        head_sha=sha,
-        head_repo=head_repo,
-        base_repo=pull["base"]["repo"]["full_name"],
-        head_message=message,
-    )
-    return facts, pull["head"]["ref"]
+    try:
+        pull = gh(f"repos/{repo}/pulls/{number}", token=token)
+        sha, branch = pull["head"]["sha"], pull["head"]["ref"]
+        head_repo = (pull["head"]["repo"] or {}).get("full_name", "(deleted fork)")
+        base_repo = pull["base"]["repo"]["full_name"]
+        state = pull["state"]
+        if not all(isinstance(value, str) and value for value in (sha, branch, head_repo, base_repo, state)):
+            raise ValueError("GitHub returned incomplete pull request facts")
+        message = gh(f"repos/{repo}/commits/{sha}", token=token)["commit"]["message"]
+        if not isinstance(message, str):
+            raise ValueError("GitHub returned no message for the branch head")
+    except (AttributeError, KeyError, TypeError) as error:
+        raise ValueError("GitHub returned incomplete pull request facts") from error
+    return PullFacts(int(number), state == "open", sha, head_repo, base_repo, message), branch
 
 
 def find_comment(repo: str, number: str, token: str) -> dict[str, Any] | None:
@@ -450,10 +473,13 @@ def replay_ci(repo: str, sha: str, token: str) -> str | None:
 
 def read_commit(repo: str, sha: str, token: str) -> dict[str, Any]:
     pages = gh(f"repos/{repo}/commits/{sha}?per_page=100", "--paginate", "--slurp", token=token)
-    return {**pages[0], "files": [file for page in pages for file in page["files"]]}
+    files = [file for page in pages for file in page["files"]]
+    if len(files) >= COMMIT_DIFF_FILE_LIMIT:
+        raise ValueError("GitHub's commit diff file limit prevents verifying all the changed files")
+    return {**pages[0], "files": files}
 
 
-def refill_commit_tasks(commit: Mapping[str, Any]) -> set[str]:
+def refill_commit_tasks(commit: Mapping[str, Any]) -> dict[str, str]:
     """Identify a GitHub-signed refill by its single parent, subject and cassette-only file changes."""
     subject = commit["commit"]["message"].split("\n", 1)[0]
     if (
@@ -462,10 +488,10 @@ def refill_commit_tasks(commit: Mapping[str, Any]) -> set[str]:
         or (commit["committer"] or {}).get("login") != "web-flow"
         or not subject.startswith(REFILL_SUBJECT)
     ):
-        return set()
+        return {}
     tasks = subject.removeprefix(REFILL_SUBJECT).split(", ")
     if not all(TASK_ID.fullmatch(task) for task in tasks):
-        return set()
+        return {}
     files = commit["files"]
     expected = {f"bench/cassettes/{task}.jsonl" for task in tasks}
     if (
@@ -473,8 +499,24 @@ def refill_commit_tasks(commit: Mapping[str, Any]) -> set[str]:
         or {file["filename"] for file in files} != expected
         or any(file["status"] not in {"added", "modified"} for file in files)
     ):
-        return set()
-    return set(tasks)
+        return {}
+    return {Path(file["filename"]).stem: file["sha"] for file in files}
+
+
+def git_blob_oid(data: bytes) -> str:
+    blob = f"blob {len(data)}\0".encode() + data
+    return hashlib.sha1(blob, usedforsecurity=False).hexdigest()
+
+
+def verify_refill_blobs(repo: str, tasks: Mapping[str, str], token: str) -> None:
+    for task, sha in tasks.items():
+        blob = gh(f"repos/{repo}/git/blobs/{sha}", token=token)
+        if blob["encoding"] != "base64":
+            raise ValueError(f"{task}.jsonl: GitHub returned a blob without base64 content")
+        data = base64.b64decode("".join(blob["content"].splitlines()), validate=True)
+        if git_blob_oid(data) != sha:
+            raise ValueError(f"{task}.jsonl: the downloaded blob does not match the commit")
+        validate_cassette(io.StringIO(data.decode("utf-8"), newline=None), task)
 
 
 def retry_from_partial(repo: str, number: str, head: str, token: str) -> tuple[str | None, set[str]]:
@@ -487,17 +529,20 @@ def retry_from_partial(repo: str, number: str, head: str, token: str) -> tuple[s
     comment = find_comment(repo, number, token)
     attempted = set(attempted_shas(comment["body"])) if comment else set()
     sha = head
-    covered: set[str] = set()
+    covered: dict[str, str] = {}
     while attempted:
         commit = read_commit(repo, sha, token)
         tasks = refill_commit_tasks(commit)
-        if not tasks or tasks & covered:
+        if not tasks or tasks.keys() & covered.keys():
             break
         covered.update(tasks)
         sha = commit["parents"][0]["sha"]
         run_id = replay_ci(repo, sha, token)
-        if run_id == "" or (run_id is not None and sha in attempted):
-            return run_id, covered
+        if run_id == "":
+            return run_id, set(covered)
+        if run_id is not None and sha in attempted:
+            verify_refill_blobs(repo, covered, token)
+            return run_id, set(covered)
         if run_id is not None:
             break
     return None, set()
@@ -621,8 +666,7 @@ def recover_commit(
     expected = {}
     for addition in additions:
         data = base64.b64decode(addition["contents"])
-        blob = f"blob {len(data)}\0".encode() + data
-        expected[addition["path"]] = hashlib.sha1(blob, usedforsecurity=False).hexdigest()
+        expected[addition["path"]] = git_blob_oid(data)
     if {file["filename"]: file["sha"] for file in commit["files"]} != expected:
         return None
     return {"oid": facts.head_sha, "url": commit["html_url"]}
@@ -652,17 +696,15 @@ def commit_batch(
                 },
             },
         )
-    except RuntimeError as error:
+        return commit_response(made)
+    except (RuntimeError, json.JSONDecodeError) as error:
         try:
             recovered = recover_commit(repo, number, branch, parent, message, additions, token)
-        except RuntimeError as verification_error:
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError, RuntimeError) as verification_error:
             raise ValueError(f"GitHub's commit result could not be verified: {error}; {verification_error}") from error
         if recovered is None:
             raise ValueError(f"GitHub's commit result could not be verified: {error}") from error
         return recovered
-    if made.get("errors"):
-        raise ValueError(f"GitHub refused the commit: {made['errors'][0]['message']}")
-    return made["data"]["createCommitOnBranch"]["commit"]
 
 
 def publish() -> int:
