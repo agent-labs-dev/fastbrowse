@@ -112,7 +112,18 @@ fn dialog(name: &str) -> String {
 
 fn listed(controls: &[&Control]) -> String {
     let count = counted(controls.len());
-    let names: Vec<String> = controls.iter().map(|c| short(&Shown::Text(c.label.clone()))).collect();
+    // Named with the context the page gives it: two "Hide N Replies" counters read alike to Jev as the count of the
+    // replies it asked about, until each said which comment it belongs to (#1467).
+    let names: Vec<String> = controls
+        .iter()
+        .map(|c| {
+            let name = match c.context.as_deref().filter(|context| !context.is_empty()) {
+                Some(context) => format!("{} ({context})", c.label),
+                None => c.label.clone(),
+            };
+            short(&Shown::Text(name))
+        })
+        .collect();
     format!("{count}: {}", names.join(", "))
 }
 
@@ -498,6 +509,29 @@ mod tests {
         assert!(effect(&before, &replaced, None, false).shown.is_empty());
         let moved = Observation { url: "https://example.test/next".into(), ..after };
         assert!(effect(&before, &moved, None, false).shown.is_empty());
+    }
+
+    /// A signed-in run replied in a nested CurseForge thread and was asked which replies sit under one reply. The
+    /// Post step's effect listed "Hide 3 Replies, Hide 4 Replies" with no comment named, and coverage read a counter
+    /// of another comment as the count asked about (#1467). An effect names a control with the context it has.
+    #[test]
+    fn test_a_control_a_step_showed_or_removed_is_named_with_the_comment_it_belongs_to() {
+        let counter = |id: &str, label: &str, context: Option<&str>| Control {
+            context: context.map(str::to_string),
+            ..control(id, label, "button")
+        };
+        let toggles = vec![
+            counter("a", "Hide 3 Replies", Some("cjber / Author / 11 hours ago")),
+            counter("b", "Hide 4 Replies", Some("Kal66 / 7 days ago")),
+            counter("c", "Close Notification", None),
+            counter("d", "Quote", Some("")),
+        ];
+        let shown = effect(&observation(vec![]), &observation(toggles.clone()), None, false);
+        let named = "4 controls: Hide 3 Replies (cjber / Author / 11 hours ago), Hide 4 Replies (Kal66 / 7 days ago), \
+                     Close Notification, Quote";
+        assert_eq!(shown.summary, format!("showed {named}"));
+        let removed = effect(&observation(toggles), &observation(vec![]), None, false);
+        assert_eq!(removed.summary, format!("removed {named}"));
     }
 
     #[test]
