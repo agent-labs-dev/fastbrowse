@@ -1913,21 +1913,13 @@ impl CdpPage {
         points.extend(std::iter::repeat_n((end_x, end_y), 5));
         let duration = Duration::from_secs_f64(DRAG_STEP_SECONDS * f64::from(DRAG_STEPS + 5));
         self.trace_action_cursor(&points, duration).await;
-        // A page's own pointer script (a sortable list) moves its items as the pointer passes them, so the destination
-        // slides out from under the pointer by design and the place it stood is where the item belongs. Only a native
-        // drag, whose drop lands on the control the last dragover reached, is held to the control it was checked on.
+        // A native drag's dragstart handler can repurpose or cover the destination before the pointer arrives, so a
+        // native drag checks it again after the first move; a page's own pointer drag is checked when it is released.
         let native = self
             .evaluate(session_id, &format!("window.__fastbrowse?.nodes.get({})?.draggable === true", target.2))
             .await
             .ok()
             .is_some_and(|value| value == Value::Bool(true));
-        // What the page held when the destination was chosen: a control the drag itself brings in is no destination.
-        self.evaluate(
-            session_id,
-            "(() => { if (window.__fastbrowse) window.__fastbrowse.beforeDrag = new WeakSet(document.querySelectorAll('*')); })()",
-        )
-        .await
-        .ok();
         let press = json!({"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1, "buttons": 1});
         self.input(self.session.send("Input.dispatchMouseEvent", press, Some(session_id))).await?;
         let mut held = self.held(session_id, (start_x, start_y), 0);
@@ -1955,8 +1947,11 @@ impl CdpPage {
                 }
             }
         }
-        // Hover styling can shift the destination's point (a border, a nudge, a placeholder above it). The release
-        // follows the control, but only to a point the hit test confirms with the pointer already resting on it.
+        // Hover styling can shift the destination's point (a border, a nudge, a placeholder above it), so the release
+        // follows the control to its live point. Whatever moved, the release is made only where a hit test at the exact
+        // release point, with the pointer resting on it, finds the destination or the dragged source: a page's release
+        // handler and Chrome's drop both act on what holds that point, and any other element there (a cover, an
+        // overlay inserted or revealed during the drag) would take a drop that was never chosen.
         let mut at = (end_x, end_y);
         for _ in 0..2 {
             // Chrome drops on the target its last dragover reached, not on what lies under the pointer now, and takes a
@@ -1969,53 +1964,37 @@ impl CdpPage {
             }
             let (_, live, landed, _, _, _, connected) =
                 self.before_action(Some(&drop), true, false, false, false, false).await?;
-            // A page's own release handler acts on whatever zone holds the pointer, so a destination the drag replaced,
-            // renamed or covered cancels the drag as a native one does.
+            // A destination the drag renamed or repurposed is no longer the control that was chosen, though the hit
+            // test still finds it.
             if !native && (!connected || live != drop.3) {
                 break;
             }
-            let Point::At(x, y) = landed else { break };
-            if (x, y) == at {
+            if self.release_point_holds(session_id, drop.2, target.2, at).await {
                 self.release(session_id, at.0, at.1, 0).await?;
                 held.done();
                 return Ok((StepOutcome::Executed, None, None));
             }
-            // A destination that slid out from under the pointer (a sortable list moves its items as the pointer passes
-            // them) is released where it stood, which is where the item belongs, provided what holds that point was on
-            // the page before the drag began: an overlay the drag brought in is not that item. One still under the
-            // pointer is released only at a point rested on and hit-tested, so a cover or a nudge never takes it.
-            if !native && !self.box_holds_point(session_id, drop.2, at).await {
-                if !self.held_before_drag(session_id, at).await {
-                    break;
-                }
-                self.release(session_id, at.0, at.1, 0).await?;
-                held.done();
-                return Ok((StepOutcome::Executed, None, None));
+            match landed {
+                Point::At(x, y) if (x, y) != at => at = (x, y),
+                _ => break,
             }
-            at = (x, y);
         }
         self.cancel_drag(session_id, (start_x, start_y), 0).await?;
         held.done();
         Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))
     }
 
-    /// Whether the element at `point` was on the page when the drag began.
-    async fn held_before_drag(&self, session_id: &str, point: (f64, f64)) -> bool {
+    /// Whether the element at the top-viewport `point` is the destination or the dragged source, or inside one with no
+    /// other control between.
+    ///
+    /// The source counts because a sortable list moves the dragged item into the destination's slot as the pointer
+    /// passes it, so the item is what holds the release point. A drag ghost drawn with `pointer-events: none` is never
+    /// the hit.
+    async fn release_point_holds(&self, session_id: &str, drop_id: i64, source_id: i64, point: (f64, f64)) -> bool {
         let script = format!(
-            "(() => {{ const known = window.__fastbrowse?.beforeDrag; const hit = document.elementFromPoint({}, {}); \
-             return !!hit && (!known || known.has(hit)); }})()",
-            point.0, point.1
-        );
-        self.evaluate(session_id, &script).await.ok() == Some(Value::Bool(true))
-    }
-
-    /// Whether `point` lies inside the control's box now.
-    async fn box_holds_point(&self, session_id: &str, local_id: i64, point: (f64, f64)) -> bool {
-        let script = format!(
-            "(() => {{ const r = window.__fastbrowse?.nodes.get({local_id})?.getBoundingClientRect(); \
-             return !!r && {x} >= r.left && {x} <= r.right && {y} >= r.top && {y} <= r.bottom; }})()",
-            x = point.0,
-            y = point.1
+            "(() => {{ const holds = id => Array.isArray(({HIT_TEST_JS})(id, false, {}, {TOP_RECT_JS})); \
+             return holds({drop_id}) || holds({source_id}); }})()",
+            json!([point.0, point.1])
         );
         self.evaluate(session_id, &script).await.ok() == Some(Value::Bool(true))
     }
