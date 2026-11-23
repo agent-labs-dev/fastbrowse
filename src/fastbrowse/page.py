@@ -52,6 +52,7 @@ class Control(Frozen):
     validation_message: str | None = Field(default=None, exclude_if=lambda message: message is None)
     """The browser's own words for why a native constraint refuses this field."""
     role_description: str | None = Field(default=None, exclude_if=lambda text: text is None)
+    visible_label: str | None = Field(default=None, exclude_if=lambda text: text is None)
     """What the page calls this control's role (`aria-roledescription`), such as "draggable"."""
     description: str | None = Field(default=None, exclude_if=lambda text: text is None)
     """The text the page attaches to this control to describe it (`aria-describedby`), as the page states it."""

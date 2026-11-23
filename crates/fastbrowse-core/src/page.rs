@@ -130,6 +130,9 @@ pub struct Control {
     /// The text the page attaches to this control to describe it (`aria-describedby`), as the page states it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The rendered text of native HTML labels when it differs from the accessible name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_label: Option<String>,
     /// Which item of its list this control is, counted from 1: `aria-posinset`, or its place among the items of its
     /// nearest list. A position such as "first" is a place in that list, which a label does not state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,6 +202,7 @@ impl Control {
             validation_message: None,
             role_description: None,
             description: None,
+            visible_label: None,
             item_position: None,
             item_count: None,
             next_page: None,

@@ -1950,6 +1950,7 @@ fn control_description(control: &Control, include_operations: bool) -> Map<Strin
         ("autocomplete", control.autocomplete.clone().map(Value::from)),
         ("validation_message", control.validation_message.clone().map(Value::from)),
         ("role_description", control.role_description.clone().map(Value::from)),
+        ("visible_label", control.visible_label.clone().map(Value::from)),
         ("description", control.description.clone().map(Value::from)),
         ("item_position", control.item_position.map(Value::from)),
         ("item_count", control.item_count.map(Value::from)),
@@ -3192,6 +3193,8 @@ mod tests {
     #[test]
     fn test_what_the_page_says_about_a_field_is_shown_to_jev() {
         let mut field = button(1);
+        field.visible_label = Some("Click to pick a date:".into());
+        assert_eq!(target_element(&field, Operation::Click)["visible_label"], "Click to pick a date:");
         field.required = Some(true);
         field.invalid = Some(true);
         field.validation_message = Some("Please fill in this field.".into());

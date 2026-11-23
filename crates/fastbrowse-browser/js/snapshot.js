@@ -1529,6 +1529,13 @@
     if (roleDescription) base.role_description = roleDescription;
     const description = describedBy(e);
     if (description && description !== base.label) base.description = description;
+    // ARIA can name a field differently from the HTML label a visitor reads to learn how to operate it.
+    const visibleLabel = [...(e.labels || [])]
+      .filter(shown)
+      .map(label => (innerTextOf(label) || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .join(' ');
+    if (visibleLabel && visibleLabel !== base.label) base.visible_label = visibleLabel;
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
     if (nativeProperty(source, 'required') || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;

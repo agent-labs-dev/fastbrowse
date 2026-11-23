@@ -84,6 +84,27 @@ async fn test_a_screenshot_glance_preserves_action_guards() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_visible_label_survives_an_aria_name_and_updates() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<label for=date>Click to pick a date:</label>\
+         <label for=date hidden>Hidden label</label><input id=date readonly aria-label=\"Date field\">'",
+    )
+    .await;
+    let before = h.observe().await;
+    let field = find(&before, "Date field");
+    assert_eq!(field.visible_label.as_deref(), Some("Click to pick a date:"));
+    assert!(field.operations.contains(&Operation::Click));
+    assert!(!field.operations.contains(&Operation::Fill));
+    eval_active(&h.page, "document.querySelector('label').textContent = 'Choose a date:'").await;
+    let after = h.observe().await;
+    assert_eq!(find(&after, "Date field").visible_label.as_deref(), Some("Choose a date:"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_click_uses_an_exposed_point_but_never_passes_through_a_cover() {
     // Flight rows had a covered centre even when another part of the same control was exposed.
     for nested in ["document", "shadow", "iframe"] {

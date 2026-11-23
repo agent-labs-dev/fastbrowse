@@ -1793,6 +1793,7 @@ impl Agent {
                 validation_message: mask_opt(&control.validation_message),
                 role_description: mask_opt(&control.role_description),
                 description: mask_opt(&control.description),
+                visible_label: mask_opt(&control.visible_label),
                 options: control.options.iter().map(|option| mask(option)).collect(),
                 ..control.clone()
             })
