@@ -1626,7 +1626,11 @@ impl Agent {
         // page to diff, kept the step, and the next click on the map was shown as made for it instead.
         let sighted = std::mem::take(&mut state.sighted);
         let keeping = std::mem::take(&mut state.keeping);
-        if let Some(last) = state.history.last_mut() {
+        // An observation with no action since the last one (a decision made again after a read) has no click to
+        // name, so it leaves the step the previous observation gave that click.
+        if (sighted.is_some() || state.acted_from.is_some())
+            && let Some(last) = state.history.last_mut()
+        {
             last.for_step = sighted.clone();
         }
         let Some(before) = state.acted_from.take() else { return };
