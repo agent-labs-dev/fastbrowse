@@ -586,6 +586,7 @@ impl Agent {
             Operation::Navigate => {
                 let Some(url) = decision.url.clone().filter(|url| {
                     task_urls(&state.task, state.caller_start.as_deref(), true).contains(url)
+                        || decision.reload.as_ref() == Some(url)
                         || state.reload_target(observation).as_ref() == Some(url)
                         || state.pager_followed.contains(url)
                         || state.routes.contains(url)

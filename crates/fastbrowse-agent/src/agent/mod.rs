@@ -1102,6 +1102,7 @@ impl Agent {
             omitted_actions: 0,
             problem: None,
             withheld_targets: Vec::new(),
+            item_missing: false,
             // A page read and unchanged since has nothing more to give a read.
             withheld: if Self::page_read(state, observation) {
                 vec![fastbrowse_core::models::Operation::Read]

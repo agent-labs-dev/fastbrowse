@@ -584,6 +584,7 @@ impl Agent {
             let decision = Decision {
                 operation: Operation::Fill,
                 url: None,
+                reload: None,
                 target: Some(target),
                 tab_id: None,
                 operation_confidence: planned.probability,

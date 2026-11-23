@@ -19,6 +19,8 @@ from fastbrowse.llm import Generation, Message
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Frozen, LLMPurpose, Operation
 from fastbrowse.telemetry import Ledger
 
+NOT_HERE = "not_here"
+
 
 class Step(Frozen):
     operation: Operation
@@ -110,6 +112,9 @@ class ScriptedJev:
             for option, described in question.criteria.items():
                 if isinstance(described, Mapping) and described.get("label") == step.label:
                     return option
+            # An item the page does not offer is answered as the question lets it be: not here.
+            if NOT_HERE in question.criteria:
+                return NOT_HERE
         return None
 
 

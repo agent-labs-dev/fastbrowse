@@ -48,6 +48,9 @@ pub(crate) mod keys {
     pub const UNOBTAINABLE: &str = "unobtainable";
     pub const INSIDE_DRAWN: &str = "inside_drawn";
     pub const STEP: &str = "step";
+    /// The option of a target question that answers no offered element is the item the task names. Control ids are
+    /// `frame:number`, so it cannot be one.
+    pub const NOT_HERE: &str = "not_here";
 
     /// The question that picks `operation`'s target.
     pub fn target(operation: Operation) -> String {
@@ -61,7 +64,7 @@ pub(crate) mod keys {
 }
 
 const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nWhat the task writes in or to a record it names, such as a reply to a comment, goes in a field in that record's context; while none is offered, open one there rather than fill a field outside it.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after the recent history shows it executed; what the page already showed before it is not the\nanswer, however close it looks.";
-const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nEach option is the element in state.elements with its id, whose `context` is the card, row or section it belongs\nto. When the task names one, choose by context; a link in one record's context opens it and shows no more of the\nlist.";
+const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose an offered element, or choose `not_here` when no offered element matches the task's item.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nEach option is the element in state.elements with its id, whose `context` is the card, row or section it belongs\nto. When the task names one, choose by context; a link in one record's context opens it and shows no more of the\nlist.";
 /// Asked only where a fill's field is chosen: the other target questions pick controls, not where text goes. A reply
 /// task filled the page's new-comment box, which sits among the comments and inside none of them (#1476).
 const FILL_TARGET_RULES: &str = "A field whose context is not the record the task names is not that record's field: when the task names a record and no offered field is in its context, choose not_here.";
@@ -90,6 +93,13 @@ pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
 pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
 pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
 pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. A later question picks the element inside the group.";
+
+/// What the escape option of a target question says: a fact about the page, for the operation question to act on.
+const NOT_HERE_IN_GROUP: &str = "The task names the item this operation would act on, and none of the other options is that item: it is not among this group of elements, which is only part of the page.";
+const NOT_HERE: &str = "The task names the item this operation would act on, and none of the other options is that item: it is not among the elements offered on this page as it was read.";
+
+/// Told beside the page's own address when it is offered to navigate to for a missing item.
+const RELOAD_FACT: &str = "Opening this page's own address loads it again, which shows what the site holds for it now.";
 
 /// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
 const PRESS_ROLE_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, or the key or key chord the task gives in an editable field.";
@@ -566,6 +576,9 @@ pub struct StepContext {
     /// its address.
     #[serde(skip)]
     pub withheld_targets: Vec<(Operation, String)>,
+    /// A target question found the item the task names missing from this page, so reloading it is a fair choice.
+    #[serde(skip)]
+    pub item_missing: bool,
     /// Fields the task gives no value for: filling one ends the run needing input.
     #[serde(default)]
     pub no_value_fields: Vec<String>,
@@ -627,6 +640,7 @@ impl StepContext {
             problem: None,
             withheld: Vec::new(),
             withheld_targets: Vec::new(),
+            item_missing: false,
             no_value_fields: Vec::new(),
             page_facts: Vec::new(),
             reload: None,
@@ -705,6 +719,9 @@ pub struct Decision {
     pub operation: Operation,
     #[serde(default)]
     pub url: Option<String>,
+    /// The current page address offered by policy as a reload after Jev found no matching target.
+    #[serde(skip)]
+    pub reload: Option<String>,
     pub target: Option<Control>,
     pub tab_id: Option<String>,
     pub operation_confidence: f64,
@@ -865,13 +882,35 @@ pub async fn decide(
         }
         if fits {
             match evaluate(jev, &request, &controls, reduction, ledger).await {
-                Ok(mut decision) => {
+                Ok(Evaluated::NotHere { operations, cost: paid, tokens: used }) => {
+                    // Said to the operation question as a fact, with those operations left out: they would be asked
+                    // for the same missing item. The page's own address is offered to navigate to, since a page may
+                    // list what the site holds only once it is loaded again.
+                    cost.extend(paid);
+                    tokens += used;
+                    let context = context.to_mut();
+                    let named: Vec<String> = operations.iter().map(ToString::to_string).collect();
+                    context.withheld.extend(operations);
+                    context.item_missing = true;
+                    context.page_facts.push(format!(
+                        "The task names an item, but no element this page offers to {} matches that item.",
+                        named.join(" or ")
+                    ));
+                    if context.reload.is_none() {
+                        context.reload = Some(observation.url.clone());
+                        context.page_facts.push(RELOAD_FACT.into());
+                    }
+                    continue;
+                }
+                Ok(Evaluated::Decided(mut decision)) => {
+                    // Carry the reload authorization across the temporary context so the navigation gate can verify it.
+                    decision.reload = context.reload.clone();
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
                     decision.input_tokens += tokens;
                     if config.step_choices {
                         decision.offered = controls;
                     }
-                    return Ok(decision);
+                    return Ok(*decision);
                 }
                 // Jev counts a picture again for each place it is used, and as it decodes it rather than as it was
                 // sent, so a body that fits can still be refused. Its pictures are the part a text cut cannot shrink:
@@ -935,7 +974,7 @@ struct Fitting<'a> {
 
 impl Fitting<'_> {
     fn group_size(&self) -> usize {
-        (self.config.observation.group_size.max(0) as usize).min(self.options)
+        (self.config.observation.group_size.max(0) as usize).min(self.options.saturating_sub(1).max(1))
     }
 
     /// How many characters the request's state runs over Jev's limit; zero or less when it fits.
@@ -1439,17 +1478,19 @@ pub fn build_request(
     }
     let mut targets: IndexMap<Operation, Vec<Control>> = IndexMap::new();
     let mut groups: IndexMap<Operation, Vec<Vec<Control>>> = IndexMap::new();
+    // A target question also offers the escape option, so one slot of the choice is kept for it.
     let limit = max_options;
-    let size = (config.observation.group_size.max(0) as usize).min(limit);
+    let target_limit = limit.saturating_sub(1).max(1);
+    let size = (config.observation.group_size.max(0) as usize).min(target_limit);
     for operation in &offered {
         if !TARGETED.contains(operation) && !fastbrowse_core::models::SCROLLING.contains(operation) {
             continue;
         }
         let Some(candidates) = indexed.get(operation) else { continue };
-        if candidates.len() <= limit {
+        if candidates.len() <= target_limit {
             questions.insert(
                 keys::target(*operation),
-                target_question(*operation, candidates, target_rules, &context.looks).into(),
+                target_question(*operation, candidates, target_rules, &context.looks, false).into(),
             );
             targets.insert(*operation, candidates.clone());
             continue;
@@ -1476,6 +1517,14 @@ pub fn build_request(
         let instructions = format!(
             "{UNTRUSTED}\nChoose the address that advances what the task still needs: one the caller supplied, a page a site the task names is known to serve for an item the task names, which holds that item directly where a search of the site would only lead to it, or this page's own address to reload it, when the task asks for that or a site failure may clear. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations.{reload_note}"
         );
+        // A page missing an item the task names is reloaded to show it, which the site-failure wording above would
+        // otherwise forbid.
+        let instructions = match context.item_missing {
+            true => format!(
+                "{instructions}\nThe page has left out an item the task names, so this page's own address may be chosen to reload it."
+            ),
+            false => instructions,
+        };
         if urls.len() > limit {
             navigation_groups = chunks(&urls, size);
             let criteria =
@@ -1620,7 +1669,7 @@ fn input_room(state_chars: i64, questions: &IndexMap<String, Question>, config: 
 
 /// The question that picks a target from `group` once Jev has chosen it for `operation`.
 fn group_target_question(request: &Request, operation: Operation, group: &[Control]) -> IndexMap<String, Question> {
-    let question = target_question(operation, group, &request.target_rules, &request.looks);
+    let question = target_question(operation, group, &request.target_rules, &request.looks, true);
     IndexMap::from([(keys::target(operation), question.into())])
 }
 
@@ -1660,13 +1709,20 @@ fn drop_pictures(context: &mut StepContext) {
     }
 }
 
+/// What one request settled: the next action, or that the item the task names is not among the elements offered for
+/// the operation Jev chose, with what the request cost.
+enum Evaluated {
+    Decided(Box<Decision>),
+    NotHere { operations: Vec<Operation>, cost: Vec<CostLine>, tokens: i64 },
+}
+
 async fn evaluate(
     jev: &dyn DecisionClient,
     request: &Request,
     controls: &[Control],
     reduction: Reduction,
     ledger: Option<&Ledger>,
-) -> Result<Decision> {
+) -> Result<Evaluated> {
     let mut cost: Vec<CostLine> = Vec::new();
     let mut tokens = 0;
     let mut ask = async |questions: &IndexMap<String, Question>| -> Result<Evaluation> {
@@ -1703,17 +1759,48 @@ async fn evaluate(
     let mut target_confidence: Option<f64> = None;
     if let Some(candidates) = request.targets.get(&operation) {
         let target_answer = choice_answer(&evaluation, &keys::target(operation))?;
+        if target_answer.choice == keys::NOT_HERE {
+            // Every target question was asked of the same page, and Jev's answer to each is the same fact: an
+            // operation whose target it also found missing would only be asked again for the same item.
+            let operations = request
+                .targets
+                .keys()
+                .copied()
+                .filter(|asked| {
+                    matches!(evaluation.answers.get(&keys::target(*asked)),
+                        Some(Answer::Choice(answer)) if answer.choice == keys::NOT_HERE)
+                })
+                .collect();
+            return Ok(Evaluated::NotHere { operations, cost, tokens });
+        }
         target = Some(find_control(candidates, destination_pick(candidates, &target_answer))?);
         target_confidence = Some(target_answer.confidence);
     } else if let Some(groups) = request.groups.get(&operation) {
         let group_answer = choice_answer(&evaluation, &keys::group(operation))?;
-        let group = &groups[group_index(&group_answer.choice, groups.len())?];
+        let chosen = group_index(&group_answer.choice, groups.len())?;
         let key = keys::target(operation);
-        let inner = ask(&group_target_question(request, operation, group)).await?;
-        let target_answer = choice_answer(&inner, &key)?;
+        // A miss inside one group says nothing about the page: the group choice may have landed on the wrong group.
+        // The other groups are asked in turn, and only a miss in every one is the item being absent.
+        let mut found = None;
+        for index in std::iter::once(chosen).chain((0..groups.len()).filter(|index| *index != chosen)) {
+            let group = &groups[index];
+            let inner = ask(&group_target_question(request, operation, group)).await?;
+            let target_answer = choice_answer(&inner, &key)?;
+            if target_answer.choice != keys::NOT_HERE {
+                found = Some((group, target_answer.clone(), index == chosen));
+                break;
+            }
+        }
+        let Some((group, target_answer, asked_first)) = found else {
+            return Ok(Evaluated::NotHere { operations: vec![operation], cost, tokens });
+        };
         target = Some(find_control(group, &target_answer.choice)?);
         // The element was only ever chosen from inside the group, so a doubtful group is a doubtful target.
-        target_confidence = Some(group_answer.confidence * target_answer.confidence);
+        target_confidence = Some(if asked_first {
+            group_answer.confidence * target_answer.confidence
+        } else {
+            target_answer.confidence
+        });
     } else if operation == Operation::SwitchTab {
         let target_answer = choice_answer(&evaluation, keys::SWITCH_TAB_TARGET)?;
         tab_id = Some(target_answer.choice.clone());
@@ -1804,11 +1891,12 @@ async fn evaluate(
             })
         })
         .collect();
-    Ok(Decision {
+    Ok(Evaluated::Decided(Box::new(Decision {
         read_scope,
         plan,
         operation,
         url,
+        reload: None,
         target,
         tab_id,
         operation_confidence,
@@ -1829,7 +1917,7 @@ async fn evaluate(
         offered: Vec::new(),
         ahead,
         step: chosen_step(&evaluation, &request.steps),
-    })
+    })))
 }
 
 /// `int(choice)` used as an index into `count` groups.
@@ -2070,6 +2158,7 @@ fn target_question(
     candidates: &[Control],
     rules: &str,
     looks: &IndexMap<String, Vec<u8>>,
+    grouped: bool,
 ) -> ChoiceQuestion {
     // An option keeps what tells it apart as a target (label, role, href, value, state), and refers by id to the
     // context and operations the shared state carries for the operation question. Repeated in every option, they
@@ -2083,16 +2172,19 @@ fn target_question(
         rules.push(LOOKS_LIKE);
     }
     let rules = if rules.len() == 1 { json!(rules[0]) } else { json!(rules) };
-    choice(
-        dumps(&json!({"rules": rules, "operation": operation.as_str()})),
-        candidates.iter().map(|c| {
-            let mut element = target_element(c, operation);
-            if let Some(png) = looks.get(&c.id) {
-                element.insert("looks_like".into(), screenshot_reference(png).into());
-            }
-            (c.id.clone(), Value::Object(element))
-        }),
-    )
+    let elements = candidates.iter().map(|c| {
+        let mut element = target_element(c, operation);
+        if let Some(png) = looks.get(&c.id) {
+            element.insert("looks_like".into(), screenshot_reference(png).into());
+        }
+        (c.id.clone(), Value::Object(element))
+    });
+    // An item the task names can be missing from the page as it was read: a list a site builds once leaves out what
+    // was added since. A forced choice then picks another item and the action lands on it (#1448), so the question
+    // can answer that none is the item. Scrolling acts on an area, not an item.
+    let absent = if grouped { NOT_HERE_IN_GROUP } else { NOT_HERE };
+    let missing = TARGETED.contains(&operation).then(|| (keys::NOT_HERE.to_string(), Value::from(absent)));
+    choice(dumps(&json!({"rules": rules, "operation": operation.as_str()})), elements.chain(missing))
 }
 
 /// Ported from browser-use/jev-ultrafast (MIT), snapshot.js: name opening a field separately from typing in it so a
@@ -2479,6 +2571,40 @@ mod tests {
         assert_eq!(decision.inside_drawn, Some(0.9));
     }
 
+    /// A target question can answer that the item the task names is not among the elements (#1448): the fact is told
+    /// to the operation question, which is asked again without the operations that found nothing to act on.
+    #[test]
+    fn test_a_target_that_is_not_here_is_told_to_the_operation_question() {
+        let page = observation(vec![button(1), button(2)]);
+        let context = StepContext::new("Move the new image to the front");
+        let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(target) = &request.questions["click_target"] else { panic!("a choice") };
+        assert_eq!(target.criteria.keys().last().map(String::as_str), Some("not_here"));
+        assert!(target.instructions.contains("choose `not_here` when no offered element matches the task's item"));
+        assert_eq!(
+            target.criteria["not_here"],
+            "The task names the item this operation would act on, and none of the other options is that item: it is not among the elements offered on this page as it was read."
+        );
+        assert!(request.targets[&Operation::Click].iter().all(|control| control.id != "not_here"));
+
+        let jev = fake(&[("click_target", "not_here"), ("navigate_target", "0")], "");
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
+        let (requests, states) = (jev.requests.lock().unwrap(), jev.states.lock().unwrap());
+        assert_eq!(requests.len(), 2, "one more request settles the operation");
+        let Question::Choice(operation) = &requests[1]["operation"] else { panic!("a choice") };
+        assert!(!operation.criteria.contains_key("click") && !requests[1].contains_key("click_target"));
+        assert_eq!(
+            states[1]["page_facts"],
+            json!(["The task names an item, but no element this page offers to click matches that item.", RELOAD_FACT])
+        );
+        assert!(operation.criteria["navigate"].as_str().unwrap().contains("https://example.test/"));
+        let Question::Choice(navigate) = &requests[1]["navigate_target"] else { panic!("a choice") };
+        assert!(navigate.instructions.contains("has left out an item the task names"));
+        assert_ne!(decision.operation, Operation::Click);
+        assert!(decision.target.is_none());
+        assert_eq!(decision.reload.as_deref(), Some(page.url.as_str()));
+    }
+
     #[test]
     fn test_the_plan_keeps_page_order_and_leaves_out_the_chosen_field() {
         let answers = |operation: &'static str, target: (&'static str, &'static str)| {
@@ -2578,7 +2704,7 @@ mod tests {
             )
         );
         let Question::Choice(target) = &request.questions["blur_target"] else { panic!("a choice") };
-        assert_eq!(target.criteria.keys().collect::<Vec<_>>(), ["typing"]);
+        assert_eq!(target.criteria.keys().collect::<Vec<_>>(), ["typing", "not_here"]);
         assert_eq!(target.criteria["typing"]["focused"], json!(true));
 
         for unfocused in [vec![field("left", Some(false))], vec![field("unknown", None)], vec![button(1)]] {
@@ -2600,7 +2726,7 @@ mod tests {
         let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
         assert_eq!(operation.criteria["press"], json!(PRESS_ROLE_KEYS));
         let Question::Choice(target) = &request.questions["press_target"] else { panic!("a choice") };
-        assert_eq!(target.criteria.keys().collect::<Vec<_>>(), ["volume", "name"]);
+        assert_eq!(target.criteria.keys().collect::<Vec<_>>(), ["volume", "name", "not_here"]);
         assert_eq!(target.criteria["volume"]["label"], json!("Press a key its slider role supports in Volume"));
         assert_eq!(target.criteria["name"]["label"], json!("Press a task-supplied key in name"));
         let spin = Control::new("qty", "spinbutton", "Quantity", [Operation::Fill]);
@@ -2681,7 +2807,7 @@ mod tests {
         assert_eq!(decision.target.as_ref().unwrap().id, "b9");
         let requests = jev.requests.lock().unwrap();
         let Question::Choice(inner) = &requests[1]["click_target"] else { panic!("a choice") };
-        assert_eq!(inner.criteria.keys().collect::<Vec<_>>(), ["b8", "b9", "b10", "b11"]);
+        assert_eq!(inner.criteria.keys().collect::<Vec<_>>(), ["b8", "b9", "b10", "b11", "not_here"]);
         assert_eq!(decision.cost.len(), 2);
         assert!((decision.confidence() - 0.81).abs() < 1e-9);
     }
@@ -2704,6 +2830,26 @@ mod tests {
         assert!(instructions(&marked, &keys::target(Operation::Click)).contains(OTHER_SITE));
         assert_eq!(marked.state["elements"][1]["other_site"], json!(true));
         assert!(OTHER_SITE.contains("leaves the site the browser opened for this task"));
+    }
+
+    #[test]
+    fn test_a_miss_in_one_group_asks_the_other_groups_before_the_item_is_absent() {
+        let config = grouped();
+        let jev = Fake {
+            options: 10,
+            ..fake(
+                &[("operation", "click"), ("click_group", "0"), ("click_target", "not_here"), ("navigate_target", "0")],
+                "",
+            )
+        };
+        let page = observation((0..12).map(button).collect());
+        let context = StepContext::new("press button 9");
+        block_on(decide(&jev, &page, &context, &config, None, &Trace::disabled())).unwrap();
+        let requests = jev.requests.lock().unwrap();
+        let inner = requests.iter().filter(|request| request.contains_key("click_target")).count();
+        assert_eq!(inner, 3, "each of the three groups was asked before the item counted as absent");
+        let Question::Choice(first) = &requests[1]["click_target"] else { panic!("a choice") };
+        assert!(first.criteria["not_here"].as_str().unwrap().contains("only part of the page"));
     }
 
     #[test]

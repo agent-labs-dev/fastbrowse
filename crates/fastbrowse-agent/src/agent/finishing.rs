@@ -202,6 +202,7 @@ impl Agent {
         let decision = crate::policy::Decision {
             operation: Operation::Navigate,
             url: Some(next),
+            reload: None,
             target: None,
             tab_id: None,
             operation_confidence: 1.0,

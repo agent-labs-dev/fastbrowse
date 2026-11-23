@@ -284,6 +284,7 @@ pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> De
         step: None,
         operation,
         url: None,
+        reload: None,
         target_confidence: target.as_ref().map(|_| 1.0),
         target,
         tab_id: None,
@@ -7202,7 +7203,7 @@ fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
     );
     let request = crate::policy::build_request(&offered, &offered.controls, &context, &Default::default(), 64);
     let Question::Choice(targets) = &request.questions["blur_target"] else { panic!("a choice") };
-    assert_eq!(targets.criteria.keys().map(String::as_str).collect::<Vec<_>>(), ["other"]);
+    assert_eq!(targets.criteria.keys().map(String::as_str).collect::<Vec<_>>(), ["other", "not_here"]);
     assert_eq!(offered.controls[0].focused, Some(true));
     assert!(offered.controls[0].operations.contains(&Operation::Fill));
     assert!(context.problem.as_deref().unwrap().contains("not offered this time"));
@@ -11810,6 +11811,19 @@ fn a_document_a_committing_setting_loaded_is_not_offered_as_a_reload() {
     let mut state = run_state();
     super::driving::note_commit(&mut state.behind_dialog, &mut state.committed_documents, &before, &landed, false);
     assert!(state.reload_target(&landed).is_some());
+}
+
+#[tokio::test]
+async fn a_reload_authorized_by_not_here_can_pass_the_navigation_gate() {
+    let agent = Agent::new(Arc::new(NoPage), authorized_jev(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.authorization = Authorization { irreversible_actions: true };
+    let page = at("https://shop.test/list", &[]);
+    let reload = page.url.clone();
+    let decision =
+        Decision { url: Some(reload.clone()), reload: Some(reload), ..code_decision(Operation::Navigate, None) };
+    let action = agent.action(&mut state, &page, &decision).await;
+    assert!(action.is_ok(), "a reload explicitly authorized by policy was rejected: {action:?}");
 }
 
 #[test]

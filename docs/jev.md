@@ -221,6 +221,11 @@ and where fastbrowse follows it:
   link to follow, and nothing that answers. Scalar field
   extraction offers `none`. Repeated short values from the same page and frame share one option
   with every source context, so identical answers do not compete as separate choices.
+- **An escape option for a target that may not be on the page.** Each target question for an operation that acts on
+  an item ends with `not_here`: the task names the item and no other option is it. A forced choice put 0.40 to 0.68
+  on the first card of a dialog that lacked the named image, and a reload scored 0.01. When the chosen operation's
+  answer is `not_here`, the operations whose target also answered it are left out and the operation question is
+  asked again with that fact and the page's own address, so Jev decides what to do (#1448).
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.
 - **Batch independent questions that share one state; answers cannot see each other.** The policy batches
   operation and target choices and applicable sign-in and bot checks. Grouped targets need a second choice.
