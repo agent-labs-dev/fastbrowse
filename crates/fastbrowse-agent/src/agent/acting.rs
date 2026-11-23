@@ -1237,7 +1237,10 @@ impl Agent {
         let action = format!("{action}{}", self.redact(&steps_taken(&state.history)));
         let action = action.as_str();
         let questions = IndexMap::from([
-            ("met".to_string(), Question::Choice(met_question(action))),
+            (
+                "met".to_string(),
+                Question::Choice(met_question(action, HistoryEntry::has_unperformed_actions(&state.history))),
+            ),
             ("values".to_string(), Question::Choice(values_question(operation, action))),
             ("happened".to_string(), Question::Choice(happened_question(action))),
         ]);

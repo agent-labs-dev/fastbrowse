@@ -1338,6 +1338,12 @@ pub(super) async fn work_selected(
     work_selected_with_slots(jev, llm, task, claims, selections, &HashMap::new(), notes, tokens, ledger).await
 }
 
+/// The bound composition's output. Old plain claims have no typed slot.
+pub(super) enum OutputSlot {
+    Numeric(std::ops::Range<usize>),
+    WinnerFields,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn work_selected_with_slots(
     jev: &dyn DecisionClient,
@@ -1345,7 +1351,7 @@ pub(super) async fn work_selected_with_slots(
     task: &str,
     claims: &[(usize, &Tally, &str, &[String])],
     selections: &HashMap<usize, Within>,
-    slots: &HashMap<usize, std::ops::Range<usize>>,
+    slots: &HashMap<usize, OutputSlot>,
     notes: &Notes,
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
@@ -1368,7 +1374,7 @@ pub(super) async fn work_selected_with_slots(
     for (index, tally, text, cited) in claims {
         let times = if tally.written.trim().is_empty() {
             0
-        } else if let Some(slot) = slots.get(index) {
+        } else if let Some(OutputSlot::Numeric(slot)) = slots.get(index) {
             usize::from(text.get(slot.clone()) == Some(tally.written.as_str()))
         } else {
             text.matches(tally.written.as_str()).count()
@@ -1693,7 +1699,11 @@ pub(super) async fn work_selected_with_slots(
             result.winner_ids = Some(result.evidence_ids.clone());
             result.evidence_ids = basis;
         }
-        if !tally.names_record()
+        // Winner-field slots copy the selected record. They never render the amount, so their unused draft
+        // template cannot disqualify a winner computed from the source amounts above.
+        let winner_fields_only = matches!(slots.get(&index), Some(OutputSlot::WinnerFields));
+        if !winner_fields_only
+            && !tally.names_record()
             && let Some(result_amount) = amount(&result.value).filter(|amount| !amount.date)
             && amount(&tally.written).is_none_or(|written| written.malformed_unit || written.unit != result_amount.unit)
         {
@@ -1713,11 +1723,12 @@ pub(super) async fn work_selected_with_slots(
             );
             continue;
         }
-        let value = if tally.names_record() || amount(&result.value).is_some_and(|value| value.date) {
-            result.value.clone()
-        } else {
-            as_written(&result.value, &tally.written)
-        };
+        let value =
+            if winner_fields_only || tally.names_record() || amount(&result.value).is_some_and(|value| value.date) {
+                result.value.clone()
+            } else {
+                as_written(&result.value, &tally.written)
+            };
         worked.insert(index, Ok(Worked { value, ..result }));
     }
     Ok(worked)

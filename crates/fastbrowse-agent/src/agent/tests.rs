@@ -421,6 +421,7 @@ async fn test_a_wait_is_told_how_far_a_playing_clock_moved() {
         state.idle.push(super::recovery::Idle {
             action: Some((Operation::Click, Some("Next".into()))),
             outcome: StepOutcome::Covered,
+            covered_target_id: None,
             refused: None,
         });
         state.history.push(executed(Some(operation), Some("Theme"), false));
@@ -2022,9 +2023,9 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
     text.value = Some("Thanks for the log".into());
     let post = in_form(button("Post"), "reply");
     let controls = [comment, top.clone(), text, post.clone()];
-    let page = observation(&controls);
+    let page = Observation { document_key: "first-document".into(), ..observation(&controls) };
     assert_eq!(crate::policy::Submitted::of(Operation::Fill, &controls[2], &page), None, "a fill submits nothing");
-    // Form ids are numbered per document: the same id on another page is another form.
+    // A new document at the same address may have reloaded the same form.
     let elsewhere = Observation { document_key: "later-document".into(), ..page.clone() };
     for (target, seen) in [(&top, &page), (&post, &page), (&post, &elsewhere)] {
         state.history.push(HistoryEntry {
@@ -2044,10 +2045,26 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
         actions[1]["form"],
         "the same form the action now asked about submits; in it, 'Comment text area' holds 'Thanks for the log'"
     );
-    assert!(actions[2]["form"].as_str().is_some_and(|form| form.starts_with("a different form")), "{actions}");
+    assert!(
+        actions[2]["form"]
+            .as_str()
+            .is_some_and(|form| form.starts_with("a form from an earlier document at this address")),
+        "{actions}"
+    );
     let mut password = in_form(Control::new("p", "textbox", "Password", [Operation::Fill]), "top");
     (password.sensitive, password.value) = (true, Some("hunter2".into()));
-    let signed = observation(&[password, top.clone()]);
+    let signed = Observation { document_key: "signed-document".into(), ..observation(&[password, top.clone()]) };
+    let submitted = crate::policy::Submitted::of(Operation::Click, &controls[3], &page).unwrap();
+    let entry = HistoryEntry { submitted: Some(submitted), ..executed(Some(Operation::Click), Some("Post"), false) };
+    let routed = Observation { url: format!("{}#reply", page.url), ..page.clone() };
+    assert!(entry.shown_beside(Some(&controls[3]), &routed)["form"].as_str().unwrap().starts_with("the same form"));
+    let unidentified = Observation { document_key: String::new(), ..page.clone() };
+    assert!(
+        entry.shown_beside(Some(&controls[3]), &unidentified)["form"]
+            .as_str()
+            .unwrap()
+            .starts_with("a form submitted at this address; its relation to the current form is unknown")
+    );
     let masked = crate::policy::Submitted::of(Operation::Click, &top, &signed).expect("a submission");
     let told = HistoryEntry { submitted: Some(masked), ..executed(Some(Operation::Click), Some("Post"), false) }
         .shown_beside(Some(&top), &signed);
@@ -2353,6 +2370,7 @@ fn test_an_action_refused_is_left_out_with_the_refusal_its_page_gave() {
     state.idle.push(super::recovery::Idle {
         action: Some((Operation::Click, Some(super::helpers::describe(&page.controls[0])))),
         outcome: StepOutcome::Failed,
+        covered_target_id: None,
         refused: Some(refusal.into()),
     });
     let mut offered = page.clone();
@@ -7464,8 +7482,52 @@ async fn test_a_covered_link_is_offered_again_once_close_removes_its_cover() {
     assert_eq!(state.unchanged, 2);
     let (offered, problem, _) = next_ask(&agent, &state).await;
     assert!(offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
+    let effect = state.history.last().unwrap().effect.as_deref().unwrap();
+    assert!(effect.contains("Previously covered, with the target still on the page: click 'Contact us'"), "{effect}");
     // Close did change the page; nothing tells Jev otherwise.
     assert!(!problem.as_deref().unwrap_or_default().contains("changed nothing"), "{problem:?}");
+}
+
+#[tokio::test]
+async fn a_covered_action_stays_in_history_when_closing_the_overlay_changes_the_route() {
+    let covered = Observation { document_key: "app".into(), ..header_under_dialog(false) };
+    let uncovered = Observation { url: "https://example.test/#closed".into(), document_key: "app".into(), ..header() };
+    let page = Scripted::new(
+        covered.clone(),
+        vec![
+            (Operation::Click, StepOutcome::Covered, covered.clone()),
+            (Operation::Click, StepOutcome::Executed, uncovered),
+        ],
+    );
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &covered).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Contact us")).await;
+    take(&agent, &mut state, Operation::Click, Some("Close")).await;
+    let effect = state.history.last().unwrap().effect.as_deref().unwrap();
+    assert!(effect.contains("Previously covered, with the target still on the page: click 'Contact us'"), "{effect}");
+}
+
+#[tokio::test]
+async fn a_replacement_control_with_the_same_label_does_not_continue_a_covered_action() {
+    let covered = Observation { document_key: "app".into(), ..header_under_dialog(false) };
+    let mut replacement = button("Contact us");
+    replacement.id = "replacement".into();
+    let next = Observation { document_key: "app".into(), ..at("https://example.test/#closed", &[replacement]) };
+    let page = Scripted::new(
+        covered.clone(),
+        vec![
+            (Operation::Click, StepOutcome::Covered, covered.clone()),
+            (Operation::Click, StepOutcome::Executed, next),
+        ],
+    );
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &covered).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Contact us")).await;
+    take(&agent, &mut state, Operation::Click, Some("Close")).await;
+    let effect = state.history.last().unwrap().effect.as_deref().unwrap();
+    assert!(!effect.contains("Previously covered"), "{effect}");
 }
 
 #[tokio::test]

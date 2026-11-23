@@ -1299,9 +1299,9 @@ impl Agent {
                     }
                     Err(error) => return Err(error),
                 };
-                let done = effect(observation, &landed, Some(target), false);
+                let mut done = effect(observation, &landed, Some(target), false);
                 if done.changed {
-                    uncover(&mut state.idle);
+                    uncover(&mut state.idle, observation, &landed, &mut done.summary);
                 }
                 state.acted_from = None;
                 let showing = state.showing.take();
@@ -1425,7 +1425,12 @@ impl Agent {
         self.record_step(state, step, false, frame).await?;
         match progressed {
             Some(progressed) => {
-                let stalled = Idle { action: withheld(decision), outcome: act.outcome, refused };
+                let covered_target_id = decision
+                    .target
+                    .as_ref()
+                    .filter(|_| act.outcome == StepOutcome::Covered)
+                    .map(|target| target.id.clone());
+                let stalled = Idle { action: withheld(decision), outcome: act.outcome, covered_target_id, refused };
                 self.count_progress(state, progressed, observation, stalled, Status::Stuck).await
             }
             None => {
@@ -1680,7 +1685,7 @@ impl Agent {
         }
         let Some(last) = state.history.last_mut() else { return };
         let waited = last.operation == Some(Operation::Wait);
-        let done = if last.operation == Some(Operation::SwitchTab) {
+        let mut done = if last.operation == Some(Operation::SwitchTab) {
             // Another tab's controls were there all along: compared with the tab left, every one read as added.
             Effect {
                 summary: format!("showed the tab at {}", observation.url),
@@ -1728,7 +1733,7 @@ impl Agent {
         // A Wait is told how far a playing clock moved, but a clock that moves by itself removes no cover.
         let moved = done.changed && (!waited || effect(&before, observation, None, false).changed);
         if moved && last.outcome == StepOutcome::Executed {
-            uncover(&mut state.idle);
+            uncover(&mut state.idle, &before, observation, &mut done.summary);
         }
         // A page can change while an attempted action goes stale. Reconsider it on the new page, including Back,
         // but keep stale actions withheld when the next observation still shows the same page state.
