@@ -1964,9 +1964,9 @@ impl CdpPage {
             }
             let (_, live, landed, _, _, _, connected) =
                 self.before_action(Some(&drop), true, false, false, false, false).await?;
-            // A destination the drag renamed or repurposed is no longer the control that was chosen, though the hit
-            // test still finds it.
-            if !native && (!connected || live != drop.3) {
+            // A destination the drag renamed or repurposed (a dragover handler, or a pointer script) is no longer the
+            // control that was chosen, though the hit test still finds it, for a native drag as for a pointer one.
+            if !connected || live != drop.3 {
                 break;
             }
             if self.release_point_holds(session_id, drop.2, target.2, at).await {
