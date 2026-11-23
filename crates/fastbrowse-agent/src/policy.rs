@@ -955,11 +955,25 @@ impl Fitting<'_> {
             let pictured = self.jev.image_tokens(&request.state, questions, &request.images);
             input_room(state_chars, questions, self.config, pictured)
         };
-        request.groups.iter().fold(room_for(&request.questions), |room, (&operation, groups)| {
+        let room = request.groups.iter().fold(room_for(&request.questions), |room, (&operation, groups)| {
             groups
                 .iter()
                 .fold(room, |room, group| room.min(room_for(&group_target_question(request, operation, group))))
-        })
+        });
+        let drag_sources = request
+            .targets
+            .get(&Operation::Drag)
+            .into_iter()
+            .flatten()
+            .chain(request.groups.get(&Operation::Drag).into_iter().flatten().flatten());
+        if !drag_sources.into_iter().any(|control| control.drawn != Some(true)) {
+            return room;
+        }
+        if request.destination_groups.is_empty() {
+            return room.min(room_for(&destination_questions(&request.destinations)));
+        }
+        let room = room.min(room_for(&destination_group_questions(&request.destination_groups)));
+        request.destination_groups.iter().fold(room, |room, group| room.min(room_for(&destination_questions(group))))
     }
 
     fn request_fits(&self, request: &Request) -> bool {
@@ -1735,21 +1749,16 @@ async fn evaluate(
     let mut destination: Option<Control> = None;
     if operation == Operation::Drag && target.as_ref().is_none_or(|target| target.drawn != Some(true)) {
         let destination_confidence = if request.destination_groups.is_empty() {
-            let key = keys::DRAG_DESTINATION.to_string();
-            let question = destination_question(&request.destinations);
-            let destination_evaluation = ask(&IndexMap::from([(key.clone(), question.into())])).await?;
-            let destination_answer = choice_answer(&destination_evaluation, &key)?;
+            let destination_evaluation = ask(&destination_questions(&request.destinations)).await?;
+            let destination_answer = choice_answer(&destination_evaluation, keys::DRAG_DESTINATION)?;
             destination = Some(find_control(&request.destinations, &destination_answer.choice)?);
             destination_answer.confidence
         } else {
-            let group_key = keys::DRAG_DESTINATION_GROUP.to_string();
-            let group_question = group_question(Operation::Drag, &request.destination_groups, &DESTINATION);
-            let group_evaluation = ask(&IndexMap::from([(group_key.clone(), group_question.into())])).await?;
-            let group_answer = choice_answer(&group_evaluation, &group_key)?;
+            let group_evaluation = ask(&destination_group_questions(&request.destination_groups)).await?;
+            let group_answer = choice_answer(&group_evaluation, keys::DRAG_DESTINATION_GROUP)?;
             let group =
                 &request.destination_groups[group_index(&group_answer.choice, request.destination_groups.len())?];
-            let questions = IndexMap::from([(keys::DRAG_DESTINATION.to_string(), destination_question(group).into())]);
-            let inner = ask(&questions).await?;
+            let inner = ask(&destination_questions(group)).await?;
             let destination_answer = choice_answer(&inner, keys::DRAG_DESTINATION)?;
             destination = Some(find_control(group, &destination_answer.choice)?);
             group_answer.confidence * destination_answer.confidence
@@ -2005,11 +2014,17 @@ fn group_question(operation: Operation, groups: &[Vec<Control>], rules: &str) ->
     )
 }
 
-fn destination_question(candidates: &[Control]) -> ChoiceQuestion {
-    choice(
+fn destination_group_questions(groups: &[Vec<Control>]) -> IndexMap<String, Question> {
+    let question = group_question(Operation::Drag, groups, &DESTINATION);
+    IndexMap::from([(keys::DRAG_DESTINATION_GROUP.into(), question.into())])
+}
+
+fn destination_questions(candidates: &[Control]) -> IndexMap<String, Question> {
+    let question = choice(
         dumps(&json!({"rules": *DESTINATION, "operation": Operation::Drag.as_str()})),
         candidates.iter().map(|control| (control.id.clone(), Value::Object(relevance_element(control)))),
-    )
+    );
+    IndexMap::from([(keys::DRAG_DESTINATION.into(), question.into())])
 }
 
 /// What a target option's `looks_like` is, told to Jev once in the question rather than in every option.
@@ -2647,6 +2662,25 @@ mod tests {
         assert_eq!(request.state["elements"][0]["context"], "Billing");
         assert_eq!(request.state["elements"][1]["id"], "b1");
         assert_eq!(request.state["elements"][1]["context"], "Shipping");
+    }
+
+    #[test]
+    fn test_fitting_counts_drag_destination_followups() {
+        let config = grouped();
+        let jev = fake(&[], "");
+        let fitting = Fitting { config: &config, options: 4, jev: &jev };
+        let mut controls: Vec<_> = (0..8).map(button).collect();
+        controls[0].operations.insert(Operation::Drag);
+        controls[1].context = Some("Details of the destination. ".repeat(400));
+        let page = observation(controls);
+        let context = StepContext::new("Drag the card into its matching destination");
+        let request = build_request(&page, &page.controls, &context, &config, fitting.options);
+        let state_chars = text::len(&dumps(&request.state)) as i64;
+        let group = &request.destination_groups[0];
+        let initial_room = input_room(state_chars, &request.questions, &config, 0);
+        let followup_room = input_room(state_chars, &destination_questions(group), &config, 0);
+        assert!(followup_room < initial_room);
+        assert_eq!(fitting.room(&request), followup_room);
     }
 
     #[test]
