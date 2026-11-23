@@ -210,6 +210,15 @@ pub struct HistoryEntry {
     /// own form, and no others.
     #[serde(skip)]
     pub form: Option<Form>,
+    /// The document that supplied the action, kept private so form changes cannot cross document instances.
+    #[serde(skip)]
+    pub document_key: Option<String>,
+    /// The form instance the action targeted, kept private so same-label fields cannot cross form instances.
+    #[serde(skip)]
+    pub form_id: Option<String>,
+    /// Form instances that appeared after this action, kept private so an unrelated click is not called the opener.
+    #[serde(skip)]
+    pub opened_forms: Vec<String>,
 }
 
 /// The scope of a form or field group. A local form id can be reused in other frames or documents.
@@ -355,6 +364,9 @@ impl HistoryEntry {
             submitted: None,
             commit: None,
             form: None,
+            document_key: None,
+            form_id: None,
+            opened_forms: Vec::new(),
         }
     }
 

@@ -1382,6 +1382,8 @@ impl Agent {
                 .and_then(|target| Submitted::of(decision.operation, target, observation)),
             commit: sent.then_some(Commit::Sent),
             form,
+            document_key: Some(observation.document_key.clone()),
+            form_id: decision.target.as_ref().and_then(|target| target.form_id.clone()),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         if let (Some(entry), Some(landed)) = (state.history.last(), &act.landed)
@@ -1696,6 +1698,18 @@ impl Agent {
         } else {
             effect(&before, observation, None, waited)
         };
+        if last.operation == Some(Operation::Click) && last.outcome == StepOutcome::Executed {
+            last.opened_forms = observation
+                .controls
+                .iter()
+                .filter_map(|control| control.form_id.as_deref())
+                .filter(|form| !before.controls.iter().any(|control| control.form_id.as_deref() == Some(*form)))
+                .map(str::to_string)
+                .collect();
+            if !last.opened_forms.is_empty() {
+                last.document_key = Some(observation.document_key.clone());
+            }
+        }
         last.added = done.added;
         // A Wait is told how far a playing clock moved, but a clock that moves by itself removes no cover.
         let moved = done.changed && (!waited || effect(&before, observation, None, false).changed);
