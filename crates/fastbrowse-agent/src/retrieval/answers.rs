@@ -1536,6 +1536,7 @@ async fn review_composition(
         }
         let records_rule = if sources.iter().any(|quote| quote["whole_record"] == true) { RECORDS } else { "" };
         let typed = typed_rule(&sources);
+        let position_rule = quote_positions(&sources, steps.len());
         let mut cited = json!({"columns": columns, "claim": shown.text, "quotes": sources});
         let computed_rule = if let Some(Ok(done)) = worked.get(&index) {
             cited["computed_from"] = json!(cited_quotes(
@@ -1560,7 +1561,7 @@ async fn review_composition(
         };
         for (key, focus) in checks {
             let question = support_question(format!(
-                "{UNTRUSTED}\n{focus} {SUPPORTED} A cell marked unavailable is supported only when these quotes give no value for that field of the same record. {SCOPE}{records_rule}{computed_rule}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}{steps_rule}{typed}"
+                "{UNTRUSTED}\n{focus} {SUPPORTED} A cell marked unavailable is supported only when these quotes give no value for that field of the same record. {SCOPE}{records_rule}{computed_rule}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}{steps_rule}{typed}{position_rule}"
             ));
             required[index].push(key.clone());
             questions.insert(key, question);
@@ -2009,6 +2010,26 @@ fn cited_steps(claim: &Claim, steps: &[Value]) -> Vec<Value> {
                 object.extend(step.as_object().into_iter().flatten().map(|(key, value)| (key.clone(), value.clone())))
             });
             cited
+        })
+        .collect()
+}
+
+/// What each cited quote's `after_step` means against the steps listed: Jev does not compare the number with the
+/// step count, so a claim about the state the steps left was rejected for a quote read after all of them (#1469).
+fn quote_positions(quotes: &[serde_json::Value], listed: usize) -> String {
+    let mut positions: Vec<usize> =
+        quotes.iter().filter_map(|quote| quote["after_step"].as_u64()).map(|n| n as usize).collect();
+    positions.sort_unstable();
+    positions.dedup();
+    positions
+        .into_iter()
+        .map(|taken| {
+            if taken >= listed {
+                format!(" A quote with after_step {taken} was read after all {listed} of the steps listed, so it shows the page as those steps left it.")
+            } else {
+                let next = taken + 1;
+                format!(" A quote with after_step {taken} was read before step {next} of the {listed} listed, so it shows the state before step {next}, not the state after it.")
+            }
         })
         .collect()
 }
@@ -5476,8 +5497,26 @@ mod tests {
             assert!(calls[0][0].content.contains("never the current state"));
             let asked = jev.asked.lock().unwrap();
             let claim = asked[0].get("claim0").unwrap().dump_json();
+            let before = "after_step 0 was read before step 1 of the 2 listed, so it shows the state before step 1";
+            assert_eq!(claim.contains(before), shown, "{claim}");
+            drop(asked);
+            let asked = jev.asked.lock().unwrap();
+            let claim = asked[0].get("claim0").unwrap().dump_json();
             assert_eq!(claim.contains(r#"\"after_step\":0"#), shown, "{claim}");
         }
+    }
+
+    /// #1469: Jev did not compare a quote's after_step with the step count, so a claim about the state the steps left
+    /// was rejected for a quote read after all of them.
+    #[test]
+    fn quote_positions_compare_after_step_with_the_listed_steps() {
+        let quotes = |steps: &[u64]| steps.iter().map(|n| json!({"after_step": n})).collect::<Vec<_>>();
+        let all = "A quote with after_step 2 was read after all 2 of the steps listed, so it shows the page as those steps left it.";
+        assert_eq!(quote_positions(&quotes(&[2, 2]), 2), format!(" {all}"));
+        let mixed = quote_positions(&quotes(&[2, 1]), 2);
+        assert!(mixed.contains("after_step 1 was read before step 2 of the 2 listed"), "{mixed}");
+        assert!(mixed.contains(all), "{mixed}");
+        assert_eq!(quote_positions(&[json!({})], 2), "");
     }
 
     #[tokio::test]

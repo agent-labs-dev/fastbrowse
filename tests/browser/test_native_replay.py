@@ -35,7 +35,19 @@ PASSING = (
 )
 # Cassettes the agent's requests have moved past, each waiting on a paid `bench fill --only TASK` a maintainer starts.
 # Strict, so the replay job lists them on every run and fails once the fill lands until the entry is removed.
-STALE: dict[str, str] = {}
+STALE: dict[str, str] = {
+    "mock-basket": "claim check states each quote's position among the steps (#1469)",
+    "mock-book-table": "claim check states each quote's position among the steps (#1469)",
+    "mock-cold-sign-in": "claim check states each quote's position among the steps (#1469)",
+    "mock-drag-card": "claim check states each quote's position among the steps (#1469)",
+    "mock-infinite-scroll": "claim check states each quote's position among the steps (#1469)",
+    "mock-sign-in": "claim check states each quote's position among the steps (#1469)",
+    "mock-sign-in-per-digit": "claim check states each quote's position among the steps (#1469)",
+    "mock-sign-out": "claim check states each quote's position among the steps (#1469)",
+    "mock-supplied-sign-in-route": "claim check states each quote's position among the steps (#1469)",
+    "mock-upload-document": "claim check states each quote's position among the steps (#1469)",
+    "search-price": "claim check states each quote's position among the steps (#1469)",
+}
 
 
 def recorded_tasks() -> list[Any]:
