@@ -50,10 +50,11 @@ pub(super) enum Act {
     Type { id: String, text: String },
     TypeSecret { id: String, name: String },
     Select { id: String, option: String },
-    Key { id: Option<String>, key: String },
+    Key { id: String, key: String },
     Scroll { id: Option<String>, down: bool },
     Goto { url: String },
     Back,
+    Wait,
     Read,
     Done,
     GiveUp { status: GiveUp, reason: String },
@@ -106,9 +107,10 @@ Act only on ids listed in the current page. Check what each action did in the ne
 Tools:
 - click(id); type(id, text) replaces the field's text; select(id, option) picks one of the listed options exactly.
 - type_secret(id, name) types the secret with that name; you never see its value. Use only the secret names given.
-- key(id, key) presses a key or chord in the control, such as Enter, Escape, Tab or ArrowDown; id may be null.
+- key(id, key) presses a key or chord in the control, such as Enter, Escape, Tab or ArrowDown.
 - scroll(id, down) scrolls the control, or the page when id is null; goto(url) opens an address the task or the pages \
 gave; back() goes back.
+- wait() waits until the page changes, for a page that is still loading or checking the browser.
 - read() records what the current page shows as evidence. The final answer is written only from pages you read, so \
 read each page that shows part of the answer, after it shows it.
 - done() ends the run once the task is carried out and the pages you read show the answer. It is refused when what was \
@@ -148,10 +150,11 @@ impl ResponseSchema for Actions {
             Actions::tool("type", &[("id", string.clone()), ("text", string.clone())]),
             Actions::tool("type_secret", &[("id", string.clone()), ("name", string.clone())]),
             Actions::tool("select", &[("id", string.clone()), ("option", string.clone())]),
-            Actions::tool("key", &[("id", nullable.clone()), ("key", string.clone())]),
+            Actions::tool("key", &[("id", string.clone()), ("key", string.clone())]),
             Actions::tool("scroll", &[("id", nullable), ("down", json!({"type": "boolean"}))]),
             Actions::tool("goto", &[("url", string.clone())]),
             Actions::tool("back", &[]),
+            Actions::tool("wait", &[]),
             Actions::tool("read", &[]),
             Actions::tool("done", &[]),
             Actions::tool(
@@ -224,9 +227,13 @@ fn page_of(observation: &Observation) -> (String, String) {
 /// What the action acts on, for a refusal that names it.
 fn target_of(act: &Act) -> Option<&str> {
     match act {
-        Act::Click { id } | Act::Type { id, .. } | Act::TypeSecret { id, .. } | Act::Select { id, .. } => Some(id),
-        Act::Key { id, .. } | Act::Scroll { id, .. } => id.as_deref(),
-        Act::Goto { .. } | Act::Back | Act::Read | Act::Done | Act::GiveUp { .. } => None,
+        Act::Click { id }
+        | Act::Type { id, .. }
+        | Act::TypeSecret { id, .. }
+        | Act::Select { id, .. }
+        | Act::Key { id, .. } => Some(id),
+        Act::Scroll { id, .. } => id.as_deref(),
+        Act::Goto { .. } | Act::Back | Act::Wait | Act::Read | Act::Done | Act::GiveUp { .. } => None,
     }
 }
 
@@ -380,6 +387,7 @@ impl Agent {
             }
             Act::Read => Some(decision(Operation::Read, None, None, None)),
             Act::Back => Some(decision(Operation::Back, None, None, None)),
+            Act::Wait => Some(decision(Operation::Wait, None, None, None)),
             Act::Goto { url } => Some(decision(Operation::Navigate, None, Some(url.clone()), None)),
             Act::Click { id } => control(id).map(|target| decision(Operation::Click, Some(target), None, None)),
             Act::Type { id, text } => {
@@ -402,10 +410,8 @@ impl Agent {
                     "Escape" => Operation::Escape,
                     _ => Operation::Press,
                 };
-                match on(id) {
-                    Some(None) => None,
-                    target => Some(decision(operation, target.flatten(), None, Some(Given::Text(key.clone())))),
-                }
+                // A key goes to a control: with no id the press had no target and the run ended in error.
+                control(id).map(|target| decision(operation, Some(target), None, Some(Given::Text(key.clone()))))
             }
         };
         let Some(decision) = made else {
@@ -434,12 +440,13 @@ mod tests {
     #[test]
     fn actions_parse_by_tool() {
         let text = r#"{"next":"","actions":[{"tool":"click","id":"4"},{"tool":"type","id":"5","text":"x"},
-            {"tool":"key","id":null,"key":"Enter"},{"tool":"give_up","status":"needs_login","reason":"wall"}]}"#;
+            {"tool":"key","id":"5","key":"Enter"},{"tool":"wait"},{"tool":"give_up","status":"needs_login","reason":"wall"}]}"#;
         let value = Actions.validate_json(text).unwrap();
         let turn: Turn = serde_json::from_value(value).unwrap();
         assert_eq!(turn.actions[0], Act::Click { id: "4".into() });
-        assert_eq!(turn.actions[2], Act::Key { id: None, key: "Enter".into() });
-        assert_eq!(turn.actions[3], Act::GiveUp { status: GiveUp::NeedsLogin, reason: "wall".into() });
+        assert_eq!(turn.actions[2], Act::Key { id: "5".into(), key: "Enter".into() });
+        assert_eq!(turn.actions[3], Act::Wait);
+        assert_eq!(turn.actions[4], Act::GiveUp { status: GiveUp::NeedsLogin, reason: "wall".into() });
     }
 
     #[test]

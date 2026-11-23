@@ -250,3 +250,15 @@ async fn test_the_first_turn_states_the_task_and_the_system_prompt_is_cached() {
         sent[0][1].content
     );
 }
+
+#[tokio::test]
+async fn test_wait_reaches_the_page_as_a_wait() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "wait"}]}), give_up()]);
+    run(page.clone(), driver.clone()).await;
+    assert!(
+        page.acted.lock().unwrap().iter().any(|action| action.operation == fastbrowse_core::models::Operation::Wait),
+        "{:?}",
+        page.acted.lock().unwrap()
+    );
+}
