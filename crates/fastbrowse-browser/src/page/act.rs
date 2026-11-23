@@ -1921,6 +1921,13 @@ impl CdpPage {
             .await
             .ok()
             .is_some_and(|value| value == Value::Bool(true));
+        // What the page held when the destination was chosen: a control the drag itself brings in is no destination.
+        self.evaluate(
+            session_id,
+            "(() => { if (window.__fastbrowse) window.__fastbrowse.beforeDrag = new WeakSet(document.querySelectorAll('*')); })()",
+        )
+        .await
+        .ok();
         let press = json!({"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1, "buttons": 1});
         self.input(self.session.send("Input.dispatchMouseEvent", press, Some(session_id))).await?;
         let mut held = self.held(session_id, (start_x, start_y), 0);
@@ -1974,9 +1981,13 @@ impl CdpPage {
                 return Ok((StepOutcome::Executed, None, None));
             }
             // A destination that slid out from under the pointer (a sortable list moves its items as the pointer passes
-            // them) is released where it stood, which is where the item belongs. One still under the pointer is
-            // released only at a point rested on and hit-tested, so a cover or a nudge never takes the release.
+            // them) is released where it stood, which is where the item belongs, provided what holds that point was on
+            // the page before the drag began: an overlay the drag brought in is not that item. One still under the
+            // pointer is released only at a point rested on and hit-tested, so a cover or a nudge never takes it.
             if !native && !self.box_holds_point(session_id, drop.2, at).await {
+                if !self.held_before_drag(session_id, at).await {
+                    break;
+                }
                 self.release(session_id, at.0, at.1, 0).await?;
                 held.done();
                 return Ok((StepOutcome::Executed, None, None));
@@ -1986,6 +1997,16 @@ impl CdpPage {
         self.cancel_drag(session_id, (start_x, start_y), 0).await?;
         held.done();
         Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))
+    }
+
+    /// Whether the element at `point` was on the page when the drag began.
+    async fn held_before_drag(&self, session_id: &str, point: (f64, f64)) -> bool {
+        let script = format!(
+            "(() => {{ const known = window.__fastbrowse?.beforeDrag; const hit = document.elementFromPoint({}, {}); \
+             return !!hit && (!known || known.has(hit)); }})()",
+            point.0, point.1
+        );
+        self.evaluate(session_id, &script).await.ok() == Some(Value::Bool(true))
     }
 
     /// Whether `point` lies inside the control's box now.
