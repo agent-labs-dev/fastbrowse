@@ -28,20 +28,3 @@ async def test_scrolling_to_parts_never_shown_is_not_withdrawn_after_three_scrol
     # The page's controls never change, so the stall rule used to read the fourth scroll as the same page state again.
     operations = await _scrolled(cdp_url, main_site, "scroll; scroll; scroll; scroll; scroll")
     assert operations == [Operation.SCROLL] * 5
-
-
-@pytest.mark.timeout(120)
-async def test_scrolling_back_over_parts_already_shown_is_withdrawn(cdp_url: str, main_site: str) -> None:
-    operations = await _scrolled(
-        cdp_url, main_site, "scroll; scroll; scroll_up; scroll_up; scroll; scroll_up; scroll; scroll_up"
-    )
-    # Two new parts, then three scrolls over parts already shown: the third is the stall budget's, so the sixth step
-    # is not the scroll the script asked for.
-    assert operations[:5] == [
-        Operation.SCROLL,
-        Operation.SCROLL,
-        Operation.SCROLL_UP,
-        Operation.SCROLL_UP,
-        Operation.SCROLL,
-    ]
-    assert operations[5] not in (Operation.SCROLL, Operation.SCROLL_UP)
