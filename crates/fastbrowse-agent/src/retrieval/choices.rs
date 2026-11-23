@@ -564,14 +564,20 @@ fn block_context(page: &Page<'_>, quote: &Evidence, reader: FactReader) -> Optio
             && block.start <= quote.start
             && quote.end <= block.end
     })?;
+    let after = page.slice(quote.end, block.end);
     // The browser captures each table record with its headers in one block. A cell's quote can end before the
-    // status that qualified it, so keep that block as basis. A download's block may be the entire file.
+    // status that qualified it. Only the last line is that record, and Markdown borders carry no evidence.
+    let needs_context = if block.kind == BlockKind::Table {
+        !after.contains('\n') && cells(after).iter().any(|(_, _, cell)| !text::strip(cell).is_empty())
+    } else {
+        page.slice(block.start, block.end).contains('\n')
+            && (!text::strip(page.slice(block.start, quote.start)).is_empty() || !text::strip(after).is_empty())
+    };
+    // A download's block may be the entire file.
     if matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
         || block.complete_source
         || block.source_url.is_some()
-        || (block.kind != BlockKind::Table && !page.slice(block.start, block.end).contains('\n'))
-        || (text::strip(page.slice(block.start, quote.start)).is_empty()
-            && text::strip(page.slice(quote.end, block.end)).is_empty())
+        || !needs_context
     {
         return None;
     }
@@ -1011,14 +1017,14 @@ mod tests {
 
     #[test]
     fn a_selected_table_cell_keeps_its_complete_row_as_evidence() {
-        let header = "| Item | Status |\n| --- | --- |\n";
-        let selected = format!("{header}| Atlas | [check icon] |");
-        let other = format!("{header}| Beacon | |");
+        let header = "| Item | Status | Note |\n| --- | --- | --- |\n";
+        let selected = format!("{header}| Atlas | [check icon] | |");
+        let other = format!("{header}| Beacon | | |");
         let captured = capture(&[(BlockKind::Table, &selected), (BlockKind::Table, &other)]);
         let candidates = read_candidates(&captured, None);
         let cell = candidates.iter().find(|candidate| candidate.value.to_str() == "Atlas").unwrap();
-        assert_eq!(cell.id, "c2");
-        let read = judged(&Judge { focus: None, choice: "c2" }, &captured);
+        assert_eq!(cell.id, "c3");
+        let read = judged(&Judge { focus: None, choice: "c3" }, &captured);
 
         assert_eq!(read.facts.len(), 2);
         let row = &read.facts[0];
@@ -1035,6 +1041,12 @@ mod tests {
         let draft = crate::retrieval::answers::draft_answer(&notes).unwrap();
         assert!(draft.citations.iter().any(|citation| citation.quote.contains("Atlas [check icon]")));
         assert!(draft.citations.iter().all(|citation| !citation.quote.contains("Beacon")));
+
+        let marker = judged(&Judge { focus: None, choice: "c4" }, &captured);
+        assert_eq!(marker.facts.len(), 1, "a trailing empty cell does not add evidence");
+        let header = judged(&Judge { focus: None, choice: "c0" }, &captured);
+        assert!(header.facts.iter().any(|fact| fact.answers && fact.text == "Item"));
+        assert!(header.facts.iter().all(|fact| !fact.text.contains("Atlas") && !fact.text.contains("Beacon")));
     }
 
     /// A page the step judged to show a fact the task needs may hold it for the steps alone, such as a code to type
