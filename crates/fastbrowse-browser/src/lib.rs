@@ -24,9 +24,9 @@ pub use pdf::PdfUnread;
 mod documents;
 
 /// A warning for whoever runs this, on stderr. Never pass an error's message here, only its kind: transport errors
-/// can carry credentials or page text.
+/// can carry credentials or page text. What a live run knows is redacted from it all the same (`safety::logged`).
 pub fn warn(message: &str) {
-    eprintln!("fastbrowse: {message}");
+    eprintln!("fastbrowse: {}", fastbrowse_core::safety::logged(message));
 }
 
 #[cfg(test)]

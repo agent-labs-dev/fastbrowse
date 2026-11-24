@@ -8,7 +8,7 @@ use fastbrowse_core::effects::{Effect, SETTING_ROLES, Setting, effect, state_key
 use fastbrowse_core::models::{
     Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepFailure, StepOutcome, StepResult, WallKind,
 };
-use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
+use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::sha256_hex;
 use fastbrowse_core::py::text;
@@ -32,6 +32,7 @@ use crate::policy::{
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_readable_start, propose_start};
 use crate::verification::RecordSchema;
+use fastbrowse_core::navigation::written_addresses;
 
 pub(super) struct TaskJudgments {
     pub dates: Vec<crate::dates::DateReference>,
@@ -166,6 +167,7 @@ impl Agent {
                 }
                 None => {
                     self.resolve_answer_intent(state).await?;
+                    self.forget_looks(state);
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
                     context.check_surface = state.surface_judgement(&page).is_none();
                     context.list_read = if list_walk.is_some() {
@@ -722,9 +724,15 @@ impl Agent {
         if self.page.search_price().is_some() {
             return self.search_entry(task, ledger).await;
         }
-        let proposal = propose_start(&*self.llm, task, Some(ledger)).await?;
+        let proposal = propose_start(&*self.llm, &self.mask(task), Some(ledger)).await?;
         ledger.record([proposal.cost])?;
-        let Some(opening) = accept_start(proposal.data.url.as_deref()) else {
+        let proposed = proposal.data.url.as_deref();
+        // The model was shown the task masked, so an address the task writes with credentials comes back as its
+        // bullets, and opens as the caller wrote it; any other address with userinfo is refused (`accept_start`).
+        let written = proposed.and_then(|proposed| {
+            written_addresses(task).into_iter().find(|address| address != proposed && self.mask(address) == proposed)
+        });
+        let Some(opening) = written.or_else(|| accept_start(proposed)) else {
             return Err(Stop::new(
                 Status::NeedsInput,
                 "Start/no-page",
@@ -732,6 +740,7 @@ impl Agent {
             )
             .into());
         };
+        self.learn_credentials([opening.as_str()]);
         self.event("start_page", || Map::from_iter([("url".into(), opening.clone().into())]));
         Ok(Some(opening))
     }
@@ -1015,8 +1024,11 @@ impl Agent {
         {
             return Ok(false);
         }
-        self.event("blank_reload", || Map::from_iter([("url".into(), observation.url.clone().into())]));
-        self.page.navigate(&observation.url, None).await?;
+        // Reopened as the browser holds it: the observation's address is masked, and a fetched page's can carry the
+        // caller's credentials, which bullets in their place would not send.
+        let url = self.raw().map_or_else(|| observation.url.clone(), |raw| raw.url);
+        self.event("blank_reload", || Map::from_iter([("url".into(), url.clone().into())]));
+        self.page.navigate(&url, None).await?;
         Ok(true)
     }
 
@@ -1768,53 +1780,15 @@ impl Agent {
         state.note_shown(&before, observation, &done.shown, showing);
     }
 
-    /// Every observation models see has resolved secret values blanked, wherever the page echoes them.
+    /// Every observation models see has resolved secret values blanked, wherever the page echoes them (`masking`).
     pub(super) async fn observe(&self) -> Step<Observation> {
         let observation = self.trace.phase("observe", self.page.observe()).await?;
         let revealed = self.reveals(&observation);
-        let redactor = self.redactor();
-        let mask = |value: &str| redactor.mask(value);
-        let mask_opt = |value: &Option<String>| value.as_deref().map(mask);
-        let controls = observation
-            .controls
-            .iter()
-            .map(|control| Control {
-                label: mask(&control.label),
-                context: mask_opt(&control.context),
-                value: mask_opt(&control.value),
-                input_name: mask_opt(&control.input_name),
-                autocomplete: mask_opt(&control.autocomplete),
-                href: mask_opt(&control.href),
-                frame_origin: mask_opt(&control.frame_origin),
-                submit_semantics: mask_opt(&control.submit_semantics),
-                validation_message: mask_opt(&control.validation_message),
-                role_description: mask_opt(&control.role_description),
-                description: mask_opt(&control.description),
-                options: control.options.iter().map(|option| mask(option)).collect(),
-                ..control.clone()
-            })
-            .collect();
-        let masked = Observation {
-            url: mask(&observation.url),
-            title: mask(&observation.title),
-            viewport_text: mask(&observation.viewport_text),
-            offscreen_text: mask(&observation.offscreen_text),
-            controls,
-            tabs: observation
-                .tabs
-                .iter()
-                .map(|tab| Tab { url: mask(&tab.url), title: mask(&tab.title), ..tab.clone() })
-                .collect(),
-            dialog: observation.dialog.as_ref().map(|dialog| Dialog {
-                message: mask(&dialog.message),
-                default_prompt: mask_opt(&dialog.default_prompt),
-                ..dialog.clone()
-            }),
-            // A page can name its modal with what it echoes back, a resolved secret among it.
-            modal: mask_opt(&observation.modal),
-            ..observation.clone()
+        let masked = {
+            let mut redactor = self.redactor();
+            super::masking::keep_code_made(&mut redactor, &observation);
+            super::masking::observation(&redactor, &observation)
         };
-        drop(redactor);
         let mut seen = self.seen();
         seen.raw = Some(observation);
         seen.secret_on_screen = revealed;
@@ -1839,61 +1813,12 @@ impl Agent {
 
     pub(super) async fn capture(&self) -> Step<Capture> {
         let capture = self.trace.phase("capture", self.page.capture()).await?;
-        let redactor = self.redactor();
-        let mask = |value: &str| redactor.mask(value);
-        let text = mask(&capture.text);
-        let digest = sha256_hex(text.as_bytes());
-        let blocks = capture
-            .blocks
-            .iter()
-            .map(|block| fastbrowse_core::page::Block {
-                heading_path: block.heading_path.iter().map(|heading| mask(heading)).collect(),
-                fields: block
-                    .fields
-                    .iter()
-                    .map(|field| fastbrowse_core::page::SourceField {
-                        path: field.path.iter().map(|part| mask(part)).collect(),
-                        ..field.clone()
-                    })
-                    .collect(),
-                control_context: block.control_context.as_ref().map(|context| fastbrowse_core::models::SourceControl {
-                    role: mask(&context.role),
-                    label: mask(&context.label),
-                    context: context.context.as_deref().map(mask),
-                    document: context.document.clone(),
-                    held: context
-                        .held
-                        .iter()
-                        .map(|held| fastbrowse_core::models::Held {
-                            element: held.element.clone(),
-                            value: mask(&held.value).into(),
-                        })
-                        .collect(),
-                }),
-                href: block.href.as_deref().map(mask),
-                // An address can carry a token in its query, and a link's text is page text like the rest.
-                links: block
-                    .links
-                    .iter()
-                    .map(|link| fastbrowse_core::models::Link {
-                        text: mask(&link.text),
-                        href: mask(&link.href),
-                        ..link.clone()
-                    })
-                    .collect(),
-                source_url: block.source_url.as_deref().map(mask),
-                ..block.clone()
-            })
-            .collect();
-        Ok(Capture {
-            masked: redactor.masked_spans(&capture.text),
-            text,
-            url: mask(&capture.url),
-            title: mask(&capture.title),
-            sha256: digest,
-            blocks,
-            ..capture.clone()
-        })
+        if let Ok(shown) = serde_json::to_value(&capture) {
+            self.learn_credentials_shown(&shown);
+        }
+        let mut redactor = self.redactor();
+        super::masking::keep_capture_ids(&mut redactor, &capture);
+        Ok(super::masking::capture(&redactor, &capture))
     }
 
     /// What a step's question shows Jev besides text. A page showing pixels, a chart or a control drawn as pixels, has
@@ -1941,18 +1866,44 @@ impl Agent {
     /// No image while a secret shows as page text: pixels cannot be masked like text. Typed fields are masked by the
     /// page itself.
     pub(super) async fn screenshots(&self) -> Step<Vec<Vec<u8>>> {
-        if self.seen().secret_on_screen {
-            return Ok(Vec::new());
+        Ok(self.image(Shot::Model).await?.into_iter().collect())
+    }
+
+    /// Whether no image of the page may leave the run: from the first address credential it learns to its end, as
+    /// its live frames and recording are held (`learn_credentials`). A page can paint its own address, the password
+    /// in it, on a canvas, where no text reading finds it.
+    pub(super) fn images_withheld(&self) -> bool {
+        self.redactor().holds_credentials()
+    }
+
+    /// The one place an image of the page is taken for anything that leaves the run: a model's screenshot, a step
+    /// frame, the final frame and every screenshot artifact. None once the run holds an address credential, and while
+    /// a resolved secret may show; a frame is also refused from the first secret typed (`frame`).
+    async fn image(&self, shot: Shot) -> Step<Option<Vec<u8>>> {
+        if self.images_withheld() {
+            return Ok(None);
+        }
+        let refused = match shot {
+            Shot::Model => self.seen().secret_on_screen,
+            // A reading cannot show what a frame will: the page may echo the secret as pixels after it.
+            Shot::Frame => self.seen().secret_typed,
+        };
+        if refused {
+            return Ok(None);
         }
         // A delayed page update can reveal a secret after the decision's observation. The glance and the image are
-        // taken together, and the image is dropped unseen when the glance shows a secret.
-        let (now, image) = tokio::join!(self.trace.phase("screenshot", self.page.glance()), self.page.screenshot());
-        if self.reveals(&now?) {
-            return Ok(Vec::new());
+        // taken together, and the image is dropped unseen when the glance shows a secret or a credential it brings.
+        let phase = match shot {
+            Shot::Model => "screenshot",
+            Shot::Frame => "frame",
+        };
+        let (now, image) = tokio::join!(self.trace.phase(phase, self.page.glance()), self.page.screenshot());
+        if self.reveals(&now?) || self.images_withheld() {
+            return Ok(None);
         }
         match image {
-            Ok(image) => Ok(vec![image]),
-            Err(BrowserError::ScreenshotsUnavailable(_)) => Ok(Vec::new()),
+            Ok(image) => Ok(Some(image)),
+            Err(BrowserError::ScreenshotsUnavailable(_)) => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
@@ -1988,7 +1939,9 @@ impl Agent {
         }
         let Some(on_event) = &self.on_event else { return Ok(()) };
         let frame = if capture_frame && self.config.step_frames { self.frame().await? } else { frame };
-        on_event(Event::Step(StepEvent { kind: Default::default(), step, frame: frame.map(Image) })).await;
+        // A read can learn a credential after it buffered this frame.
+        let frame = if self.images_withheld() { None } else { frame.map(Image) };
+        on_event(Event::Step(StepEvent { kind: Default::default(), step, frame })).await;
         Ok(())
     }
 
@@ -2027,26 +1980,59 @@ impl Agent {
     /// The check is made against a fresh reading of the page rather than the last observation, which was taken before
     /// the action ran, and the action may be the one that put the secret there.
     pub(super) async fn frame(&self) -> Step<Option<Vec<u8>>> {
-        // A reading cannot show what a frame will: the page may echo the secret as pixels after it.
-        if self.seen().secret_typed {
-            return Ok(None);
+        self.image(Shot::Frame).await
+    }
+
+    /// Learn the credentials of every address a page shows, in its text, a link or a field. Chrome can drop the
+    /// userinfo of an address a redirect brought from the tab's address once it has answered the server's 401 with
+    /// it, so the page's own `document.URL` and its echo of the password were the only places the run met it, and
+    /// the bare echo and the `Authorization` value the page showed reached Jev unmasked (#1381). Each string is
+    /// scanned on its own: a JSON dump writes a quote as `\"`, and `\` ends a special scheme's authority.
+    ///
+    /// Only an authority with userinfo after a scheme or `//` is learnt, so an email or a `mailto:` link is not. One a
+    /// page shows holds every image for the rest of the run by design: the page may draw it again on a canvas or in
+    /// a field, where no text check can find it.
+    fn learn_credentials_shown(&self, shown: &Value) {
+        fn strings<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+            match value {
+                Value::String(text) => out.push(text),
+                Value::Array(items) => items.iter().for_each(|item| strings(item, out)),
+                Value::Object(fields) => fields.values().for_each(|item| strings(item, out)),
+                _ => {}
+            }
         }
-        let now = self.trace.phase("frame", self.page.glance()).await?;
-        if self.reveals(&now) {
-            return Ok(None);
-        }
-        match self.trace.phase("frame", self.page.screenshot()).await {
-            Ok(image) => Ok(Some(image)),
-            Err(BrowserError::ScreenshotsUnavailable(_)) => Ok(None),
-            Err(error) => Err(error.into()),
-        }
+        let mut found = Vec::new();
+        strings(shown, &mut found);
+        self.learn_credentials(found);
     }
 
     /// Whether a resolved secret shows on the page; live and recorded frames are held back while one does.
     pub(super) fn reveals(&self, observation: &Observation) -> bool {
         // A dialog hides the page text, so its observation cannot prove the pixels contain no secret.
-        let revealed = observation.dialog.is_some() || self.reveals_text(&observation.dump_json());
-        self.page.withhold_frames(revealed);
+        // An address a redirect or a new tab brings with credentials is learnt here, before its observation is masked
+        // for a model or a trace, and from then on the run's frames are held to its end (`learn_credentials`).
+        self.learn_credentials(
+            std::iter::once(observation.url.as_str())
+                .chain(observation.tabs.iter().map(|tab| tab.url.as_str()))
+                .chain(observation.history_entry.as_deref()),
+        );
+        self.learn_credentials_shown(&observation.dump());
+        // The page's own address and its tabs' are not drawn on the page, so they are set aside: Chrome keeps a
+        // start's credentials in a tab's address, and every model image of such a run was withheld.
+        let mut drawn = observation.dump();
+        if let Some(fields) = drawn.as_object_mut() {
+            fields.remove("url");
+            if let Some(tabs) = fields.get_mut("tabs").and_then(Value::as_array_mut) {
+                tabs.iter_mut().filter_map(Value::as_object_mut).for_each(|tab| {
+                    tab.remove("url");
+                });
+            }
+        }
+        let redactor = self.redactor();
+        let revealed = observation.dialog.is_some() || redactor.reveals_value(&drawn);
+        let held = redactor.holds_credentials();
+        drop(redactor);
+        self.page.withhold_frames(revealed || held);
         revealed
     }
 }
@@ -2184,6 +2170,15 @@ fn same_control(chosen: &Control, now: &Control) -> bool {
         ..now.clone()
     };
     fingerprint == *chosen
+}
+
+/// What an image of the page is taken for (`Agent::image`).
+#[derive(Clone, Copy)]
+enum Shot {
+    /// For a model to look at.
+    Model,
+    /// For a caller: a step frame or the final frame.
+    Frame,
 }
 
 #[cfg(test)]

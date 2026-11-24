@@ -866,6 +866,13 @@ pub trait Page: Send + Sync {
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.
     fn withhold_frames(&self, withheld: bool);
 
+    /// Take no image of the page from now to the end of the run, `screenshot` included, and hold every live and
+    /// recorded frame: the run holds an address credential, which a page can paint where no reading finds it. A page
+    /// that takes no images of its own has nothing to hold; the agent takes none for it either way.
+    fn hold_images(&self) {
+        self.withhold_frames(true);
+    }
+
     /// Leave the current tab open when the run ends, because an irreversible action was sent from it: what it
     /// committed may still be in flight, and the result page is the user's to see. A page with no tab to keep does
     /// nothing.

@@ -292,7 +292,10 @@ pub(crate) struct Picked {
 }
 
 pub(crate) struct RunState {
-    pub task: String,
+    /// The task with its inputs written in, as the caller gave it: for code that opens, types or compares what it
+    /// writes. A model or an output is shown it through `Agent::model_task` or `Agent::caller_task`, masked: written
+    /// out raw, an address in it carried its credentials to every model shown the task (#1381).
+    pub raw_task: String,
     /// The recipe this run replays, while it has steps left to offer.
     pub replay: Option<super::replay::Replay>,
     /// The steps this run carried out, kept as a recipe a later run can replay.
@@ -301,8 +304,9 @@ pub(crate) struct RunState {
     pub text_source: Option<fastbrowse_core::recipe::RecipeText>,
     /// The task as the caller wrote it, before `with_inputs`, which is what a recipe keeps.
     pub given_task: String,
-    /// The caller's background: shown beside the task, never read as what it asks for.
-    pub context: Option<String>,
+    /// The caller's background: shown beside the task, never read as what it asks for. A model is shown it through
+    /// `Agent::model_context`, masked, as the task is.
+    pub raw_context: Option<String>,
     pub inputs: IndexMap<String, String>,
     pub attachments: Vec<Attachment>,
     pub authorization: Authorization,
@@ -881,12 +885,12 @@ impl RunState {
         ledger: Arc<Ledger>,
     ) -> RunState {
         RunState {
-            task: with_inputs(&task, &inputs),
+            raw_task: with_inputs(&task, &inputs),
             given_task: task,
             replay: None,
             recipe_log: Vec::new(),
             text_source: None,
-            context: None,
+            raw_context: None,
             inputs,
             attachments,
             authorization,

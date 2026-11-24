@@ -1044,6 +1044,29 @@ async fn compose_packed(
 pub(crate) enum Screenshot {
     Attached,
     Absent,
+    /// The task asks for one, and none can be taken: the run holds an address credential, and no image of a page
+    /// leaves such a run (`Agent::image`).
+    Withheld,
+}
+
+impl Screenshot {
+    /// What the composer and the coverage check are told about it, if anything.
+    pub(crate) fn written(self) -> Option<&'static str> {
+        match self {
+            Screenshot::Attached => Some(SCREENSHOT_ATTACHED),
+            Screenshot::Withheld => Some(SCREENSHOT_WITHHELD),
+            Screenshot::Absent => None,
+        }
+    }
+
+    /// What the done check is told about it, if anything.
+    pub(crate) fn pictured(self) -> Option<&'static str> {
+        match self {
+            Screenshot::Attached => Some(SCREENSHOT_PICTURED),
+            Screenshot::Withheld => Some(SCREENSHOT_UNTAKEN),
+            Screenshot::Absent => None,
+        }
+    }
 }
 
 /// What the composer and the coverage check are told about the screenshot code attaches. Not told it, the composer
@@ -1057,6 +1080,14 @@ pub(crate) const SCREENSHOT_ATTACHED: &str = "Code attaches a screenshot of the 
 /// ended stuck. It is told only what code does, so it still judges a screenshot of another page, or of the page before
 /// a later step, as not given by ending here.
 pub(crate) const SCREENSHOT_PICTURED: &str = "Code attaches one screenshot to the answer: of the page the run is on when it ends, which is the current page if it ends now, and it can attach no other. A screenshot the task asks for is not a separate action: it is given when the current page is the page, in the state, that the task asks to have pictured.";
+
+/// What the composer and the coverage check are told when the task asks for a screenshot the run cannot take. Told
+/// nothing, they would judge the answer as if code attached one, as `SCREENSHOT_ATTACHED` says it does.
+pub(crate) const SCREENSHOT_WITHHELD: &str = "Code attaches no screenshot to the answer, though the task asks for one: the run was given an address with credentials, and no image of any page leaves such a run, since a page can show its address in pixels that cannot be masked. The written answer need not say whether a screenshot is attached.";
+
+/// What the done check is told when the task asks for a screenshot the run cannot take: no action can give it, so it
+/// is not a step left to carry out.
+pub(crate) const SCREENSHOT_UNTAKEN: &str = "Code attaches no screenshot to the answer and can take none: the run was given an address with credentials, and no image of any page leaves such a run. A screenshot the task asks for is not a step any action can carry out, and the run reports it as not given.";
 
 const UNREDUCED: &str = "The composed claims did not reduce to one request within the composing model's context window, so no single composition saw every note.";
 
@@ -1152,8 +1183,8 @@ pub(crate) async fn compose_reviewed(
         relabeled(feedback, shown_items, steps),
         dumps(&json!(shown.iter().map(|claim| &claim.text).collect::<Vec<_>>()))
     ));
-        if screenshot == Screenshot::Attached {
-            writing_task.push_str(&format!("\n\n# Screenshot\n{SCREENSHOT_ATTACHED}"));
+        if let Some(written) = screenshot.written() {
+            writing_task.push_str(&format!("\n\n# Screenshot\n{written}"));
         }
         // Every draft is written knowing what the run itself did, so it never says a step's work was already there. A
         // count no longer rests on the writer, so a long run's steps cannot cost it one.
@@ -1267,7 +1298,7 @@ fn coverage_question(
     Question::Noul(NoulQuestion::new(
         format!(
             "{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form. Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values.{}{} {NOT_ESTABLISHED} Task: {} Answer: {}",
-            if screenshot == Screenshot::Attached { format!(" {SCREENSHOT_ATTACHED}") } else { String::new() },
+            screenshot.written().map(|written| format!(" {written}")).unwrap_or_default(),
             if committed.is_empty() {
                 String::new()
             } else {

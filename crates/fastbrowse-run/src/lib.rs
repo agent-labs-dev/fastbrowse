@@ -10,8 +10,8 @@ pub mod fetch;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::agent::{Agent, RecipeSink, Resume, RunOptions};
 use fastbrowse_agent::verification::RecordSchema;
@@ -32,14 +32,17 @@ use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BrowserUsed, BrowserVia, BrowserWarningEvent,
     BudgetResource, BudgetStop, Bytes, CostBasis, CostBreakdown, CostComponent, CostLine, Event, EventHandler,
-    FailureKind, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status, StepResult, UntilCheck,
-    WallKind,
+    FailureKind, FrameHandler, Limits, LocalChrome, RunResult, SecretRef, SecretResolver, Status, StepResult,
+    UntilCheck, WallKind,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::Page;
+use fastbrowse_core::protocol::run_task_fields;
 use fastbrowse_core::py::text::repr;
-use fastbrowse_core::telemetry::{Ledger, LedgerState};
+use fastbrowse_core::safety::{Redactor, mask_address};
+use fastbrowse_core::schema::Schema;
+use fastbrowse_core::telemetry::{Ledger, LedgerState, Trace};
 use serde_json::{Map, Value};
 use tokio::sync::Notify;
 
@@ -242,7 +245,13 @@ struct Checked {
 /// wording wherever the run was asked for. `secrets` says whether the run was given any, which an entry point knows
 /// before it resolves one: refusing them after resolving named a missing variable or vault item instead (#1337).
 pub fn check(task: &RunTask, secrets: bool) -> Result<(), RunError> {
-    checked(task, secrets).map(drop)
+    // Called before `run_task`, so outside the run's redactor, and a refusal quotes the value it refused (a proxy
+    // country, a DevTools endpoint) to an embedder that may log it: masked by what the task holds, each string learnt
+    // as one whole address, as every door learns a message before it says anything of it (#1381).
+    checked(task, secrets).map(drop).map_err(|error| {
+        let learnt = serde_json::to_value(task).map(|given| fastbrowse_core::safety::learnt(&given));
+        redacted_error(error, &learnt.unwrap_or_default())
+    })
 }
 
 fn checked(task: &RunTask, secrets: bool) -> Result<Checked, RunError> {
@@ -441,8 +450,10 @@ fn sink(downloads: Option<&Path>, scratch: &Scratch) -> Result<Arc<dyn ArtifactS
 
 /// The websocket URL of the browser serving DevTools on `port`, read from its `/json/version` endpoint.
 pub async fn resolve_cdp_port(port: u16, host: &str, http: &Http) -> Result<String, BrowserError> {
-    let endpoint = format!("http://{host}:{port}/json/version");
-    let response = http.get(&endpoint, &[], 5.0).await.map_err(|_| {
+    // Named in every error below, which an embedder may log; a host written with credentials keeps them out.
+    let address = format!("http://{host}:{port}/json/version");
+    let endpoint = mask_address(&address);
+    let response = http.get(&address, &[], 5.0).await.map_err(|_| {
         BrowserError::failed("devtools/ConnectError", format!("no DevTools endpoint at {endpoint} (ConnectError)"))
     })?;
     if response.status == 404 {
@@ -777,17 +788,27 @@ async fn browser(
     let foreground = lazily || task.foreground;
     if task.wants_extension() {
         let (record, connected) = pick_host(&host_dir(), task.extension_browser.as_deref())?;
-        // The task after `#` names the run's tab group.
         let connection = BrowserConnection {
             attach: task.attach || task.target_match.is_some(),
             target_match: task.target_match.clone(),
             foreground,
-            ..BrowserConnection::new(format!("{SCHEME}{}#{}", record.display(), task.task), true)
+            ..BrowserConnection::new(extension_address(&record, &task.task, &http.trace), true)
         };
         return Ok((connection, Owned::Extension(Box::new(connected))));
     }
     let handed = match (&host.open_browser, &task.cdp_url, task.cdp_port) {
-        (Some(open), ..) => Some(open().await.map_err(|error| refused("OpenBrowser", &error))?),
+        (Some(open), ..) => {
+            let address = open().await.map_err(|error| refused("OpenBrowser", &error))?;
+            // The host's answer is an address the caller wrote, like `cdp_url`, and is learnt before anything quotes
+            // it: a connection error names the address, and its credentials reached the result whole.
+            if let Some(redactor) = http.trace.redactor() {
+                redactor
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .register_tree(&Value::from(&*address));
+            }
+            Some(address)
+        }
         (None, Some(url), _) => Some(url.clone()),
         (None, None, Some(port)) => Some(resolve_cdp_port(port, "127.0.0.1", http).await?),
         (None, None, None) => None,
@@ -905,14 +926,154 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
     }
 }
 
-/// Open `start`, pursue `task`, and return what the run could prove.
-pub async fn run_task(task: RunTask, host: Host) -> Result<RunResult, RunError> {
-    // Boxed so a caller holds a pointer rather than the whole run, which an unoptimized build copies into each
-    // caller's frame: inline, a run on a 2 MB thread stack overflowed it before the browser started.
-    Box::pin(run_unboxed(task, host)).await
+/// The fields of a run's arguments that may carry an address's credentials: what a model reads as the task, where it
+/// starts, its background and its inputs, which are masked wherever they are shown, and the DevTools address, which is
+/// only connected to. Every other field is used or handed back as written (a path the caller looks up, an id a reply
+/// is matched by, a selector, a schema key the data comes back under), so masking one would break the caller's own
+/// use of it, and left raw it reached results, events, errors and model requests (#1381).
+const CREDENTIAL_FIELDS: [&str; 5] = ["task", "start", "context", "inputs", "cdp_url"];
+
+/// Learn every credential in everything the caller handed the run, then refuse the run when any field outside
+/// `CREDENTIAL_FIELDS` holds one: an address's userinfo, or text a credential written elsewhere in the request
+/// repeats. Each field is read by its type (`run_task_fields`), so a field added later is learnt and checked with the
+/// rest, and a closed set's value is never mistaken for text. The refusal names the field, never its value.
+fn admit(redactor: &Mutex<Redactor>, task: &RunTask, secrets: &[SecretRef]) -> Result<(), RunError> {
+    let mut redactor = redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let given =
+        serde_json::to_value(task).map_err(|_| RunError::Invalid("the run's arguments cannot be read".into()))?;
+    let secrets: Vec<Value> = secrets.iter().filter_map(|secret| serde_json::to_value(secret).ok()).collect();
+    redactor.register_tree(&given);
+    secrets.iter().for_each(|secret| redactor.register_tree(secret));
+    let held = run_task_fields().into_iter().find(|field| {
+        !CREDENTIAL_FIELDS.contains(&field.key())
+            && given.get(field.key()).is_some_and(|value| redactor.holds_typed(&field.ty, value))
+    });
+    if let Some(field) = held {
+        return Err(RunError::Invalid(format!(
+            "{} holds a credential; only task, start, context, inputs and cdp_url may carry an address's credentials",
+            field.key()
+        )));
+    }
+    // A secret's name and origins are sent back to the caller to resolve it, so neither can be masked on the way.
+    if secrets.iter().any(|secret| redactor.holds_typed(&SecretRef::ty(), secret)) {
+        return Err(RunError::Invalid(
+            "a secret's name or origin holds a credential; only task, start, context, inputs and cdp_url may carry an address's credentials".into(),
+        ));
+    }
+    Ok(())
 }
 
-async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
+/// What else the run reads that the caller wrote, learnt before anything is shown: a recipe, whose start is refused at
+/// load when it carries credentials but whose steps' links, labels and text can write an address a replay shows a
+/// model, and the settings' text, whose base addresses may carry the provider's credentials (#1381).
+fn learn_credentials(
+    redactor: &Mutex<Redactor>,
+    recipe: Option<&fastbrowse_core::recipe::Recipe>,
+    settings: &Settings,
+) -> bool {
+    let mut redactor = redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(recipe) = recipe.and_then(|recipe| serde_json::to_value(recipe).ok()) {
+        redactor.register_tree(&recipe);
+    }
+    settings.text().iter().for_each(|(_, value)| redactor.register_tree(value));
+    redactor.holds_credentials()
+}
+
+/// `on_event` with every event redacted on its way out (`Redactor::redacted`), the browser's warnings and the steps
+/// alike: an event is built from what the run holds, and a field read straight from the caller or a page reached the
+/// caller's handler, a serve client's `run/event` and the MCP log raw.
+fn redacting(on_event: EventHandler, redactor: Arc<Mutex<Redactor>>) -> EventHandler {
+    Arc::new(move |event| {
+        let redacted = redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).redacted(&event);
+        match redacted {
+            Some(event) => on_event(event),
+            None => {
+                fastbrowse_browser::warn("an event that could not be redacted was not sent");
+                Box::pin(async {})
+            }
+        }
+    })
+}
+
+/// The run's one way out: its result or error, every string the caller, a page or a model wrote redacted, map keys
+/// included, so a path, a profile, a data key, an artifact's name or an error built from any of them is redacted
+/// without a sink of its own (#1381).
+fn exited(outcome: Result<RunResult, RunError>, redactor: &Mutex<Redactor>) -> Result<RunResult, RunError> {
+    let redactor = redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match outcome {
+        Ok(mut result) => {
+            let frame = result.final_frame.take();
+            let mut redacted = redactor.redacted(&result).ok_or_else(|| {
+                RunError::Invalid("the run's result could not be redacted, so it was withheld".into())
+            })?;
+            redacted.final_frame = frame;
+            Ok(redacted)
+        }
+        Err(error) => Err(redacted_error(error, &redactor)),
+    }
+}
+
+fn redacted_error(error: RunError, redactor: &Redactor) -> RunError {
+    match error {
+        RunError::Invalid(message) => RunError::Invalid(redactor.redact(&message)),
+        RunError::UnsupportedSchema(message) => RunError::UnsupportedSchema(redactor.redact(&message)),
+        RunError::Configuration(message) => RunError::Configuration(redactor.redact(&message)),
+        RunError::Recording(message) => RunError::Recording(redactor.redact(&message)),
+        RunError::Cancelled(receipt) => RunError::Cancelled(redacted_receipt(receipt, redactor)),
+        RunError::AfterSpending { error, receipt } => RunError::AfterSpending {
+            error: Box::new(redacted_error(*error, redactor)),
+            receipt: redacted_receipt(receipt, redactor),
+        },
+    }
+}
+
+fn redacted_receipt(receipt: CancellationReceipt, redactor: &Redactor) -> CancellationReceipt {
+    let reason = receipt.reason.as_deref().map(|reason| redactor.redact(reason).into_boxed_str());
+    // Unreadable once redacted, the receipt keeps only its charges, which name models and purposes, never text.
+    let redacted = redactor
+        .redacted(&receipt)
+        .unwrap_or_else(|| CancellationReceipt { cost: receipt.cost.clone(), ..Default::default() });
+    CancellationReceipt { reason, ..redacted }
+}
+
+/// The extension's address for the host at `record`, the task after `#` naming the run's tab group. The name is shown
+/// in the browser and traced with the connection, so it carries the task as the trace writes it.
+fn extension_address(record: &Path, task: &str, trace: &Trace) -> String {
+    format!("{SCHEME}{}#{}", record.display(), redacted(trace, task))
+}
+
+/// `text` as the run's trace writes it out, its secrets and every address's credentials named.
+fn redacted(trace: &Trace, text: &str) -> String {
+    trace
+        .redactor()
+        .map_or_else(|| fastbrowse_core::safety::Redactor::default().redact(text), |r| r.lock().unwrap().redact(text))
+}
+
+/// Open `start`, pursue `task`, and return what the run could prove.
+///
+/// The run learns every credential the caller handed it before anything else (`admit`), and everything it hands
+/// back, its result, its error and each event, passes one redaction on the way (`exited`, `redacting`).
+pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
+    let redactor: Arc<Mutex<Redactor>> = Arc::default();
+    fastbrowse_core::safety::live(&redactor);
+    let secrets: Vec<SecretRef> = host.secrets.iter().flat_map(|secrets| secrets.available()).collect();
+    let admitted = admit(&redactor, &task, &secrets);
+    if let Err(refusal) = admitted {
+        return exited(Err(refusal), &redactor);
+    }
+    // A declared value is masked from here, before anything types it: a token the caller put in the start address's
+    // query is no credential by its structure, and reached every model and exit as given (#1381).
+    if let Some(secrets) = &host.secrets {
+        redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).declare_held(secrets.as_ref());
+    }
+    host.on_event = host.on_event.take().map(|on_event| redacting(on_event, redactor.clone()));
+    // Boxed so a caller holds a pointer rather than the whole run, which an unoptimized build copies into each
+    // caller's frame: inline, a run on a 2 MB thread stack overflowed it before the browser started.
+    let outcome = Box::pin(run_unboxed(task, host, redactor.clone())).await;
+    exited(outcome, &redactor)
+}
+
+async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Redactor>>) -> Result<RunResult, RunError> {
     // A resolver that declares no secret gives the run none to type, as an empty list to `serve` does; counting the
     // resolver itself refused a fetch run for an empty `ScopedSecrets` that serve and the CLI accept.
     let secrets = host.secrets.as_ref().is_some_and(|secrets| !secrets.available().is_empty());
@@ -941,8 +1102,12 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     };
     let http = host.http.take().unwrap_or_else(Http::hyper);
     // The agent learns each secret, and its clients write the requests that may carry one, so they share a redactor.
-    let trace = http.trace.clone().redacting(Arc::default());
+    let trace = http.trace.clone().redacting(redactor.clone());
     let http = http.with_trace(trace);
+    // Learned before anything reads the task: the consent check, the extension's tab group and the first frame all
+    // come before the agent, and each took an address's credentials as the caller wrote them (#1381).
+    learn_credentials(&redactor, recipe.as_ref(), &settings);
+    settings.validate_credentials(&mut redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner))?;
     let (warning_task, warning_tx, warning_stop_tx) = host
         .on_event
         .clone()
@@ -1041,7 +1206,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         // Asked while the browser starts: a task that answers a consent banner itself needs it left on the page.
         let consent = async {
             config.refuse_cookie_banners
-                && fastbrowse_agent::start::answers_consent_itself(&*jev, &task.task, &ledger).await.unwrap_or(false)
+                && fastbrowse_agent::start::answers_consent_itself(&*jev, &redacted(&http.trace, &task.task), &ledger)
+                    .await
+                    .unwrap_or(false)
         };
         let (started, answers_consent) = if task.wants_extension() {
             // The connected browser is found first, so with none the run ends before the consent check spends.
@@ -1053,16 +1220,23 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         let (connection, started) = started?;
         owned = Some(started);
         let connection = BrowserConnection { allowed_origins: origins.clone(), ..connection };
+        let attach = connection.attach;
+        task.start = recipe_start(task.start.as_deref(), recipe.as_ref(), attach);
+        // One predicate for every image of the start page: a frame, a recording and a live view all show its pixels,
+        // address bar included, before any reading can say what they show. A start holding a declared secret got a
+        // live view while its frames were held (#1381).
+        let images_held =
+            redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).holds_images_from(task.start.as_deref());
         if let Some(on_event) = &host.on_event {
+            // A live view cannot be recalled once given, so a run whose images are held from its start gives none. A
+            // credential learnt later is held from then on in frames, and the view already given stays.
             let event = BrowserEvent {
                 kind: Default::default(),
-                live_url: connection.live_url.clone(),
+                live_url: connection.live_url.clone().filter(|_| !images_held),
                 browser_id: connection.browser_id.clone(),
             };
             on_event(Event::Browser(event)).await;
         }
-        let attach = connection.attach;
-        task.start = recipe_start(task.start.as_deref(), recipe.as_ref(), attach);
         let opened = BrowserSession::new(
             connection,
             sink(task.downloads.as_deref(), &scratch)?,
@@ -1088,6 +1262,16 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             },
         );
         session = Some(opened.clone());
+        // Held from the first frame to the end of the run: a frame cannot be checked for a value as it arrives, and
+        // the start page's address bar and content can show the credentials it was opened with.
+        // A declared secret in the start is held only until a reading of the page shows it gone: from the first
+        // reading on, the agent holds frames while the page shows it.
+        // Asked once the browser is known: the address a host's `open_browser` answered is learnt with it.
+        if redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).holds_credentials() {
+            opened.hold_images();
+        } else if images_held {
+            opened.set_frames_withheld(true);
+        }
         opened.open().await?;
         // The cursor is drawn wherever someone can see the page: the user's own Chrome, a headed or attached local
         // browser, a cloud browser's live view, the frames a host streams, or a recording. A headless run nobody
@@ -1156,7 +1340,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             && !result.status.waits_on_person()
             && let Some(filming) = recording.lock().await.as_mut()
         {
-            let _ = filming.show_result(&task.task, &card(&result)).await;
+            let _ = filming.show_result(&redacted(&http.trace, &task.task), &card(&result)).await;
         }
         Ok(result)
     };
@@ -1409,6 +1593,236 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    #[tokio::test]
+    async fn test_run_refuses_start_credentials_repeated_in_settings() {
+        for (variable, value, field) in [
+            ("FASTBROWSE_LLM_EXTRA_BODY", r#"{"metadata":{"FixtureToken9":"tag"}}"#, "llm_extra_body"),
+            ("FASTBROWSE_LLM_EXTRA_BODY", r#"{"metadata":{"tag":"FixtureToken9"}}"#, "llm_extra_body"),
+            ("FASTBROWSE_LLM_MODEL", "models/FixtureToken9", "llm_model"),
+        ] {
+            let settings = Settings::from_sources(&[(variable, value)], None).expect("valid settings in isolation");
+            let task = RunTask {
+                task: "Read the page".into(),
+                start: Some("https://ops:FixtureToken9@shop.test/".into()),
+                ..RunTask::default()
+            };
+            let host = Host { settings: Some(settings), ..Host::default() };
+            let Err(RunError::Configuration(message)) = run_task(task, host).await else {
+                panic!("expected credential refusal");
+            };
+            assert!(message.contains(field));
+            assert!(!message.contains("FixtureToken9"));
+        }
+    }
+
+    /// The address a host's `open_browser` answers is the caller's, like `cdp_url`, and is learnt as it is handed over:
+    /// unlearnt, a password in it holding a quote was quoted whole past the structural scan, and the run did not hold
+    /// its frames for a credential its address bar can show (#1381).
+    #[tokio::test]
+    async fn test_the_address_open_browser_answers_is_learnt_as_it_is_handed_over() {
+        let redactor: Arc<Mutex<Redactor>> = Arc::default();
+        let http = Http::hyper().with_trace(Trace::collecting().redacting(redactor.clone()));
+        let host = Host {
+            open_browser: Some(Arc::new(|| {
+                Box::pin(async { Ok("ws://ops:0pen\"pw@127.0.0.1:9222/devtools/browser/x".to_string()) })
+            })),
+            ..Host::default()
+        };
+        let task = RunTask { task: "Read the page".into(), browser: true, ..RunTask::default() };
+        let (connection, _) = browser(&task, &host, &LocalChrome::default(), &http, &mut None).await.ok().unwrap();
+        assert!(connection.cdp_url.contains("0pen"));
+        let learnt = redactor.lock().unwrap();
+        assert!(learnt.holds_credentials());
+        assert!(!learnt.mask("the browser at ws://ops:0pen\"pw@127.0.0.1:9222 refused").contains("pw"));
+    }
+
+    /// The consent check, the extension's tab group and the result card each took the task as the caller wrote it,
+    /// an address's credentials included, before the agent had masked anything (#1381).
+    #[test]
+    fn test_the_tab_group_and_the_result_card_show_the_task_with_its_credentials_masked() {
+        let redactor: Arc<Mutex<Redactor>> = Arc::default();
+        let trace = Trace::collecting().redacting(redactor.clone());
+        let task = RunTask {
+            task: "Read https://shopper:t4sk-pw@shop.test/orders".into(),
+            context: Some("The CRM is https://ana:c0ntext-pw@crm.test/".into()),
+            ..RunTask::default()
+        };
+        admit(&redactor, &task, &[]).unwrap();
+        assert!(redactor.lock().unwrap().holds_credentials());
+        let group = extension_address(Path::new("/hosts/a"), &task.task, &trace);
+        assert_eq!(
+            group.split_once('#').map(|(_, name)| name),
+            Some("Read https://[secret:address_credentials]@shop.test/orders")
+        );
+        // Learned, a credential is masked where the text names it outside an address too.
+        let context = task.context.as_deref().unwrap_or_default();
+        for shown in
+            [group, redacted(&trace, &task.task), redacted(&trace, context), redacted(&trace, "typed c0ntext-pw")]
+        {
+            assert!(
+                !shown.contains("t4sk-pw") && !shown.contains("shopper") && !shown.contains("c0ntext-pw"),
+                "{shown}"
+            );
+            assert!(!shown.contains("ana:"), "{shown}");
+        }
+        let clean = RunTask { task: "Read https://shop.test/orders".into(), ..RunTask::default() };
+        let fresh: Arc<Mutex<Redactor>> = Arc::default();
+        admit(&fresh, &clean, &[]).unwrap();
+        assert!(!learn_credentials(&fresh, None, &Settings::default()));
+        // A caller's JSON is decoded before anything reads it, so an `@` it escaped is an `@` here, and a context
+        // that is itself JSON keeps its addresses masked within it.
+        let decoded: RunTask = serde_json::from_str(
+            r#"{"task": "Read it", "context": "{\"crm\": \"https://ana:J5on9w\u0040crm.test/\"}"}"#,
+        )
+        .unwrap();
+        let json: Arc<Mutex<Redactor>> = Arc::default();
+        admit(&json, &decoded, &[]).unwrap();
+        let context = json.lock().unwrap().redact(decoded.context.as_deref().unwrap_or_default());
+        assert_eq!(context, r#"{"crm": "https://[secret:address_credentials]@crm.test/"}"#);
+        // A replayed recipe's start opens the run as a caller's start does.
+        let replayed: Arc<Mutex<Redactor>> = Arc::default();
+        let recipe = fastbrowse_core::recipe::Recipe {
+            version: fastbrowse_core::recipe::RECIPE_VERSION,
+            task: clean.task.clone(),
+            start: Some("https://ops:r3cipe-pw@shop.test/".into()),
+            steps: Vec::new(),
+        };
+        assert!(learn_credentials(&replayed, Some(&recipe), &Settings::default()));
+        assert!(!replayed.lock().unwrap().redact("it said r3cipe-pw").contains("r3cipe-pw"));
+        // So do the settings' base addresses, which a provider's error can repeat.
+        let settings = Settings { llm_base_url: Some("https://ops:ba5e-pw@llm.test/v1".into()), ..Settings::default() };
+        let based: Arc<Mutex<Redactor>> = Arc::default();
+        assert!(learn_credentials(&based, None, &settings));
+        assert!(!based.lock().unwrap().redact("401 for ba5e-pw").contains("ba5e-pw"));
+    }
+
+    /// A sample of `ty` with each string and each chosen key a distinct marker, `leaf-0`, `leaf-1` and so on.
+    fn populated(ty: &fastbrowse_core::schema::Ty, next: &mut usize) -> Value {
+        use fastbrowse_core::schema::Ty;
+        let marker = |next: &mut usize| {
+            *next += 1;
+            Value::from(format!("leaf-{next}"))
+        };
+        match ty {
+            Ty::Str | Ty::Path => marker(next),
+            Ty::Any | Ty::JsonValue | Ty::Map(_) => {
+                let key = marker(next).as_str().unwrap_or_default().to_string();
+                let value = match ty {
+                    Ty::Map(item) => populated(item, next),
+                    _ => marker(next),
+                };
+                Value::Object(Map::from_iter([(key, value)]))
+            }
+            Ty::Int => Value::from(1),
+            Ty::Float => Value::from(1.0),
+            Ty::Bool => Value::from(true),
+            Ty::Null => Value::Null,
+            Ty::Base64 | Ty::Bytes | Ty::Image => Value::from(""),
+            Ty::DateTime => Value::from("2026-01-01T00:00:00Z"),
+            Ty::List(item) | Ty::Set(item) => Value::Array(vec![populated(item, next)]),
+            Ty::Tuple(items) => Value::Array(items.iter().map(|item| populated(item, next)).collect()),
+            Ty::Optional(inner) | Ty::Alias(_, inner) | Ty::Constrained(inner, _) => populated(inner, next),
+            Ty::Literal(values) => values[0].clone(),
+            Ty::Enum(closed) => closed.values[0].clone(),
+            Ty::Union(variants) => populated(&variants[0], next),
+            Ty::Tagged { variants, .. } => populated(&variants[0].1, next),
+            Ty::Model(model) => Value::Object(
+                model
+                    .fields
+                    .iter()
+                    .filter(|field| !field.exclude)
+                    .map(|field| (field.key().to_string(), populated(&field.ty, next)))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Every string a caller writes into a run's arguments, a key or a value, is learnt or refused. The arguments
+    /// are built from `RunTask`'s own schema, so a field added later is covered without being named: one field at a
+    /// time was found unlearnt by review (a run id, a profile, a schema description, a path), each reaching a
+    /// result, an error, an event or a model request raw (#1381).
+    #[test]
+    fn test_every_string_a_caller_writes_is_learnt_or_refused() {
+        let mut next = 0;
+        let fields = run_task_fields();
+        let sample = Value::Object(
+            fields.iter().map(|field| (field.key().to_string(), populated(&field.ty, &mut next))).collect(),
+        );
+        let written = sample.to_string();
+        let mut refused = std::collections::BTreeSet::new();
+        for leaf in 1..=next {
+            let marker = format!("\"leaf-{leaf}\"");
+            let field = fields
+                .iter()
+                .map(|field| field.key())
+                .find(|key| sample[*key].to_string().contains(&marker))
+                .expect("every marker is under a field");
+            let password = format!("pw-{leaf}x");
+            let task: RunTask =
+                serde_json::from_str(&written.replace(&marker, &format!("\"https://ops:{password}@h.test/\"")))
+                    .unwrap_or_else(|error| panic!("{field}: {error}"));
+            // The preflight an entry point calls before `run_task` answers outside any redactor; given the field
+            // alone, so it is not refused for another field's value first.
+            let alone = serde_json::json!({"task": "Read it", field: serde_json::to_value(&task).unwrap()[field]});
+            let alone: RunTask = serde_json::from_value(alone).unwrap_or_else(|error| panic!("{field}: {error}"));
+            if let Err(error) = check(&alone, false) {
+                assert!(!error.to_string().contains(&password), "{field}: {error}");
+            }
+            let redactor: Arc<Mutex<Redactor>> = Arc::default();
+            match admit(&redactor, &task, &[]) {
+                Ok(()) => {
+                    assert!(CREDENTIAL_FIELDS.contains(&field), "{field} carried a credential and was admitted");
+                    let redactor = redactor.lock().unwrap();
+                    assert!(!redactor.redact(&format!("said {password}")).contains(&password), "{field} unlearnt");
+                }
+                Err(error) => {
+                    assert!(!CREDENTIAL_FIELDS.contains(&field), "{field} is the caller's to write: {error}");
+                    let error = error.to_string();
+                    assert!(error.starts_with(&format!("{field} holds a credential")), "{error}");
+                    assert!(!error.contains(&password), "{error}");
+                    refused.insert(field);
+                }
+            }
+        }
+        // Nothing is refused for holding no credential, and every field with text was tried.
+        let plain: RunTask = serde_json::from_str(&written).unwrap();
+        admit(&Arc::default(), &plain, &[]).unwrap();
+        for field in ["record", "output_schema", "chrome", "cloud_profile", "target_match", "attachments"] {
+            assert!(refused.contains(field), "{field} was never tried");
+        }
+        // A credential written once in the task is refused where it repeats outside an address, as in a path.
+        let repeated = RunTask {
+            task: "Read https://ops:r3peat-pw@h.test/".into(),
+            record: Some("/tmp/r3peat-pw.mp4".into()),
+            ..RunTask::default()
+        };
+        let error = admit(&Arc::default(), &repeated, &[]).unwrap_err().to_string();
+        assert!(error.starts_with("record holds a credential"), "{error}");
+        // A setting read from the environment alone, which no caller argument names, is refused by a message that
+        // does not repeat it, or held as a key nothing prints, or learnt with the rest.
+        for (name, variable) in fastbrowse_clients::environment::FIELDS {
+            match Settings::from_sources(&[(variable, "https://ops:env-pw@h.test/")], None) {
+                Err(error) => assert!(!error.to_string().contains("env-pw"), "{name}: {error}"),
+                Ok(settings) if settings.text().is_empty() => {}
+                Ok(settings) => {
+                    let redactor = Mutex::default();
+                    assert!(learn_credentials(&redactor, None, &settings), "{name} unlearnt");
+                    let said = redactor.lock().unwrap().redact("said env-pw");
+                    assert!(!said.contains("env-pw"), "{name} unlearnt");
+                }
+            }
+        }
+        // A secret's name and origins are sent back to resolve it, so a credential in either is refused too.
+        let clean = RunTask { task: "Sign in".into(), ..RunTask::default() };
+        for secret in [
+            SecretRef { name: "https://ops:s3cret-pw@h.test/".into(), origins: vec!["https://h.test".into()] },
+            SecretRef { name: "password".into(), origins: vec!["https://ops:s3cret-pw@h.test".into()] },
+        ] {
+            let error = admit(&Arc::default(), &clean, &[secret]).unwrap_err().to_string();
+            assert!(error.starts_with("a secret's name or origin holds a credential") && !error.contains("s3cret"));
+        }
+    }
 
     #[tokio::test]
     async fn a_stop_that_says_why_is_the_errors_text() {

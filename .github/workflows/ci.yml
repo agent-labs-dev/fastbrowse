@@ -223,6 +223,9 @@ jobs:
         run: |
           installed=$(npx -y @puppeteer/browsers@3.2.6 install chrome@stable --path "$RUNNER_TEMP/cft" --format '{{path}}')
           echo "FASTBROWSE_TEST_EXTENSION_CHROME=$installed" >> "$GITHUB_ENV"
+      # The credential canary records a run and checks what the recording holds, and the frame tests encode; without
+      # ffmpeg each fails by name.
+      - run: sudo apt-get update -q && sudo apt-get install -yq ffmpeg
       - run: cargo nextest run --workspace --locked --no-fail-fast
       # nextest does not run doctests.
       - run: cargo test --workspace --locked --doc

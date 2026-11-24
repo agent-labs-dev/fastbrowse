@@ -30,9 +30,16 @@ const MAX_REWRITES: i64 = 3;
 impl Agent {
     /// Whether the answer goes out with a screenshot of the page the run ends on, which the checks that judge it are
     /// told: the task asks for one and there is a browser page to picture. A run over HTTP has no rendered page, and
-    /// one stopped there on a screenshot task was told a screenshot came with its answer when none could.
+    /// one stopped there on a screenshot task was told a screenshot came with its answer when none could. A run that
+    /// holds an address credential takes no image (`images_withheld`), and the checks are told why.
     pub(super) fn screenshot(&self, intent: OutputIntent) -> Screenshot {
-        if intent.attaches_screenshot() && !self.page.over_http() { Screenshot::Attached } else { Screenshot::Absent }
+        if !intent.attaches_screenshot() || self.page.over_http() {
+            Screenshot::Absent
+        } else if self.images_withheld() {
+            Screenshot::Withheld
+        } else {
+            Screenshot::Attached
+        }
     }
 
     async fn observe_if_changed(&self, observation: &Observation) -> Step<Observation> {
@@ -146,7 +153,8 @@ impl Agent {
             return Ok(None);
         };
         let reached = match until {
-            Some(until) => until(self.raw().map_or_else(|| observation.url.clone(), |raw| raw.url)).await,
+            // The embedder is shown the address as events show it: its credentials and secrets masked (#1381).
+            Some(until) => until(observation.url.clone()).await,
             None => true,
         };
         if reached {

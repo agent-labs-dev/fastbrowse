@@ -220,7 +220,10 @@ impl Http {
             accept.iter().any(|part| part == "application/json" || part == "application/*" || part == "*/*"),
             accept.iter().any(|part| part == "text/event-stream" || part == "text/*" || part == "*/*"),
         );
-        let check_headers = || -> Option<Reply> {
+        // Learnt before anything is said of the request: the header values a refusal quotes, then the body's strings.
+        // Masked after the fact by structure alone, a password holding a quote was quoted whole (#1381).
+        let mut learnt = fastbrowse_core::safety::learnt(&json!([header(headers, "mcp-protocol-version")]));
+        let check_headers = |learnt: &fastbrowse_core::safety::Redactor| -> Option<Reply> {
             if opening {
                 return Some(server_error(
                     StatusCode::BAD_REQUEST,
@@ -235,7 +238,7 @@ impl Http {
                         "Bad Request: Unsupported protocol version: {version}. Supported versions: {}",
                         super::SUPPORTED_PROTOCOL_VERSIONS.join(", ")
                     );
-                    Some(server_error(StatusCode::BAD_REQUEST, -32600, &message, Some(id)))
+                    Some(server_error(StatusCode::BAD_REQUEST, -32600, &learnt.mask(&message), Some(id)))
                 }
                 _ => None,
             }
@@ -246,21 +249,26 @@ impl Http {
                     let message = "Not Acceptable: Client must accept both application/json and text/event-stream";
                     return refused(server_error(StatusCode::NOT_ACCEPTABLE, -32600, message, Some(id)));
                 }
-                let message: Value = match serde_json::from_slice(body) {
-                    Ok(message) => message,
-                    Err(error) => {
-                        let message = format!("Parse error: {error}");
-                        return refused(server_error(StatusCode::BAD_REQUEST, -32700, &message, Some(id)));
-                    }
+                // A body that is not JSON has no strings to learn from, so its refusal quotes nothing of it.
+                let Ok(message) = serde_json::from_slice::<Value>(body) else {
+                    let message = "Parse error: the body is not JSON";
+                    return refused(server_error(StatusCode::BAD_REQUEST, -32700, message, Some(id)));
                 };
+                learnt.register_tree(&message);
                 let Value::Object(object) = &message else {
                     let message = "Validation error: a JSON-RPC message is one JSON object";
                     return refused(server_error(StatusCode::BAD_REQUEST, -32602, message, Some(id)));
                 };
                 let is_request = object.contains_key("id") && object.contains_key("method");
                 let initializing = is_request && object.get("method").and_then(Value::as_str) == Some("initialize");
-                if !initializing && let Some(response) = check_headers() {
+                if !initializing && let Some(response) = check_headers(&learnt) {
                     return refused(response);
+                }
+                // An id is echoed whole to be matched, and the stream closes on it, so one holding a credential is
+                // refused here, before the server is asked to answer it.
+                if is_request && object.get("id").is_some_and(super::id_holds_credential) {
+                    let message = "Invalid request: the id is an address with a credential; choose one that is not";
+                    return refused(server_error(StatusCode::BAD_REQUEST, -32600, message, Some(id)));
                 }
                 let line = json::write(&message, Style::PYDANTIC).into_bytes();
                 if !is_request {
@@ -288,7 +296,7 @@ impl Http {
                 (events(receiver, id), initializing)
             }
             Method::DELETE => {
-                if let Some(response) = check_headers() {
+                if let Some(response) = check_headers(&learnt) {
                     return refused(response);
                 }
                 self.sessions().remove(id);

@@ -416,10 +416,11 @@ async fn test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_f
     use fastbrowse_browser::recording::Recording;
     use fastbrowse_browser::session::{BoxError, CheckAccess};
 
-    if fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_none() {
-        eprintln!("recording needs ffmpeg; skipping");
-        return;
-    }
+    // A recording test that passed without ffmpeg checked nothing of what a recording holds, so it fails by name.
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_some(),
+        "recording needs ffmpeg on PATH; CI's rust job installs it"
+    );
     for page in ["clear", "showing a secret", "revealing a secret during the capture", "after access is revoked"] {
         let dir = temp_dir("recording");
         let still = dir.join("still.jpg");

@@ -619,6 +619,11 @@ fn field_group_question(
     ChoiceQuestion::new(instructions, criteria)
 }
 
+/// What each question about a field's value is keyed by, its name said only in the question: an output field is
+/// named by the caller, and a name holding an address credential, masked by the run's boundary in what it says, would
+/// otherwise reach Jev whole as a key (#1381). One field is asked about per request, so one key serves every field.
+const FIELD: &str = "field";
+
 /// The value Jev picks for one field, narrowing first when the pool exceeds Jev's option ceiling or one request.
 #[allow(clippy::too_many_arguments)]
 pub async fn choose_candidate(
@@ -662,9 +667,9 @@ pub async fn choose_candidate(
     let choice =
         |part: &[Candidate]| field_question(field, part, Some(name), Some(task), record_fields, max_options, answered);
     let mut pool: Vec<Candidate> = candidates.to_vec();
-    while pool.len() >= max_options || (pool.len() > 1 && !fits(state, &alone(name, choice(&pool)?))) {
+    while pool.len() >= max_options || (pool.len() > 1 && !fits(state, &alone(FIELD, choice(&pool)?))) {
         let groups = field_candidate_groups(&pool, max_options);
-        let key = format!("{name}_group");
+        let key = format!("{FIELD}_group");
         let whole = alone(&key, field_group_question(field, &groups, Some(name), Some(task)));
         if fits(state, &whole) {
             let outer = ask(jev, state, whole, ledger).await?;
@@ -687,8 +692,8 @@ pub async fn choose_candidate(
         let mut questions: IndexMap<String, Question> = IndexMap::new();
         while let Some(part) = parts.pop() {
             let question = choice(part)?;
-            if fits(state, &alone(name, question.clone())) {
-                questions.insert(format!("{name}_{}", questions.len()), question.into());
+            if fits(state, &alone(FIELD, question.clone())) {
+                questions.insert(format!("{FIELD}_{}", questions.len()), question.into());
             } else if part.len() > 1 {
                 let (first, rest) = part.split_at(part.len() / 2);
                 parts.extend([rest, first]);
@@ -713,8 +718,8 @@ pub async fn choose_candidate(
         pool = winners;
     }
     let question = choice(&pool)?;
-    let answers = ask(jev, state, IndexMap::from([(name.to_string(), question.into())]), ledger).await?;
-    let Some(Answer::Choice(answer)) = answers.get(name) else {
+    let answers = ask(jev, state, IndexMap::from([(FIELD.to_string(), question.into())]), ledger).await?;
+    let Some(Answer::Choice(answer)) = answers.get(FIELD) else {
         return Ok(None);
     };
     let Some((value, evidence)) = copy_field(answer, &pool) else {
@@ -769,7 +774,7 @@ pub async fn choose_candidate(
     let whole = chars.len();
     let begins = edges(|word| (word.start, word.outer_start), &|at| copy(at, whole));
     let ends = edges(|word| (word.end, word.outer_end), &|at| copy(0, at));
-    let (begin_key, end_key) = (format!("{name}_begins"), format!("{name}_ends"));
+    let (begin_key, end_key) = (format!("{FIELD}_begins"), format!("{FIELD}_ends"));
     let mut questions =
         IndexMap::from([(begin_key.clone(), ask_edge("begin", begins)), (end_key.clone(), ask_edge("end", ends))]);
     let mut edge_state = std::borrow::Cow::Borrowed(state);
@@ -1042,10 +1047,10 @@ mod narrowing_tests {
 
     #[tokio::test]
     async fn two_fields_in_one_heading_each_take_their_own_words() {
-        let package = &[("package", "c0"), ("package_begins", "httpx 0.28.1"), ("package_ends", "httpx")];
-        assert_eq!(pick("package", package).await, ("httpx".into(), "httpx".into(), 2));
-        let version = &[("version", "c0"), ("version_begins", "0.28.1"), ("version_ends", "httpx 0.28.1")];
-        assert_eq!(pick("version", version).await, ("0.28.1".into(), "0.28.1".into(), 2));
+        let package = &[("field", "c0"), ("field_begins", "httpx 0.28.1"), ("field_ends", "httpx")];
+        assert_eq!(pick("field", package).await, ("httpx".into(), "httpx".into(), 2));
+        let version = &[("field", "c0"), ("field_begins", "0.28.1"), ("field_ends", "httpx 0.28.1")];
+        assert_eq!(pick("field", version).await, ("0.28.1".into(), "0.28.1".into(), 2));
     }
 
     #[tokio::test]
@@ -1060,7 +1065,7 @@ mod narrowing_tests {
             ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
                 for (key, question) in questions {
                     let Question::Choice(question) = question else { panic!("a field choice") };
-                    if key == "city" {
+                    if key == "field" {
                         let context = question.criteria["c2"]["context"].as_str().unwrap();
                         assert!(context.contains("| City | Region | Population |"));
                         assert!(!context.contains("column '?'"));
@@ -1082,7 +1087,7 @@ mod narrowing_tests {
         let field = ScalarField::new(Annotation::Str);
         let candidates = field_candidates(&page, &field).unwrap();
         let jev = TableContext(Picker(
-            &[("city", "c2"), ("city_begins", "Lyon | Auvergne-Rhône-Alpes | 522,250 |"), ("city_ends", "| Lyon")],
+            &[("field", "c2"), ("field_begins", "Lyon | Auvergne-Rhône-Alpes | 522,250 |"), ("field_ends", "| Lyon")],
             Default::default(),
         ));
         let picked = choose_candidate(
@@ -1104,16 +1109,16 @@ mod narrowing_tests {
 
     #[tokio::test]
     async fn a_value_keeps_the_punctuation_at_its_edge() {
-        let framework = &[("package", "c0"), ("package_begins", ".NET 8 (LTS)"), ("package_ends", ".NET 8")];
+        let framework = &[("field", "c0"), ("field_begins", ".NET 8 (LTS)"), ("field_ends", ".NET 8")];
         assert_eq!(pick_in(".NET 8 (LTS)", "package", framework).await, (".NET 8".into(), ".NET 8".into(), 2));
-        let language = &[("package", "c0"), ("package_begins", "C++ 23"), ("package_ends", "C++")];
+        let language = &[("field", "c0"), ("field_begins", "C++ 23"), ("field_ends", "C++")];
         assert_eq!(pick_in("C++ 23", "package", language).await, ("C++".into(), "C++".into(), 2));
     }
 
     #[tokio::test]
     async fn punctuation_variants_beyond_the_provider_choice_limit_preserve_the_whole_quote() {
         let quote = vec!["(Alpha-17),"; 200].join(" ");
-        assert_eq!(pick_in(&quote, "package", &[("package", "c0")]).await, (quote.clone(), quote, 1));
+        assert_eq!(pick_in(&quote, "package", &[("field", "c0")]).await, (quote.clone(), quote, 1));
     }
 
     #[tokio::test]
@@ -1167,7 +1172,7 @@ mod narrowing_tests {
         let field = ScalarField::new(Annotation::Str);
         let candidates = field_candidates(&page, &field).unwrap();
         let jev = ContextChecked(
-            Picker(&[("reference", "c0"), ("reference_begins", "1"), ("reference_ends", "1")], Default::default()),
+            Picker(&[("field", "c0"), ("field_begins", "1"), ("field_ends", "1")], Default::default()),
             quote,
         );
         let picked = choose_candidate(

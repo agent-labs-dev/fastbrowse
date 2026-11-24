@@ -333,6 +333,9 @@ pub(crate) struct State {
     pub(crate) cursor_hidden: bool,
     /// The cursor world in each tab the run drew in, for tabs that outlive the session.
     pub(crate) cursor_contexts: HashMap<String, i64>,
+    /// Set once the run holds an address credential, and never cleared: no image of the page leaves the run, a
+    /// screenshot included (`Session::hold_images`).
+    pub(crate) images_held: bool,
     pub(crate) screencast_session_id: Option<String>,
     pub(crate) pending_frame: Option<Frame>,
     pub(crate) frame_scheduled: bool,
@@ -705,6 +708,20 @@ impl BrowserSession {
 
     pub(crate) fn set_cursor_hidden(&self, hidden: bool) {
         self.0.state.lock().unwrap().cursor_hidden = hidden;
+    }
+
+    /// Hold every image of the page to the end of the session: live frames and the recording, sealed as a typed
+    /// secret seals them, and screenshots. The run holds an address credential, and a page can paint its own address
+    /// where no reading of its text finds it.
+    pub fn hold_images(&self) {
+        let mut state = self.0.state.lock().unwrap();
+        state.images_held = true;
+        state.frames_sealed = true;
+    }
+
+    /// Whether `hold_images` was called: `CdpPage::screenshot` refuses from then on.
+    pub fn images_held(&self) -> bool {
+        self.0.state.lock().unwrap().images_held
     }
 
     pub fn set_frames_withheld(&self, withheld: bool) {

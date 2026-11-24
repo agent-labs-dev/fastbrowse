@@ -1,5 +1,6 @@
 //! run_task decisions, including one owned-local browser initialization check.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -320,6 +321,99 @@ async fn page_after_refusal(start: &str, task: &str, answers_it: f64) -> String 
     pages.get(1).copied().unwrap_or_default().to_string()
 }
 
+/// Asked while the browser starts whether the task answers a consent banner itself, Jev was shown the task as the
+/// caller wrote it, an address's credentials included: nothing had masked them yet (#1381).
+#[tokio::test]
+async fn test_the_consent_check_is_shown_the_task_with_its_credentials_masked() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let options = task(|o, h| {
+        o.task = "Accept the cookies at https://shopper:t4sk-pw@shop.test/orders".into();
+        o.browser = true;
+        h.jev = Some(Arc::new(RecordingDecision(seen.clone())));
+        h.open_browser = Some(no_browser());
+    });
+    let _ = run(options).await;
+    let states = seen.lock().unwrap();
+    let task = |state: &Value| state["task"].as_str().map(str::to_string);
+    assert!(states.iter().filter_map(task).any(|task| task.contains("@shop.test/orders")), "{states:?}");
+    for state in states.iter().map(Value::to_string) {
+        assert!(!state.contains("t4sk-pw") && !state.contains("shopper"), "{state}");
+    }
+}
+
+/// Stops the run at its first decision, a second after it, so the browser has had time to send frames.
+struct StopsAfterASecond;
+
+impl DecisionClient for StopsAfterASecond {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a Value,
+        _: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            Err(DecisionError::failed("stopped"))
+        })
+    }
+}
+
+/// A start with credentials can draw them from the first paint (a page writes `document.URL`, which keeps them), and
+/// frames went out from the browser's opening until the agent was built and first looked (#1381). With credentials,
+/// none of the run's frames goes out; without, the same page sends them.
+#[tokio::test]
+async fn test_no_frame_goes_out_of_a_run_whose_start_has_credentials() {
+    // A silent pass without Chrome would look like no frame going out.
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_some(),
+        "test_no_frame_goes_out_of_a_run_whose_start_has_credentials needs Chrome on PATH"
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let page = "<html><body><p id=u></p><script>document.getElementById('u').textContent = document.URL; \
+                    setInterval(() => document.body.style.background = `hsl(${Date.now() % 360}, 50%, 50%)`, 50)\
+                    </script></body></html>";
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                page.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    for (start, sent) in
+        [(format!("http://shopper:fr4me-pw@127.0.0.1:{port}/"), false), (format!("http://127.0.0.1:{port}/"), true)]
+    {
+        let frames = Arc::new(AtomicUsize::new(0));
+        let counted = frames.clone();
+        let host = Host {
+            jev: Some(Arc::new(StopsAfterASecond)),
+            llm: Some(Arc::new(Silent)),
+            settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
+            on_frame: Some(Arc::new(move |_: Vec<u8>| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {})
+            })),
+            ..Host::default()
+        };
+        let task = RunTask {
+            task: "read the page".into(),
+            start: Some(start.clone()),
+            launch: true,
+            browser: true,
+            ..RunTask::default()
+        };
+        let _ = run_task(task, host).await;
+        assert_eq!(frames.load(Ordering::SeqCst) > 0, sent, "{start}");
+    }
+}
+
 fn answering(status: u16) -> Http {
     Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
         Box::pin(async move { Ok(Response::new(status, Vec::new())) })
@@ -562,6 +656,20 @@ fn local_uses_the_extension_unless_a_launch_is_asked_for() {
     assert!(error.contains("drop launch"), "{error}");
     let error = refused(RunTask { local: true, cloud_profile: Some("p".into()), ..RunTask::default() });
     assert!(error.contains("cloud_profile needs the cloud browser"), "{error}");
+}
+
+/// `check` runs before `run_task`, outside the run's redactor, and its refusals quoted the value refused: a proxy
+/// country or a DevTools endpoint holding an address's password reached the embedder's log whole (#1381).
+#[test]
+fn a_preflight_refusal_masks_the_credential_it_quotes() {
+    let read = RunTask { task: "read the page".into(), ..RunTask::default() };
+    for given in [
+        RunTask { proxy_country: Some("https://ops:pf-d00r@h.test/".into()), ..read.clone() },
+        RunTask { cdp_url: Some("http://ops:pf-d00r@h.test/".into()), ..read.clone() },
+    ] {
+        let error = fastbrowse_run::check(&given, false).unwrap_err().to_string();
+        assert!(!error.contains("pf-d00r"), "{error}");
+    }
 }
 
 #[test]
@@ -1520,4 +1628,446 @@ async fn test_a_save_over_another_cards_caption_is_not_taken() {
             "{question}"
         );
     }
+}
+
+/// Every request to a client, as the client was handed it, around the client that answers it, counting the images the
+/// request carried. Jev's profile says it sees images, so a run that withheld none would send them.
+struct Recorded<C: ?Sized>(Arc<C>, Arc<Mutex<Vec<String>>>, Arc<AtomicUsize>);
+
+impl DecisionClient for Recorded<dyn DecisionClient> {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile { images: true, ..self.0.profile() }
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.1.lock().unwrap().push(format!("{state}{}", serde_json::to_string(questions).unwrap()));
+        self.0.evaluate(state, questions)
+    }
+
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a fastbrowse_core::decision::Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.1.lock().unwrap().push(format!("{state}{}", serde_json::to_string(questions).unwrap()));
+        self.2.fetch_add(images.len(), Ordering::SeqCst);
+        self.0.evaluate_images(state, questions, images)
+    }
+}
+
+impl LLMClient for Recorded<dyn LLMClient> {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        self.1.lock().unwrap().extend(messages.iter().map(|message| message.content.clone()));
+        // The response schema is sent with the request, and its keys are written by code, never from a caller's name.
+        self.1.lock().unwrap().push(format!("{}{}", schema.name(), schema.json_schema()));
+        self.2.fetch_add(messages.iter().map(|message| message.images.len()).sum(), Ordering::SeqCst);
+        self.0.generate_value(purpose, messages, schema, ledger)
+    }
+}
+
+/// What a run's clients and callbacks were handed, gathered across every run given its host.
+#[derive(Default, Clone)]
+struct Handed {
+    asked: Arc<Mutex<Vec<String>>>,
+    written: Arc<Mutex<Vec<String>>>,
+    images: Arc<AtomicUsize>,
+    frames: Arc<AtomicUsize>,
+    events: Arc<Mutex<Vec<String>>>,
+    checked: Arc<Mutex<Vec<String>>>,
+}
+
+impl Handed {
+    /// A host whose Jev follows `script` and sees images, with step frames asking for a PNG with every step event and
+    /// a final frame on the result.
+    fn host(&self, script: &str, trace: &fastbrowse_core::telemetry::Trace) -> Host {
+        let jev: Arc<dyn DecisionClient> =
+            Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(fastbrowse_agent::scripted::steps(script).unwrap()));
+        let llm: Arc<dyn LLMClient> = Arc::new(fastbrowse_agent::scripted::ScriptedLLM);
+        let (frames, events, checked) = (self.frames.clone(), self.events.clone(), self.checked.clone());
+        Host {
+            jev: Some(Arc::new(Recorded(jev, self.asked.clone(), self.images.clone()))),
+            llm: Some(Arc::new(Recorded(llm, self.written.clone(), self.images.clone()))),
+            config: Some(fastbrowse_core::config::Config { step_frames: true, ..Default::default() }),
+            settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
+            http: Some(Http::hyper().with_trace(trace.clone())),
+            on_frame: Some(Arc::new(move |_: Vec<u8>| {
+                frames.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {})
+            })),
+            on_event: Some(Arc::new(move |event: Event| {
+                events.lock().unwrap().push(serde_json::to_string(&event).unwrap());
+                Box::pin(async {})
+            })),
+            until: Some(Arc::new(move |url: String| {
+                checked.lock().unwrap().push(url);
+                Box::pin(async { true })
+            })),
+            ..Host::default()
+        }
+    }
+}
+
+/// Whether a serialised event or result carries an image anywhere in it: a step event's `frame`, or any base64 PNG.
+fn carries_image(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.iter().any(|(key, value)| (key == "frame" && !value.is_null()) || carries_image(value))
+        }
+        Value::Array(items) => items.iter().any(carries_image),
+        Value::String(text) => text.starts_with("iVBORw0KGgo") || text.starts_with("/9j/"),
+        _ => false,
+    }
+}
+
+/// A run given credentials in its start (with a tab the browser strips), its task (a
+/// password-less token), its JSON context (an escaped `@`), an input's name (a quote, a tab and a newline) and value (a
+/// one-letter password) and a redirect, on a page that echoes each of them plain, percent-encoded and as the
+/// `Authorization: Basic` the browser sent, with and without padding, shows none of them to any model, event, trace
+/// record, result, `until` check, recording, saved recipe, refused recipe or Debug print, and sends no image of the page to Jev, the
+/// LLM, a step event, a frame or the result, while the browser is given every address whole (#1381). The run's only
+/// stderr writes (`fastbrowse_browser::warn` and the recipe warning) carry no page text or address.
+#[tokio::test]
+async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_frames() {
+    use fastbrowse_core::py::base64;
+    // A silent pass without Chrome would look like a clean run; CI's rust job has Chrome, so this fails loudly there
+    // and anywhere else Chrome is missing.
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_some(),
+        "test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_frames needs Chrome on PATH"
+    );
+    // Each password holds characters a prose cut once ended an authority at, or a JSON or Debug print escapes.
+    let (start_pw, redirect_pw, task_pw) = ("St@rt 9'pw", "R3dir<\"x", "T4sk(pw);");
+    let (token, context_pw) = ("Tok3n9pw", "J5on9pw");
+    // The one-letter password is a letter no path of the run holds: a path a credential's letters spell is refused.
+    let (name_pw, value_pw, canvas_pw) = ("Na\"m\te\n9pw", "Z", "C4nvas9pw");
+    let encode =
+        |text: &str| percent_encoding::utf8_percent_encode(text, percent_encoding::NON_ALPHANUMERIC).to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let reports = Arc::new(Mutex::new(Vec::<String>::new()));
+    let reported = reports.clone();
+    let echoes = [start_pw, redirect_pw, task_pw, context_pw]
+        .map(|pw| format!("{pw} {} {}", encode(pw), base64::encode(format!("ops:{pw}").as_bytes())))
+        .join(" ")
+        + &format!(" {token} {}", base64::encode(format!("{token}:").as_bytes()))
+        // A browser or a server may print a Basic credential without its padding.
+        + &format!(" Authorization: Basic {}", base64::encode(format!("ops:{value_pw}").as_bytes()).trim_end_matches('='));
+    // The address the run ends on carries the token in its query, as an `until` check would be shown it raw.
+    let redirect = format!("http://ops:{}@127.0.0.1:{port}/orders?ref={token}", encode(redirect_pw));
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = vec![0u8; 16384];
+            let read = socket.read(&mut buffer).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let authorization = request
+                .lines()
+                .find_map(|line| line.strip_prefix("Authorization: Basic "))
+                .map(str::trim)
+                .map(str::to_string);
+            reported.lock().unwrap().extend(authorization.clone());
+            let reply = if path.starts_with("/canvas") {
+                // The address is painted, never written as text, so a text check of the page finds nothing to hold.
+                let page = "<html><body><h1>Canvas</h1><canvas id=c width=900 height=60></canvas><script>\
+                            const c = document.getElementById('c').getContext('2d'); c.font = '24px sans-serif'; \
+                            c.fillText(document.URL, 10, 40)</script></body></html>";
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                    page.len()
+                )
+            } else if path == "/" {
+                format!("HTTP/1.1 302 Found\r\nlocation: {redirect}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+            } else if path.starts_with("/orders") && authorization.is_none() {
+                "HTTP/1.1 401 Unauthorized\r\nwww-authenticate: Basic realm=\"orders\"\r\ncontent-length: 0\r\n\
+                 connection: close\r\n\r\n"
+                    .to_string()
+            } else {
+                let sent = authorization.unwrap_or_default();
+                let page = format!(
+                    "<html><head><title>Orders {sent}</title></head><body><h1>Orders</h1><p id=u></p><label>Code <input name=code></label>\
+                     <p>Authorization: Basic {sent}</p><p>{echoes}</p><a href=\"{redirect}\">again</a>\
+                     <script>document.getElementById('u').textContent = document.URL</script></body></html>"
+                );
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                    page.len()
+                )
+            };
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    let handed = Handed::default();
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let recording = scratch.join(format!("canary-{}.mp4", std::process::id()));
+    let (replayed, saved) = (
+        scratch.join(format!("canary-{}-replayed.json", std::process::id())),
+        scratch.join(format!("canary-{}-saved.json", std::process::id())),
+    );
+    // Without ffmpeg the recording is refused before any frame, and the recording's content went unchecked in CI;
+    // CI's rust job installs it, so this fails by name wherever it is missing.
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_some(),
+        "test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_frames needs ffmpeg on PATH"
+    );
+    let trace = fastbrowse_core::telemetry::Trace::collecting();
+    // The input is offered to Jev under a handle, so the script picks it by the handle and never by its name.
+    let host = handed.host("fill Code = input:0; read", &trace);
+    // The browser strips the tab, so it opens with the password as written without it.
+    let encoded = encode(start_pw);
+    let (head, tail) = encoded.split_at(4);
+    let instruction = format!(
+        "Read the orders. The key page is http://ops:{task_pw}@127.0.0.1:{port}/key, and the repository \
+         http://{token}@127.0.0.1:{port}/repo, neither needed now."
+    );
+    // A recipe's start is refused with a credential in it, by a message that does not repeat the address.
+    std::fs::write(
+        &replayed,
+        serde_json::json!({
+            "version": fastbrowse_core::recipe::RECIPE_VERSION,
+            "task": instruction,
+            "start": format!("http://ops:{head}\t{tail}@127.0.0.1:{port}/"),
+            "steps": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let task = RunTask {
+        task: instruction.clone(),
+        context: Some(format!(r#"{{"crm": "http://ops:{context_pw}@127.0.0.1:{port}/crm"}}"#)),
+        inputs: Some(IndexMap::from([(
+            format!("http://ops:{name_pw}@127.0.0.1:{port}/in"),
+            format!("http://ops:{value_pw}@127.0.0.1:{port}/vault"),
+        )])),
+        start: Some(format!("http://ops:{head}\t{tail}@127.0.0.1:{port}/")),
+        save_recipe: Some(saved.clone()),
+        record: Some(recording.clone()),
+        launch: true,
+        browser: true,
+        ..RunTask::default()
+    };
+    // A JSON caller's escaped `@` is decoded before the run reads it.
+    let escaped =
+        serde_json::to_string(&task).unwrap().replace(&format!("{context_pw}@"), &format!("{context_pw}\\u0040"));
+    assert!(escaped.contains("\\u0040"));
+    let task: RunTask = serde_json::from_str(&escaped).unwrap();
+    let printed = format!("{task:?}");
+    let connection = format!(
+        "{:?}",
+        fastbrowse_core::models::BrowserConnection::new(format!("ws://ops:{name_pw}@127.0.0.1:{port}/"), false)
+    );
+    let result = run_task(task, host).await.unwrap();
+    // A page that paints its address on a canvas shows the credential in pixels alone, so only holding every image
+    // keeps it out of a screenshot, a step frame or the result.
+    let painted = run_task(
+        RunTask {
+            task: "Read the canvas.".into(),
+            start: Some(format!("http://ops:{canvas_pw}@127.0.0.1:{port}/canvas")),
+            launch: true,
+            browser: true,
+            ..RunTask::default()
+        },
+        handed.host("read", &trace),
+    )
+    .await
+    .unwrap();
+    // A refusal names the DevTools address it refused, raised to an embedder before any redactor exists.
+    let refused = run_task(
+        RunTask {
+            task: "Read it".into(),
+            cdp_url: Some(format!("http://ops:{context_pw}@127.0.0.1:{port}/")),
+            ..RunTask::default()
+        },
+        Host::default(),
+    )
+    .await
+    .unwrap_err();
+    let replay =
+        run_task(RunTask { task: instruction, recipe: Some(replayed.clone()), ..RunTask::default() }, Host::default())
+            .await
+            .unwrap_err()
+            .to_string();
+    assert!(replay.contains("not a recipe"), "{replay}");
+    let mut sinks = vec![
+        ("recipe refusal", replay),
+        ("result", serde_json::to_string(&result).unwrap()),
+        ("painted result", serde_json::to_string(&painted).unwrap()),
+        ("refusal", refused.to_string()),
+        ("task debug", printed),
+        ("connection debug", connection),
+        ("saved recipe", std::fs::read_to_string(&saved).unwrap_or_default()),
+    ];
+    sinks.extend(handed.checked.lock().unwrap().iter().map(|url| ("until", url.clone())));
+    sinks.extend(
+        result
+            .recordings
+            .iter()
+            .map(|path| ("recording", String::from_utf8_lossy(&std::fs::read(path).unwrap_or_default()).to_string())),
+    );
+    sinks.extend(handed.asked.lock().unwrap().iter().map(|text| ("jev", text.clone())));
+    sinks.extend(handed.written.lock().unwrap().iter().map(|text| ("llm", text.clone())));
+    sinks.extend(handed.events.lock().unwrap().iter().map(|text| ("event", text.clone())));
+    sinks.extend(trace.events().iter().map(|record| ("trace", record.to_string())));
+    assert!(sinks.iter().any(|(sink, text)| *sink == "jev" && text.contains("Orders")), "the page was not read");
+    assert!(!handed.checked.lock().unwrap().is_empty(), "until was not asked");
+    // Every frame of the run is held, so its recording has no clean frame to keep and is not written.
+    assert!(result.recordings.is_empty() && !recording.exists(), "a recording was written");
+    let written_start = format!("{head}\t{tail}");
+    // A one-letter password leaves every key and control id whole, so the fill finds its field and both runs finish.
+    assert_eq!((result.status, painted.status), (Status::Complete, Status::Complete), "{:?}", result.error);
+    assert!(handed.events.lock().unwrap().iter().any(|event| event.contains("\"fill\"")), "the input was not typed");
+    let mut leaks = Vec::new();
+    for (user, pw) in [
+        ("ops", start_pw),
+        ("ops", redirect_pw),
+        ("ops", task_pw),
+        ("ops", context_pw),
+        ("ops", name_pw),
+        ("ops", value_pw),
+        ("ops", canvas_pw),
+        (token, ""),
+    ] {
+        let secret = if pw.is_empty() { user } else { pw };
+        let basic = if pw.is_empty() { format!("{user}:") } else { format!("{user}:{pw}") };
+        let padded = base64::encode(basic.as_bytes());
+        let mut forms = vec![
+            written_start.clone(),
+            padded.clone(),
+            padded.trim_end_matches('=').to_string(),
+            padded.replace('+', "-").replace('/', "_"),
+            format!("{user}:{pw}@"),
+        ];
+        // A one-letter password is in every text as a letter; its address and Basic forms are what identify it.
+        if secret.chars().count() > 1 {
+            forms.extend([secret.to_string(), encode(secret)]);
+        }
+        // JSON and Debug write a quote, a tab and a newline escaped, so each form is looked for as written and so.
+        for form in forms
+            .iter()
+            .flat_map(|form| [form.clone(), serde_json::to_string(form).unwrap().trim_matches('"').to_string()])
+        {
+            leaks.extend(
+                sinks
+                    .iter()
+                    .filter(|(_, text)| text.contains(&form))
+                    .map(|(sink, _)| format!("{form:?} in the {sink}")),
+            );
+        }
+    }
+    if handed.frames.load(Ordering::SeqCst) != 0 {
+        leaks.push("a live frame went out".into());
+    }
+    if handed.images.load(Ordering::SeqCst) != 0 {
+        leaks.push(format!("{} images reached Jev or the LLM", handed.images.load(Ordering::SeqCst)));
+    }
+    if result.final_frame.is_some() || painted.final_frame.is_some() {
+        leaks.push("the result carries a final frame".into());
+    }
+    let pictured =
+        handed.events.lock().unwrap().iter().filter(|text| carries_image(&serde_json::from_str(text).unwrap())).count();
+    if pictured != 0 {
+        leaks.push(format!("{pictured} events carry an image"));
+    }
+    for path in [&recording, &replayed, &saved] {
+        let _ = std::fs::remove_file(path);
+    }
+    assert!(leaks.is_empty(), "the run leaked: {leaks:#?}");
+    // The browser itself was given the redirect's address whole and answered the 401 with its credentials.
+    let sent = base64::encode(format!("ops:{redirect_pw}").as_bytes());
+    assert!(reports.lock().unwrap().contains(&sent), "the browser was not given the redirect's credentials");
+}
+
+/// A token in a start address's query is not a credential by its structure, so a run learns it only when the caller
+/// declares it as a secret. Declared, it is masked from the first request on, before anything types it: no model,
+/// event, trace record, result or refusal carries it, and while the page shows it no image of the page goes out.
+#[tokio::test]
+async fn test_a_declared_secret_in_the_start_query_reaches_no_model_or_exit() {
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_some(),
+        "test_a_declared_secret_in_the_start_query_reaches_no_model_or_exit needs Chrome on PATH"
+    );
+    let token = "QueryTok9";
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        // The page writes its own address, query and all, as text.
+        let page = "<html><head><title>Shop</title></head><body><h1>Shop</h1><p id=u></p>\
+                    <script>document.getElementById('u').textContent = document.URL</script></body></html>";
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                page.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    let origin = format!("http://127.0.0.1:{port}");
+    let declared = || -> Arc<dyn fastbrowse_core::models::SecretResolver> {
+        Arc::new(ScopedSecrets::per_secret([(
+            "shop_token".to_string(),
+            (SecretValue::Plain(token.to_string()), vec![origin.clone()]),
+        )]))
+    };
+    let handed = Handed::default();
+    let trace = fastbrowse_core::telemetry::Trace::collecting();
+    let mut host = handed.host("read", &trace);
+    host.secrets = Some(declared());
+    let result = run_task(
+        RunTask {
+            task: "Read the shop page.".into(),
+            start: Some(format!("{origin}/?token={token}")),
+            launch: true,
+            browser: true,
+            ..RunTask::default()
+        },
+        host,
+    )
+    .await
+    .unwrap();
+    // A refusal quoting the DevTools address it was handed, the token in its query.
+    let refused = run_task(
+        RunTask { task: "Read it".into(), cdp_url: Some(format!("{origin}/?token={token}")), ..RunTask::default() },
+        Host { secrets: Some(declared()), ..Host::default() },
+    )
+    .await
+    .unwrap_err();
+    let mut sinks = vec![("result", serde_json::to_string(&result).unwrap()), ("refusal", refused.to_string())];
+    sinks.extend(handed.asked.lock().unwrap().iter().map(|text| ("jev", text.clone())));
+    sinks.extend(handed.written.lock().unwrap().iter().map(|text| ("llm", text.clone())));
+    sinks.extend(handed.events.lock().unwrap().iter().map(|text| ("event", text.clone())));
+    sinks.extend(handed.checked.lock().unwrap().iter().map(|url| ("until", url.clone())));
+    sinks.extend(trace.events().iter().map(|record| ("trace", record.to_string())));
+    assert!(sinks.iter().any(|(sink, text)| *sink == "jev" && text.contains("Shop")), "the page was not read");
+    let mut leaks: Vec<String> = sinks
+        .iter()
+        .filter(|(_, text)| text.contains(token))
+        .map(|(sink, _)| format!("the token in the {sink}"))
+        .collect();
+    if handed.frames.load(Ordering::SeqCst) != 0 {
+        leaks.push("a live frame went out".into());
+    }
+    if handed.images.load(Ordering::SeqCst) != 0 {
+        leaks.push(format!("{} images reached Jev or the LLM", handed.images.load(Ordering::SeqCst)));
+    }
+    if result.final_frame.is_some() {
+        leaks.push("the result carries a final frame".into());
+    }
+    let pictured =
+        handed.events.lock().unwrap().iter().filter(|text| carries_image(&serde_json::from_str(text).unwrap())).count();
+    if pictured != 0 {
+        leaks.push(format!("{pictured} events carry an image"));
+    }
+    assert!(leaks.is_empty(), "the run leaked: {leaks:#?}");
 }
