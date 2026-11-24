@@ -6,7 +6,7 @@ package fastbrowse
 import "encoding/json"
 
 // ProtocolVersion is the version of the wire format this client speaks.
-const ProtocolVersion = 3
+const ProtocolVersion = 4
 
 // What a client can ask of the server.
 const (

@@ -607,7 +607,7 @@ export const Method = {
   RUN_CANCEL: 'run/cancel',
   SHUTDOWN: 'shutdown',
 } as const;
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const ServerMethod = {
   RUN_EVENT: 'run/event',
   RUN_FRAME: 'run/frame',

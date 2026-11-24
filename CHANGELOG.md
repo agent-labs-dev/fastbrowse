@@ -14,7 +14,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - A selected table cell keeps its row as evidence. When a later column marks that row with a status or icon, the answer check can use it ([#1513](https://github.com/agent-labs-dev/fastbrowse/issues/1513)).
 - The completion check sees which control a drag was sent to, alongside what the page showed afterward ([#1519](https://github.com/agent-labs-dev/fastbrowse/issues/1519)).
 
-- **Breaking: `--desktop` is removed.** fastbrowse drives browsers only, so the flag, the `desktop` and `desktop_apps` run parameters in every SDK, the `right_click` and `double_click` operations, `FASTBROWSE_DESKPILOT` and `FASTBROWSE_DESKTOP_SHOWN` are gone. Drive desktop apps with [deskpilot](https://github.com/cjber/deskpilot) directly. The SDKs still drive an already-running Chromium browser or Electron app over CDP.
+- **Breaking: `--desktop` is removed.** fastbrowse drives browsers only, so the flag, the `desktop` and `desktop_apps` run parameters in every SDK, the `right_click` and `double_click` operations, `FASTBROWSE_DESKPILOT` and `FASTBROWSE_DESKTOP_SHOWN` are gone. Drive desktop apps with [deskpilot](https://github.com/cjber/deskpilot) directly. The SDKs still drive an already-running Chromium browser or Electron app over CDP. The protocol version is now 4, so an older client and this binary refuse each other at `initialize`.
 
 ## [0.12.0] - 2026-11-23
 

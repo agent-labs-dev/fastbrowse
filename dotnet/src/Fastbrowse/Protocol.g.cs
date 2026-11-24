@@ -1110,7 +1110,7 @@ public enum WallKind
 public static class ProtocolConstants
 {
     /// <summary>The version of the wire format this client speaks.</summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
     public const string MethodInitialize = "initialize";
     public const string MethodRun = "run";
