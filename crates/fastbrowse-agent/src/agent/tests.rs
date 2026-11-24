@@ -4704,6 +4704,28 @@ async fn test_a_drawn_page_whose_text_answer_was_rejected_has_its_screenshot_rea
 }
 
 #[tokio::test]
+async fn test_an_answer_the_chat_driver_named_in_quotes_is_not_joined_by_a_screenshot_read() {
+    // saucedemo-checkout: the order total was quoted from the page before Finish, a draft rejected earlier armed the
+    // screenshot read, and the emptied cart's "$0.00" read off the page done was called on became the answer.
+    let summary = capture(&[(BlockKind::Paragraph, "Total: $\n43.18")]);
+    let page = Observation { visual_content: true, ..at("https://example.test/checkout-step-two", &[]) };
+    let agent = Agent::new(
+        Arc::new(Screenshots::default()),
+        Arc::new(ScriptedJev::new(Vec::new())),
+        Arc::new(ListingImageLLM("Total: $0.00")),
+    );
+    let mut state = run_state();
+    state.task = "Finish the order and tell me the total.".into();
+    state.output_intent = super::state::OutputIntent::Text;
+    let evidence = block_evidence(&summary, "s0");
+    state.notes.add(Fact::read(&evidence.quote.clone(), evidence, FactReader::LlmQuote).answering());
+    state.composition_feedback = Some("coverage: the claims do not give the order total".into());
+    state.chat.named = true;
+    agent.read_drawn_page(&mut state, &page).await.expect("no read");
+    assert!(state.notes.facts().iter().all(|fact| fact.reader != FactReader::LlmImage));
+}
+
+#[tokio::test]
 async fn test_a_null_image_read_is_not_repeated_for_identical_pixels_in_one_run() {
     let llm = Arc::new(EmptyImageLLM::default());
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None, zoomed: None });

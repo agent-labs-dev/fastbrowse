@@ -251,8 +251,11 @@ impl Agent {
         // A rejected draft says what was read does not answer the task: a chart's title, read as the answer to "how
         // many units were sold in April", stood as answered, the bars were never read, and the rewrite said the value
         // is not shown.
-        let drawn_unanswered =
-            observation.visual_content && (!state.notes.answered() || state.composition_feedback.is_some());
+        // An answer the chat driver named in quotes is the answer, so only a task about how the page looks, which the
+        // driver cannot see, reads the pixels beside it.
+        let drawn_unanswered = observation.visual_content
+            && !state.chat.named
+            && (!state.notes.answered() || state.composition_feedback.is_some());
         if !drawn_unanswered && !state.appearance {
             return Ok(());
         }

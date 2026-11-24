@@ -50,10 +50,9 @@ pub(crate) fn quoted(capture: &Capture, quote: &str) -> Option<Evidence> {
     }
     let page = Page::new(capture);
     let tables = table_blocks(capture);
-    let length = quote.chars().count() as i64;
-    capture.text.match_indices(quote).find_map(|(at, _)| {
+    spans_of(&capture.text, quote).find_map(|(at, to)| {
         let start = capture.text[..at].chars().count() as i64;
-        let end = start + length;
+        let end = start + capture.text[at..to].chars().count() as i64;
         // A quote may run across blocks of one document, its frame and address: saucedemo draws "Total: $" and "43.18"
         // as two, so the total as the driver read it lay in no single block and done was refused with it on screen.
         // A block's source id names that block alone, so it cannot say which blocks are one document.
@@ -73,6 +72,27 @@ pub(crate) fn quoted(capture: &Capture, quote: &str) -> Option<Evidence> {
             .find(|table| table.start == block.start && table.start < table.row && table.row <= start)
             .map_or(start, |table| table.start);
         Some(evidence(&page, block, start, end))
+    })
+}
+
+/// The byte spans of `text` that hold `quote`'s words in order, each gap between them any run of whitespace. The
+/// driver is shown a page one block per line and writes the words back as it read them: it quoted "Total: $\n43.18"
+/// as "Total: $ 43.18", and done was refused twice with the total on screen. Whitespace is layout, not the words a
+/// quote cites, so this is the comparison a quote needs; the evidence keeps the page's own text.
+fn spans_of<'a>(text: &'a str, quote: &'a str) -> impl Iterator<Item = (usize, usize)> + 'a {
+    let words: Vec<&str> = quote.split_whitespace().collect();
+    let first = words.first().copied().unwrap_or_default();
+    text.match_indices(first).filter(|_| !first.is_empty()).filter_map(move |(at, _)| {
+        let mut to = at + first.len();
+        for word in &words[1..] {
+            let rest = &text[to..];
+            let gap = rest.len() - rest.trim_start().len();
+            if gap == 0 || !rest[gap..].starts_with(word) {
+                return None;
+            }
+            to += gap + word.len();
+        }
+        Some((at, to))
     })
 }
 
@@ -158,6 +178,9 @@ mod tests {
         .unwrap();
         let total = quoted(&page, "Total: $\n43.18").expect("one document's blocks");
         assert_eq!((total.start, total.end), (0, 14));
+        let spaced = quoted(&page, "Total: $ 43.18").expect("the words, whatever whitespace joins them");
+        assert_eq!((spaced.start, spaced.end, spaced.quote.as_str()), (0, 14, "Total: $\n43.18"));
+        assert!(quoted(&page, "Total: $43.18").is_none(), "words the page keeps apart are not one word");
         assert!(quoted(&page, "43.18\nAd").is_none(), "a quote into another frame's block is not one passage");
     }
 }

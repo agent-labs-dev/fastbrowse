@@ -57,6 +57,10 @@ pub(super) struct Chat {
     /// The addresses read so far, in order: a page the model was shown but never read looked the same to it as one
     /// read, and a count over every page left out the first (stretch-quotes-top-authors).
     read_pages: indexmap::IndexSet<String>,
+    /// Whether the latest done named its answer in quotes every one of which a page held. What it names is the answer:
+    /// a screenshot read of the page done was called on stood beside it, and saucedemo's emptied cart, "$0.00",
+    /// replaced the order total the driver quoted from the page before.
+    pub(super) named: bool,
 }
 
 impl Chat {
@@ -581,6 +585,7 @@ impl Agent {
                 // date of a date, day and month shown as three blocks.
                 // Quotes are cut whether or not the page was read: skipped on a page the driver had read() first, its
                 // quotes of a Hacker News thread gave way to the read's 28 picks of "upvote", and the answer was those.
+                state.chat.named = false;
                 if !quotes.is_empty() {
                     let capture = self.capture().await?;
                     let earlier = std::mem::take(&mut state.chat.shown);
@@ -597,6 +602,7 @@ impl Agent {
                         ));
                         return Ok(None);
                     }
+                    state.chat.named = true;
                     state.chat.read_on = Some(read_key(observation));
                 }
                 if state.chat.read_on.as_ref() != Some(&read_key(observation)) {
