@@ -40,7 +40,7 @@ use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::Page;
 use fastbrowse_core::protocol::run_task_fields;
 use fastbrowse_core::py::text::repr;
-use fastbrowse_core::safety::{Redactor, mask_userinfo};
+use fastbrowse_core::safety::{Redactor, mask_address};
 use fastbrowse_core::schema::Schema;
 use fastbrowse_core::telemetry::{Ledger, LedgerState, Trace};
 use serde_json::{Map, Value};
@@ -451,8 +451,8 @@ fn sink(downloads: Option<&Path>, scratch: &Scratch) -> Result<Arc<dyn ArtifactS
 /// The websocket URL of the browser serving DevTools on `port`, read from its `/json/version` endpoint.
 pub async fn resolve_cdp_port(port: u16, host: &str, http: &Http) -> Result<String, BrowserError> {
     // Named in every error below, which an embedder may log; a host written with credentials keeps them out.
-    let endpoint = mask_userinfo(&format!("http://{host}:{port}/json/version"));
     let address = format!("http://{host}:{port}/json/version");
+    let endpoint = mask_address(&address);
     let response = http.get(&address, &[], 5.0).await.map_err(|_| {
         BrowserError::failed("devtools/ConnectError", format!("no DevTools endpoint at {endpoint} (ConnectError)"))
     })?;
@@ -1107,6 +1107,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
     // Learned before anything reads the task: the consent check, the extension's tab group and the first frame all
     // come before the agent, and each took an address's credentials as the caller wrote them (#1381).
     learn_credentials(&redactor, recipe.as_ref(), &settings);
+    settings.validate_credentials(&mut redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner))?;
     let (warning_task, warning_tx, warning_stop_tx) = host
         .on_event
         .clone()
@@ -1592,6 +1593,28 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    #[tokio::test]
+    async fn test_run_refuses_start_credentials_repeated_in_settings() {
+        for (variable, value, field) in [
+            ("FASTBROWSE_LLM_EXTRA_BODY", r#"{"metadata":{"FixtureToken9":"tag"}}"#, "llm_extra_body"),
+            ("FASTBROWSE_LLM_EXTRA_BODY", r#"{"metadata":{"tag":"FixtureToken9"}}"#, "llm_extra_body"),
+            ("FASTBROWSE_LLM_MODEL", "models/FixtureToken9", "llm_model"),
+        ] {
+            let settings = Settings::from_sources(&[(variable, value)], None).expect("valid settings in isolation");
+            let task = RunTask {
+                task: "Read the page".into(),
+                start: Some("https://ops:FixtureToken9@shop.test/".into()),
+                ..RunTask::default()
+            };
+            let host = Host { settings: Some(settings), ..Host::default() };
+            let Err(RunError::Configuration(message)) = run_task(task, host).await else {
+                panic!("expected credential refusal");
+            };
+            assert!(message.contains(field));
+            assert!(!message.contains("FixtureToken9"));
+        }
+    }
 
     /// The address a host's `open_browser` answers is the caller's, like `cdp_url`, and is learnt as it is handed over:
     /// unlearnt, a password in it holding a quote was quoted whole past the structural scan, and the run did not hold

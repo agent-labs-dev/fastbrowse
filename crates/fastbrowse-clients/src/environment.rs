@@ -38,7 +38,7 @@ use fastbrowse_core::decision::{DecisionClient, JEV_MODEL, OpenRouterDecisionCat
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{LLMPurpose, LocalChrome};
 use fastbrowse_core::py::lax::bool_of;
-use fastbrowse_core::safety::mask_userinfo;
+use fastbrowse_core::safety::{Redactor, mask_address};
 use serde_json::{Map, Value};
 
 use crate::action_picker::{ActionPicker, LlmDecisionClient};
@@ -301,7 +301,7 @@ impl std::fmt::Debug for Settings {
             .field("exa_api_key", exa_api_key)
             .field("mcp_token", mcp_token)
             .field("decision_source", decision_source)
-            .field("decision_base_url", &decision_base_url.as_deref().map(mask_userinfo))
+            .field("decision_base_url", &decision_base_url.as_deref().map(mask_address))
             .field("decision_model", decision_model)
             .field("decision_api_key", decision_api_key)
             .field("action_picker", action_picker)
@@ -312,13 +312,13 @@ impl std::fmt::Debug for Settings {
             .field("llm_provider", llm_provider)
             .field("llm_provider_api_key", llm_provider_api_key)
             .field("llm_model", llm_model)
-            .field("llm_base_url", &llm_base_url.as_deref().map(mask_userinfo))
+            .field("llm_base_url", &llm_base_url.as_deref().map(mask_address))
             .field("llm_api_key", llm_api_key)
             .field("llm_strict", llm_strict)
             .field("llm_strict_set", llm_strict_set)
             .field("llm_extra_body", &llm_extra_body.as_deref().map(withheld_body))
             .field("llm_reasoning", llm_reasoning)
-            .field("chrome", &chrome.as_deref().map(mask_userinfo))
+            .field("chrome", &chrome.as_deref().map(mask_address))
             .field("headed", headed)
             .field("profile", profile)
             .finish()
@@ -432,13 +432,6 @@ pub fn parse_dotenv(text: &str) -> Vec<(String, String)> {
 /// The settings an address's credentials may be written in: the endpoints a client connects to.
 const BASE_ADDRESSES: [&str; 2] = ["decision_base_url", "llm_base_url"];
 
-/// Whether any string of `value`, keys included, is or holds an address that carries credentials.
-fn carries_credentials(value: &Value) -> bool {
-    let mut redactor = fastbrowse_core::safety::Redactor::default();
-    redactor.register_tree(value);
-    redactor.holds_credentials()
-}
-
 impl Settings {
     /// `load_settings()`: the process environment over `.env` in the working directory.
     pub fn load() -> Result<Settings, ConfigurationError> {
@@ -478,7 +471,7 @@ impl Settings {
             // Name the setting, never echo the input: the field may be a key.
             return Err(ConfigurationError(format!("invalid settings: {}", invalid.join(", "))));
         }
-        settings.refuse_credentials()?;
+        settings.validate_credentials(&mut Redactor::default())?;
         Ok(settings)
     }
 
@@ -532,24 +525,22 @@ impl Settings {
         .collect()
     }
 
-    /// Refuse an address's credentials in any text setting but the two base addresses. A model name and the extra
-    /// body are written into every model request as they are, and a Chrome or profile path into errors and the
-    /// result, so a credential in one reached the provider and the caller unmasked (#1381); a base address is only
-    /// connected to, and its userinfo is masked wherever an address is shown.
-    fn refuse_credentials(&self) -> Result<(), ConfigurationError> {
-        let held: Vec<&str> = self
-            .text()
+    /// Learn every text setting before checking any of them. Models, request body fields and paths can repeat
+    /// a credential learned from another setting or from the caller's task.
+    pub fn validate_credentials(&self, redactor: &mut Redactor) -> Result<(), ConfigurationError> {
+        let text = self.text();
+        for (_, value) in &text {
+            redactor.register_tree(value);
+        }
+        let held: Vec<&str> = text
             .into_iter()
-            .filter(|(name, value)| !BASE_ADDRESSES.contains(name) && carries_credentials(value))
+            .filter(|(name, value)| !BASE_ADDRESSES.contains(name) && redactor.reveals_value(value))
             .map(|(name, _)| name)
             .collect();
         if held.is_empty() {
             return Ok(());
         }
-        Err(ConfigurationError(format!(
-            "settings hold an address with credentials: {}; only the base URLs may carry one",
-            held.join(", ")
-        )))
+        Err(ConfigurationError(format!("settings hold credentials: {}", held.join(", "))))
     }
 
     fn assign(&mut self, name: &str, value: &str) -> Result<(), ()> {
@@ -666,12 +657,14 @@ impl Settings {
     }
 
     pub fn decision(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        self.validate_client_credentials(http)?;
         self.decision_from_catalog(http, None)
     }
 
     /// Resolve an explicit OpenRouter model pin before the caller fits a request. The pinned default and proxy
     /// endpoints use the checked-in profiles, as does configuration preflight.
     pub async fn resolve_decision(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        self.validate_client_credentials(http)?;
         let is_openrouter = self.decision_route().0 == DecisionSource::OpenRouter;
         let has_pin = self.decision_model.as_ref().is_some_and(|model| !model.is_empty());
         let public_route = self
@@ -847,13 +840,6 @@ impl Settings {
         let Value::Object(parsed) = parsed else {
             return Err(ConfigurationError("FASTBROWSE_LLM_EXTRA_BODY must be a JSON object".into()));
         };
-        // Checked here as well as at load: a caller can build `Settings` in code, and the body is merged into each
-        // model request after the messages are masked.
-        if carries_credentials(&Value::Object(parsed.clone())) {
-            return Err(ConfigurationError(
-                "FASTBROWSE_LLM_EXTRA_BODY holds an address with credentials; only the base URLs may carry one".into(),
-            ));
-        }
         let clashes = reserved_clashes(&parsed);
         if !clashes.is_empty() {
             return Err(ConfigurationError(format!(
@@ -971,7 +957,17 @@ impl Settings {
             .map_err(ConfigurationError)
     }
 
+    fn validate_client_credentials(&self, http: &Http) -> Result<(), ConfigurationError> {
+        match http.trace.redactor() {
+            Some(redactor) => {
+                self.validate_credentials(&mut redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+            }
+            None => self.validate_credentials(&mut Redactor::default()),
+        }
+    }
+
     pub fn llm(&self, http: &Http) -> Result<Box<dyn LLMClient>, ConfigurationError> {
+        self.validate_client_credentials(http)?;
         let source = self.llm_source();
         if matches!(source, LLMProvider::OpenRouter | LLMProvider::Gateway)
             && self.llm_provider.is_some()
@@ -1071,7 +1067,7 @@ mod tests {
             assert!(error.to_string().contains("llm_extra_body") && !error.to_string().contains("s3t-pw"), "{error}");
             // Settings built in code are checked where the body is read, before any request is written.
             let settings = Settings { llm_extra_body: Some(extra.into()), ..Settings::default() };
-            let error = settings.extra_body().unwrap_err().to_string();
+            let error = settings.llm(&Http::hyper()).err().expect("credential refused").to_string();
             assert!(error.contains("credentials") && !error.contains("s3t-pw"), "{error}");
         }
         let based = Settings::from_sources(&[("FASTBROWSE_LLM_BASE_URL", "https://ops:s3t-pw@h.test/v1")], None);

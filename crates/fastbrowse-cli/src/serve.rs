@@ -543,6 +543,7 @@ pub fn arguments(
     let browser_api_key = options::environment(&task, &settings)?;
     let host = Host {
         browser_api_key,
+        settings: Some(settings),
         secrets: match callbacks.resolve {
             Some(resolve) if !secrets.is_empty() => Some(Arc::new(ClientSecrets { refs: secrets, resolve }) as _),
             _ => None,

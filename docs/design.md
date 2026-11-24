@@ -602,12 +602,13 @@ its addresses masked; `FASTBROWSE_LLM_EXTRA_BODY` is printed, and written to the
 values withheld.
 
 A string the caller writes in a field that must come back as written (a path to record or save to, an output schema,
-a profile, a selector, a desktop app, an attachment's name, a serve `run_id`, a secret's name or origin) cannot be
+a profile, a selector, an attachment's name, a serve `run_id`, a secret's name or origin) cannot be
 masked without breaking what the caller matches it against, so a run whose such field holds a credential is refused
 before it starts, by a message that does not repeat it. Only the start, task, context, inputs and `cdp_url` may carry
-an address's credentials. Settings refuse one anywhere but the two base URLs, `FASTBROWSE_LLM_EXTRA_BODY` included,
-its keys too, so no model request body carries one. A short credential refuses any such field its letters spell: a
-one-letter password refuses every path holding that letter.
+an address's credentials. Before constructing clients, a run checks text settings against credentials learned from
+its arguments, recipe and settings. The check includes nested keys and values in `FASTBROWSE_LLM_EXTRA_BODY`. The two
+base URLs may carry endpoint credentials. A short credential refuses any checked field containing it, so a one-letter
+password refuses every checked path holding that letter.
 
 The userinfo of an address runs to its last `@`, as the WHATWG URL parser reads it, so a password holding `@`, `'`,
 `(`, `)`, `,`, `;`, `!`, `.`, `:` or `%20` is masked whole; prose punctuation ends only the host. A `"`, `<`, `>` or

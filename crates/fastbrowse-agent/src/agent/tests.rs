@@ -3221,6 +3221,34 @@ async fn test_no_image_of_the_page_leaves_a_run_that_holds_an_address_credential
     assert_eq!(result.failure_kind.as_deref(), Some("FinalFrame/withheld"));
 }
 
+#[tokio::test]
+async fn test_a_buffered_step_frame_is_dropped_after_capture_learns_a_credential() {
+    let sent = Sent::new(SentToLLM::default());
+    let page = Capture { url: "https://ops:FixturePixel9@shop.test/".into(), ..capture(&[]) };
+    let agent = sent.agent(Arc::new(Captured(page)));
+    assert!(!agent.images_withheld());
+    let frame = Some(png(10, 10));
+    agent.capture().await.unwrap();
+    assert!(agent.images_withheld());
+    let step = StepResult {
+        index: 0,
+        operation: Operation::Read,
+        decided_by: Decider::Jev,
+        outcome: StepOutcome::Executed,
+        failure: None,
+        url: "https://shop.test/".into(),
+        target: None,
+        confidence: None,
+        note: None,
+        facts: Vec::new(),
+        page_changed: None,
+        duration_ms: 0,
+        choices: Vec::new(),
+    };
+    agent.record_step(&mut run_state(), step, false, frame).await.unwrap();
+    assert!(matches!(sent.events.lock().unwrap().last(), Some(Event::Step(step)) if step.frame.is_none()));
+}
+
 /// Told a screenshot is attached when none can be, the done check and the composer judged a run as if one were: once
 /// the run holds an address credential they are told none is taken, and why.
 #[tokio::test]

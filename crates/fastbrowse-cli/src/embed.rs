@@ -11,6 +11,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Event, RunResult};
 use fastbrowse_core::protocol::{ErrorCode, Method, RunParams, ServerMethod};
 use fastbrowse_core::py::dump::Dump;
+use fastbrowse_core::safety::learnt;
 use serde_json::Value;
 
 use crate::runner::{Cancel, Runner, default_runner};
@@ -92,13 +93,17 @@ impl Embedded {
 
     /// Run the task `params` describes, a `run` request's params as JSON, until it ends or `cancel` is tripped.
     pub async fn run(&self, params: &str, host: Host, cancel: Cancel) -> Result<RunResult, Refused> {
-        let params: Value =
-            serde_json::from_str(params).map_err(|error| refusal(format!("run: params are not JSON: {error}")))?;
+        let params: Value = serde_json::from_str(params).map_err(|_| refusal("run: params are not JSON".into()))?;
         #[cfg(feature = "scripted")]
         if let Some(requests) = &self.requests {
             requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(params.clone());
         }
-        let params: RunParams = read(Method::Run, params)?;
+        let redactor = learnt(&params);
+        let mask_refusal = |mut error: Refused| {
+            error.message = redactor.redact(&error.message);
+            error
+        };
+        let params: RunParams = read(Method::Run, params).map_err(mask_refusal)?;
         // `serve` asks the client for what the params say it holds, so a host that holds less has to say so here.
         if params.frames && host.on_frame.is_none() {
             return Err(refusal("run: frames is set and no frame callback was given".into()));
@@ -112,10 +117,10 @@ impl Embedded {
         let failed = Failed { cancel: cancel.clone(), failure: Arc::default() };
         let callbacks = callbacks(host, &failed);
         let run_id = params.run_id.clone();
-        let (task, run_host) = arguments(params, &self.settings, callbacks)?;
+        let (task, run_host) = arguments(params, &self.settings, callbacks).map_err(mask_refusal)?;
         let outcome = self.runner.run(task, run_host).await;
         let failure = failed.failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
-        reply(outcome, failure, &run_id)
+        reply(outcome, failure, &run_id).map_err(mask_refusal)
     }
 }
 
@@ -187,5 +192,25 @@ fn callbacks(host: Host, failed: &Failed) -> Callbacks {
                 })
             })
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_embed_does_not_echo_quoted_credentials_in_a_refusal() {
+        let params = serde_json::json!({
+            "run_id": "test",
+            "task": "Read the page",
+            "fetch": r#"https://ops:pa"ss9@shop.test/"#
+        });
+        let error = Embedded::new(Vec::new())
+            .run(&params.to_string(), Host::default(), Cancel::default())
+            .await
+            .expect_err("a URL is not a boolean");
+        assert_eq!(error.code, ErrorCode::InvalidParams);
+        assert!(!error.message.contains("ss9"));
     }
 }

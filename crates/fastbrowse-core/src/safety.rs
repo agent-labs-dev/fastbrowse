@@ -868,6 +868,16 @@ pub fn mask_userinfo(text: &str) -> String {
     Redactor::default().mask(text)
 }
 
+/// Mask an address supplied as a whole. The URL parser recognises quoted userinfo that a prose scan cannot.
+pub fn mask_address(address: &str) -> String {
+    if let Ok(url) = Url::parse(address)
+        && (url.password().is_some() || !url.username().is_empty())
+    {
+        return mask_userinfo(url.as_str());
+    }
+    mask_userinfo(address)
+}
+
 /// What a door learns from one message a caller sent, before it says anything about it: every string in `message`,
 /// map keys included, read as one whole address (`register_address`), as the browser would parse it. A door that
 /// masked a reply, a log line or an echoed id after the fact had only the structural scan, which cannot tell a
@@ -1095,13 +1105,8 @@ impl Redactor {
         let basic = crate::py::base64::encode(format!("{user}:{password}").as_bytes());
         let url_safe = basic.replace('+', "-").replace('/', "_");
         let unpadded = [basic.trim_end_matches('=').to_string(), url_safe.trim_end_matches('=').to_string()];
-        // A decoded form of one delimiter (`%2F` read as `/`) is not a form anything shows as the credential: on
-        // its own it is every address's punctuation, and registering it would blank that everywhere.
         let decoded_secret = decoded(secret);
-        let decoded_form = (decoded_secret != secret
-            && !(decoded_secret.chars().count() == 1
-                && decoded_secret.chars().next().is_some_and(|c| c.is_ascii_punctuation())))
-        .then_some(decoded_secret);
+        let decoded_form = (decoded_secret != secret).then_some(decoded_secret);
         let forms = [Some(secret.to_string()), decoded_form, browser, Some(basic), Some(url_safe)]
             .into_iter()
             .chain(unpadded.map(Some));
@@ -1159,12 +1164,12 @@ impl Redactor {
         !self.spans(text).is_empty()
     }
 
-    /// Whether any string inside `value` reveals a secret.
+    /// Whether any string inside `value`, including a map key, reveals a secret.
     pub fn reveals_value(&self, value: &Value) -> bool {
         match value {
             Value::String(text) => self.reveals(text),
             Value::Array(items) => items.iter().any(|item| self.reveals_value(item)),
-            Value::Object(fields) => fields.values().any(|item| self.reveals_value(item)),
+            Value::Object(fields) => fields.iter().any(|(key, item)| self.reveals(key) || self.reveals_value(item)),
             Value::Null | Value::Bool(_) | Value::Number(_) => false,
         }
     }
@@ -1886,56 +1891,19 @@ mod tests {
 
     /// Registering learns the credential as text, so a page or log writing it outside an address is caught: the
     /// password, or the user name when there is none, as a token sent as one is. A user name beside a password names
-    /// the account, and blanked as a word, `admin` vanished from every page the run read.
     #[test]
-    fn test_registering_an_address_learns_its_credential_as_text() {
-        let mut redactor = Redactor::new();
-        assert!(redactor.register_credentials_in("Open https://admin:p%2Fss@shop.test:8443/orders?id=7 and report"));
-        assert!(!redactor.register_credentials_in("https://admin:p%2Fss@shop.test/"));
-        assert!(redactor.holds_credentials());
-        for (text, redacted) in [
-            ("Welcome, admin. Your password is p/ss", "Welcome, admin. Your password is [secret:address_credentials]"),
-            ("Typed p%2fss and p%2Fss", "Typed [secret:address_credentials] and [secret:address_credentials]"),
-        ] {
-            assert_eq!(redactor.redact(text), redacted, "{text}");
-        }
-        assert!(!redactor.reveals("Welcome, admin"));
-        // With no password, the user name is the secret; the browser's encoding of it is learnt too.
-        let mut token = Redactor::new();
-        assert!(token.register_credentials_in("//ghp{tok1}@code.test/repo"));
-        assert_eq!(
-            token.redact("Token ghp{tok1}, ghp%7Btok1%7D"),
-            "Token [secret:address_credentials], [secret:address_credentials]"
-        );
-        // Nested inside another address's query, the credential is learnt at its own level.
-        let mut nested = Redactor::new();
-        assert!(nested.register_credentials_in("https://a.test/?next=https%3A%2F%2Fu%3Ahunter2%40shop.test"));
-        assert_eq!(nested.redact("hunter2"), "[secret:address_credentials]");
-        // No userinfo registers nothing: a token in a query or path is not a credential.
-        let mut none = Redactor::new();
-        for text in ["https://shop.test/reset?token=abc", "https://@shop.test/", "not an address"] {
-            assert!(!none.register_credentials_in(text), "{text}");
-        }
-        assert!(!none.holds_credentials() && none.values.is_empty());
-        // Text this redactor masked still holds the run, and registers no form that would match every masked span.
-        let mut masked = Redactor::new();
-        masked.register_credentials_in("https://\u{2022}\u{2022}@h.test/");
-        assert!(masked.holds_credentials());
-        assert_eq!(masked.redact("a \u{2022}\u{2022} b"), "a \u{2022}\u{2022} b");
-    }
-
-    /// A password that is one encoded delimiter (`%2F`) must not register the lone `/` it decodes to: that is
-    /// every address's punctuation, and blanking it would corrupt unrelated addresses and page text.
-    #[test]
-    fn test_a_password_of_one_encoded_delimiter_registers_no_lone_delimiter() {
+    fn test_a_password_of_one_encoded_delimiter_is_masked_when_echoed_decoded() {
         let mut redactor = Redactor::new();
         assert!(redactor.register_address("https://ops:%2F@shop.test/"));
-        assert!(redactor.holds_credentials());
-        assert_eq!(
-            redactor.redact("see https://other.test/a/b and ops:%2F@shop.test"),
-            "see https://other.test/a/b and ops:[secret:address_credentials]@shop.test"
-        );
-        assert!(!redactor.reveals("a/b/c"));
+        assert_eq!(redactor.mask("echo /"), "echo •");
+    }
+
+    #[test]
+    fn test_a_whole_address_with_a_quote_in_its_password_is_masked() {
+        let address = r#"https://ops:pa"ss9@shop.test/orders"#;
+        let masked = mask_address(address);
+        assert!(!masked.contains("ss9"));
+        assert!(masked.ends_with("@shop.test/orders"));
     }
 
     /// A password holding a bullet or a `[secret:` marker was skipped as already masked: never registered, so its

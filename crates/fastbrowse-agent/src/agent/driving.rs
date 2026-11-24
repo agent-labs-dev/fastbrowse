@@ -1939,7 +1939,9 @@ impl Agent {
         }
         let Some(on_event) = &self.on_event else { return Ok(()) };
         let frame = if capture_frame && self.config.step_frames { self.frame().await? } else { frame };
-        on_event(Event::Step(StepEvent { kind: Default::default(), step, frame: frame.map(Image) })).await;
+        // A read can learn a credential after it buffered this frame.
+        let frame = if self.images_withheld() { None } else { frame.map(Image) };
+        on_event(Event::Step(StepEvent { kind: Default::default(), step, frame })).await;
         Ok(())
     }
 

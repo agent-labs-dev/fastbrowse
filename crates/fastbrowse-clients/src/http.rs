@@ -63,7 +63,7 @@ impl std::fmt::Debug for Request {
         let Request { method, url, headers, body, max_bytes, timeout, handoff } = self;
         f.debug_struct("Request")
             .field("method", method)
-            .field("url", &fastbrowse_core::safety::mask_userinfo(url))
+            .field("url", &fastbrowse_core::safety::mask_address(url))
             .field("headers", &headers.iter().map(|(name, _)| name).collect::<Vec<_>>())
             .field("body_bytes", &body.len())
             .field("max_bytes", max_bytes)

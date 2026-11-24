@@ -534,6 +534,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let host = Host {
         recipe_sink: recipe_sink.clone(),
         browser_api_key,
+        settings: Some(settings),
         secrets: secrets.map(|secrets| Arc::new(secrets) as _),
         on_event: Some(progress(context.streams.clone())),
         http: kept.as_ref().map(|kept| fastbrowse_clients::http::Http::hyper().with_trace(kept.trace())),
