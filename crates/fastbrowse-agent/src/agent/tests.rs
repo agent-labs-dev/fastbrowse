@@ -2359,9 +2359,9 @@ fn test_an_idle_wait_stays_on_offer_and_an_idle_click_does_not() {
     assert!(offered.controls.is_empty(), "{:?}", offered.controls);
 }
 
-/// A desktop run pressed OK right after its click on a list row failed (#1403): deskpilot said to scroll the row into
-/// view, and the next ask said only that the click did not move the task on. A refused action is named with the
-/// refusal, so the next decision is made knowing what it takes.
+/// A run pressed OK right after its click on a list row failed (#1403): the page said to scroll the row into view,
+/// and the next ask said only that the click did not move the task on. A refused action is named with the refusal, so
+/// the next decision is made knowing what it takes.
 #[test]
 fn test_an_action_refused_is_left_out_with_the_refusal_its_page_gave() {
     let page = observation(&[button("entry 173"), button("OK")]);
@@ -3218,8 +3218,8 @@ async fn test_a_task_carried_out_is_not_told_it_is_answered_by_what_it_read_befo
     }
 }
 
-/// A `--desktop` run asked to choose Germany in a form's combo box read the box as "United Kingdom" on its first page,
-/// chose Germany, and ended stuck citing "United Kingdom", which the window no longer showed (#989). A stopped run that
+/// A run asked to choose Germany in a form's combo box read the box as "United Kingdom" on its first page, chose
+/// Germany, and ended stuck citing "United Kingdom", which the page no longer showed (#989). A stopped run that
 /// only carries something out answers, as a finished one does, with what it read after its last step.
 #[tokio::test]
 async fn test_a_stopped_task_carried_out_answers_only_with_what_it_read_after_its_last_step() {
@@ -12089,7 +12089,7 @@ fn a_carried_out_task_answers_with_a_fact_drawn_from_quotes_read_after_its_last_
     let mut state = run_state();
     state.history.push(executed(Some(Operation::Fill), Some("textbox"), true));
     let mut page = capture(&[(BlockKind::Paragraph, "hello"), (BlockKind::Paragraph, "hello")]);
-    page.url = "desktop://org.gnome.texteditor/".into();
+    page.url = "https://example.test/".into();
     let read = |id: &str| Fact::read("hello", block_evidence(&page, id), FactReader::JevChoice);
     let (first, second) = (read("s0"), read("s1"));
     let basis = vec![crate::memory::fact_id(&first), crate::memory::fact_id(&second)];

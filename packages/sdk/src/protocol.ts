@@ -34,8 +34,6 @@ export type BrowserWarningFailure =
   | 'cancelled';
 export type Operation =
   | 'click'
-  | 'right_click'
-  | 'double_click'
   | 'hover'
   | 'drag'
   | 'fill'
@@ -506,8 +504,6 @@ export interface RunParams {
   browser?: boolean;
   extension?: boolean;
   extension_browser?: string | null;
-  desktop?: string | null;
-  desktop_apps?: string[];
 }
 export interface SecretRef {
   name: string;
@@ -611,7 +607,7 @@ export const Method = {
   RUN_CANCEL: 'run/cancel',
   SHUTDOWN: 'shutdown',
 } as const;
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const ServerMethod = {
   RUN_EVENT: 'run/event',
   RUN_FRAME: 'run/frame',

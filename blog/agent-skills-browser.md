@@ -3,9 +3,9 @@ title: Add a browser skill to Claude Code and Codex
 description: Install the fastbrowse skill so Claude Code or Codex can browse a site and come back with an answer, its quotes and a run status.
 topic: Coding agents and MCP
 published: 2026-11-01
-updated: 2026-11-22
+updated: 2026-11-24
 verifiedAgainst: v0.12.0
-verifiedOn: 2026-11-22
+verifiedOn: 2026-11-24
 ---
 
 The fastbrowse skill lets a coding agent hand a browser task to fastbrowse and get back an answer, the quotes behind it and a run status it can branch on.

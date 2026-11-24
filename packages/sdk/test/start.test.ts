@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 
 import { Fastbrowse, FastbrowseError } from '../src/index.ts';
+import { PROTOCOL_VERSION } from '../src/protocol.ts';
 import { launcher, packageVersion, scriptedServer, serverBinary } from './server.ts';
 
 afterEach(() => {
@@ -69,8 +70,8 @@ test('a binary on another protocol version is refused with both versions named, 
   const server = scriptedServer('other_protocol');
   await assert.rejects(Fastbrowse.start({ binaryPath: server.path }), (error: unknown) => {
     assert.ok(error instanceof FastbrowseError);
-    assert.match(error.message, /protocol version 3\b/);
-    assert.match(error.message, /protocol version 4\b/);
+    assert.match(error.message, new RegExp(`protocol version ${PROTOCOL_VERSION}\\b`));
+    assert.match(error.message, new RegExp(`protocol version ${PROTOCOL_VERSION + 1}\\b`));
     return true;
   });
   assert.equal(server.running(), false);

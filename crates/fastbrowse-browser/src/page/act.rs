@@ -776,12 +776,6 @@ impl CdpPage {
                 self.session.handle_dialog(accept, action.text.as_deref()).await?;
                 Ok((StepOutcome::Executed, None, None))
             }
-            // Only a desktop window offers these: the page index never does, so an action naming one was not offered.
-            Operation::RightClick | Operation::DoubleClick => Ok((
-                StepOutcome::Failed,
-                Some(format!("a browser page does not offer {}", action.operation.as_str())),
-                Some(StepFailure::BrowserError),
-            )),
             Operation::Read | Operation::Done => Err(BrowserError::failed(
                 "act/not-dispatched",
                 format!("{} does not dispatch through the browser layer", action.operation.as_str()),

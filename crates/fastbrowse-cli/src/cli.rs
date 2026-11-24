@@ -151,7 +151,6 @@ pub fn parser(build: &Build) -> Parser {
             Opt::flag("--browser"),
             Opt::flag("--extension"),
             Opt::value("--extension-browser"),
-            Opt::append("--desktop"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
             Opt::flag("--no-cursor"),
@@ -198,9 +197,6 @@ pub struct Args {
     pub extension: bool,
     /// Which browser the extension is connected in, by its label; implies `extension`.
     pub extension_browser: Option<String>,
-    /// The desktop apps to start and drive through deskpilot instead of a browser, each a command line, one per
-    /// `--desktop`. Each is driven through its accessibility tree, so an app that exposes none cannot be.
-    pub desktop: Vec<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     /// `--cursor` or `--no-cursor`; neither draws the cursor wherever the page can be seen.
@@ -268,7 +264,6 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         browser: parsed.flag("--browser"),
         extension: parsed.flag("--extension"),
         extension_browser: text("--extension-browser"),
-        desktop: parsed.all("--desktop").to_vec(),
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
@@ -464,14 +459,10 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let explicit_extension = args.extension || args.extension_browser.is_some();
-    let extension = explicit_extension || (!args.cloud && !args.fetch && args.desktop.is_empty());
-    // A desktop run starts no browser, so a cloud one asked for beside it was silently never started (#1337).
-    let desktop = !args.desktop.is_empty();
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension || desktop) {
+    let extension = explicit_extension || (!args.cloud && !args.fetch);
+    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension) {
         return Err(ConfigurationError(
-            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch, --extension or \
-             --desktop"
-                .into(),
+            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
         ));
     }
     let cdp_port = args
@@ -520,8 +511,6 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         browser: args.browser,
         extension,
         extension_browser: args.extension_browser.clone(),
-        desktop: args.desktop.first().cloned(),
-        desktop_apps: args.desktop.iter().skip(1).cloned().collect(),
         ..RunTask::default()
     };
     let secrets_given = !args.secret.is_empty() || args.bitwarden.is_some();

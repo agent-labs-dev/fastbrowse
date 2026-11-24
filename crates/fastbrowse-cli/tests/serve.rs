@@ -24,7 +24,7 @@ async fn test_initialize_answers_with_the_protocol_version_and_the_package_versi
         response,
         json!({"jsonrpc": "2.0", "id": 1, "result": {"protocol_version": PROTOCOL_VERSION, "fastbrowse_version": VERSION}})
     );
-    assert_eq!(PROTOCOL_VERSION, 3);
+    assert_eq!(PROTOCOL_VERSION, 4);
 }
 
 #[tokio::test]

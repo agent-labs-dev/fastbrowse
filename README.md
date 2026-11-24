@@ -34,8 +34,6 @@ credentials, irreversible actions and spending under the control of code.
   [fastbrowse extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop),
   or in a Browser Use Cloud browser with `--cloud`. The SDKs also drive local Chrome and any Chromium browser or
   Electron app that is already running.
-- **Desktop apps too.** On Linux with Hyprland, `--desktop` starts native apps, one per flag, and drives their
-  windows through their accessibility trees, in the background, with [deskpilot](https://github.com/cjber/deskpilot).
 - **One agent, every interface.** A CLI, a Python library, Node and Go SDKs that need no Python, an MCP
   server, and a skill for coding agents.
 
@@ -109,7 +107,7 @@ uvx fastbrowse "Log in as standard_user with the saved password and add the back
 ```
 
 The [command-line reference](docs/cli.md#flags) has every flag, your own signed-in Chrome and Bitwarden logins, driving open
-windows and [desktop apps](docs/cli.md#desktop-apps), model and provider settings, and every status with its exit code.
+windows, model and provider settings, and every status with its exit code.
 
 ## Use your own Chrome
 

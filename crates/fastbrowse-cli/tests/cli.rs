@@ -176,24 +176,6 @@ async fn test_fetch_starts_no_browser_and_asks_for_no_cloud_key() {
 }
 
 #[tokio::test]
-async fn desktop_does_not_select_the_default_extension() {
-    let ran = cli(&["task", "--desktop", "app"]).await;
-    assert_eq!(ran.code, 0, "{}", ran.err);
-    let call = ran.call.unwrap();
-    assert_eq!(call.task.desktop.as_deref(), Some("app"));
-    assert!(!call.task.extension && call.task.chrome.is_none());
-}
-
-#[tokio::test]
-async fn each_desktop_flag_starts_one_more_app() {
-    let ran = cli(&["task", "--desktop", "gnome-text-editor -s", "--desktop", "gnome-calculator"]).await;
-    assert_eq!(ran.code, 0, "{}", ran.err);
-    let call = ran.call.unwrap();
-    assert_eq!(call.task.desktop.as_deref(), Some("gnome-text-editor -s"));
-    assert_eq!(call.task.desktop_apps, ["gnome-calculator"]);
-}
-
-#[tokio::test]
 async fn test_fetch_refuses_flags_that_shape_a_browser() {
     for (flag, field) in [
         (&["--local"][..], "local"),
@@ -216,13 +198,6 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
         assert!(ran.call.is_none());
         assert_eq!(ran.err, format!("fastbrowse: fetch starts no browser, so it cannot be combined with {field}\n"));
     }
-}
-
-#[tokio::test]
-async fn cloud_refuses_a_desktop_run_that_starts_no_browser() {
-    let ran = cli(&["t", "--cloud", "--desktop", "app"]).await;
-    assert!(ran.call.is_none());
-    assert!(ran.err.contains("--cloud cannot be combined with") && ran.err.contains("--desktop"), "{}", ran.err);
 }
 
 #[tokio::test]

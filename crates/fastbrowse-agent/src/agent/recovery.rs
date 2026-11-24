@@ -34,8 +34,8 @@ pub(crate) struct Idle {
     /// The observed target of a covered action, distinct from any later control with the same label.
     pub covered_target_id: Option<String>,
     /// Why a failed action was not performed, in the words of the browser or app that refused it. Told only that a
-    /// click on a row out of view "did not move the task on", a desktop run pressed OK next and submitted the
-    /// dialog's default row; deskpilot had said to scroll the row into view (#1403).
+    /// click on a row out of view "did not move the task on", a run pressed OK next and submitted the
+    /// dialog's default row, though the page had said to scroll the row into view (#1403).
     pub refused: Option<String>,
 }
 

@@ -831,7 +831,7 @@ impl Agent {
                 return self.answered(partial, &notes, Some(state), ledger, status, error, budget);
             }
         }
-        // A run stuck on a desktop form after choosing Germany cited "United Kingdom", the combo box's value as its
+        // A run stuck on a form after choosing Germany cited "United Kingdom", the combo box's value as its
         // first read saw it, before the choice: a task that only carries something out answers, stopped or not, with
         // what it read after its last step that changes the site (#989).
         let outcome = state.filter(|state| state.output_intent == state::OutputIntent::CarriedOut).map(outcome_notes);

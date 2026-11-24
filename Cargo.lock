@@ -549,7 +549,6 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
- "shlex",
  "tokio",
  "url",
 ]

@@ -82,10 +82,6 @@ pub trait FailureKind {
 str_enum! {
     pub enum Operation {
         Click = "click",
-        /// A secondary click, which opens the context menu a desktop app keeps an item's commands in.
-        RightClick = "right_click",
-        /// Two clicks in quick succession, which open a file, folder or list item in a desktop app.
-        DoubleClick = "double_click",
         Hover = "hover",
         Drag = "drag",
         Fill = "fill",
@@ -113,10 +109,8 @@ pub const SCROLLING: [Operation; 2] = [Operation::Scroll, Operation::ScrollUp];
 
 /// Operations aimed at one observed control. All but a blur are hit-tested before input reaches it: a blur sends no
 /// input, so a band drawn over the field does not stop it.
-pub const TARGETED: [Operation; 11] = [
+pub const TARGETED: [Operation; 9] = [
     Operation::Click,
-    Operation::RightClick,
-    Operation::DoubleClick,
     Operation::Hover,
     Operation::Drag,
     Operation::Fill,

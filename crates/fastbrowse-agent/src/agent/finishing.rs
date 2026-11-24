@@ -805,7 +805,7 @@ fn drafted(feedback: &str) -> Option<Vec<String>> {
 /// it reported a write task's start page, "Save: disabled", the disabled Save button beside the field it was about to
 /// change (#939). A fact drawn from other facts holds what they quote: it is kept when every quote it rests on was
 /// read after that step. A read that joined two spans of "hello" into one answering fact had no quote of its own, was
-/// dropped, and a desktop run asked to write "hello" and read it back ended `complete` with no answer (#1343).
+/// dropped, and a run asked to write "hello" and read it back ended `complete` with no answer (#1343).
 pub(super) fn outcome_notes(state: &RunState) -> Notes {
     let taken = state.history.iter().filter(|entry| entry.changed_site()).count();
     let notes = &state.notes;

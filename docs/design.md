@@ -488,8 +488,7 @@ has no fixed bound. A run with `max_seconds` waits at most until it must stop br
 most one armed watch (`WAIT_ARM_SECONDS`, 60 s) and is then told the page did not change, so it can decide again and
 the stall rule counts a page that never moves. The wait samples the fingerprint twice a second beside the events it hears, since a script writing
 `checked` as a property raises none. A wait that ends with nothing changed is a step that changed nothing, under the one stall rule, unless
-a player's clock moved meanwhile. A cancelled wait removes what it installed in the page. A direct `Page::act` Wait has no deadline of its own, so it lasts one armed watch at most; an embedder bounds it further through `Page::wait` or cancellation. Desktop waits use the
-same run deadline while polling the window's accessibility tree for a change.
+a player's clock moved meanwhile. A cancelled wait removes what it installed in the page. A direct `Page::act` Wait has no deadline of its own, so it lasts one armed watch at most; an embedder bounds it further through `Page::wait` or cancellation.
 
 An empty observation waits on loading events before action history and progress are recorded.
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
