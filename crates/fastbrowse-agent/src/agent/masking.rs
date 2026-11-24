@@ -24,7 +24,6 @@ pub(super) fn keep_code_made(redactor: &mut Redactor, observation: &Observation)
                 .into_iter()
                 .flatten(),
         );
-        kept.push(&control.role);
     }
     for tab in &observation.tabs {
         kept.push(&tab.id);
@@ -142,7 +141,8 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         form_id: form_id.clone(),
         // Never written out, so no model or trace reads it, and acting matches it against the live page.
         retarget_key: retarget_key.clone(),
-        role: role.clone(),
+        // Hover controls can carry a page-defined role that echoes a credential.
+        role: mask(role),
         label: mask(label),
         context: mask_opt(context),
         operations: operations.clone(),
@@ -368,7 +368,6 @@ mod tests {
             ".controls[0].id",
             ".controls[0].frame_id",
             ".controls[0].form_id",
-            ".controls[0].role",
             ".controls[0].input_type",
             ".controls[0].shown_by",
         ];
