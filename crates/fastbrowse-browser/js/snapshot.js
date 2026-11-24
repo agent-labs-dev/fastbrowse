@@ -2399,32 +2399,60 @@
       read(inner, dx + f.left + left, dy + f.top + top);
     }
   };
+  // The box a text node's line is laid out in: the nearest ancestor that is not inline, as capture.js splits blocks.
+  // Text nodes in one box read as one line, the way the page shows them. One line per node showed React's split
+  // `Total: $` and `43.18` on two lines, a text no capture held, and every quote of saucedemo's total was refused.
+  const lineBox = memo(e => {
+    for (let at = e; at; at = at.parentElement) {
+      const display = styleProperty(at, 'display');
+      if (!(display.startsWith('inline') || display === 'contents')) return at;
+    }
+    return null;
+  });
+  // Spaces collapse across the nodes of a line too: a card's icon button between two gaps showed one space, not two.
+  const joined = (line, value) => (line.endsWith(' ') && value.startsWith(' ') ? line + value.slice(1) : line + value);
   // Size, the cheapest test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    // The line being read: its list, its box and its place in the list. A <br> ends it.
+    let run = null;
     let node;
     while ((node = walker.nextNode())) {
-      const value = node.textContent.trim(),
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.tagName === 'BR') run = null;
+        continue;
+      }
+      // Whitespace collapses as CSS lays out normal text: a gap between two inline nodes is one space of the line.
+      // Visible text is read whole on every observe, as it always was; the context lines' cache counts its own
+      // `replace` normalizations of unchanged text, so this pass does not go through `replace`.
+      const value = node.textContent.split(/\s+/).join(' '),
         parent = node.parentElement;
-      if (!value || !parent) continue;
+      if (!parent) continue;
+      if (!value.trim()) {
+        if (run && lineBox(parent) === run.box) run.list[run.at] = joined(run.list[run.at], ' ');
+        continue;
+      }
       const r = textBoxOf(node);
       if (r.width <= 0 || r.height <= 0 || parent.closest('script,style,noscript,template') || !visible(parent)) {
         continue;
       }
       const top = r.top + dy,
         left = r.left + dx;
-      if (top + r.height > 0 && top < innerHeight && left + r.width > 0 && left < innerWidth) {
-        words.push(value);
+      const list =
+        top + r.height > 0 && top < innerHeight && left + r.width > 0 && left < innerWidth ? words : offscreen;
+      const box = lineBox(parent);
+      if (run && run.list === list && run.box === box) {
+        list[run.at] = joined(list[run.at], value);
       } else {
-        offscreen.push(value);
+        run = {list, box, at: list.push(value) - 1};
       }
     }
     readFrames(doc, dx, dy, readText);
   };
   readText(document, 0, 0);
-  const viewport_text = words.join('\n');
-  const offscreen_text = offscreen.join('\n');
+  const viewport_text = words.map(line => line.trim()).join('\n');
+  const offscreen_text = offscreen.map(line => line.trim()).join('\n');
 
   // Page state carried by pixels: a chart, a picture, a drawing or a video is evidence the page text and the
   // control list cannot hold, and the verifier needs the screenshot for it. Only what the viewport shows counts,
