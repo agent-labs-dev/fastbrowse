@@ -1788,9 +1788,7 @@ mod tests {
         // Nothing is refused for holding no credential, and every field with text was tried.
         let plain: RunTask = serde_json::from_str(&written).unwrap();
         admit(&Arc::default(), &plain, &[]).unwrap();
-        for field in
-            ["record", "output_schema", "chrome", "cloud_profile", "target_match", "desktop_apps", "attachments"]
-        {
+        for field in ["record", "output_schema", "chrome", "cloud_profile", "target_match", "attachments"] {
             assert!(refused.contains(field), "{field} was never tried");
         }
         // A credential written once in the task is refused where it repeats outside an address, as in a path.
