@@ -3,9 +3,9 @@ title: How to verify browser agent results
 description: What each fastbrowse run status and exit code means, how citations back an answer, and what to do when a run ends unverified.
 topic: Results and cost
 published: 2026-10-31
-updated: 2026-11-22
+updated: 2026-11-24
 verifiedAgainst: v0.11.2
-verifiedOn: 2026-11-22
+verifiedOn: 2026-11-24
 ---
 
 fastbrowse marks an answer it could not back with a quote as `unverified` and exits 10. A caller that checks the exit code never mistakes a guess for a result.
