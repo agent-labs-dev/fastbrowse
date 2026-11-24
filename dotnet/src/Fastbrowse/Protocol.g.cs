@@ -558,10 +558,6 @@ public enum Operation
 {
     [JsonStringEnumMemberName("click")]
     Click,
-    [JsonStringEnumMemberName("right_click")]
-    RightClick,
-    [JsonStringEnumMemberName("double_click")]
-    DoubleClick,
     [JsonStringEnumMemberName("hover")]
     Hover,
     [JsonStringEnumMemberName("drag")]
@@ -765,12 +761,6 @@ public sealed record RunParams
 
     [JsonPropertyName("extension_browser")]
     public string? ExtensionBrowser { get; init; }
-
-    [JsonPropertyName("desktop")]
-    public string? Desktop { get; init; }
-
-    [JsonPropertyName("desktop_apps")]
-    public IReadOnlyList<string>? DesktopApps { get; init; }
 }
 
 public sealed record RunResult

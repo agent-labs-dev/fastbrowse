@@ -1139,7 +1139,7 @@ impl Agent {
                         } else if action.operation == Operation::Wait {
                             // A WAIT lasts until the page changes, which may be later than a few seconds: a status line
                             // rewritten every ten seconds was never seen to move. The run's own deadline bounds it, and
-                            // with no deadline the page ends it after one armed watch, a browser's or a desktop window's.
+                            // with no deadline the page ends it after one armed watch.
                             let seconds = browsing_deadline(&state.ledger, state.compose)
                                 .map_or(f64::INFINITY, |until| {
                                     until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64()

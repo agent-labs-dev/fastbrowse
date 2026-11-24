@@ -34,8 +34,6 @@ export type BrowserWarningFailure =
   | 'cancelled';
 export type Operation =
   | 'click'
-  | 'right_click'
-  | 'double_click'
   | 'hover'
   | 'drag'
   | 'fill'
@@ -506,8 +504,6 @@ export interface RunParams {
   browser?: boolean;
   extension?: boolean;
   extension_browser?: string | null;
-  desktop?: string | null;
-  desktop_apps?: string[];
 }
 export interface SecretRef {
   name: string;

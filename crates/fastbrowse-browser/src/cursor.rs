@@ -1,7 +1,7 @@
 //! The agent cursor fastbrowse draws inside the page it drives (js/cursor.js), so whoever watches the tab, live or in a
 //! recording, sees where each action lands while their own pointer stays where they left it.
 //!
-//! It is drawn by the page itself, in an isolated world, so it needs no desktop tool and shows the same on Wayland,
+//! It is drawn by the page itself, in an isolated world, so it needs no desktop tooling and shows the same on Wayland,
 //! X11, macOS and in a cloud browser's screencast, and the extension and CDP runs share it. It is purely visual: the
 //! input is still sent over CDP, so nothing here can change what an action did. A document that refuses or loses the
 //! script (a navigation destroys its world) only misses that drawing; the next document starts from where the last
@@ -23,8 +23,8 @@ pub const CURSOR_JS: &str = include_str!("../js/cursor.js");
 /// The isolated world the cursor runs in, so page scripts can neither see nor call it.
 pub const CURSOR_WORLD: &str = "fastbrowse-cursor";
 
-// The glide is paced as deskpilot's agent cursor paces it (`glideTo` in src/deskpilot/plugin/deskpilot.cpp), so a
-// recording matches the desktop's: 1.5 times its length over `GLIDE_PEAK_PX_PER_S`, between `GLIDE_MIN_MS` and
+// The glide is paced as deskpilot's agent cursor paces it (`glideTo` in src/deskpilot/plugin/deskpilot.cpp), so the
+// drawn cursor looks the same everywhere: 1.5 times its length over `GLIDE_PEAK_PX_PER_S`, between `GLIDE_MIN_MS` and
 // `GLIDE_MAX_MS`, and no glide under `GLIDE_STILL_PX`.
 const GLIDE_MIN_MS: f64 = 120.0;
 const GLIDE_MAX_MS: f64 = 700.0;

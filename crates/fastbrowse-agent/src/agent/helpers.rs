@@ -78,8 +78,6 @@ pub(crate) fn describe(control: &Control) -> String {
 pub(crate) fn doing(operation: Operation, target: Option<&str>) -> String {
     let doing = match operation {
         Operation::Click => "clicking",
-        Operation::RightClick => "right-clicking",
-        Operation::DoubleClick => "double-clicking",
         Operation::Hover => "hovering over",
         Operation::Drag => "dragging",
         Operation::Fill => "typing in",

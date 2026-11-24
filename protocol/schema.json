@@ -968,8 +968,6 @@
     "Operation": {
       "enum": [
         "click",
-        "right_click",
-        "double_click",
         "hover",
         "drag",
         "fill",
@@ -1532,26 +1530,6 @@
           ],
           "default": null,
           "title": "Extension Browser"
-        },
-        "desktop": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Desktop"
-        },
-        "desktop_apps": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Desktop Apps",
-          "type": "array"
         }
       },
       "required": [

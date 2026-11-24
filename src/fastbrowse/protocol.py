@@ -214,13 +214,6 @@ class RunParams(Params):
     extension_browser: str | None = None
     """Which browser the extension is connected in, by the label its popup shows, when there is more than one.
     Implies `extension`."""
-    desktop: str | None = None
-    """Drive a native desktop app instead of a browser, through deskpilot on Hyprland: the command line that starts
-    it, split as a POSIX shell splits words. The run starts the app on deskpilot's hidden workspace and closes it
-    when the run ends."""
-    desktop_apps: tuple[str, ...] = ()
-    """More desktop apps to start in the same run beside `desktop`, each a command line as `desktop` is. Every window
-    the run's apps open is one of its tabs, so the run moves between apps as a browser run moves between tabs."""
 
 
 class RunCancelParams(Params):

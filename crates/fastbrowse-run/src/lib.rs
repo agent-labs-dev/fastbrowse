@@ -5,7 +5,6 @@
 //! definition. An embedder gets the parts that are easy to forget: the cloud browser's own cost folded into the
 //! result, downloads kept when a directory is given, and owned tabs closed on every path out.
 
-pub mod desktop;
 pub mod fetch;
 
 use std::future::Future;
@@ -296,46 +295,6 @@ fn checked(task: &RunTask, secrets: bool) -> Result<Checked, RunError> {
         ]);
         if !browser.is_empty() {
             return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
-        }
-    }
-    if task.desktop.is_none() && !task.desktop_apps.is_empty() {
-        return refuse("desktop_apps are started beside desktop, so name the first app in desktop".into());
-    }
-    if let Some(app) = &task.desktop {
-        if std::iter::once(app)
-            .chain(&task.desktop_apps)
-            .any(|app| shlex::split(app).is_none_or(|words| words.is_empty()))
-        {
-            return refuse("desktop must name an app to start, as a command line".into());
-        }
-        // A desktop run opens no browser and no address. Recipes key their steps by web address, so a desktop run
-        // neither records one nor replays one yet. A recording is filmed from the window's own shots.
-        let browser = given(&[
-            ("start", task.start.is_some()),
-            ("fetch", task.fetch),
-            ("browser", task.browser),
-            ("local", task.local),
-            ("launch", task.launch),
-            ("chrome", task.chrome.is_some()),
-            ("cloud_profile", task.cloud_profile.is_some()),
-            ("cdp_url", task.cdp_url.is_some()),
-            ("cdp_port", task.cdp_port.is_some()),
-            ("attach", task.attach),
-            ("target_match", task.target_match.is_some()),
-            ("foreground", task.foreground),
-            ("proxy_country", task.proxy_country.is_some()),
-            ("cloud_extensions", !task.cloud_extensions.is_empty()),
-            ("viewport", task.viewport.is_some()),
-            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
-            ("recipe", task.recipe.is_some()),
-            ("save_recipe", task.save_recipe.is_some()),
-            ("cursor", task.cursor == Some(true)),
-            ("downloads", task.downloads.is_some()),
-            ("extension", extension),
-            ("allowed_origins", task.allowed_origins.is_some()),
-        ]);
-        if !browser.is_empty() {
-            return refuse(format!("desktop drives an app, not a browser, so drop {}", browser.join(", ")));
         }
     }
     if task.cdp_url.is_some() && task.cdp_port.is_some() {
@@ -1020,11 +979,6 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     let mut limits = task.limits.clone();
     let mut resume = None;
     let told: Told = Arc::default();
-    if let Some(app) = task.desktop.clone() {
-        let apps: Vec<String> = std::iter::once(app).chain(task.desktop_apps.iter().cloned()).collect();
-        let on_event = noting(host.on_event.clone(), &told);
-        return desktop(&task, &apps, &host, schema, &config, &http, (jev, llm), on_event, &told).await;
-    }
     if task.recipe.is_none() && task.save_recipe.is_none() && reads_first(&task, &chrome) {
         let on_event = noting(host.on_event.clone(), &told);
         let began = std::time::Instant::now();
@@ -1445,130 +1399,6 @@ async fn fetched(
         && (fetched.needed_browser() || search_page.as_ref().is_some_and(|page| page.needed_browser()) || bot_check);
     let spent = ledger.state().clone();
     Ok(Read { result, needs_browser, spent, resume: agent.resume() })
-}
-
-/// A run on a desktop app the run starts: the same agent, with deskpilot as its page. There is no address to start
-/// from, so the run begins on the app's window as it opens.
-#[allow(clippy::too_many_arguments)]
-async fn desktop(
-    task: &RunTask,
-    apps: &[String],
-    host: &Host,
-    schema: Option<Arc<RecordSchema>>,
-    config: &Config,
-    http: &Http,
-    (jev, llm): (Arc<dyn DecisionClient>, Arc<dyn LLMClient>),
-    on_event: EventHandler,
-    told: &Told,
-) -> Result<RunResult, RunError> {
-    let program = std::env::var("FASTBROWSE_DESKPILOT").unwrap_or_else(|_| "deskpilot".into());
-    // Shown acts where it can be seen, with deskpilot's agent cursor: for a desktop of its own that a recording is
-    // taken of, never the user's, where it would take their view and focus.
-    let view = match std::env::var("FASTBROWSE_DESKTOP_SHOWN").as_deref() {
-        Err(std::env::VarError::NotPresent) => desktop::View::Hidden,
-        Ok("1") => desktop::View::Shown,
-        Ok(other) => return Err(RunError::Invalid(format!("FASTBROWSE_DESKTOP_SHOWN is 1 or unset, not {other:?}"))),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            return Err(RunError::Invalid("FASTBROWSE_DESKTOP_SHOWN is 1 or unset".into()));
-        }
-    };
-    let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
-    // Kept outside the run, so the video is finished however the run ends, after the apps have closed.
-    let recording: Filming = Arc::default();
-    // Kept outside the run too, so the apps are closed however it ends, a cancel included: a server dropped with the
-    // run is killed before it closes them, which left a run's apps open after it (#1345).
-    let server: Arc<tokio::sync::Mutex<Option<Arc<desktop::Deskpilot>>>> = Arc::default();
-    let run = async {
-        // `check` refused a command line that does not split into words.
-        let commands: Vec<Vec<String>> = apps.iter().map(|app| shlex::split(app).unwrap_or_default()).collect();
-        let opened = match desktop::connect(&program, view).await {
-            Ok(client) => {
-                *server.lock().await = Some(client.clone());
-                desktop::DeskpilotPage::open(client, &commands, view).await.map(|page| page.traced(http.trace.clone()))
-            }
-            Err(error) => Err(error),
-        };
-        let page = match opened {
-            Ok(page) => page,
-            Err(desktop::OpenError::Invalid(message)) => return Err(RunError::Invalid(message)),
-            // A deskpilot that cannot start or answer is an outage, as a cloud browser that cannot start is.
-            Err(desktop::OpenError::Unavailable(message)) => {
-                return Ok(RunResult {
-                    browser: None,
-                    status: Status::Unavailable,
-                    budget: None,
-                    answer: None,
-                    data: Value::Null,
-                    evidence: Vec::new(),
-                    steps: Vec::new(),
-                    cost: ledger.breakdown(),
-                    artifacts: Vec::new(),
-                    citations: Vec::new(),
-                    error: Some(message),
-                    failure_kind: Some("Deskpilot.Unavailable".into()),
-                    final_url: None,
-                    final_frame: None,
-                    recordings: Vec::new(),
-                    wall: None,
-                });
-            }
-        };
-        let page = match &task.record {
-            None => page,
-            // Started once the app is open, so a deskpilot that cannot start leaves no encoder behind.
-            Some(path) => {
-                let (started, feed) = Recording::start_fed(path).map_err(|error| RunError::Recording(error.0))?;
-                *recording.lock().await = Some(started);
-                page.filmed(Arc::new(feed)).await
-            }
-        };
-        let agent = Agent::new(Arc::new(page), jev, llm)
-            .with_redactor(http.trace.redactor().unwrap_or_default())
-            .with_config(config.clone())
-            .with_secrets(host.secrets.clone())
-            .with_trace(http.trace.clone())
-            .with_events(captioned(Some(on_event), &recording));
-        let run = RunOptions {
-            start: None,
-            choose_start: false,
-            context: task.context.clone(),
-            inputs: task.inputs.clone().unwrap_or_default(),
-            attachments: attachments(task),
-            output_schema: schema,
-            limits: None,
-            ledger: Some(ledger.clone()),
-            authorization: task.authorization.clone(),
-            until: host.until.clone(),
-            resume: None,
-            recipe: None,
-            recipe_sink: None,
-        };
-        let result = agent.run(&task.task, run).await.map_err(|error| RunError::Invalid(error.to_string()))?;
-        // The app stays open for a person to finish nothing: it closes with the run, so every outcome gets its card.
-        if let Some(filming) = recording.lock().await.as_mut() {
-            let _ = filming.show_result(&task.task, &card(&result)).await;
-        }
-        Ok(result)
-    };
-    // Starting deskpilot is inside the guard too, so a cancel drops a startup that hangs.
-    let outcome = host.cancel.guard(run).await;
-    // The run's outcome is decided by now: a `stop` deskpilot refused changes nothing the run reports.
-    let client = server.lock().await.take();
-    if let Some(client) = client {
-        let _ = client.close().await;
-    }
-    let filming = recording.lock().await.take();
-    let recordings = match filming {
-        Some(filming) => filming.finish().await,
-        None => Vec::new(),
-    };
-    match outcome {
-        Err(_) => Err(cancelled(told, ledger.breakdown().lines, recordings, None, host.cancel.reason())),
-        Ok(Ok(result)) => Ok(RunResult { recordings, ..result }),
-        Ok(Err(error)) if recordings.is_empty() => Err(error),
-        // The videos were written however the run failed, so the error still names them.
-        Ok(Err(error)) => Err(error.after(told, ledger.breakdown().lines, recordings)),
-    }
 }
 
 #[cfg(test)]

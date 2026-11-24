@@ -333,28 +333,26 @@ type Notification struct {
 type Operation string
 
 const (
-	OperationClick       Operation = "click"
-	OperationRightClick  Operation = "right_click"
-	OperationDoubleClick Operation = "double_click"
-	OperationHover       Operation = "hover"
-	OperationDrag        Operation = "drag"
-	OperationFill        Operation = "fill"
-	OperationPress       Operation = "press"
-	OperationBlur        Operation = "blur"
-	OperationSelect      Operation = "select"
-	OperationEnter       Operation = "enter"
-	OperationEscape      Operation = "escape"
-	OperationScroll      Operation = "scroll"
-	OperationScrollUp    Operation = "scroll_up"
-	OperationBack        Operation = "back"
-	OperationSwitchTab   Operation = "switch_tab"
-	OperationUpload      Operation = "upload"
-	OperationDialog      Operation = "dialog"
-	OperationWait        Operation = "wait"
-	OperationRead        Operation = "read"
-	OperationDone        Operation = "done"
-	OperationNavigate    Operation = "navigate"
-	OperationSearch      Operation = "search"
+	OperationClick     Operation = "click"
+	OperationHover     Operation = "hover"
+	OperationDrag      Operation = "drag"
+	OperationFill      Operation = "fill"
+	OperationPress     Operation = "press"
+	OperationBlur      Operation = "blur"
+	OperationSelect    Operation = "select"
+	OperationEnter     Operation = "enter"
+	OperationEscape    Operation = "escape"
+	OperationScroll    Operation = "scroll"
+	OperationScrollUp  Operation = "scroll_up"
+	OperationBack      Operation = "back"
+	OperationSwitchTab Operation = "switch_tab"
+	OperationUpload    Operation = "upload"
+	OperationDialog    Operation = "dialog"
+	OperationWait      Operation = "wait"
+	OperationRead      Operation = "read"
+	OperationDone      Operation = "done"
+	OperationNavigate  Operation = "navigate"
+	OperationSearch    Operation = "search"
 )
 
 // A method's params. An unknown field is refused, so a misspelled option is never dropped in silence.
@@ -442,8 +440,6 @@ type RunParams struct {
 	Browser             bool              `json:"browser,omitempty"`
 	Extension           bool              `json:"extension,omitempty"`
 	ExtensionBrowser    *string           `json:"extension_browser,omitempty"`
-	Desktop             *string           `json:"desktop,omitempty"`
-	DesktopApps         []string          `json:"desktop_apps,omitempty"`
 }
 
 type RunResult struct {

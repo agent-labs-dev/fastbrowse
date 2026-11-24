@@ -1,8 +1,7 @@
-//! Record a run to a video: a tab's screencast frames, or the frames a caller feeds it such as a desktop window's
-//! shots, resampled to a steady rate by ffmpeg.
+//! Record a run to a video: a tab's screencast frames, resampled to a steady rate by ffmpeg.
 //!
-//! The screencast sends a frame only when the page repaints, and a fed recording gets one only when its caller takes
-//! one, so a ticker repeats the latest frame at `FPS`; the video's timing is then the run's real timing. The recording
+//! The screencast sends a frame only when the page repaints, so a ticker repeats the latest frame at `FPS`; the
+//! video's timing is then the run's real timing. The recording
 //! follows tab switches, captions each step from when its action began, and ends on a card showing the run's outcome,
 //! so one file shows both what the agent did and what it answered. Two more ffmpeg passes over a lossless first one
 //! write it twice, one encoder at a time: with the step captions burned in, and plain beside it as `<name>.plain.mp4`.
@@ -81,54 +80,19 @@ struct Frames {
     casting: Option<String>,
 }
 
-/// The frames a fed recording films, and where its cursor goes, from a caller with no tab to cast.
-#[derive(Clone)]
-pub struct FrameFeed {
-    frames: Arc<Mutex<Frames>>,
-    marks: Arc<Mutex<Vec<PointerMark>>>,
-}
-
-impl FrameFeed {
-    /// Show `frame`, a PNG or JPEG, from now until the next one. A recording fed PNGs keeps its first frame's size. The caller holds back a frame that may show a secret.
-    pub fn show(&self, frame: Vec<u8>) {
-        let mut frames = self.frames.lock().unwrap();
-        frames.frame_at = Some(Instant::now());
-        frames.frame = Some(frame);
-    }
-
-    /// Draw the cursor gliding to `mark` as the action there begins, as a tab recording does.
-    pub fn mark(&self, mark: PointerMark) {
-        self.marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(mark);
-    }
-}
-
-/// The lossless ffmpeg pass every frame is written to. A fed recording starts it at its first frame and fits each
-/// later frame inside that frame's size: a desktop run films windows of different sizes, and ffmpeg stretches every
-/// frame of a pipe to the size of its first.
+/// The lossless ffmpeg pass every frame is written to.
 struct Pass {
     ffmpeg_path: PathBuf,
     output: PathBuf,
-    /// A fed recording that has not yet had a frame, so ffmpeg is not started.
-    waiting: bool,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
 }
 
 impl Pass {
-    /// Start ffmpeg, fitting each frame inside `size` when one is given.
-    fn launch(&mut self, size: Option<(u32, u32)>) -> std::io::Result<()> {
+    /// Start ffmpeg.
+    fn launch(&mut self) -> std::io::Result<()> {
         let mut command = Command::new(&self.ffmpeg_path);
         command.args(["-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", &FPS.to_string(), "-i", "-"]);
-        if let Some((width, height)) = size {
-            // Shrunk to fit and never enlarged, so a smaller window keeps its own pixels, centred on a black frame.
-            command.args([
-                "-vf",
-                &format!(
-                    "scale=w='min(iw,{width})':h='min(ih,{height})':force_original_aspect_ratio=decrease,\
-                     pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
-                ),
-            ]);
-        }
         let mut child = command
             // Lossless, so the captioning pass is the only lossy encode; 4:4:4 also takes the odd sizes a tab has.
             .args(["-c:v", "libx264", "-qp", "0", "-preset", "ultrafast", "-pix_fmt", "yuv444p"])
@@ -143,41 +107,17 @@ impl Pass {
         Ok(())
     }
 
-    /// Write one frame, starting a fed recording's ffmpeg at its first; false once ffmpeg cannot take it.
+    /// Write one frame; false once ffmpeg cannot take it.
     async fn write(&mut self, frame: &[u8]) -> bool {
-        if std::mem::take(&mut self.waiting)
-            && let Err(error) = self.launch(png_size(frame))
-        {
-            warn(&format!("could not start ffmpeg: {}", error.kind()));
-            return false;
-        }
         let Some(stdin) = self.stdin.as_mut() else { return false };
         stdin.write_all(frame).await.is_ok() && stdin.flush().await.is_ok()
     }
 }
 
-/// The width and height in a PNG's header, or None for any other image, which ffmpeg then encodes at its own size.
-fn png_size(image: &[u8]) -> Option<(u32, u32)> {
-    let header = image.get(..24)?;
-    if header[..8] != *b"\x89PNG\r\n\x1a\n" || header[12..16] != *b"IHDR" {
-        return None;
-    }
-    let number = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
-    Some((number(16), number(20)))
-}
-
-/// What the closing card of a fed recording shows, drawn over its last frame when it is encoded: there is no tab to
-/// open the card in.
-struct DrawnCard {
-    task: String,
-    result: ResultCard,
-    seconds: f64,
-}
-
-/// Writes the session's active tab, or the frames fed to it, to `path` (an .mp4) from `start` until `finish`.
+/// Writes the session's active tab to `path` (an .mp4) from `start` until `finish`.
 pub struct Recording {
-    /// The session whose active tab is cast, or None for a fed recording.
-    session: Option<BrowserSession>,
+    /// The session whose active tab is cast.
+    session: BrowserSession,
     path: PathBuf,
     ffmpeg_path: PathBuf,
     scratch: PathBuf,
@@ -188,7 +128,6 @@ pub struct Recording {
     captions: Vec<(Instant, String)>,
     pointer_marks: Arc<Mutex<Vec<PointerMark>>>,
     card_at: Option<Instant>,
-    drawn_card: Option<DrawnCard>,
     /// The finished videos, set only once both are encoded: a failed run must not report a file it did not write.
     pub outputs: Vec<PathBuf>,
 }
@@ -209,7 +148,7 @@ impl Recording {
                 "a recording shows whatever the tab shows, so it cannot be used with allowed_origins".into(),
             ));
         }
-        let mut recording = Self::spawn(Some(session.clone()), path)?;
+        let mut recording = Self::spawn(session.clone(), path)?;
         recording.pointer_marks = pointer_marks;
         let frames = recording.frames.clone();
         let tapped = (session.clone(), frames);
@@ -232,16 +171,8 @@ impl Recording {
         Ok(recording)
     }
 
-    /// Start ffmpeg for frames the caller feeds through the returned `FrameFeed`, as a desktop run does with its
-    /// window's shots.
-    pub fn start_fed(path: &Path) -> Result<(Self, FrameFeed), RecordingError> {
-        let recording = Self::spawn(None, path)?;
-        let feed = FrameFeed { frames: recording.frames.clone(), marks: recording.pointer_marks.clone() };
-        Ok((recording, feed))
-    }
-
     /// Start the lossless ffmpeg pass and the ticker that writes the latest frame to it.
-    fn spawn(session: Option<BrowserSession>, path: &Path) -> Result<Self, RecordingError> {
+    fn spawn(session: BrowserSession, path: &Path) -> Result<Self, RecordingError> {
         let ffmpeg_path = which("ffmpeg")
             .map(PathBuf::from)
             .ok_or_else(|| RecordingError("recording needs ffmpeg on PATH".into()))?;
@@ -258,16 +189,13 @@ impl Recording {
         let mut pass = Pass {
             ffmpeg_path: ffmpeg_path.clone(),
             output: scratch.join("uncaptioned.mkv"),
-            waiting: session.is_none(),
             child: None,
             stdin: None,
         };
-        if session.is_some() {
-            pass.launch(None).map_err(|e| {
-                let _ = std::fs::remove_dir_all(&scratch);
-                RecordingError(format!("could not start ffmpeg: {}", e.kind()))
-            })?;
-        }
+        pass.launch().map_err(|e| {
+            let _ = std::fs::remove_dir_all(&scratch);
+            RecordingError(format!("could not start ffmpeg: {}", e.kind()))
+        })?;
         let pass = Arc::new(tokio::sync::Mutex::new(pass));
         let frames = Arc::new(Mutex::new(Frames::default()));
         let started = Instant::now();
@@ -284,7 +212,6 @@ impl Recording {
             captions: vec![],
             pointer_marks: Arc::default(),
             card_at: None,
-            drawn_card: None,
             outputs: vec![],
         })
     }
@@ -303,17 +230,9 @@ impl Recording {
         self.captions.push((began, format!("{} \u{b7} {}", step.index + 1, describe(step))));
     }
 
-    /// End the video on the task and its outcome, in the tab being recorded, or drawn over a fed recording's last
-    /// frame.
+    /// End the video on the task and its outcome, in the tab being recorded.
     pub async fn show_result(&mut self, task: &str, result: &ResultCard) -> Result<(), crate::error::BrowserError> {
-        let Some(session) = self.session.clone() else {
-            let card_at = Instant::now();
-            self.card_at = Some(card_at);
-            let seconds = (card_at - self.started).as_secs_f64();
-            self.drawn_card = Some(DrawnCard { task: task.to_owned(), result: result.clone(), seconds });
-            sleep(secs(RESULT_SECONDS)).await;
-            return Ok(());
-        };
+        let session = self.session.clone();
         let text = result.answer.clone().or_else(|| result.error.clone()).unwrap_or_default();
         let parts = split_citation_links(&text);
         let cited: Vec<u32> = parts.iter().skip(1).step_by(2).filter_map(|n| n.parse().ok()).collect();
@@ -357,7 +276,7 @@ impl Recording {
         }
         card.push_str(&format!(
             "<div style='color:{}'>{}</div></body>",
-            outcome_colours(result).0,
+            outcome_colour(result),
             html_escape(&outcome_line(result, (card_at - self.started).as_secs_f64()))
         ));
         let url = format!("data:text/html;base64,{}", BASE64.encode(card.as_bytes()));
@@ -373,9 +292,7 @@ impl Recording {
             ticker.abort();
             let _ = ticker.await;
         }
-        if let Some(session) = &self.session {
-            session.set_frame_tap(None);
-        }
+        self.session.set_frame_tap(None);
         self.close().await;
         let _ = std::fs::remove_dir_all(&self.scratch);
         std::mem::take(&mut self.outputs)
@@ -408,8 +325,7 @@ impl Recording {
                 let _ = ffmpeg.start_kill();
                 let _ = ffmpeg.wait().await;
             }
-            let source = if self.session.is_some() { "the browser sent" } else { "the run took" };
-            warn(&format!("{source} no frames, so nothing was recorded to {}", self.path.display()));
+            warn(&format!("the browser sent no frames, so nothing was recorded to {}", self.path.display()));
             return;
         };
         let Some(ffmpeg) = child else { return };
@@ -429,10 +345,9 @@ impl Recording {
         self.encode_all(first).await;
     }
 
-    /// One screenshot of the active tab, or None while frames are withheld, when the capture fails, or with no tab.
+    /// One screenshot of the active tab, or None while frames are withheld or when the capture fails.
     async fn still(&self) -> Option<Vec<u8>> {
-        // A fed recording's caller has no frame to give that it did not already feed.
-        let session = self.session.as_ref()?;
+        let session = &self.session;
         if session.frames_withheld() {
             return None;
         }
@@ -486,20 +401,12 @@ impl Recording {
         let marks = self.pointer_marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let card_at = self.card_at.unwrap_or_else(Instant::now);
         let mut overlays: Vec<(&str, String)> = Vec::new();
-        if !marks.is_empty() || self.drawn_card.is_some() {
+        if !marks.is_empty() {
             match self.frame_dimensions().await {
                 Some((width, height)) => {
-                    if !marks.is_empty() {
-                        overlays.push((
-                            "cursor.ass",
-                            cursor_ass(&marks, origin, card_at, width, height, self.session.is_none()),
-                        ));
-                    }
-                    if let Some(card) = &self.drawn_card {
-                        overlays.push(("card.ass", card_ass(card, since(card_at), width, height)));
-                    }
+                    overlays.push(("cursor.ass", cursor_ass(&marks, origin, card_at, width, height)));
                 }
-                None => warn("could not read the recording dimensions, so the cursor and result card are omitted"),
+                None => warn("could not read the recording dimensions, so the cursor is omitted"),
             }
         }
         let mut drawn = Vec::new();
@@ -600,7 +507,7 @@ impl Recording {
 }
 
 /// The two final videos and the filter each is encoded through: the captioned one burns `captions` in, and both
-/// carry `overlays`, the cursor and a drawn result card, in order.
+/// carry `overlays`, the cursor, in order.
 fn encode_passes(captions: Option<&str>, overlays: &[String]) -> [(&'static str, String); 2] {
     // H.264 needs even dimensions, and yuv420p is what phones and social sites play.
     let base = "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p";
@@ -635,21 +542,18 @@ fn encode_args(filter: &str, output: &str) -> Vec<String> {
     .to_vec()
 }
 
-async fn tick(session: Option<BrowserSession>, frames: Arc<Mutex<Frames>>, pass: Arc<tokio::sync::Mutex<Pass>>) {
+async fn tick(session: BrowserSession, frames: Arc<Mutex<Frames>>, pass: Arc<tokio::sync::Mutex<Pass>>) {
     let mut written: u32 = 0;
     loop {
-        // A fed recording has no cast to keep alive: its caller sends each frame.
-        if let Some(session) = &session {
-            let Ok(active) = session.active_session_id() else { return };
-            let recast = {
-                let frames = frames.lock().unwrap();
-                !session.has_frame_handler()
-                    && (frames.casting.as_deref() != Some(active.as_str())
-                        || frames.frame_at.is_none_or(|at| at.elapsed() > secs(RECAST_SECONDS)))
-            };
-            if recast {
-                cast(session, &frames, &active).await;
-            }
+        let Ok(active) = session.active_session_id() else { return };
+        let recast = {
+            let frames = frames.lock().unwrap();
+            !session.has_frame_handler()
+                && (frames.casting.as_deref() != Some(active.as_str())
+                    || frames.frame_at.is_none_or(|at| at.elapsed() > secs(RECAST_SECONDS)))
+        };
+        if recast {
+            cast(&session, &frames, &active).await;
         }
         let frame = frames.lock().unwrap().frame.clone();
         if let Some(frame) = frame {
@@ -716,73 +620,14 @@ fn outcome_line(result: &ResultCard, seconds: f64) -> String {
     format!("{} in {seconds:.1}s, {} steps, ${:.4}", result.status, result.steps, result.known_dollars)
 }
 
-/// `text` as ASS dialogue text that libass shows as written.
-fn ass_text(text: &str) -> String {
-    // libass reads `{...}` as a style override and a backslash before N, n or h as a line break or a hard space, so a
-    // word joiner after each backslash and an escaped brace keep an answer's own characters text.
-    text.replace('\\', "\\\u{2060}").replace('{', "\\{").replace("\r\n", "\n").replace('\n', "\\N")
-}
-
-/// The outcome line's colour as CSS and as ASS: green only for a completed run, red for every other status, so a card
-/// never shows a closed app, an error or a stopped run in the colour of success.
-fn outcome_colours(result: &ResultCard) -> (&'static str, &'static str) {
-    if result.status == "complete" { ("#3fb950", "&H50B93F&") } else { ("#f85149", "&H4951F8&") }
-}
-
-/// The result card a tab shows, as an ASS overlay that covers the frame from `start` seconds to the end of the video:
-/// the task, the answer with its citation numbers, the cited quotes and the outcome line, in the tab card's colours.
-fn card_ass(card: &DrawnCard, start: f64, width: u32, height: u32) -> String {
-    // The tab card's sizes are CSS pixels on a page about 720 pixels tall.
-    let px = |size: f64| (size * f64::from(height) / 720.0).round().max(1.0);
-    let margin = (f64::from(width) * 0.08).round();
-    let (grey, white, blue, outcome) = ("&H9E948B&", "&HF3EDE6&", "&HFFA658&", outcome_colours(&card.result).1);
-    let text = card.result.answer.clone().or_else(|| card.result.error.clone()).unwrap_or_default();
-    let parts = split_citation_links(&text);
-    let cited: Vec<u32> = parts.iter().skip(1).step_by(2).filter_map(|n| n.parse().ok()).collect();
-    let answer: String = parts
-        .iter()
-        .enumerate()
-        .map(|(i, part)| if i % 2 == 1 { format!("{{\\c{blue}}} {part}{{\\c{white}}}") } else { ass_text(part) })
-        .collect();
-    let mut body = format!(
-        "{{\\fs{}\\c{grey}}}{}\\N\\N{{\\fs{}\\b1\\c{white}}}{answer}{{\\b0}}",
-        px(24.0),
-        ass_text(&card.task),
-        px(40.0)
-    );
-    let sources: Vec<String> = card
-        .result
-        .citations
-        .iter()
-        .filter(|c| cited.contains(&c.id))
-        .map(|c| {
-            format!(
-                "{{\\c{blue}}}{}{{\\c{grey}}} {} {{\\c{white}}}\u{201c}{}\u{201d}",
-                c.id,
-                ass_text(&urlsplit(&c.url).1),
-                ass_text(&c.quote)
-            )
-        })
-        .collect();
-    if !sources.is_empty() {
-        body.push_str(&format!("\\N\\N{{\\fs{}}}{}", px(20.0), sources.join("\\N")));
-    }
-    body.push_str(&format!(
-        "\\N\\N{{\\fs{}\\c{outcome}}}{}",
-        px(24.0),
-        ass_text(&outcome_line(&card.result, card.seconds))
-    ));
-    // Drawn to the end of whatever the video holds after the card begins; the ticker stops shortly after it.
-    let (from, to) = (ass_time(start), ass_time(start + 3600.0));
-    format!(
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,{},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,4,{margin},{margin},0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,{from},{to},Default,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\1c&H17110D&}}m 0 0 l {width} 0 {width} {height} 0 {height}{{\\p0}}\nDialogue: 1,{from},{to},Default,,0,0,0,,{body}\n",
-        px(24.0)
-    )
+/// The outcome line's colour: green only for a completed run, red for every other status, so a card never shows an
+/// error or a stopped run in the colour of success.
+fn outcome_colour(result: &ResultCard) -> &'static str {
+    if result.status == "complete" { "#3fb950" } else { "#f85149" }
 }
 
 /// The agent cursor of deskpilot's Hyprland plugin (`drawOne` and `glideTo` in src/deskpilot/plugin/deskpilot.cpp), in
-/// logical pixels at a 1280 px wide frame, with fastbrowse's own colour and centre dot. A change to the look is made
-/// there first and copied here.
+/// logical pixels at a 1280 px wide frame, with fastbrowse's own colour and centre dot.
 mod agent_cursor {
     /// The arm of a bracket, and the width of its rounded stroke.
     pub const BRACKET: f64 = 6.0;
@@ -872,9 +717,7 @@ fn disc(radius: f64) -> String {
 /// to each action point along an eased arc; a press moves them in towards the centre dot and back, and leaves a disc
 /// that grows and fades where it was pressed. Points are CSS pixels, scaled to the frame.
 ///
-/// A `fitted` recording, a fed one, shrinks each frame to fit inside the first and centres it on black, never
-/// enlarging it, so a mark's own frame pixels are placed the same way, not stretched across the whole video.
-fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32, fitted: bool) -> String {
+fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32) -> String {
     use agent_cursor::*;
     let mut out = format!(
         "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,1,0,7,0,0,0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -885,14 +728,10 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
     let seconds = |mark: &PointerMark| mark.at.saturating_duration_since(origin).as_secs_f64();
     let point = |mark: &PointerMark| {
         let (w, h) = (f64::from(width), f64::from(height));
-        if !fitted {
-            return (mark.x * w / mark.width, mark.y * h / mark.height);
-        }
-        let shrink = (w / mark.width).min(h / mark.height).min(1.0);
-        ((w - mark.width * shrink) / 2.0 + mark.x * shrink, (h - mark.height * shrink) / 2.0 + mark.y * shrink)
+        (mark.x * w / mark.width, mark.y * h / mark.height)
     };
     let until = until.saturating_duration_since(origin).as_secs_f64();
-    // When each mark's glide begins: as long as deskpilot's for its length, but not before the mark before it landed.
+    // When each mark's glide begins: as long as the page cursor's for its length, but not before the mark before it landed.
     let starts: Vec<f64> = marks
         .iter()
         .enumerate()
@@ -1075,7 +914,7 @@ mod tests {
     fn brackets_stay_at_rest_size_while_gliding_and_move_in_on_a_press_only() {
         let origin = Instant::now();
         let marks = [mark(origin, Operation::Click, true, 1, 100.0), mark(origin, Operation::Hover, false, 3, 600.0)];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720, false);
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
         let layer = lines(&ass, 2);
         // A glide is straight pieces of an arc ending at the landing, at the resting size and full opacity.
         let moves = layer.iter().filter(|line| line.contains("\\move(")).collect::<Vec<_>>();
@@ -1109,7 +948,7 @@ mod tests {
     fn a_press_leaves_a_fading_disc_where_it_was_pressed_and_a_hover_none() {
         let origin = Instant::now();
         let marks = [mark(origin, Operation::Fill, true, 1, 100.0), mark(origin, Operation::Hover, false, 3, 600.0)];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720, false);
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
         let discs = lines(&ass, 1);
         // 380 ms in 20 ms steps, all at the press, from 0.3 opacity to none.
         assert_eq!(discs.len(), 19);
@@ -1122,7 +961,7 @@ mod tests {
     fn shapes_are_drawn_about_the_press_point() {
         let origin = Instant::now();
         let marks = [mark(origin, Operation::Fill, true, 1, 100.0)];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720, false);
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(5), 1280, 720);
         // Every event anchors its drawing's origin at the position, and the disc and the brackets are symmetric about it.
         for line in ass.lines().filter(|line| line.starts_with("Dialogue")) {
             assert!(line.contains("\\an7\\p1}"), "{line}");
@@ -1153,7 +992,7 @@ mod tests {
             height: 720.0,
         };
         let marks = [mark(1000, 100.0, Operation::Fill, true), mark(1500, 600.0, Operation::Hover, false)];
-        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(3), 1280, 720, false);
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(3), 1280, 720);
         let squeezed = ass
             .lines()
             .filter(|line| {
@@ -1164,29 +1003,11 @@ mod tests {
     }
 
     #[test]
-    fn a_fed_frame_smaller_than_the_video_keeps_its_pixels_centred_and_the_cursor_with_them() {
-        // A 640 by 360 window frame on a 1280 by 720 video is drawn at 640 by 360 in its middle: its centre is the
-        // video's, and a mark at the frame's left edge is a quarter of the way across, not at the video's left edge.
-        let origin = Instant::now();
-        let at =
-            |x, y| PointerMark { x, y, width: 640.0, height: 360.0, ..mark(origin, Operation::Click, false, 1, 0.0) };
-        let until = origin + std::time::Duration::from_secs(2);
-        let fitted = cursor_ass(&[at(0.0, 0.0)], origin, until, 1280, 720, true);
-        assert!(fitted.contains("\\pos(320.0,180.0)"), "{fitted}");
-        let centre = cursor_ass(&[at(320.0, 180.0)], origin, until, 1280, 720, true);
-        assert!(centre.contains("\\pos(640.0,360.0)"), "{centre}");
-        // A frame larger than the video is shrunk to fit: 2560 by 1440 halves.
-        let large = PointerMark { x: 2560.0, y: 1440.0, width: 2560.0, height: 1440.0, ..at(0.0, 0.0) };
-        let shrunk = cursor_ass(&[large], origin, until, 1280, 720, true);
-        assert!(shrunk.contains("\\pos(1280.0,720.0)"), "{shrunk}");
-    }
-
-    #[test]
     fn sizes_follow_the_frame_width() {
         let origin = Instant::now();
         let marks = [mark(origin, Operation::Click, true, 1, 100.0)];
-        let wide = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 2560, 1440, false);
-        let narrow = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 1280, 720, false);
+        let wide = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 2560, 1440);
+        let narrow = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(2), 1280, 720);
         // The resting brackets' corner is 15 logical pixels out: 15 frame pixels at 1280 wide, 30 at 2560.
         assert!(narrow.contains("m -15.00 "));
         assert!(wide.contains("-30.00"));
@@ -1200,11 +1021,11 @@ mod tests {
         assert_eq!(captioned, ("captioned.mp4", format!("{base},{steps}")));
         assert_eq!(plain, ("plain.mp4", base.to_owned()));
 
-        // The cursor and a drawn result card are on both videos, over the captions; only one has the captions.
-        let overlays = ["subtitles=cursor.ass".to_owned(), "subtitles=card.ass".to_owned()];
+        // The cursor is on both videos, over the captions; only one has the captions.
+        let overlays = ["subtitles=cursor.ass".to_owned()];
         let [captioned, plain] = encode_passes(Some(steps), &overlays);
-        assert_eq!(captioned.1, format!("{base},{steps},subtitles=cursor.ass,subtitles=card.ass"));
-        assert_eq!(plain.1, format!("{base},subtitles=cursor.ass,subtitles=card.ass"));
+        assert_eq!(captioned.1, format!("{base},{steps},subtitles=cursor.ass"));
+        assert_eq!(plain.1, format!("{base},subtitles=cursor.ass"));
 
         let passes = encode_passes(None, &[]);
         assert!(passes.iter().all(|(_, filter)| filter == base));
@@ -1216,58 +1037,6 @@ mod tests {
             assert_eq!(args.last().map(String::as_str), Some(output));
             assert!(!args.iter().any(|arg| arg == "-filter_complex" || arg == "-map" || arg.contains("split")));
         }
-    }
-
-    #[test]
-    fn a_drawn_card_covers_the_frame_with_the_answer_its_sources_and_outcome() {
-        let card = DrawnCard {
-            task: "write {x} and read it back".into(),
-            result: ResultCard {
-                status: "complete".into(),
-                answer: Some("hello\\N [1](<desktop://org.gnome.TextEditor#e3>)".into()),
-                error: None,
-                citations: vec![CardCitation {
-                    id: 1,
-                    url: "desktop://org.gnome.TextEditor".into(),
-                    quote: "hello".into(),
-                }],
-                steps: 3,
-                known_dollars: 0.0123,
-            },
-            seconds: 12.34,
-        };
-        let ass = card_ass(&card, 10.0, 1280, 720);
-        assert!(ass.contains("PlayResX: 1280\nPlayResY: 720"));
-        // One opaque box over the whole frame from the card on, and the text above it.
-        assert!(ass.contains("Dialogue: 0,0:00:10.00,1:00:10.00,Default,,0,0,0,,{\\an7\\pos(0,0)\\p1\\1c&H17110D&}m 0 0 l 1280 0 1280 720 0 720"));
-        let text = ass.lines().find(|line| line.starts_with("Dialogue: 1,")).unwrap();
-        // The page's braces and a typed backslash stay text, and the deep link becomes its number.
-        assert!(text.contains("write \\{x} and read it back"), "{text}");
-        assert!(text.contains("hello\\\u{2060}N"), "{text}");
-        assert!(!text.contains("<desktop://"), "{text}");
-        assert!(text.contains("\u{201c}hello\u{201d}"), "{text}");
-        assert!(text.ends_with("complete in 12.3s, 3 steps, $0.0123"), "{text}");
-        assert!(text.contains("\\c&H50B93F&}complete"), "{text}");
-    }
-
-    #[test]
-    fn a_card_for_a_run_that_did_not_complete_draws_its_outcome_in_red() {
-        let card = DrawnCard {
-            task: "save the file".into(),
-            result: ResultCard {
-                status: "unavailable".into(),
-                answer: None,
-                error: Some("every window of the run is closed".into()),
-                citations: vec![],
-                steps: 2,
-                known_dollars: 0.0,
-            },
-            seconds: 4.0,
-        };
-        let text = card_ass(&card, 1.0, 1280, 720);
-        let text = text.lines().find(|line| line.starts_with("Dialogue: 1,")).unwrap();
-        assert!(!text.contains("&H50B93F&"), "{text}");
-        assert!(text.contains("\\c&H4951F8&}unavailable"), "{text}");
     }
 
     #[test]

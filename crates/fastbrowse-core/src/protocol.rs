@@ -348,15 +348,6 @@ pub struct RunTask {
     /// `extension`.
     #[serde(default)]
     pub extension_browser: Option<String>,
-    /// Drive a native desktop app instead of a browser, through deskpilot on Hyprland: the command line that starts
-    /// it, split as a POSIX shell splits words. The run starts the app on deskpilot's hidden workspace and closes it
-    /// when the run ends.
-    #[serde(default)]
-    pub desktop: Option<String>,
-    /// More desktop apps to start in the same run beside `desktop`, each a command line as `desktop` is. Every window
-    /// the run's apps open is one of its tabs, so the run moves between apps as a browser run moves between tabs.
-    #[serde(default)]
-    pub desktop_apps: Vec<String>,
 }
 
 impl RunTask {
@@ -367,20 +358,15 @@ impl RunTask {
     }
 
     /// Whether `local` alone reaches the user's own browser. A signed-out Chrome cannot do a signed-in task, so a
-    /// separate one starts only when `launch`, a binary, a headed window or a kept profile asks for it, and a browserless,
-    /// desktop or attached run keeps its own meaning.
+    /// separate one starts only when `launch`, a binary, a headed window or a kept profile asks for it, and a browserless
+    /// or attached run keeps its own meaning.
     pub fn local_means_extension(&self) -> bool {
         let launched = self.launch
             || self
                 .chrome
                 .as_ref()
                 .is_some_and(|chrome| chrome.headed || chrome.profile.is_some() || chrome.binary.is_some());
-        self.local
-            && !launched
-            && !self.fetch
-            && self.desktop.is_none()
-            && self.cdp_url.is_none()
-            && self.cdp_port.is_none()
+        self.local && !launched && !self.fetch && self.cdp_url.is_none() && self.cdp_port.is_none()
     }
 }
 
@@ -701,8 +687,6 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("browser", Ty::Bool, false),
         Field::default("extension", Ty::Bool, false),
         Field::default("extension_browser", text(), none()),
-        Field::default("desktop", text(), none()),
-        Field::default("desktop_apps", Ty::list(Ty::Str), empty()),
     ]
 }
 
