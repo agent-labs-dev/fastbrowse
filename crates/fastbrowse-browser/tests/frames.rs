@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_browser::testing;
 use fastbrowse_core::models::{BrowserWarningEvent, BrowserWarningFailure, BrowserWarningOperation, FrameHandler};
@@ -472,4 +473,262 @@ async fn test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_f
         assert!(!path.exists(), "{page}");
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+// -- test_frame_callback.py ------------------------------------------------------------------------------------------
+//
+// Python runs these on a real Chrome and sets the frame handler on the open session. The Rust session takes its
+// handler when it is made, so on a real Chrome the cast would hand its own frames to the handler before the test's;
+// the fake sends none.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_close_cancels_a_blocked_frame_callback() {
+    let fake = FakeChrome::start().await;
+    let started = watch::channel(false).0;
+    let on_frame: FrameHandler = Arc::new({
+        let started = started.clone();
+        move |_frame| {
+            started.send_replace(true);
+            Box::pin(std::future::pending())
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    let active = session.active_session_id().unwrap();
+    testing::deliver_frame(&session, "aGVsbG8=", 1, Some(&active));
+    let mut waiting = started.subscribe();
+    tokio::time::timeout(Duration::from_secs(1), waiting.wait_for(|s| *s)).await.unwrap().unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), session.close()).await.unwrap().unwrap();
+
+    assert!(testing::lifecycle::closing(&session));
+    assert_eq!(testing::background_len(&session), 0);
+    assert!(!testing::has_pending_frame(&session));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_close_does_not_wait_on_a_frame_callback_that_ignores_cancellation() {
+    // Python's handler swallows its cancellation; a Rust future cannot, so this one blocks its thread instead, which
+    // no cancellation reaches either. Python shortens `_FRAME_RELEASE_SECONDS` to 0.1s; the Rust one is 2s.
+    let fake = FakeChrome::start().await;
+    let started = watch::channel(false).0;
+    let released = Arc::new(AtomicBool::new(false));
+    let on_frame: FrameHandler = Arc::new({
+        let (started, released) = (started.clone(), released.clone());
+        move |_frame| {
+            let (started, released) = (started.clone(), released.clone());
+            Box::pin(async move {
+                started.send_replace(true);
+                // A caller's handler can ignore its cancellation and keep waiting, as a retry loop that catches
+                // everything does; the run must still return and stop its browser.
+                while !released.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            })
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    let frame = json!({
+        "data": "aGVsbG8=",
+        "sessionId": 1,
+        "metadata": {
+            "offsetTop": 0, "pageScaleFactor": 1, "deviceWidth": 1, "deviceHeight": 1, "scrollOffsetX": 0,
+            "scrollOffsetY": 0,
+        },
+    });
+    let active = session.active_session_id().unwrap();
+    testing::dispatch(&session, "Page.screencastFrame", frame, Some(&active));
+    let mut waiting = started.subscribe();
+    tokio::time::timeout(Duration::from_secs(1), waiting.wait_for(|s| *s)).await.unwrap().unwrap();
+
+    let closing = tokio::spawn({
+        let session = session.clone();
+        async move { session.close().await }
+    });
+    let finished = tokio::time::timeout(Duration::from_secs(4), async {
+        while !closing.is_finished() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    released.store(true, Ordering::SeqCst);
+    closing.await.unwrap().unwrap();
+    testing::settle_background(&session).await;
+    assert!(finished.is_ok(), "close waited on the frame callback");
+    assert!(session.client().is_err());
+}
+
+// -- test_command_deadline.py: a live browser can leave one page command unanswered indefinitely --------------------
+//
+// These run on the real `CDP_REPLY_SECONDS` (60s), `CDP_PAGE_SECONDS` (10s), `CDP_ALIVE_SECONDS` (10s) and
+// `CDP_COMMAND_SECONDS` (120s), which are constants a test cannot shorten as Python's monkeypatch does, so each takes
+// half a minute or more and is ignored by default. Each Python scenario is kept, its times scaled to these. A command
+// to a page also asks the page whether it answers, and the fake holds that `Runtime.evaluate` with the command.
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "slow: waits out the real CDP_COMMAND_SECONDS, about 120s"]
+async fn test_unanswered_command_from_live_browser_has_a_deadline() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    fake.block("Runtime.evaluate");
+    let client = session.client().unwrap();
+    let raised = tokio::time::timeout(
+        Duration::from_secs(150),
+        client.send("Runtime.evaluate", json!({"expression": "aPromiseThatNeverSettles()"}), None),
+    )
+    .await
+    .expect("the deadline ends the wait")
+    .unwrap_err();
+    assert!(matches!(raised, BrowserError::PageUnresponsive(_)), "{raised:?}");
+    assert!(raised.to_string().contains("command deadline"), "{raised}");
+    assert_eq!(client.pending(), 0);
+    session.close().await.unwrap();
+    // The browser answered throughout, so the page stopping is the run's failure, never an outage.
+    assert!(!raised.is_unavailable());
+    assert!(fake.calls().iter().any(|m| m == "Browser.getVersion"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "slow: waits out the real CDP_PAGE_SECONDS and CDP_ALIVE_SECONDS, about 20s"]
+async fn test_repeated_command_deadlines_stop_the_tab_instead_of_recurring() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    fake.block("Runtime.evaluate");
+    let client = session.client().unwrap();
+    // Python waits out the deadlines one after another; they are counted the same side by side, in half the time.
+    let deadlines = (0..fastbrowse_browser::cdp::CDP_DEADLINES_BEFORE_STOP)
+        .map(|_| client.send("Runtime.evaluate", json!({"expression": "1"}), Some("session")));
+    for raised in futures_util::future::join_all(deadlines).await {
+        let raised = raised.unwrap_err();
+        assert!(matches!(raised, BrowserError::PageUnresponsive(_)) && raised.to_string().contains("command deadline"));
+    }
+    let sent = fake.calls().len();
+    let raised = tokio::time::timeout(
+        Duration::from_secs_f64(0.02),
+        client.send("Runtime.evaluate", json!({"expression": "1"}), Some("session")),
+    )
+    .await
+    .expect("refused at once")
+    .unwrap_err();
+    assert!(matches!(raised, BrowserError::PageUnresponsive(_)) && raised.to_string().contains("already exceeded"));
+    assert_eq!(fake.calls().len(), sent, "a tab command after repeated deadlines is not sent to wait again");
+    // Closing the run's tabs is still possible.
+    client.send("Target.getTargets", json!({}), None).await.unwrap();
+    session.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "slow: waits out the real CDP_PAGE_SECONDS and two CDP_ALIVE_SECONDS, about 30s"]
+async fn test_a_browser_gone_by_the_command_deadline_is_an_outage() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    fake.block("Runtime.evaluate");
+    let client = session.client().unwrap();
+    let sending = client.send("Runtime.evaluate", json!({"expression": "1"}), Some("session"));
+    let gone = async {
+        // The browser answers the probe after the first wait, and goes while the page is asked whether it answers.
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        fake.block("Browser.getVersion");
+    };
+    let (raised, ()) = tokio::join!(sending, gone);
+    let raised = raised.unwrap_err();
+    assert!(matches!(raised, BrowserError::BrowserUnresponsive(_)), "{raised:?}");
+    assert!(raised.to_string().contains("stopped answering"), "{raised}");
+    session.close().await.unwrap();
+    assert!(raised.is_unavailable());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "slow: waits out the real CDP_PAGE_SECONDS and two CDP_ALIVE_SECONDS, about 30s"]
+async fn test_a_reply_that_lands_during_the_deadline_probe_is_kept() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    // The page leaves the probe unanswered, so the command is past its deadline, and the browser probe that follows
+    // waits on a browser slow to answer; the page's reply lands meanwhile. The first browser probe answers.
+    fake.queue("Browser.getVersion", [json!({})]);
+    fake.block("Browser.getVersion");
+    fake.delay("Runtime.evaluate", 22.0);
+    let reply = session.client().unwrap().send("Runtime.evaluate", json!({"expression": "1"}), Some("session")).await;
+    session.close().await.unwrap();
+    assert_eq!(reply.unwrap(), json!({"result": {"value": "loading"}}));
+}
+
+// -- test_active_target.py: closing the last owned tab must produce a classified browser failure ----------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_capture_session_after_last_target_closes_is_unavailable() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    testing::dispatch(&session, "Target.targetDestroyed", json!({"targetId": session.active_target_id()}), None);
+    let error = session.active_session_id().unwrap_err();
+    assert!(error.is_unavailable() && error.to_string().contains("active browser tab closed"), "{error}");
+    session.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_closed_active_tab_hands_over_to_its_opener_else_the_last_active_tab() {
+    // An OAuth popup closes itself once it has signed the run in: the run goes back to the tab that opened it, not to
+    // the first tab, and a tab with no opener left hands over to the one the run was on before it.
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    for (target, session_id) in [("second", "second-session"), ("third", "third-session")] {
+        fake.queue("Target.createTarget", [json!({"targetId": target})]);
+        fake.queue("Target.attachToTarget", [json!({"sessionId": session_id})]);
+        testing::open_owned_tab(&session, "about:blank").await.unwrap();
+    }
+    session.switch_tab("second").await.unwrap();
+    session.switch_tab("third").await.unwrap();
+    fake.queue("Target.attachToTarget", [json!({"sessionId": "popup-session"})]);
+    testing::adopt(&session, "popup", "second").await;
+    session.switch_tab("popup").await.unwrap();
+    for (closed, next) in [("popup", "second"), ("second", "third"), ("third", "owned")] {
+        testing::dispatch(&session, "Target.targetDestroyed", json!({"targetId": closed}), None);
+        assert_eq!(session.active_target_id(), next, "after {closed} closed");
+    }
+    session.close().await.unwrap();
+}
+
+/// The decision loop holds the page as `Arc<dyn Page>`, and reads an outage there as core's `Unavailable`.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_closed_tab_reaches_the_loop_as_unavailable() {
+    use fastbrowse_browser::page::CdpPage;
+    use fastbrowse_core::page::{BrowserError as PageError, Page};
+
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    let page: Arc<dyn Page> = Arc::new(CdpPage::new(session.clone(), Default::default()));
+    testing::dispatch(&session, "Target.targetDestroyed", json!({"targetId": session.active_target_id()}), None);
+    let error = page.capture().await.unwrap_err();
+    assert!(matches!(&error, PageError::Unavailable(m) if m.contains("active browser tab closed")), "{error:?}");
+    session.close().await.unwrap();
+}
+
+// -- test_attached_recording.py --------------------------------------------------------------------------------------
+//
+// test_recording_preserves_attached_page_geometry_and_reattachment is not ported: it runs `run_task` and `Agent`,
+// the run layer, which is not ported here.
+
+/// A server that never answers leaves Chrome loading with no further event, so a load is waited on for as long as a
+/// navigation is given one, from its own start, and no longer.
+#[tokio::test]
+async fn a_load_that_never_ends_stops_being_waited_on_once_it_has_had_a_navigations_time() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session_with(fake.connection(), SessionOptions::default()).await;
+    settle(&session).await;
+    assert_eq!(session.loading_left(), None);
+    tokio::time::pause();
+    testing::dispatch(&session, "Page.frameStartedLoading", json!({"frameId": "top"}), Some("session"));
+    assert_eq!(session.loading_left(), Some(225.0));
+    tokio::time::advance(Duration::from_secs(200)).await;
+    // The same load reported again is no new time to wait.
+    testing::dispatch(&session, "Page.frameStartedLoading", json!({"frameId": "top"}), Some("session"));
+    assert_eq!(session.loading_left(), Some(25.0));
+    tokio::time::advance(Duration::from_secs(25)).await;
+    assert_eq!(session.loading_left(), None);
+    assert!(session.navigating(), "the load is still in flight; only the wait on it ends");
+    // A load that lands ends; the next one, as a challenge page that keeps navigating starts, has its own time.
+    testing::dispatch(&session, "Page.frameStoppedLoading", json!({"frameId": "top"}), Some("session"));
+    testing::dispatch(&session, "Page.frameStartedLoading", json!({"frameId": "top"}), Some("session"));
+    assert_eq!(session.loading_left(), Some(225.0));
 }
