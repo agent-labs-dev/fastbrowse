@@ -324,7 +324,8 @@
   const blockFlows = new WeakMap();
   const hasBlockFlow = e => {
     if (blockFlows.has(e)) return blockFlows.get(e);
-    const block = isBlock(e) || [...e.children].some(
+    // An inline wrapper around ARIA list items is walked, so each item stays a block of its own place.
+    const block = isBlock(e) || e.querySelector('[role="listitem"]') !== null || [...e.children].some(
       child => child.tagName !== 'BR' && !SKIP.has(child.tagName) && !hidden(child) && hasBlockFlow(child),
     );
     blockFlows.set(e, block);

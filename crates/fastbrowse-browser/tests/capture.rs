@@ -601,6 +601,7 @@ async fn test_a_wrapped_item_and_a_field_value_carry_their_place() {
          <ul><li><label>Name <input value='alpha'></label></li>\
          <li><label>Other <input value='beta'></label></li></ul>\
          <div role='list'><span role='listitem'>Inline first</span> <span role='listitem'>Inline second</span></div>\
+         <div role='list'><span><a href='/w1' role='listitem'>Wrapped first</a> <a href='/w2' role='listitem'>Wrapped second</a></span></div>\
          <ul><li>Row one</li><li><img src='data:image/gif;base64,R0lGODlhAQABAAAAACw=' width='20' height='20' alt='Second pic'></li></ul>",
     )
     .await;
@@ -614,6 +615,8 @@ async fn test_a_wrapped_item_and_a_field_value_carry_their_place() {
     assert_eq!(place("Other: beta"), Some((2, 2)));
     assert_eq!(place("Inline first"), Some((1, 2)));
     assert_eq!(place("Inline second"), Some((2, 2)));
+    assert_eq!(place("Wrapped first"), Some((1, 2)));
+    assert_eq!(place("Wrapped second"), Some((2, 2)));
     let full = h.page.capture().await.expect("capture");
     let image = full.blocks.iter().find(|b| text_of(&full, b).starts_with("Image element DOM metadata")).unwrap();
     assert_eq!(image.item_place.map(|place| (place.position, place.count)), Some((2, 2)));
