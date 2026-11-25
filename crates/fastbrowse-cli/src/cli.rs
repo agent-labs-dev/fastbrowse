@@ -463,15 +463,26 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let explicit_extension = args.extension || args.extension_browser.is_some();
     let extension = explicit_extension || (!args.cloud && !args.fetch);
-    // `--attach` and `--target-match` pick a tab in a browser already running, which a cloud run never has.
-    let attaching = args.attach || args.target_match.is_some();
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension || attaching)
-    {
-        return Err(ConfigurationError(
-            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch, --extension, --extension-browser, \
-             --attach or --target-match"
-                .into(),
-        ));
+    if args.cloud {
+        // `--attach` and `--target-match` pick a tab in a browser already running, which a cloud run never has.
+        // Name only the flags given: a list of every incompatible flag points at ones the user never passed.
+        let given: Vec<&str> = [
+            (args.headed, "--headed"),
+            (args.profile.is_some(), "--profile"),
+            (args.cdp_url.is_some(), "--cdp-url"),
+            (args.cdp_port.is_some(), "--cdp-port"),
+            (args.fetch, "--fetch"),
+            (args.extension, "--extension"),
+            (args.extension_browser.is_some(), "--extension-browser"),
+            (args.attach, "--attach"),
+            (args.target_match.is_some(), "--target-match"),
+        ]
+        .into_iter()
+        .filter_map(|(present, name)| present.then_some(name))
+        .collect();
+        if !given.is_empty() {
+            return Err(ConfigurationError(format!("--cloud cannot be combined with {}", given.join(", "))));
+        }
     }
     let cdp_port = args
         .cdp_port

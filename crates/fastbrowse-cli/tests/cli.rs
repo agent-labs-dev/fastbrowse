@@ -268,7 +268,7 @@ async fn extension_and_cloud_refusals_name_the_cli_flags() {
         argv.extend_from_slice(flag);
         let ran = cli(&argv).await;
         assert!(ran.call.is_none());
-        assert!(ran.json()["error"].as_str().unwrap().starts_with("--cloud cannot be combined with"));
+        assert_eq!(ran.json()["error"].as_str().unwrap(), format!("--cloud cannot be combined with {}", flag[0]));
     }
 }
 
