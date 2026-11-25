@@ -831,8 +831,19 @@ fn estimated_context_bytes(messages: &[Message]) -> usize {
     request_bytes(messages, &Typed::<AnswerDraft>::default())
 }
 
-/// The bytes of a request for `schema`, envelope included, as `estimated_context_bytes` counts them.
+/// The bytes of a request for `schema`, envelope included, as `estimated_context_bytes` counts them. An image counts as
+/// the base64 data URL a client sends it in, apart from the rest: serialized as it is held, PNG bytes are not UTF-8,
+/// and the driver's context check panicked on the turn after a screenshot.
 pub(crate) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -> usize {
+    // `{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,"}},` around each image's payload.
+    const IMAGE_PART: usize = 67;
+    let images: usize = messages
+        .iter()
+        .flat_map(|message| &message.images)
+        .map(|image| IMAGE_PART + image.0.len().div_ceil(3) * 4)
+        .sum();
+    let messages: Vec<Message> =
+        messages.iter().map(|message| Message { images: Vec::new(), ..message.clone() }).collect();
     let schema_json = schema.json_schema();
     let envelope = json!({
         "model": "",
@@ -842,7 +853,7 @@ pub(crate) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -
             "json_schema": {"name": schema.name(), "schema": schema_json, "strict": true},
         },
     });
-    serde_json::to_vec(&envelope).expect("a request is serializable").len()
+    serde_json::to_vec(&envelope).expect("a request is serializable").len() + images
 }
 
 pub(crate) fn context_limit(context: i64) -> Result<usize> {

@@ -34,6 +34,11 @@ struct DatePage {
     before: Option<String>,
     /// The modal open over the page, which lists none of its own controls.
     modal: Option<String>,
+    /// The note belongs to a customer record, and the inline Next shows the next customer in the same row.
+    records: bool,
+    next_record: std::sync::atomic::AtomicBool,
+    /// A real PNG for a screenshot, in place of none.
+    png: bool,
     acted: Mutex<Vec<Action>>,
 }
 
@@ -47,6 +52,10 @@ impl DatePage {
             json!({"id": "main:note", "frame_id": null, "frame_origin": "https://example.test", "role": "textbox", "label": "Note", "operations": ["fill", "drag"],
                    "sensitive": false, "offscreen": false}),
         ];
+        if self.records {
+            let next = self.next_record.load(std::sync::atomic::Ordering::SeqCst);
+            controls[2]["context"] = json!(if next { "Customer Bob" } else { "Customer Alice" });
+        }
         if self.framed {
             controls.push(json!({"id": "auth:password", "frame_id": "auth", "frame_origin": "https://auth.test",
                                  "role": "textbox", "label": "Password", "operations": ["fill"], "sensitive": true,
@@ -125,12 +134,16 @@ impl Page for DatePage {
         self.acted.lock().unwrap().push(action.clone());
         let opens = action.target_id.as_deref() == Some("main:date")
             && !self.open.swap(true, std::sync::atomic::Ordering::SeqCst);
+        let paged = self.records && action.target_id.as_deref() == Some("main:inline-next");
+        if paged {
+            self.next_record.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         Box::pin(async move {
             Ok(ActResult {
                 outcome: StepOutcome::Executed,
                 failure: None,
                 // A note taking text changes the page's text but no control on it.
-                page_changed: opens || action.target_id.as_deref() == Some("main:note"),
+                page_changed: opens || paged || action.target_id.as_deref() == Some("main:note"),
                 detail: None,
                 moved: false,
                 landed: None,
@@ -143,7 +156,11 @@ impl Page for DatePage {
     }
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
-        Box::pin(async { Ok(Vec::new()) })
+        let mut png = std::io::Cursor::new(Vec::new());
+        if self.png {
+            image::DynamicImage::new_rgba8(1, 1).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        }
+        Box::pin(async move { Ok(png.into_inner()) })
     }
 
     fn withhold_frames(&self, _: bool) {}
@@ -174,6 +191,8 @@ struct Driver {
     composed: Mutex<Vec<Vec<Message>>>,
     /// The context window the driver model's provider lists, in tokens.
     context: Option<i64>,
+    /// The answer each compose call returns, in place of the scripted LLM's.
+    composition: Option<Value>,
 }
 
 impl Driver {
@@ -183,6 +202,7 @@ impl Driver {
             sent: Mutex::new(Vec::new()),
             composed: Mutex::new(Vec::new()),
             context: None,
+            composition: None,
         })
     }
 
@@ -202,6 +222,12 @@ impl LLMClient for Driver {
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         if purpose == LLMPurpose::Compose {
             self.composed.lock().unwrap().push(messages.to_vec());
+            if let Some(answer) = self.composition.clone() {
+                return Box::pin(async move {
+                    let data = schema.validate_json(&answer.to_string()).map_err(LLMError::schema)?;
+                    Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
+                });
+            }
         }
         if purpose != LLMPurpose::Action {
             return ScriptedLLM.generate_value(purpose, messages, schema, ledger);
@@ -224,10 +250,14 @@ async fn run(page: Arc<DatePage>, driver: Arc<Driver>) -> RunResult {
 }
 
 async fn run_with(page: Arc<DatePage>, driver: Arc<Driver>, jev: Arc<dyn DecisionClient>) -> RunResult {
+    run_task(page, driver, jev, "Open the date field and go to the next month.").await
+}
+
+async fn run_task(page: Arc<DatePage>, driver: Arc<Driver>, jev: Arc<dyn DecisionClient>, task: &str) -> RunResult {
     let agent = Agent::new(page, jev, driver);
     agent
         .run(
-            "Open the date field and go to the next month.",
+            task,
             RunOptions {
                 start: Some("https://example.test/".into()),
                 limits: Some(Limits { max_steps: Some(10), ..Default::default() }),
@@ -461,6 +491,23 @@ async fn test_a_done_on_a_page_reporting_the_site_failed_is_sent_back_and_then_e
     assert!(told.contains("reports that the site failed") && told.contains("goto(its address)"), "{told}");
 }
 
+#[tokio::test]
+async fn test_a_stuck_run_does_not_complete_on_notes_from_a_page_reporting_the_site_failed() {
+    let page = Arc::new(DatePage { offscreen: "No results returned.".into(), ..DatePage::default() });
+    let turns = [
+        json!({"next": "", "actions": [{"tool": "done", "answer": [
+            {"text": "No results returned.", "quotes": ["Pick a date", "No results returned."]}
+        ]}]}),
+        give_up(),
+    ];
+    let composition = json!({"claims": [{"text": [{"prose": "No results returned."}], "evidence_ids": ["e0"]}]});
+    let driver = Arc::new(Driver { composition: Some(composition), ..Arc::into_inner(Driver::new(turns)).unwrap() });
+    let jev = Arc::new(Answering(ScriptedJev::new(Vec::new()), &[("site_failure", 1.0), ("claim0", 1.0)]));
+    let result = run_task(page, driver.clone(), jev, "Report what the page says.").await;
+    assert!(driver.told(1).contains("reports that the site failed"));
+    assert_eq!(result.status, Status::Stuck, "{:?}", result.answer);
+}
+
 /// One secret, `pw`, for the test page's origin only.
 struct Secret;
 
@@ -528,6 +575,19 @@ async fn test_a_plan_stops_after_an_action_that_changed_nothing() {
         second.contains("1 planned action(s) were not run because") && second.contains("changed nothing"),
         "{second}"
     );
+}
+
+#[tokio::test]
+async fn test_a_plan_stops_once_a_control_it_named_shows_another_record() {
+    let page = Arc::new(DatePage { records: true, ..DatePage::default() });
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "click", "id": "2"}, {"tool": "type", "id": "3", "text": "Alice"}]}),
+        give_up(),
+    ]);
+    run(page.clone(), driver.clone()).await;
+    let acted: Vec<_> = page.acted.lock().unwrap().iter().map(|action| action.target_id.clone()).collect();
+    assert_eq!(acted, [Some("main:inline-next".into())], "the note planned for Alice now belongs to Bob");
+    assert!(driver.told(1).contains("Customer Bob"));
 }
 
 #[tokio::test]
@@ -668,6 +728,20 @@ async fn first_request_bytes(page: DatePage) -> i64 {
     let driver = Driver::new([give_up()]);
     run(page, driver.clone()).await;
     serde_json::to_vec(&driver.sent.lock().unwrap()[0]).unwrap().len() as i64
+}
+
+#[tokio::test]
+async fn test_a_screenshot_kept_in_the_conversation_is_counted_against_the_models_context() {
+    let page = Arc::new(DatePage { png: true, ..DatePage::default() });
+    let turns = [
+        json!({"next": "", "actions": [{"tool": "screenshot"}]}),
+        json!({"next": "", "actions": [{"tool": "wait", "seconds": 0}]}),
+        give_up(),
+    ];
+    let driver = Arc::new(Driver { context: Some(128_000), ..Arc::into_inner(Driver::new(turns)).unwrap() });
+    let result = run(page, driver.clone()).await;
+    assert_eq!(result.status, Status::Stuck, "{:?}", result.error);
+    assert!(!driver.sent.lock().unwrap()[2].iter().all(|message| message.images.is_empty()));
 }
 
 #[tokio::test]

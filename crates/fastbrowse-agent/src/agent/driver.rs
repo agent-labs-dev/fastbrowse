@@ -39,8 +39,8 @@ pub(super) struct Chat {
     queue: VecDeque<Act>,
     /// The page the queue was planned on, as its url, document and page key, and the ids of the controls it had.
     planned_on: Option<(String, String, String)>,
-    /// Each control as id, role and label: a list redrawn in place reuses its element ids for other entries.
-    planned_ids: HashSet<(String, String, String)>,
+    /// Each control as id, role, label and record context: a list redrawn in place reuses its element ids for others.
+    planned_ids: HashSet<ControlIdentity>,
     /// The origins whose secret names the model has been told.
     secrets_told: HashSet<String>,
     /// Whether the model has been told no screenshot is taken for the rest of the run (`Agent::images_withheld`).
@@ -434,10 +434,13 @@ fn page_reach(unread: Option<Unread>) -> String {
     format!("This page was read over HTTP: its markup holds no links or controls, but {missing}. {step}")
 }
 
-/// A control as a planned action names it: a suggestion list refilled for new input kept its element ids, and a click
-/// planned on one city's entry would land on another's.
-fn identity(control: &Control) -> (String, String, String) {
-    (control.id.clone(), control.role.clone(), control.label.clone())
+/// A control as a planned action names it, with the record it was shown under: a suggestion list refilled for new input
+/// kept its element ids, and a click planned on one city's entry would land on another's; a list reusing its rows for
+/// another customer kept ids and labels, and a note planned for one customer was typed into the next one's.
+type ControlIdentity = (String, String, String, Option<String>);
+
+fn identity(control: &Control) -> ControlIdentity {
+    (control.id.clone(), control.role.clone(), control.label.clone(), control.context.clone())
 }
 
 /// A page state as read: a date picked in place keeps the url and document but changes the page key.

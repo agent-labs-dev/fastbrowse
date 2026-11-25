@@ -738,14 +738,17 @@ impl Agent {
                         && state.undone.is_none();
                     // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
                     // and a run stuck before any finish check judged its steps may have left one undone: that check's
-                    // own question decides, asked of the last page.
-                    if answers
-                        && stop.status == Status::Stuck
-                        && (state.history.iter().any(HistoryEntry::acts) || state.asks_steps)
-                    {
+                    // own question decides, asked of the last page. A task that only asks to be told is asked what done
+                    // asks it: whether the page reports the site failed. A refused done had noted an error panel's
+                    // quotes, and this draft completed the run on them.
+                    if answers && stop.status == Status::Stuck {
+                        let steps = state.history.iter().any(HistoryEntry::acts) || state.asks_steps;
                         answers = match self.observed() {
-                            Some(page) => matches!(self.actions_done(state, &page).await, Ok(Carried::Done)),
-                            None => false,
+                            Some(page) if steps => {
+                                matches!(self.actions_done(state, &page).await, Ok(Carried::Done))
+                            }
+                            Some(page) => matches!(self.site_failed(state, &page).await, Ok(false)),
+                            None => !steps,
                         };
                     }
                     // A schema run's data is drawn from this answer, as at done: the extraction kept from the draft it
