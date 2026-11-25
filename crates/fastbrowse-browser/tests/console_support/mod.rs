@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 const DESCRIPTION: &str = "# Shortest Path Forever\n\nThe quickest walking route to your next objective.\n\n\
                            ## Settings\n\nType /spf to open the settings panel.";
 const REPLY: &str = "Thanks, the next version prefers the tunnel.";
+const REPLY_2: &str = "Thanks, the arrow now skips the harbor.";
 
 async fn eval(page: &CdpPage, session: &BrowserSession, expression: &str) -> Value {
     let session_id = session.active_session_id().expect("active session");
@@ -75,38 +76,63 @@ pub async fn description(page: &CdpPage, session: &BrowserSession, base: &str) {
     assert_eq!(eval(page, session, "document.querySelector('.form-actions .btn-primary').disabled").await, json!(true));
 }
 
-/// Reply to one comment, in its own thread: Reply opens an editor inside that comment, prefilled with the author's
-/// name, beside the page's own comment box.
+/// Reply to two comments, each in its own thread: Reply opens an editor inside that comment, prefilled with the
+/// author's name, beside the page's own comment box. Nivlemoth_Nathrezim also replied in another thread and IronmanBG
+/// wrote twice, so each name link shows twice and names no comment: the editor and its Post are told apart by the
+/// commenter and the comment's age instead, and the page's own box is named as outside every comment listed.
 pub async fn reply(page: &CdpPage, session: &BrowserSession, base: &str) {
+    reply_to(page, session, base, "Nivlemoth_Nathrezim", "7 hours ago", "over the mountain in Alterac", REPLY).await;
+    reply_to(page, session, base, "IronmanBG", "The arrow also points", "The arrow also points the wrong way", REPLY_2)
+        .await;
+}
+
+async fn reply_to(
+    page: &CdpPage,
+    session: &BrowserSession,
+    base: &str,
+    author: &str,
+    card: &str,
+    parent: &str,
+    text: &str,
+) {
     page.navigate(&format!("{base}/addon-comments.html"), None).await.expect("navigate");
     let observation = page.observe().await.expect("observe");
+    let named = |c: &Control| c.context.as_deref().is_some_and(|context| context.contains(author));
+    let own_box = find(&observation, |c| c.role == "textbox" && !named(c), "the page's own comment box");
+    assert!(
+        own_box.context.as_deref().is_some_and(|context| context.contains("outside every item listed")),
+        "the page's own box is named as outside every comment: {own_box:?}"
+    );
     let reply = find(
         &observation,
-        |c| c.label == "Reply" && c.context.as_deref().is_some_and(|context| context.contains("Nivlemoth_Nathrezim")),
-        "Reply on Nivlemoth_Nathrezim's comment",
+        |c| c.label == "Reply" && c.context.as_deref().is_some_and(|context| context.contains(card) && named(c)),
+        "Reply on the comment",
     );
+    assert!(named(reply), "Reply is named by its commenter: {reply:?}");
     act(page, Operation::Click, reply, None, &observation).await;
     let before: HashSet<&str> = observation.controls.iter().map(|c| c.id.as_str()).collect();
     let opened = page.observe().await.expect("observe");
     // The reply editor and its Post are the controls Reply added; the page's own box was there before.
     let added = |c: &Control| !before.contains(c.id.as_str());
     let editor = find(&opened, |c| added(c) && c.role == "textbox", "the opened reply editor");
-    act(page, Operation::Fill, editor, Some(REPLY), &opened).await;
+    assert!(named(editor), "the opened editor is named by the comment: {editor:?}");
+    act(page, Operation::Fill, editor, Some(text), &opened).await;
     let filled = page.observe().await.expect("observe");
     let post = find(&filled, |c| added(c) && c.label == "Post", "the reply editor's Post");
+    assert!(named(post), "Post is named by the comment: {post:?}");
     act(page, Operation::Click, post, None, &filled).await;
     let placed = format!(
         "[...document.querySelectorAll('#thread > li')].map(li => [li.querySelector('.text').textContent, \
          [...li.querySelectorAll(':scope .comments-list .text')].map(t => t.textContent)])\
          .filter(([, replies]) => replies.includes({}))",
-        json!(REPLY)
+        json!(text)
     );
     let everywhere =
-        format!("[...document.querySelectorAll('.text')].filter(t => t.textContent === {}).length", json!(REPLY));
+        format!("[...document.querySelectorAll('.text')].filter(t => t.textContent === {}).length", json!(text));
     assert_eq!(eval(page, session, &everywhere).await, json!(1), "posted exactly once");
     let threads = eval(page, session, &placed).await;
     assert_eq!(threads.as_array().map(Vec::len), Some(1), "posted once, as a reply: {threads}");
-    assert!(threads[0][0].as_str().unwrap().contains("over the mountain in Alterac"), "{threads}");
+    assert!(threads[0][0].as_str().unwrap().contains(parent), "{threads}");
 }
 
 /// Delete one gallery image through the controls its card shows only while the pointer is over it.

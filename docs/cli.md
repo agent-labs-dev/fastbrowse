@@ -223,8 +223,8 @@ its sessions: close the app, or restart it without the flag, when you are done.
 
 ## Models
 
-The LLM defaults to `openai/gpt-6-luna` at low reasoning, for proposing a first address when no
-`start` is given and for writing an answer that must be composed from more than one fact.
+The LLM defaults to `openai/gpt-6-luna` at low reasoning. It drives every turn of the run, proposes a first address
+when no `start` is given, and writes an answer that must be composed from more than one fact.
 
 | Setting | Effect |
 |:--|:--|
