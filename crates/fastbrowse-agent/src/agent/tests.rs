@@ -10185,3 +10185,31 @@ async fn test_a_run_whose_password_is_one_letter_or_a_control_id_still_completes
         assert_eq!(*page.clicked.lock().unwrap(), ["e1"], "{password}");
     }
 }
+
+/// The driver reads an address the caller wrote with credentials only masked, so it copies it as its bullets: an input
+/// whose value was such an address was typed as the bullets, and a page the task named behind a password was never
+/// opened. Code puts back what the caller wrote, and nothing else (#1381).
+#[test]
+fn test_an_address_the_driver_copied_masked_is_typed_and_opened_as_the_caller_wrote_it() {
+    let agent = agent();
+    let ledger = Arc::new(Ledger::new(Limits::default()));
+    let inputs = IndexMap::from([("vault".to_string(), "https://ops:Z9pw@vault.test/keys".to_string())]);
+    let mut state = RunState::new(
+        "Open https://ops:K3y9pw@crm.test/ and file the vault address.".into(),
+        inputs,
+        Vec::new(),
+        Authorization::default(),
+        ledger,
+    );
+    state.raw_context = Some("Mirror: https://ops:M1rr0r@mirror.test/".into());
+    agent.learn_credentials([state.raw_task.as_str(), state.raw_context.as_deref().unwrap()]);
+    let shown = agent.model_task(&state);
+    assert!(!shown.contains("Z9pw") && !shown.contains("K3y9pw"), "{shown}");
+    for raw in ["https://ops:Z9pw@vault.test/keys", "https://ops:K3y9pw@crm.test/", "https://ops:M1rr0r@mirror.test/"] {
+        let copied = format!("see {}", agent.mask(raw));
+        assert_eq!(agent.as_written(&state, &copied), format!("see {raw}"));
+    }
+    // A masked address the caller never wrote is left as the driver wrote it.
+    let other = agent.mask("https://ops:Other9@elsewhere.test/");
+    assert_eq!(agent.as_written(&state, &other), other);
+}

@@ -1625,12 +1625,15 @@ struct Handed {
 }
 
 impl Handed {
-    /// A host whose Jev follows `script` and sees images, with step frames asking for a PNG with every step event and
-    /// a final frame on the result.
+    /// A host whose driver follows `script` and whose Jev and LLM see images, with step frames asking for a PNG with
+    /// every step event and a final frame on the result.
     fn host(&self, script: &str, trace: &fastbrowse_core::telemetry::Trace) -> Host {
         let jev: Arc<dyn DecisionClient> =
             Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(fastbrowse_agent::scripted::steps(script).unwrap()));
-        let llm: Arc<dyn LLMClient> = Arc::new(fastbrowse_agent::scripted::ScriptedLLM);
+        // The driver LLM takes the steps; Jev answers the questions code still gates on.
+        let llm: Arc<dyn LLMClient> = Arc::new(fastbrowse_agent::scripted::ScriptedDriver::new(
+            fastbrowse_agent::scripted::steps(script).unwrap(),
+        ));
         let (frames, events, checked) = (self.frames.clone(), self.events.clone(), self.checked.clone());
         Host {
             jev: Some(Arc::new(Recorded(jev, self.asked.clone(), self.images.clone()))),
@@ -1758,8 +1761,10 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
         "test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_frames needs ffmpeg on PATH"
     );
     let trace = fastbrowse_core::telemetry::Trace::collecting();
-    // The input is offered to Jev under a handle, so the script picks it by the handle and never by its name.
-    let host = handed.host("fill Code = input:0; read", &trace);
+    // The driver reads the input's value masked, as the task writes it, and types it as it was shown; code types it as
+    // the caller wrote it.
+    let shown_value = fastbrowse_core::safety::mask_userinfo(&format!("http://ops:{value_pw}@127.0.0.1:{port}/vault"));
+    let host = handed.host(&format!("fill Code = {shown_value}; enter Code"), &trace);
     // The browser strips the tab, so it opens with the password as written without it.
     let encoded = encode(start_pw);
     let (head, tail) = encoded.split_at(4);
@@ -1814,7 +1819,7 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
             browser: true,
             ..RunTask::default()
         },
-        handed.host("read", &trace),
+        handed.host("", &trace),
     )
     .await
     .unwrap();
@@ -1855,7 +1860,7 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
     sinks.extend(handed.written.lock().unwrap().iter().map(|text| ("llm", text.clone())));
     sinks.extend(handed.events.lock().unwrap().iter().map(|text| ("event", text.clone())));
     sinks.extend(trace.events().iter().map(|record| ("trace", record.to_string())));
-    assert!(sinks.iter().any(|(sink, text)| *sink == "jev" && text.contains("Orders")), "the page was not read");
+    assert!(sinks.iter().any(|(sink, text)| *sink == "llm" && text.contains("Orders")), "the page was not read");
     assert!(!handed.checked.lock().unwrap().is_empty(), "until was not asked");
     // Every frame of the run is held, so its recording has no clean frame to keep and is not written.
     assert!(result.recordings.is_empty() && !recording.exists(), "a recording was written");

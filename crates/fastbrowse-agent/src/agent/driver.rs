@@ -958,6 +958,7 @@ impl Agent {
             Act::Dialog => Some(decision(Operation::Dialog, None, None, None)),
             // An address is read as a link on the page in front of the model is: the model copied `/cart` off one.
             Act::Goto { url } => {
+                let url = &self.as_written(state, url);
                 let url = url::Url::parse(&observation.url)
                     .and_then(|base| base.join(url))
                     .map(String::from)

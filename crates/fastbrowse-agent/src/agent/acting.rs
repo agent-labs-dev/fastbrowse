@@ -368,6 +368,7 @@ impl Agent {
                     // Text the task states word for word is the task's, so a recipe types it again; any other text
                     // the driver wrote may come from the page, so a replay leaves it to the driver.
                     Some(Given::Text(text)) => {
+                        let text = &self.as_written(state, text);
                         state.text_source = Some(if state.given_task.contains(text.as_str()) {
                             RecipeText::Literal(text.clone())
                         } else {

@@ -239,6 +239,24 @@ impl Agent {
         self.redactor().mask(value)
     }
 
+    /// `text` the driver wrote, with each address the caller wrote in the task, an input or the context put back as
+    /// written where the driver copied it as shown, credentials masked. The model reads those addresses only masked, so
+    /// an input whose value was such an address was typed as its bullets, and a page the task named behind a password
+    /// could not be opened; a mask is code's own rewriting, so mapping it back names exactly what the caller wrote.
+    fn as_written(&self, state: &RunState, text: &str) -> String {
+        let mut text = text.to_string();
+        for written in std::iter::once(state.raw_task.as_str())
+            .chain(state.raw_context.as_deref())
+            .flat_map(fastbrowse_core::navigation::written_addresses)
+        {
+            let shown = self.mask(&written);
+            if shown != written {
+                text = text.replace(&shown, &written);
+            }
+        }
+        text
+    }
+
     // A task scoped to "the whole site" loses its referent after navigation unless its starting address stays
     // with it. It is stated as what happened, not as an instruction: worded "Start at <url>." it read as one more
     // step no action had taken, and Jev chose DONE over typing a sign-in code it had just read. Mask at the call

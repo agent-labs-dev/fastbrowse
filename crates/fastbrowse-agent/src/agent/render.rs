@@ -66,13 +66,17 @@ pub(super) fn render(observation: &Observation, seen: &HashSet<String>, text: Op
 ///
 /// A heading starts `# `: given the page's lines unmarked, a run asked for a new window's heading answered with its
 /// title, "Example of a new window", over the `h1` "Example of a new window page for Automation Testing Practice".
+///
+/// Blocks are cut through one offset table: `Capture::block_text` walks the text from its start for each block, and a
+/// fetched page of 30000 rows spent four minutes in this function before the driver's first turn.
 pub(super) fn page_text(capture: &Capture) -> String {
+    let page = crate::retrieval::text::Page::new(capture);
     let blocks =
         capture.blocks.iter().filter(|block| !matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle));
     blocks
         .map(|block| match block.kind {
-            BlockKind::Heading => format!("# {}", capture.block_text(block)),
-            _ => capture.block_text(block).to_string(),
+            BlockKind::Heading => format!("# {}", page.slice(block.start, block.end)),
+            _ => page.slice(block.start, block.end).to_string(),
         })
         .collect::<Vec<_>>()
         .join("\n\n")
