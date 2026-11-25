@@ -1564,6 +1564,29 @@ async fn test_an_image_alt_that_repeats_the_visible_title_does_not_double_the_la
     h.close().await;
 }
 
+/// Matching an alt against every run of sibling texts built strings quadratic in the node count: a control named by
+/// 1,000 spans exhausted a 128 MB heap. The match now grows a run only while it is still the start of the alt.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_control_named_by_many_spans_beside_an_image_is_observed() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        r##"const spans = Array.from({length: 3000}, (_, i) => `<span>word${i} lorem ipsum dolor</span>`).join('');
+          document.body.innerHTML = '<div role="button" tabindex="0"><img alt="word7 lorem ipsum dolor" width="16" height="16">' + spans + '</div>';"##,
+    )
+    .await;
+    let obs = h.observe().await;
+    let button = obs.controls.iter().find(|c| c.role == "button").expect("the button is offered");
+    assert!(
+        button.label.starts_with("word0 lorem ipsum dolor word1"),
+        "{}",
+        &button.label[..80.min(button.label.len())]
+    );
+    h.close().await;
+}
+
 /// A gallery's buttons faded in on hover from opacity 0, so the observation taken right after the hover saw only the
 /// transition's starting value and offered none of them.
 #[tokio::test(flavor = "multi_thread")]

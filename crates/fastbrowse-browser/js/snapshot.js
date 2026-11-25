@@ -1157,13 +1157,24 @@
     }));
     const words = parts.filter(part => !part.image).map(part => part.text);
     // Words split across inline nodes ("Test <b>image</b>") repeat the alt as a whole.
-    // A badge or status beside the title must not hide it, so every run of adjacent texts counts.
-    const shownText = new Set();
-    for (let i = 0; i < words.length; i++) {
-      for (let j = i; j < words.length; j++) shownText.add(flat(words.slice(i, j + 1).join(' ')));
-    }
+    // A badge or status beside the title must not hide it, so any run of adjacent texts may match. A run is grown only
+    // while it is still the start of the alt: building every run made strings quadratic in the node count, and a
+    // control named by 1,000 spans exhausted the renderer's heap.
+    const shownBeside = alt => {
+      const target = flat(alt);
+      if (!target) return false;
+      for (let i = 0; i < words.length; i++) {
+        let run = '';
+        for (let j = i; j < words.length; j++) {
+          run = flat(`${run} ${words[j]}`);
+          if (run === target) return true;
+          if (!target.startsWith(run)) break;
+        }
+      }
+      return false;
+    };
     return parts
-      .filter(part => !part.image || !shownText.has(flat(part.text)))
+      .filter(part => !part.image || !shownBeside(part.text))
       .map(part => part.text)
       .join(' ')
       .trim();
