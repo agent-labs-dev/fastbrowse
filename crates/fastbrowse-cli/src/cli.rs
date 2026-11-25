@@ -540,10 +540,9 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         http: kept.as_ref().map(|kept| fastbrowse_clients::http::Http::hyper().with_trace(kept.trace())),
         ..Host::default()
     };
-    let started_at_ms = crate::stats::now_ms();
-    let started = std::time::Instant::now();
+    let mut pending = crate::stats::Pending::start(&context.environ);
     let outcome = context.runner.run(task, host).await;
-    let elapsed = started.elapsed();
+    pending.stop();
     let status = outcome.as_ref().ok().map(|result| result.status);
     let trace = kept.and_then(|kept| kept.finish(status));
     *context.kept_at.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
@@ -562,12 +561,12 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         Err(error) => {
             let message = error.to_string();
             let result = options::error_result(error.failure_kind(), &message);
-            crate::stats::record(&context.environ, &result, started_at_ms, elapsed);
+            pending.record(&result);
             return Ok(fail(args, context, &message, trace.as_deref()));
         }
     };
     // The opt-in local log, appended before anything is printed so a crash in reporting still leaves the run counted.
-    crate::stats::record(&context.environ, &result, started_at_ms, elapsed);
+    pending.record(&result);
     // Replay accounting only for a run that replayed: a run that only saved one printed "0 actions reused" (#1342).
     if args.recipe.is_some()
         && let Some(sink) = recipe_sink

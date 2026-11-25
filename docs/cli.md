@@ -333,11 +333,12 @@ exits 1 when any check failed: the model keys (named by variable, never by value
 the extension host registration, and whether the temporary directory is writable. Memory is reported where the kernel
 offers it. It is the first thing to run when a setup problem surfaces as a bare CDP error.
 
-`fastbrowse stats` summarises an opt-in local run log. Set `FASTBROWSE_STATS` to a JSON Lines file and each run appends
-one object to it: a status, a step count, a duration, a cost and when it started, and nothing about the task, the page
-or a secret. `fastbrowse stats` then reports how many runs there are, the p50 and p95 duration, the error rate and the
-mean priced cost; `--file PATH` reads a log other than the one the variable names, and `--json` prints the summary as
-JSON.
+`fastbrowse stats` summarises an opt-in local run log. Set `FASTBROWSE_STATS` to a JSON Lines file, in the environment
+or in `.env` in the working directory, and each run appends one object to it: a status, a step count, a duration, a cost
+and when it started, and nothing about the task, the page or a secret. A run you stop with Ctrl-C is logged as
+`cancelled` with its cost unknown. `fastbrowse stats` then reports how many runs there are, the p50 and p95 duration,
+the error rate and the mean priced cost; `--file PATH` reads a log other than the one the variable names, and `--json`
+prints the summary as JSON.
 
 ## Troubleshooting
 

@@ -10,23 +10,85 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use fastbrowse_core::models::RunResult;
+use fastbrowse_core::models::{RunResult, Status};
 use serde_json::{Value, json};
 
 /// The variable that turns the log on: the JSON Lines file it appends to, one object per run.
 pub const STATS_ENV: &str = "FASTBROWSE_STATS";
 
-/// The file the log is written to, or None when nothing asked for one.
+/// The file the log is written to, or None when nothing asked for one. The process environment wins over `.env` in the
+/// working directory, as the settings are read, so the line `.env.example` documents turns the log on.
 pub fn destination(environ: &HashMap<String, String>) -> Option<PathBuf> {
-    environ.get(STATS_ENV).map(|value| value.trim()).filter(|value| !value.is_empty()).map(PathBuf::from)
+    let named = environ.get(STATS_ENV).cloned().or_else(|| {
+        let text = std::fs::read_to_string(".env").ok()?;
+        fastbrowse_clients::environment::parse_dotenv(&text)
+            .into_iter()
+            .rev()
+            .find(|(key, _)| key == STATS_ENV)?
+            .1
+            .into()
+    });
+    named.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(PathBuf::from)
 }
 
 /// Append one line for `result`. A log that cannot be written is reported to stderr and never fails the run: the run's
 /// own answer is what the caller asked for.
 pub fn record(environ: &HashMap<String, String>, result: &RunResult, started_at_ms: u64, elapsed: Duration) {
+    write(environ, &line(result, started_at_ms, elapsed));
+}
+
+fn write(environ: &HashMap<String, String>, record: &Value) {
     let Some(path) = destination(environ) else { return };
-    if let Err(error) = append(&path, &line(result, started_at_ms, elapsed)) {
+    if let Err(error) = append(&path, record) {
         eprintln!("fastbrowse: could not write the run stats to {}: {error}", path.display());
+    }
+}
+
+/// One run's place in the log from the moment it starts. A run stopped by Ctrl-C or SIGTERM is dropped mid-flight and
+/// never returns a result, so dropping this before `record` writes the run as cancelled, with its cost unknown: the
+/// count, the error rate and the duration percentiles then include the runs a person stopped.
+pub struct Pending<'a> {
+    environ: &'a HashMap<String, String>,
+    started_at_ms: u64,
+    started: std::time::Instant,
+    elapsed: Option<Duration>,
+    recorded: bool,
+}
+
+impl<'a> Pending<'a> {
+    pub fn start(environ: &'a HashMap<String, String>) -> Pending<'a> {
+        Pending { environ, started_at_ms: now_ms(), started: std::time::Instant::now(), elapsed: None, recorded: false }
+    }
+
+    /// Fix the duration at the moment the runner returned, before the trace and the report take their time.
+    pub fn stop(&mut self) {
+        self.elapsed = Some(self.started.elapsed());
+    }
+
+    pub fn record(&mut self, result: &RunResult) {
+        self.recorded = true;
+        let elapsed = self.elapsed.unwrap_or_else(|| self.started.elapsed());
+        record(self.environ, result, self.started_at_ms, elapsed);
+    }
+}
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        if self.recorded {
+            return;
+        }
+        let elapsed = self.elapsed.unwrap_or_else(|| self.started.elapsed());
+        write(
+            self.environ,
+            &json!({
+                "at_ms": self.started_at_ms,
+                "status": Status::Cancelled.as_str(),
+                "steps": 0,
+                "duration_ms": elapsed.as_millis() as u64,
+                "dollars": 0.0,
+                "cost_complete": false,
+            }),
+        );
     }
 }
 
