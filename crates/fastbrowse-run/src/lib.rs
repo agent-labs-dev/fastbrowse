@@ -873,6 +873,54 @@ async fn browser(
     Ok((connection, Owned::Cloud(Box::new(remote))))
 }
 
+/// Drives `read` to its end while `start` runs beside it. When `read` ends in a way `escalates` calls for, the rest of
+/// `start` is waited for and handed back; otherwise `start` is dropped, and returned only if it had already finished,
+/// for the caller to close.
+async fn read_beside_start<R, S>(
+    read: impl Future<Output = R>,
+    start: impl Future<Output = S>,
+    escalates: impl Fn(&R) -> bool,
+) -> (R, Option<S>) {
+    tokio::pin!(read, start);
+    let mut started = None;
+    let read = loop {
+        tokio::select! {
+            read = &mut read => break read,
+            ready = &mut start, if started.is_none() => started = Some(ready),
+        }
+    };
+    if started.is_none() && escalates(&read) {
+        started = Some(start.await);
+    }
+    (read, started)
+}
+
+/// Closes the browser a read started beside it that no run will use, and returns what it cost. One whose start was
+/// cut off is waited for, so a browser the service already created is stopped and metered; one cut off by a
+/// cancellation is left to stop behind the run, as a cancelled start always is.
+async fn release_start(
+    ready: Option<Result<(BrowserConnection, Owned), Refused>>,
+    starting: &mut Option<BrowserUseCloudBrowser>,
+    cancelled: bool,
+) -> Vec<CostLine> {
+    let mut lines = Vec::new();
+    let failed = matches!(ready, Some(Err(_)));
+    if let Some(Ok((_, owned))) = ready {
+        stop(owned, &mut lines).await;
+    }
+    if let Some(mut remote) = starting.take() {
+        if cancelled || failed {
+            lines.extend(unfinished_start(remote, cancelled));
+        } else {
+            if remote.stop().await.is_err() {
+                fastbrowse_browser::warn("the cloud browser did not stop and bills until its timeout");
+            }
+            lines.extend(remote.cost());
+        }
+    }
+    lines
+}
+
 /// What a cloud browser whose start never finished is known to have cost. A start that failed stopped its browser
 /// and read the final figure. A cancelled one leaves the browser to be stopped behind the run, so its reading is the
 /// service's figure so far, and with no reading at all a browser may still have been created and billed: unknown.
@@ -1144,10 +1192,29 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
     let mut limits = task.limits.clone();
     let mut resume = None;
     let told: Told = Arc::default();
+    // Held outside the fetched read so a cloud browser started beside it is stopped however the read ends.
+    let mut starting: Option<BrowserUseCloudBrowser> = None;
+    let mut ahead: Option<Result<(BrowserConnection, Owned), Refused>> = None;
     if task.recipe.is_none() && task.save_recipe.is_none() && reads_first(&task, &chrome) {
         let on_event = noting(host.on_event.clone(), &told);
         let began = std::time::Instant::now();
         let clients = (jev.clone(), llm.clone());
+        // The cloud browser a read that escalates would start only after it ended is started beside it instead: the
+        // create call and the connection took about 2.5 s of every escalated run (84 of 177 in the fair sweep). The
+        // read that completes without escalating stops that browser, so the price of speculating is a Browser Use
+        // Cloud session that lived a few seconds: billed per whole minute with a one-minute minimum ($0.0003 at
+        // $0.02 an hour), plus a call to create and one to stop it, and one of the account's concurrent sessions
+        // for that time. Local Chrome is not started early: it costs CPU, not time, and saves under a second. An
+        // unset key leaves the error to where the browser is first needed, after the read's receipt is kept.
+        if !task.fetch
+            && host.open_browser.is_none()
+            && host.browser_api_key.is_none()
+            && task.chrome.is_none()
+            && on_cloud(&task, &chrome)
+        {
+            host.browser_api_key = settings.browser_key().ok().map(str::to_string);
+        }
+        let speculate = !task.fetch && host.open_browser.is_none() && host.browser_api_key.is_some();
         let read = fetched(
             &task,
             &host,
@@ -1159,21 +1226,53 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
             origins.clone(),
             on_event,
             &told,
-        )
-        .await?;
-        if task.fetch || !read.needs_browser {
-            return Ok(read.result);
+        );
+        let (read, ready) = if speculate {
+            read_beside_start(
+                read,
+                browser(&task, &host, &chrome, &http, &mut starting),
+                |read| matches!(read, Ok(read) if read.needs_browser),
+            )
+            .await
+        } else {
+            (read.await, None)
+        };
+        let escalates = matches!(&read, Ok(read) if read.needs_browser) && !task.fetch;
+        let read = match read {
+            Ok(read) => read,
+            Err(error) => {
+                let lines = release_start(ready, &mut starting, matches!(error, RunError::Cancelled(_))).await;
+                return Err(match error {
+                    RunError::Cancelled(mut receipt) => {
+                        receipt.cost.lines.extend(lines);
+                        RunError::Cancelled(receipt)
+                    }
+                    other => other.after(&told, lines, Vec::new()),
+                });
+            }
+        };
+        if !escalates {
+            let lines = release_start(ready, &mut starting, false).await;
+            let mut result = read.result;
+            result.cost.lines.extend(lines);
+            return Ok(result);
         }
         limits = match remaining(task.limits.as_ref(), &read.spent, began.elapsed().as_secs_f64()) {
             Ok(limits) => limits,
             // The attempt spent what a browser run would have needed, so the run ends on that limit, not the page.
-            Err(stop) => return Ok(out_of_budget(read.result, stop)),
+            Err(stop) => {
+                let lines = release_start(ready, &mut starting, false).await;
+                let mut result = read.result;
+                result.cost.lines.extend(lines);
+                return Ok(out_of_budget(result, stop));
+            }
         };
         http.trace.event("escalate", || {
             Map::from_iter([("reason".into(), Value::from(read.result.error.clone().unwrap_or_default()))])
         });
         fetch_spent = read.result.cost.lines;
         resume = read.resume;
+        ahead = ready;
     }
     // A `chrome` argument names local Chrome; with no browser named at all the run takes the cloud one.
     if host.browser_api_key.is_none()
@@ -1197,7 +1296,6 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
         .map_err(|error| RunError::Invalid(error.to_string()).after(&told, fetch_spent.clone(), Vec::new()))?;
     let mut session: Option<BrowserSession> = None;
     let mut owned: Option<Owned> = None;
-    let mut starting: Option<BrowserUseCloudBrowser> = None;
     // Kept outside the run so each is closed however the run ends, before the browser is.
     let recording: Filming = Arc::default();
     let mut recording_failed: Option<String> = None;
@@ -1210,7 +1308,10 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
                     .await
                     .unwrap_or(false)
         };
-        let (started, answers_consent) = if task.wants_extension() {
+        let (started, answers_consent) = if let Some(started) = ahead.take() {
+            // Started beside the fetched read, so only the consent check is left to wait for.
+            (started, consent.await)
+        } else if task.wants_extension() {
             // The connected browser is found first, so with none the run ends before the consent check spends.
             let started = browser(&task, &host, &chrome, &http, &mut starting).await?;
             (Ok::<_, Refused>(started), consent.await)
@@ -1589,10 +1690,62 @@ async fn fetched(
 mod tests {
     use std::time::Duration;
 
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     use super::*;
+
+    /// Flags that it started and whether it was dropped before finishing.
+    struct Starting(Arc<AtomicBool>, Arc<AtomicBool>);
+
+    impl Starting {
+        async fn start(self, takes: Duration) -> &'static str {
+            self.0.store(true, Ordering::SeqCst);
+            tokio::time::sleep(takes).await;
+            self.1.store(false, Ordering::SeqCst);
+            "ready"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_a_browser_starts_beside_the_read_and_is_kept_when_the_read_escalates() {
+        let (began, dropped) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+        let guard = Starting(began.clone(), dropped.clone());
+        let read = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            "needs a browser"
+        };
+        let (read, started) = read_beside_start(read, guard.start(Duration::from_millis(60)), |read| {
+            // The start is already running when the read ends, which is what saves its time.
+            assert!(began.load(Ordering::SeqCst), "{read}");
+            true
+        })
+        .await;
+        assert_eq!(read, "needs a browser");
+        assert_eq!(started, Some("ready"), "the rest of the start is waited for, not started again");
+    }
+
+    #[tokio::test]
+    async fn test_a_browser_started_beside_a_read_that_completes_is_dropped_or_handed_back_to_close() {
+        // Unfinished when the read completes: dropped, which stops a cloud browser (`BrowserUseCloudBrowser::drop`).
+        let (began, unfinished) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(true)));
+        let guard = Starting(began.clone(), unfinished.clone());
+        let (_, started) =
+            read_beside_start(async { "complete" }, guard.start(Duration::from_secs(3600)), |_| false).await;
+        assert_eq!(started, None);
+        assert!(began.load(Ordering::SeqCst));
+        assert!(unfinished.load(Ordering::SeqCst), "the start was cut off, not waited for");
+        // Finished first: handed back, for the caller to close.
+        let guard = Starting(Arc::default(), Arc::default());
+        let read = async {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            "complete"
+        };
+        let (_, started) = read_beside_start(read, guard.start(Duration::ZERO), |_| false).await;
+        assert_eq!(started, Some("ready"));
+    }
 
     #[tokio::test]
     async fn test_run_refuses_start_credentials_repeated_in_settings() {

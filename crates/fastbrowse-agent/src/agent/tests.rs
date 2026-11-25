@@ -10389,3 +10389,146 @@ async fn test_a_click_inside_a_drawn_surface_is_authorized_for_the_thing_it_land
     }
     assert_ne!(asked[0], asked[1]);
 }
+
+/// The page of a run that reads over HTTP and then moves to a browser: the same document, which only the browser can
+/// act on.
+struct Switching {
+    page: Unmoved,
+    http: bool,
+}
+
+impl Switching {
+    fn new(http: bool) -> Arc<Self> {
+        let page = Unmoved {
+            now: at("https://pages.test/list", &[button("Next")]),
+            sent: Mutex::new(Vec::new()),
+            handed_over: Default::default(),
+            waits: Mutex::default(),
+            swap: Mutex::default(),
+            swap_on_capture: Mutex::default(),
+            waited_on: Mutex::default(),
+        };
+        Arc::new(Switching { page, http })
+    }
+}
+
+impl Page for Switching {
+    fn over_http(&self) -> bool {
+        self.http
+    }
+
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        self.page.observe()
+    }
+
+    fn document_changed<'a>(&'a self, observation: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        self.page.document_changed(observation)
+    }
+
+    fn navigate<'a>(&'a self, url: &'a str, back_to: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.page.navigate(url, back_to)
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        self.page.capture()
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        if self.http {
+            return Box::pin(async {
+                Err(BrowserError::NeedsBrowser("'Next' can only be filled in a browser".into()))
+            });
+        }
+        self.page.act(action, observation)
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        self.page.screenshot()
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        self.page.address()
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        self.page.response_status()
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+/// The chat driver, keeping every conversation it is asked a turn of.
+struct Conversations(Arc<crate::scripted::ScriptedDriver>, Mutex<Vec<Vec<Message>>>);
+
+impl LLMClient for Conversations {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
+        if purpose == LLMPurpose::Action {
+            self.1.lock().unwrap().push(messages.to_vec());
+        }
+        self.0.generate_value(purpose, messages, schema, ledger)
+    }
+}
+
+/// A run that read over HTTP and was told its action needs a browser carried on there with the driver's whole
+/// conversation: its task, the pages it read, its turns. A browser that started a new conversation planned again what
+/// the fetch had already planned (75 driver turns across 84 escalations in the fair sweep).
+#[tokio::test]
+async fn test_the_browser_driver_resumes_the_conversation_the_fetch_run_held() {
+    const TASK: &str = "Open the next page of the list";
+    let llm = Arc::new(Conversations(driven(steps("click Next; click Next")), Mutex::default()));
+    let options = || super::RunOptions { start: Some("https://pages.test/list".into()), ..Default::default() };
+    let fetch = Agent::new(Switching::new(true), Arc::new(ScriptedJev::new(Vec::new())), llm.clone());
+    let result = fetch.run(TASK, options()).await.unwrap();
+    assert_eq!(result.status, Status::Blocked, "{:?}", result.error);
+    let resume = fetch.resume().expect("the fetch run hands on");
+    let asked = llm.1.lock().unwrap().len();
+    assert_eq!(asked, 1, "the fetch run took one turn");
+
+    let browser = Agent::new(Switching::new(false), Arc::new(ScriptedJev::new(Vec::new())), llm.clone());
+    let options = super::RunOptions { start: None, resume: Some(resume), ..options() };
+    let _ = browser.run(TASK, options).await.unwrap();
+    let turns = llm.1.lock().unwrap().clone();
+    let fetched = &turns[0];
+    let resumed = &turns[1];
+    // The fetch run's turn and the reply it got are the start of the browser's first conversation, unchanged, so
+    // the provider's cached prefix holds.
+    let kept = fetched.len() + 1;
+    assert!(resumed.len() > kept, "the browser turn adds the switch and its page");
+    for (before, after) in fetched.iter().zip(resumed) {
+        assert_eq!((&before.role, &before.content), (&after.role, &after.content));
+    }
+    assert!(
+        resumed[kept - 1].content.contains(r#""tool":"click""#),
+        "the fetch run's own reply: {:?}",
+        resumed[kept - 1]
+    );
+    let switch = &resumed[kept].content;
+    assert!(switch.contains("none of your last actions ran"), "{switch}");
+    // Nothing the fetch run planned is asked for again: one task, one system message, a turn for each reply.
+    let last = turns.last().unwrap();
+    assert_eq!(last.iter().filter(|message| message.content.contains("<task>")).count(), 1);
+    let replies = last.iter().filter(|message| message.role == fastbrowse_core::llm::Role::Assistant).count();
+    assert_eq!(replies, turns.len() - 1, "each turn the run took is in the conversation once");
+}
