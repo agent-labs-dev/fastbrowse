@@ -154,13 +154,16 @@ pub fn start_url(value: &str) -> String {
 }
 
 /// Whether an address states its own scheme, so it must not be rewritten. A scheme is `name:` followed by `//`, or by
-/// anything that is not the start of a port: `about:blank` and `mailto:x@y` are addresses, while `example.com:8080`
-/// and `localhost:3000` are a host and a port.
+/// anything that is not a port: `about:blank`, `mailto:x@y` and `http:127.0.0.1/page` are addresses, while
+/// `example.com:8080` and `localhost:3000/x` are a host and a port. A port is all digits up to the end of the
+/// authority (`/`, `?`, `#` or the end), so a payload that merely begins with digits is not one.
 fn states_scheme(value: &str) -> bool {
     let Some((head, tail)) = value.split_once(':') else { return false };
     let named = head.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
         && head.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
-    named && (tail.starts_with("//") || !tail.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    let digits = tail.chars().take_while(char::is_ascii_digit).count();
+    let is_port = digits > 0 && matches!(tail[digits..].chars().next(), None | Some('/' | '?' | '#'));
+    named && (tail.starts_with("//") || !is_port)
 }
 
 /// The variables a `--secret` names that the environment does not hold, so a run fails before a browser opens.
@@ -326,6 +329,9 @@ mod tests {
         assert_eq!(start_url("http://example.com"), "http://example.com");
         assert_eq!(start_url("https://example.com/x"), "https://example.com/x");
         assert_eq!(start_url("about:blank"), "about:blank");
+        assert_eq!(start_url("http:127.0.0.1:8080/page"), "http:127.0.0.1:8080/page");
+        assert_eq!(start_url("https:192.0.2.1/page"), "https:192.0.2.1/page");
+        assert_eq!(start_url("file:123.html"), "file:123.html");
         assert_eq!(start_url("file:///tmp/x.html"), "file:///tmp/x.html");
         assert_eq!(start_url(""), "");
     }
