@@ -387,10 +387,10 @@
       text = `${text} (title: ${title})`;
       linkTitles.add(link);
     }
-    const { hosts = hostsOf(nodes), ...rest } = extra;
+    const { hosts = hostsOf(nodes), at = first, ...rest } = extra;
     blocks.push({
       kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath,
-      control_context: controlOf(nodes), ...itemPlace(first), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
+      control_context: controlOf(nodes), ...itemPlace(at), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
       ...(inherited ? { href: hrefOf(link), links: [{ text, href: link.href }, ...(extra.links ?? [])] } : {}),
     });
   };
@@ -494,6 +494,8 @@
         text: name ? `${name}: ${value}` : value,
         control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
         ...(e.tagName === 'SELECT' ? {} : { hosts: [e] }),
+        // The control sits in its own list item, which the block of its value stands in.
+        at: e,
       }));
   const pushFields = root => {
     for (const { text, ...control } of fields(root)) push('paragraph', text, control);
@@ -701,9 +703,10 @@
       position = declared;
       count = Number.parseInt(el.getAttribute('aria-setsize'), 10);
     } else {
-      const list = el.parentElement;
-      const siblings = list?.matches(LIST) ? [...list.children].filter(c => {
-        if (!c.matches(ITEM) || hidden(c)) return false;
+      // The items its nearest list owns, through any layout wrappers between them, but not those of a list nested in it.
+      const list = el.parentElement?.closest(LIST);
+      const siblings = list ? [...list.querySelectorAll(ITEM)].filter(c => {
+        if (c.parentElement.closest(LIST) !== list || hidden(c)) return false;
         if (visible(c)) return true;
         // The capture also reads display:contents items, which have children on screen but no box of their own.
         const style = getComputedStyle(c);

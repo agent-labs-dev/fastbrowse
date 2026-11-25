@@ -507,7 +507,7 @@ fn positive(value: Option<String>) -> Option<i64> {
 /// A list item and the tag token that closes it, which ends the item's hold on the blocks read inside it.
 #[derive(Clone, Copy)]
 struct OpenItem {
-    place: ItemPlace,
+    place: Option<ItemPlace>,
     close: usize,
 }
 
@@ -554,25 +554,39 @@ impl Tree {
     /// among its list's rendered items. A label does not say it is the third of its list, nor does the page's text. A
     /// list of one has no place worth stating, and a declared place with no known size has no count to state.
     fn item_places(&self) -> HashMap<usize, OpenItem> {
+        // The rendered items each list owns, through any layout wrappers between them, but not those of a list nested
+        // in an item: an item belongs to its nearest list.
+        let mut owned: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (i, element) in self.elements.iter().enumerate().filter(|(_, element)| element.item && !element.hidden) {
+            let mut up = element.parent;
+            while !self.elements[up].list && up != 0 {
+                up = self.elements[up].parent;
+            }
+            if self.elements[up].list {
+                owned.entry(up).or_default().push(i);
+            }
+        }
         let mut places = HashMap::new();
         for (i, element) in self.elements.iter().enumerate().filter(|(_, element)| !element.hidden) {
+            if !element.item && element.posinset.is_none() {
+                continue;
+            }
             let (position, count) = match element.posinset {
                 Some(position) => (position, element.setsize.unwrap_or(0)),
-                None if element.item && self.elements[element.parent].list => {
-                    let items: Vec<usize> = self.elements[element.parent]
-                        .children
-                        .iter()
-                        .copied()
-                        .filter(|&child| self.elements[child].item && !self.elements[child].hidden)
-                        .collect();
+                None => {
+                    let mut up = element.parent;
+                    while !self.elements[up].list && up != 0 {
+                        up = self.elements[up].parent;
+                    }
+                    let items = owned.get(&up).map(Vec::as_slice).unwrap_or_default();
                     let position = items.iter().position(|&item| item == i).map_or(0, |index| index as i64 + 1);
                     (position, items.len() as i64)
                 }
-                None => continue,
             };
-            if position > 0 && count > 1 && position <= count {
-                places.insert(element.start, OpenItem { place: ItemPlace { position, count }, close: element.close });
-            }
+            // An item with no place worth stating is still the nearest item around what it holds, so an inner one
+            // does not lend its enclosing item's place to the blocks inside it.
+            let place = (position > 0 && count > 1 && position <= count).then_some(ItemPlace { position, count });
+            places.insert(element.start, OpenItem { place, close: element.close });
         }
         places
     }
@@ -1445,7 +1459,7 @@ impl<'a> Reader<'a> {
                 links: links.next().unwrap_or_default(),
                 frame_id: None,
                 whole_record: false,
-                item_place: self.places.last().map(|open| open.place),
+                item_place: self.places.last().and_then(|open| open.place),
                 fields: Vec::new(),
             });
         }
@@ -1496,7 +1510,7 @@ impl<'a> Reader<'a> {
             links,
             frame_id: None,
             whole_record: false,
-            item_place: self.places.last().map(|open| open.place),
+            item_place: self.places.last().and_then(|open| open.place),
             fields: Vec::new(),
         });
         if let Some(level) = level {
@@ -2442,6 +2456,29 @@ mod tests {
         assert_eq!(place("| Table value |"), Some((3, 3)), "a table row carries its item's place");
         assert_eq!(place("After"), None, "text after the list is no item");
         assert_eq!(place("Alone"), None, "a list of one has no place to state");
+    }
+
+    /// An item belongs to its nearest list: layout wrappers between a list and its items do not take them from it, and
+    /// an inner item with no place of its own does not borrow the outer item's.
+    #[test]
+    fn an_item_takes_its_place_from_the_nearest_list_through_wrappers() {
+        let place = |html: &str, text: &str| {
+            let (_, found) = blocks(html, "https://example.test/");
+            let block = found.iter().find(|block| block.text == text).unwrap();
+            block.item_place.map(|place| (place.position, place.count))
+        };
+        let wrapped = "<div role='list'><div><div role='listitem'><p>First</p></div></div>\
+                       <div><div role='listitem'><p>Second</p></div></div></div>";
+        assert_eq!(place(wrapped, "First"), Some((1, 2)));
+        assert_eq!(place(wrapped, "Second"), Some((2, 2)));
+        for inner in [
+            "<ul><li><a href='/only'>Only inner link</a></li></ul>",
+            "<ul><li aria-posinset='41' aria-setsize='-1'><a href='/only'>Only inner link</a></li></ul>",
+        ] {
+            let nested = format!("<ul><li>First outer</li><li><p>Second outer</p>{inner}</li></ul>");
+            assert_eq!(place(&nested, "Second outer"), Some((2, 2)));
+            assert_eq!(place(&nested, "Only inner link"), None, "{nested}");
+        }
     }
 
     /// An item closed by the next item's start tag keeps its place, the page's declared place stands where it gives a

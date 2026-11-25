@@ -588,6 +588,31 @@ async fn test_blocks_inside_a_list_item_carry_its_place() {
     h.close().await;
 }
 
+/// An item belongs to its nearest list through layout wrappers, and the block of a field's value stands in the item
+/// its control is in.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wrapped_item_and_a_field_value_carry_their_place() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<div role='list'><div><div role='listitem'><p>First</p></div></div>\
+         <div><div role='listitem'><p>Second</p></div></div></div>\
+         <ul><li><label>Name <input value='alpha'></label></li>\
+         <li><label>Other <input value='beta'></label></li></ul>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).unwrap();
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("First"), Some((1, 2)));
+    assert_eq!(place("Second"), Some((2, 2)));
+    assert_eq!(place("Other: beta"), Some((2, 2)));
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_quote_cards_are_whole_records_with_local_titles() {
     let Some(h) = harness().await else { return };
