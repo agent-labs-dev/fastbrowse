@@ -1538,12 +1538,14 @@ async fn test_an_image_alt_that_repeats_the_visible_title_does_not_double_the_la
         r##"document.body.innerHTML = '<ul>' +
           '<li role="button" tabindex="0"><img alt="Test image" width="16" height="16"><span>Test image</span></li>' +
           '<li role="button" tabindex="0"><img alt="Cover art" width="16" height="16"><span>Second image</span></li>' +
-          '<li role="button" tabindex="0"><img alt="Third image" width="16" height="16"></li></ul>';"##,
+          '<li role="button" tabindex="0"><img alt="Third image" width="16" height="16"></li>' +
+          '<li role="button" tabindex="0"><span><img alt="Wrapped image" width="16" height="16"></span><span>Wrapped image</span></li>' +
+          '<li role="button" tabindex="0"><img alt="Split image" width="16" height="16">Split <b>image</b></li></ul>';"##,
     )
     .await;
     let obs = h.observe().await;
     let labels: Vec<&str> = obs.controls.iter().filter(|c| c.role == "button").map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, ["Test image", "Cover art Second image", "Third image"], "{:?}", obs.controls);
+    assert_eq!(labels, ["Test image", "Cover art Second image", "Third image", "Wrapped image", "Split image"], "{:?}", obs.controls);
     h.close().await;
 }
 

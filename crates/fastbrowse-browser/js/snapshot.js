@@ -1134,8 +1134,15 @@
   // (#1457). The alt text only stands in for the picture, so it is left out when a sibling already shows it.
   const namedByContent = (e, seen) => {
     const flat = text => text.replace(/\s+/g, ' ').trim();
+    // A picture may sit in a wrapper (<picture>, a thumbnail span): the wrapper counts as the picture when it holds
+    // an image and no words of its own.
+    const isPicture = n =>
+      n.nodeType === 1 &&
+      (n.tagName === 'IMG' ||
+        (n.children.length > 0 &&
+          [...n.childNodes].every(c => (c.nodeType === 3 ? !c.textContent.trim() : c.nodeType !== 1 || isPicture(c)))));
     const parts = [...e.childNodes].map(n => ({
-      image: n.nodeType === 1 && n.tagName === 'IMG',
+      image: isPicture(n),
       text:
         n.nodeType === 3
           ? n.textContent
@@ -1146,7 +1153,9 @@
             ? labelFrom(n, seen)
             : '',
     }));
-    const shownText = new Set(parts.filter(part => !part.image).map(part => flat(part.text)));
+    const words = parts.filter(part => !part.image).map(part => part.text);
+    // Words split across inline nodes ("Test <b>image</b>") repeat the alt as a whole.
+    const shownText = new Set([...words.map(flat), flat(words.join(' '))]);
     return parts
       .filter(part => !part.image || !shownText.has(flat(part.text)))
       .map(part => part.text)
