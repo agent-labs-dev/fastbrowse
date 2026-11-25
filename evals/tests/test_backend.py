@@ -261,6 +261,32 @@ def test_campaign_metadata_preserves_model_requests_outside_judge_evidence() -> 
     assert "events" not in metadata["browser"]
 
 
+def test_campaign_metadata_keeps_the_typed_capture_and_evidence_a_read_traced() -> None:
+    """The exported trajectory is what a composition replay rebuilds its notes from (#1273): the capture's blocks
+    with their source ids, kind and whole-record flag, its sha, and each fact's evidence binding, all unaltered."""
+    url = "https://example.test/files"
+    text = "Download files\nReleased: 2026-01-01"
+    block = {
+        "source_id": "s1",
+        "kind": "paragraph",
+        "start": 15,
+        "end": 35,
+        "heading_path": ["Download files"],
+        "whole_record": True,
+    }
+    read = {
+        "event": "read",
+        "step": 0,
+        "url": url,
+        "sha256": "abc",
+        "capture": {"url": url, "title": "Files", "sha256": "abc", "text": text, "blocks": [block]},
+        "facts": [{"text": "Released: 2026-01-01", "evidence": {"source_id": "s1", "capture_sha256": "abc"}}],
+    }
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._events.append(read)
+    assert json.loads(json.dumps(harness.trial_metadata))["events"] == [read]
+
+
 def test_campaign_traces_scrub_bound_task_secrets() -> None:
     harness = backend.FastbrowseHarness(observer="plain-cdp")
     harness._secret_values = {"PASSWORD": "fixture-private-value"}
