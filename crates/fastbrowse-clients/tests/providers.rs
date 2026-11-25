@@ -187,7 +187,7 @@ fn test_a_preset_keeps_no_other_providers_key() {
 
 #[test]
 fn test_a_hosted_preset_refuses_another_address() {
-    for provider in ["openai", "anthropic", "openrouter", "gateway"] {
+    for provider in ["openai", "anthropic", "gateway"] {
         let loaded = settings(&[
             ("FASTBROWSE_LLM_PROVIDER", provider),
             ("FASTBROWSE_LLM_BASE_URL", "https://proxy.example/v1"),
@@ -199,6 +199,21 @@ fn test_a_hosted_preset_refuses_another_address() {
         let error = config_error(loaded.llm(&Script::default().http()));
         assert!(error.contains("FASTBROWSE_LLM_PROVIDER=custom"), "{provider}: {error}");
     }
+}
+
+#[tokio::test]
+async fn test_openrouter_at_another_address_is_spoken_to_as_openrouter_with_its_own_key() {
+    let mut env = EVERY_KEY.to_vec();
+    env.extend([("FASTBROWSE_LLM_PROVIDER", "openrouter"), ("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:9000/llm")]);
+    let request = one(&env).await;
+    // The default OpenAI model goes over the Responses API with OpenRouter's routing, as it does on OpenRouter.
+    assert_eq!(request.url, "http://127.0.0.1:9000/llm/responses");
+    assert!(body(&request).get("provider").is_some(), "{:?}", body(&request));
+    assert_eq!(request.header("authorization"), Some("Bearer local-secret"));
+    let sent = format!("{:?}{}", request.headers, String::from_utf8_lossy(&request.body));
+    let foreign: Vec<_> =
+        EVERY_KEY.iter().map(|(_, key)| *key).filter(|key| *key != "local-secret" && sent.contains(key)).collect();
+    assert!(foreign.is_empty(), "the proxy was sent {foreign:?}");
 }
 
 #[test]

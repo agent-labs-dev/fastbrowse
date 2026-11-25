@@ -25,7 +25,7 @@ from, how the schema is asked for and where a reasoning effort goes. The table i
 
 | `FASTBROWSE_LLM_PROVIDER` | Address | Key | Schema | Reasoning effort | Default model |
 |:--|:--|:--|:--|:--|:--|
-| `openrouter` | `https://openrouter.ai/api/v1` (`/responses` for an `openai/...` model) | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for GPT-6 Luna and Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `openai/gpt-6-luna` |
+| `openrouter` | `https://openrouter.ai/api/v1` (`/responses` for an `openai/...` model), or a proxy in front of it in `FASTBROWSE_LLM_BASE_URL` | `OPENROUTER_API_KEY`; `FASTBROWSE_LLM_API_KEY` for a proxy | strict `json_schema` | `reasoning.effort`: `low` for GPT-6 Luna and Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `openai/gpt-6-luna` |
 | `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for GPT-6 Luna and Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `openai/gpt-6-luna` |
 | `openai` | `https://api.openai.com/v1 (`/responses`)` | `OPENAI_API_KEY` | strict `json_schema` (`text.format`) | `reasoning.effort` | none |
 | `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, only when set | `claude-haiku-5-5`, `claude-haiku-5-5` for field text and shortcuts |
@@ -47,7 +47,9 @@ Rules that hold across the table:
 - **A key goes to its own provider's host and nowhere else.** A hosted preset reads only its own variable, so
   `OPENAI_API_KEY` is never sent to Groq, and `OPENROUTER_API_KEY` never leaves OpenRouter. A hosted preset refuses
   `FASTBROWSE_LLM_BASE_URL`, since that would carry its key to another address; use `custom` for a proxy, with
-  `FASTBROWSE_LLM_API_KEY`. `azure` takes an address only on `.openai.azure.com` or `.services.ai.azure.com` over
+  `FASTBROWSE_LLM_API_KEY`. `openrouter` takes one for a proxy in front of OpenRouter: requests go there as they go
+  to OpenRouter, provider routing and the Responses API for OpenAI models included, with `FASTBROWSE_LLM_API_KEY` as
+  the key. `azure` takes an address only on `.openai.azure.com` or `.services.ai.azure.com` over
   https.
 - **A model is named, or the run does not start.** Without a default, the run stops before its first request and
   asks for `FASTBROWSE_LLM_MODEL`: an OpenRouter id sent elsewhere would fail as a 404 on its first call instead.
