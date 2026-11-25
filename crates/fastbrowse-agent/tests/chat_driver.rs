@@ -1068,3 +1068,27 @@ async fn test_a_value_shown_before_its_secret_resolved_is_not_sent_again() {
     assert!(sent[1].iter().all(|message| !message.content.contains("hunter2")), "{:?}", sent[1]);
     assert!(sent[1].iter().any(|message| message.content.contains("[secret:pw]")), "{:?}", sent[1]);
 }
+
+/// Pixels cannot be checked for a value learnt after they were taken, and a screenshot of a page showing a demo
+/// password was sent again on every turn after the run typed it as a secret.
+#[tokio::test]
+async fn test_a_screenshot_taken_before_a_secret_resolved_is_not_sent_again() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "screenshot"}]}),
+        json!({"next": "", "actions": [{"tool": "type_secret", "id": "1", "name": "pw"}]}),
+        give_up(),
+    ]);
+    Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), driver.clone())
+        .with_secrets(Some(Arc::new(Secret)))
+        .run(
+            "Sign in with the password.",
+            RunOptions { start: Some("https://example.test/".into()), ..Default::default() },
+        )
+        .await
+        .expect("a result");
+    let sent = driver.sent.lock().unwrap();
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert!(sent[1].iter().any(|message| !message.images.is_empty()), "the screenshot was sent");
+    assert!(sent[2].iter().all(|message| message.images.is_empty()), "{:?}", sent[2]);
+}

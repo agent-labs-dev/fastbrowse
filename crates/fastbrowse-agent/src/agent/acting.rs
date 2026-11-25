@@ -289,7 +289,17 @@ impl Agent {
                 if let Some(target) = target {
                     self.gate_edit(state, observation, decision, target).await?;
                 }
-                self.gate_irreversible(state, observation, decision).await?;
+                // Every thing drawn on a canvas or map shares its one control, so a question naming only the surface
+                // was asked the same for a harmless pin and a destructive one, and the named thing was clicked after.
+                let inside = match (&decision.given, target) {
+                    (Some(Given::Text(on)), Some(target))
+                        if decision.operation == Operation::Click && target.drawn == Some(true) =>
+                    {
+                        Some(format!("\nThe click lands on {} drawn inside this element.\n", text::repr(on)))
+                    }
+                    _ => None,
+                };
+                self.gate_irreversible_with_fact(state, observation, decision, inside.as_deref()).await?;
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
             }
             Operation::Press => {

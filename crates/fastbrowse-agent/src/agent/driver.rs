@@ -449,10 +449,15 @@ const KEPT_IMAGES: usize = 2;
 fn attach(messages: &mut [Message], png: Vec<u8>) {
     let Some(last) = messages.last_mut() else { return };
     last.images = vec![fastbrowse_core::models::Bytes(png)];
-    for message in messages.iter_mut().rev().filter(|message| !message.images.is_empty()).skip(KEPT_IMAGES) {
+    for message in chat_images(messages).rev().skip(KEPT_IMAGES) {
         message.images.clear();
         message.content += "\n(the screenshot sent with this turn was removed)";
     }
+}
+
+/// The messages that still carry a screenshot.
+fn chat_images(messages: &mut [Message]) -> impl DoubleEndedIterator<Item = &mut Message> {
+    messages.iter_mut().filter(|message| !message.images.is_empty())
 }
 
 /// What the action acts on, for a refusal that names it.
@@ -1158,6 +1163,13 @@ impl Agent {
             for shown in &mut state.chat.shown {
                 *shown = self.masked(shown);
             }
+            // Pixels cannot be checked for a value learnt after they were taken, so no screenshot from before goes on.
+            for message in chat_images(&mut state.chat.messages) {
+                message.images.clear();
+                message.content += "\n(the screenshot sent with this turn was removed: a secret was typed after it)";
+            }
+            state.chat.image = None;
+            state.chat.pictures.clear();
             // The actions planned with this secret were written before it resolved, so one may carry its value, as a key
             // named on the page that is also the secret, and its authorization question would send it to Jev.
             if state.chat.queue.iter().any(|act| act.written().iter().any(|text| self.redact(text) != *text)) {

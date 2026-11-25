@@ -10228,3 +10228,51 @@ async fn the_site_failure_check_is_told_the_task_and_the_steps_taken() {
     assert!(sent["task"].as_str().is_some_and(|task| task.contains("Bristol to York")), "{sent}");
     assert!(sent["recent_actions"].as_array().is_some_and(|steps| steps.len() == 1), "{sent}");
 }
+
+/// Asks every question as `ScriptedJev` would, keeping each question's instructions.
+struct Questioned(ScriptedJev, std::sync::Mutex<Vec<String>>);
+
+impl fastbrowse_core::decision::DecisionClient for Questioned {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
+    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
+        for question in questions.values() {
+            if let fastbrowse_core::decision::Question::Noul(question) = question {
+                self.1.lock().unwrap().push(question.instructions.clone());
+            }
+        }
+        self.0.evaluate(state, questions)
+    }
+
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// Every thing drawn on a canvas shares its one control, so authorization asked the same questions for a harmless pin
+/// and a destructive one, then clicked the one the driver named. Each click names what it lands on.
+#[tokio::test]
+async fn test_a_click_inside_a_drawn_surface_is_authorized_for_the_thing_it_lands_on() {
+    let canvas = Control { drawn: Some(true), ..button("canvas") };
+    let page = observation(std::slice::from_ref(&canvas));
+    let mut asked = Vec::new();
+    for on in ["the pin labelled Depot", "the Delete route button"] {
+        let jev = Arc::new(Questioned(ScriptedJev::new(Vec::new()), Default::default()));
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.raw_task = "Show the depot's opening hours.".into();
+        state.authorization.irreversible_actions = true;
+        let decision = Decision {
+            given: Some(crate::policy::Given::Text(on.into())),
+            ..code_decision(Operation::Click, Some(canvas.clone()))
+        };
+        let _ = agent.action(&mut state, &page, &decision).await;
+        let questions = jev.1.lock().unwrap().clone();
+        assert!(!questions.is_empty());
+        assert!(questions.iter().all(|q| q.contains(&format!("The click lands on '{on}'"))), "{questions:?}");
+        asked.push(questions);
+    }
+    assert_ne!(asked[0], asked[1]);
+}
