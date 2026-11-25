@@ -11,6 +11,7 @@ mod driving;
 mod finishing;
 pub mod helpers;
 mod masking;
+mod paging;
 mod reading;
 mod recovery;
 mod render;

@@ -36,7 +36,7 @@ pub(super) struct Chat {
     /// How much of the run's history the model has been told the results of.
     reported: usize,
     /// Actions the model planned past the first, run while the page they were planned on stays.
-    queue: VecDeque<Act>,
+    pub(super) queue: VecDeque<Act>,
     /// The page the queue was planned on, as its url, document and page key, and the ids of the controls it had.
     planned_on: Option<(String, String, String)>,
     /// Each control as id, role, label and record context: a list redrawn in place reuses its element ids for others.
@@ -64,7 +64,7 @@ pub(super) struct Chat {
     /// Each page state the model was shown, as captured then: a value it saw before an action moved on, such as an
     /// order's total on the page Finish replaces, was not on the page done is called on, and the run ended
     /// unverified with the total in its conversation (saucedemo-checkout).
-    shown: Vec<fastbrowse_core::page::Capture>,
+    pub(super) shown: Vec<fastbrowse_core::page::Capture>,
     /// The answer the latest done wrote, every quote of which a page held. What it names is the answer: a screenshot
     /// read of the page done was called on stood beside it, and saucedemo's emptied cart, "$0.00", replaced the order
     /// total the driver quoted from the page before.
@@ -75,11 +75,13 @@ pub(super) struct Chat {
     /// Each screenshot the model was shown, by the page state it shows: a quote no page text holds is read off the
     /// latest of the page done is called on, and a second one of the same state counts as no progress.
     pictures: Vec<((String, String, String), Vec<u8>)>,
+    /// The lines of each page that `read_text` showed, so reading the same lines again counts as no progress.
+    pub(super) read_ranges: HashSet<(String, u64, u64)>,
 }
 
 impl Chat {
     /// The number control `id` of `document` is shown as, given one the first time it is shown, kept for the run.
-    fn number(&mut self, document: &str, id: &str) -> String {
+    pub(super) fn number(&mut self, document: &str, id: &str) -> String {
         let next = self.ids.len() + 1;
         let key = (document.to_string(), id.to_string());
         let number = *self.numbers.entry(key.clone()).or_insert(next);
@@ -92,7 +94,7 @@ impl Chat {
     /// The control id the model named as `shown`, or `shown` itself when it names no number given out. The `*` the
     /// page lines put before a new control's number is part of the line, not the id, and a model copied it: `*146`.
     /// A number given out on another document names no control of `document`, though its id may now name one.
-    fn id_of(&self, document: &str, shown: &str) -> String {
+    pub(super) fn id_of(&self, document: &str, shown: &str) -> String {
         shown
             .trim()
             .trim_start_matches('*')
@@ -160,6 +162,25 @@ pub(super) enum Act {
         tab: String,
     },
     Back,
+    /// Follows a page's next-page link and the next page's own, reading each into the run's evidence in one turn, so a
+    /// list across ten pages is not ten turns. `max_pages` is the model's own stopping point, not a limit of ours.
+    ReadPages {
+        id: String,
+        #[serde(default)]
+        max_pages: Option<u64>,
+    },
+    /// Shows `lines` lines of a page's text from line `from`: the page in front of the model when `page` is null, else a
+    /// page shown earlier, by address. The page in front is windowed to its viewport, and this reads the rest.
+    ReadText {
+        page: Option<String>,
+        from: u64,
+        lines: u64,
+    },
+    /// Lists `count` of the controls outside the viewport, from the `from`th, which a windowed page names but leaves out.
+    ReadControls {
+        from: u64,
+        count: u64,
+    },
     /// Presses Escape to close the open modal. Controls behind a modal are not listed, so one that lists none of its
     /// own left the model no control to press Escape in, and the run stalled behind it.
     Close,
@@ -238,7 +259,9 @@ struct Turn {
 /// The fixed instructions every request starts with, kept unchanged across a run so its prefix is cached.
 pub(super) const SYSTEM: &str = "You operate a web browser to complete the user's task. Each turn you are told what \
 your previous actions did, then the current page: its title and address, one line per control as \
-`[id] role \"label\" = \"value\" (states) can <operations>`, then its visible text, a heading's line starting `# `. An id starting with `*` was not on \
+`[id] role \"label\" = \"value\" (states) can <operations>`, then its text, a heading's line starting `# `. A long page \
+is shown as its viewport and the screen above and below it, with a line naming the lines and controls left out, which \
+read_text and read_controls show. An id starting with `*` was not on \
 the page you last saw: it is what your last action opened or loaded. Controls in a layer drawn over the page, such \
 as a popup, menu or calendar a control opened, are listed under their own heading.
 
@@ -260,6 +283,13 @@ canvas, give to as null and the path is drawn from a screenshot.
 - switch_tab(tab) shows the open tab with that id from the Tabs list.
 - scroll(id, down) scrolls the control, or the page when id is null; goto(url) opens an address; \
 back() goes back; close() presses Escape to close the open modal.
+- read_pages(id, max_pages) follows the next-page link `id`, which its line marks \"leads to the next page of a list\", \
+and each next page's own, reading every page into your evidence in one turn; max_pages is how many pages to read, \
+null for the whole list. You are told the pages read and whether the list ended; the page you see next is the last. \
+Their text is held for done: cite them in `pages` for a count, total, minimum or maximum, and read_text reads them.
+- read_text(page, from, lines) shows lines of a page's text, as numbered in the line that names what a long page left \
+out; page is null for the page in front of you, else the address of a page shown to you before.
+- read_controls(from, count) lists controls outside the viewport that a long page left out, in reading order.
 - screenshot() shows you the viewport as an image in your next turn, for what the text does not give: pictures, \
 colours, icons, charts, a canvas, or where things sit. Actions after it in the same turn are not run.
 - wait(seconds) waits until the page changes, for at most that many seconds, for a page that is still loading or \
@@ -341,8 +371,21 @@ impl ResponseSchema for Actions {
             Actions::tool("upload", &[("id", string.clone()), ("file", string.clone())]),
             Actions::tool("hover", &[("id", string.clone())]),
             Actions::tool("switch_tab", &[("tab", string.clone())]),
-            Actions::tool("scroll", &[("id", nullable), ("down", json!({"type": "boolean"}))]),
+            Actions::tool("scroll", &[("id", nullable.clone()), ("down", json!({"type": "boolean"}))]),
             Actions::tool("goto", &[("url", string.clone())]),
+            Actions::tool("read_pages", &[("id", string.clone()), ("max_pages", json!({"type": ["integer", "null"]}))]),
+            Actions::tool(
+                "read_text",
+                &[
+                    ("page", nullable.clone()),
+                    ("from", json!({"type": "integer"})),
+                    ("lines", json!({"type": "integer"})),
+                ],
+            ),
+            Actions::tool(
+                "read_controls",
+                &[("from", json!({"type": "integer"})), ("count", json!({"type": "integer"}))],
+            ),
             Actions::tool("back", &[]),
             Actions::tool("close", &[]),
             Actions::tool("screenshot", &[]),
@@ -495,6 +538,8 @@ fn target_of(act: &Act) -> Option<&str> {
         | Act::Upload { id, .. }
         | Act::Hover { id } => Some(id),
         Act::Scroll { id, .. } => id.as_deref(),
+        Act::ReadPages { id, .. } => Some(id),
+        Act::ReadText { .. } | Act::ReadControls { .. } => None,
         Act::Goto { .. }
         | Act::SwitchTab { .. }
         | Act::Back
@@ -534,18 +579,7 @@ impl Agent {
                 return Err(Flow::Stop(stop));
             }
             let observation = self.observe().await?;
-            if state.first_url.is_none() {
-                state.first_url = Some(observation.url.clone());
-            }
-            // Read before the effect is recorded, which consumes the flag: the record is what coverage is told later.
-            let keeps = state.keeping;
-            self.note_effect(state, &observation);
-            self.settle(state, &observation).await?;
-            self.take_commit(state, &observation, keeps);
-            self.record_page(state, &observation);
-            // The pages of a list this page links to, so finishing opens one the run left unread: without them a count
-            // over every page ended on the pages the model chose to read, one short (quotes-rowling-count).
-            state.note_pager_pages(&observation);
+            self.arrive(state, &observation).await?;
             // Saved steps from an earlier run go first, through the same gates as the driver's own actions.
             if let Some(decision) = state
                 .replay
@@ -578,6 +612,23 @@ impl Agent {
 }
 
 impl Agent {
+    /// Takes in the page the last step reached: what the step changed, the commit it sent, and the page's place in the run.
+    pub(super) async fn arrive(&self, state: &mut RunState, observation: &Observation) -> Step {
+        if state.first_url.is_none() {
+            state.first_url = Some(observation.url.clone());
+        }
+        // Read before the effect is recorded, which consumes the flag: the record is what coverage is told later.
+        let keeps = state.keeping;
+        self.note_effect(state, observation);
+        self.settle(state, observation).await?;
+        self.take_commit(state, observation, keeps);
+        self.record_page(state, observation);
+        // The pages of a list this page links to, so finishing opens one the run left unread: without them a count
+        // over every page ended on the pages the model chose to read, one short (quotes-rowling-count).
+        state.note_pager_pages(observation);
+        Ok(())
+    }
+
     /// Counts the commit the last step sent once the page after it shows: authorization checks a later commit against
     /// the ones the run made, and the coverage check is told the steps it kept. Left set, the gate's flag also marked
     /// every later step, such as a fill, as a commit sent. Only a commit that went counts: one that opened a dialog is
@@ -761,7 +812,12 @@ impl Agent {
         }
         let content = self.redact(&content);
         let capture = self.capture().await?;
-        let page = self.redact(&render(&shown, &seen, Some(&page_text(&capture))));
+        let text = page_text(&capture);
+        // A page with something outside its viewport goes as the viewport and a screen each side, the rest named and
+        // read by `read_text` and `read_controls`: sent whole, a Wikipedia article's 100k tokens went with every turn.
+        let window =
+            (!shown.viewport_text.is_empty()).then(|| super::render::window_of(&text, &shown.viewport_text)).flatten();
+        let page = self.redact(&super::render::render_view(&shown, &seen, Some(&text), window));
         // A page the model was shown whole is read: it answers from what it saw. Counted unread, every page of a list
         // it paged through left the list unread, and code reopened page 2 after it answered from all ten.
         let whole = match self.fit(&mut state.chat, &content, page, &shown, &seen).await {
@@ -775,7 +831,7 @@ impl Agent {
                 return Err(error);
             }
         };
-        if whole {
+        if whole && window.is_none() {
             state.read_urls.insert(observation.url.clone());
         }
         if let Some(png) = state.chat.image.take() {
@@ -1070,6 +1126,18 @@ impl Agent {
                     }
                 };
                 self.count_progress(state, pictured, observation, None.into(), Status::Stuck).await?;
+                return Ok(None);
+            }
+            Act::ReadPages { id, max_pages } => {
+                self.read_pages(state, observation, id, *max_pages).await?;
+                return Ok(None);
+            }
+            Act::ReadText { page, from, lines } => {
+                self.read_text(state, observation, page.as_deref(), *from, *lines).await?;
+                return Ok(None);
+            }
+            Act::ReadControls { from, count } => {
+                self.read_controls(state, observation, *from, *count).await?;
                 return Ok(None);
             }
             Act::Back => Some(decision(Operation::Back, None, None, None)),

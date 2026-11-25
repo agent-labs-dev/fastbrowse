@@ -48,7 +48,8 @@ A reviewer rejects a change that breaks one.
   fixing, name the limit the case exposes and check which other open issues share it. A fix that only the failing
   task or site would notice is a case patch: rework the part of the design that is too narrow instead.
 - **No caps.** Nothing a model reads or writes is cut short, except by a limit its provider documents, named as
-  that provider's in the code (Jev's in `DecisionProfile`).
+  that provider's in the code (Jev's in `DecisionProfile`). A window is not a cut when what it leaves out is named in the
+  turn and readable on request (`read_text`, `read_controls`), and quotes and tallies check against the whole capture.
 - **Measure before claiming.** A claim about the agent rests on a run made for it, compared with a baseline on the
   same harness, judge and task set ([docs/agents/evals.md](docs/agents/evals.md)).
 

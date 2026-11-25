@@ -10,6 +10,47 @@ use fastbrowse_core::page::{BlockKind, Capture, Control, Observation};
 /// `observation` as lines, with `seen` the control ids of the page the driver looked at before. `text` is the page's
 /// captured text, the text a quote is checked against; without it the observation's visible text goes instead.
 pub(super) fn render(observation: &Observation, seen: &HashSet<String>, text: Option<&str>) -> String {
+    render_view(observation, seen, text, None)
+}
+
+/// The lines of the page text a viewport window shows, as indexes into the text's lines, both included.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Window {
+    pub first: usize,
+    pub last: usize,
+}
+
+/// Where in `text` the viewport is, with the screen above and below it. A scroll moves the page by one viewport, so
+/// the viewport and one screen each side hold what the driver reaches by one scroll, and the rest is named and read
+/// by `read_text`. The viewport's own lines are found in the page text in order: the snapshot gives the viewport its
+/// text, and the capture is a separate read of the same page with no position in it, so the place is where the
+/// viewport's lines appear. A viewport none of whose lines the text holds has no place, and the page goes whole;
+/// a window that reaches both ends of the text is the whole page.
+pub(super) fn window_of(text: &str, viewport: &str) -> Option<Window> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut cursor = 0;
+    let mut span: Option<(usize, usize)> = None;
+    for line in viewport.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Some(at) = lines[cursor..].iter().position(|shown| shown.trim() == line) {
+            let at = cursor + at;
+            span = Some((span.map_or(at, |(first, _)| first), at));
+            cursor = at + 1;
+        }
+    }
+    let (first, last) = span?;
+    let screen = last - first + 1;
+    let window = Window { first: first.saturating_sub(screen), last: (last + screen).min(lines.len() - 1) };
+    (window.first > 0 || window.last + 1 < lines.len()).then_some(window)
+}
+
+/// `render`, with the page text and controls cut to `window` when one is given: the controls in the viewport, the
+/// text of the window, and a line naming what is left out and the tools that read it.
+pub(super) fn render_view(
+    observation: &Observation,
+    seen: &HashSet<String>,
+    text: Option<&str>,
+    window: Option<Window>,
+) -> String {
     let mut out = format!("Page: {} {}\n", q(&observation.title), observation.url);
     if let Some(modal) = observation.modal.as_deref().filter(|modal| !modal.is_empty()) {
         out += &format!("A modal is open: {}. Controls behind it are not listed.\n", q(modal));
@@ -35,14 +76,42 @@ pub(super) fn render(observation: &Observation, seen: &HashSet<String>, text: Op
         out += &heading;
         out.push('\n');
         for control in observation.controls.iter().filter(|control| control.layer == layer) {
+            if window.is_some() && control.offscreen {
+                continue;
+            }
             out += &line(control, !seen.is_empty() && !seen.contains(&control.id));
             out.push('\n');
         }
     }
+    let outside = observation.controls.iter().filter(|control| control.offscreen).count();
+    if window.is_some() && outside > 0 {
+        out += &format!(
+            "{outside} more controls are outside the viewport: read_controls(from, count) lists them in reading order \
+             and scroll brings them into view.\n"
+        );
+    }
     // The driver reads the text its quotes are checked against. Shown the visible text, a table came as one cell a
     // line with its icons left out, so the flag marking the Best Picture winner never reached it and every quote it
     // took of the row failed against the captured "| Argo | 7 | 3 | [flag icon] |".
-    if let Some(text) = text {
+    if let (Some(text), Some(window)) = (text, window) {
+        let lines: Vec<&str> = text.lines().collect();
+        out += &format!(
+            "Page text, lines {} to {} of {}: the viewport and the screen above and below it:\n",
+            window.first + 1,
+            window.last + 1,
+            lines.len()
+        );
+        out += &lines[window.first..=window.last].join("\n");
+        let (above, below) = (window.first, lines.len() - 1 - window.last);
+        let left = match (above, below) {
+            (0, below) => format!("The last {below} lines are not shown"),
+            (above, 0) => format!("The first {above} lines are not shown"),
+            (above, below) => format!("The first {above} lines and the last {below} are not shown"),
+        };
+        out += &format!(
+            "\n({left}: read_text(null, from, lines) reads any lines of the page, and scroll moves the viewport.)"
+        );
+    } else if let Some(text) = text {
         out += "Page text:\n";
         out += text;
     } else {
@@ -129,6 +198,10 @@ pub(super) fn line(control: &Control, new: bool) -> String {
     if control.offscreen {
         states.push("offscreen".into());
     }
+    // The list's own pager: only a link the page marks is read_pages' to follow, so the model is told which ones.
+    if fastbrowse_core::page::pager_link(control) {
+        states.push("leads to the next page of a list".into());
+    }
     if control.already_read == Some(true) {
         states.push("leads to a page already read".into());
     }
@@ -204,6 +277,43 @@ mod tests {
         let page = text.find(r#"[1] textbox "Date""#).unwrap();
         let layer = text.find("Controls in a layer drawn over the page:\n[2] link \"4\"").unwrap();
         assert!(page < layer, "{text}");
+    }
+
+    fn numbered(count: usize) -> String {
+        (1..=count).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn the_window_is_the_viewport_and_one_screen_each_side() {
+        let window = window_of(&numbered(20), "line 9\nline 10\nline 11").unwrap();
+        assert_eq!(window, Window { first: 5, last: 13 });
+    }
+
+    #[test]
+    fn a_page_the_window_covers_or_cannot_place_goes_whole() {
+        assert_eq!(window_of(&numbered(3), "line 2"), None);
+        assert_eq!(window_of(&numbered(20), "no such line"), None);
+    }
+
+    #[test]
+    fn a_window_names_the_lines_and_controls_it_leaves_out() {
+        let near = Control::new("1", "link", "Near", [Operation::Click]);
+        let far = Control { offscreen: true, ..Control::new("2", "link", "Far", [Operation::Click]) };
+        let observation: Observation = serde_json::from_value(serde_json::json!({
+            "url": "https://example.test/", "title": "t", "page_key": "k", "document_key": "d",
+            "captured_at": "2026-11-18T00:00:00Z", "viewport_text": "line 9", "tabs": [],
+            "controls": [near, far]
+        }))
+        .unwrap();
+        let text = numbered(20);
+        let shown = render_view(&observation, &HashSet::new(), Some(&text), window_of(&text, "line 9"));
+        assert!(shown.contains("Page text, lines 8 to 10 of 20"), "{shown}");
+        assert!(
+            shown.contains("The first 7 lines and the last 10 are not shown: read_text(null, from, lines)"),
+            "{shown}"
+        );
+        assert!(shown.contains("1 more controls are outside the viewport: read_controls(from, count)"), "{shown}");
+        assert!(shown.contains("Near") && !shown.contains("Far"), "{shown}");
     }
 
     #[test]
