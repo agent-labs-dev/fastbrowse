@@ -1778,7 +1778,7 @@
   const labelsByRole = new Map();
   const nameOf = (scope, element, label, nearest, own = null) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
-    if (aria && aria !== label) return { name: aria, outside: listsRecordsOutside(e, element) };
+    if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
     // A line kept though other controls share it, as a commenter's name link is under each of their comments, does
