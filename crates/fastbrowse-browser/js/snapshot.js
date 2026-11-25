@@ -1778,7 +1778,7 @@
   const labelsByRole = new Map();
   const nameOf = (scope, element, label, nearest, own = null) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
-    if (aria && aria !== label) return aria;
+    if (aria && aria !== label) return { name: aria, outside: listsRecordsOutside(e, element) };
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
     // A line kept though other controls share it, as a commenter's name link is under each of their comments, does
@@ -2230,7 +2230,7 @@
   const nearestHeading = (element, label) => {
     for (let inner = element, e = element.parentElement; e && e !== e.ownerDocument.body; inner = e, e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
-      if (aria && aria !== label) return aria;
+      if (aria && aria !== label) return { name: aria, outside: listsRecordsOutside(e, element) };
       let first = '',
         before = '';
       for (const title of openTitles(e)) {

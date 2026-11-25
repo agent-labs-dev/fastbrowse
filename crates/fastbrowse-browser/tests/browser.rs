@@ -3317,12 +3317,8 @@ async fn test_twin_controls_outside_every_record_keep_the_note_that_they_are_out
     .await;
     let obs = observe_until(&h.page, "Post").await;
     for label in ["Comment text area", "Post"] {
-        let contexts: Vec<String> = obs
-            .controls
-            .iter()
-            .filter(|c| c.label == label)
-            .map(|c| c.context.clone().unwrap_or_default())
-            .collect();
+        let contexts: Vec<String> =
+            obs.controls.iter().filter(|c| c.label == label).map(|c| c.context.clone().unwrap_or_default()).collect();
         assert_eq!(contexts.len(), 2, "{label}: {contexts:?}");
         let outside = contexts.iter().filter(|c| c.contains("outside every item listed under Comments")).count();
         assert_eq!(outside, 1, "only the page's own {label} is outside the comments: {contexts:?}");
