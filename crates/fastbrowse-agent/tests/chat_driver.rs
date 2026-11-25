@@ -32,6 +32,8 @@ struct DatePage {
     framed: bool,
     /// The page's text before its date field is opened, when it differs from after.
     before: Option<String>,
+    /// The modal open over the page, which lists none of its own controls.
+    modal: Option<String>,
     acted: Mutex<Vec<Action>>,
 }
 
@@ -81,8 +83,10 @@ impl Page for DatePage {
         let open = self.open.load(std::sync::atomic::Ordering::SeqCst);
         let controls = self.controls();
         let offscreen = self.offscreen.clone();
+        let modal = self.modal.clone();
         Box::pin(async move {
             Ok(serde_json::from_value(json!({
+                "modal": modal,
                 "url": "https://example.test/", "title": "Pick a date",
                 "page_key": if open { "open" } else { "closed" }, "document_key": "doc",
                 "captured_at": "2026-11-18T00:00:00Z", "viewport_text": "Pick a date", "offscreen_text": offscreen, "tabs": [],
@@ -1091,4 +1095,34 @@ async fn test_a_screenshot_taken_before_a_secret_resolved_is_not_sent_again() {
     assert_eq!(sent.len(), 3, "{sent:?}");
     assert!(sent[1].iter().any(|message| !message.images.is_empty()), "the screenshot was sent");
     assert!(sent[2].iter().all(|message| message.images.is_empty()), "{:?}", sent[2]);
+}
+
+/// Controls behind a modal are not listed, so a modal listing none of its own left the driver nothing to press Escape
+/// in. close() presses it, asked about as any key press is.
+#[tokio::test]
+async fn test_close_presses_escape_on_a_modal_only_once_authorization_allows_it() {
+    let modal = || DatePage { modal: Some("Subscribe to our newsletter".into()), ..Default::default() };
+    let close = || json!({"next": "", "actions": [{"tool": "close"}]});
+
+    let page = Arc::new(modal());
+    let jev = Arc::new(Answering(ScriptedJev::new(Vec::new()), &[("irreversible", 1.0)]));
+    let result = run_with(page.clone(), Driver::new([close()]), jev).await;
+    assert_eq!(result.status, Status::NeedsConfirmation, "{:?}", result.error);
+    assert!(page.acted.lock().unwrap().is_empty(), "{:?}", page.acted.lock().unwrap());
+
+    let page = Arc::new(modal());
+    let jev = Arc::new(Answering(ScriptedJev::new(Vec::new()), &[("irreversible", 0.0)]));
+    run_with(page.clone(), Driver::new([close(), give_up()]), jev).await;
+    let acted = page.acted.lock().unwrap();
+    assert_eq!(acted.len(), 1, "{acted:?}");
+    assert_eq!((acted[0].operation, acted[0].target_id.as_deref()), (fastbrowse_core::models::Operation::Escape, None));
+}
+
+#[tokio::test]
+async fn test_close_with_no_modal_open_is_told_back() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([json!({"next": "", "actions": [{"tool": "close"}]}), give_up()]);
+    run(page.clone(), driver.clone()).await;
+    assert!(page.acted.lock().unwrap().is_empty());
+    assert!(driver.told(1).contains("close() was refused: no modal is open."), "{}", driver.told(1));
 }

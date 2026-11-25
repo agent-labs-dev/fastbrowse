@@ -499,7 +499,17 @@ impl Agent {
             Operation::Scroll | Operation::ScrollUp => {
                 Ok(Action { target_id: target.map(|target| target.id.clone()), ..Action::new(decision.operation) })
             }
-            Operation::Escape | Operation::Back | Operation::Wait => Ok(Action::new(decision.operation)),
+            // Escape goes to the focused element; a close names the modal it is pressed in, and is asked about as that
+            // key press would be: a widget that discards a draft on Escape loses it.
+            Operation::Escape => {
+                if target.is_some() {
+                    let pressed = Decision { operation: Operation::Press, ..decision.clone() };
+                    let fact = "\nThe exact key chord to press is 'Escape'.\n";
+                    self.gate_irreversible_with_fact(state, observation, &pressed, Some(fact)).await?;
+                }
+                Ok(Action::new(Operation::Escape))
+            }
+            Operation::Back | Operation::Wait => Ok(Action::new(decision.operation)),
             // No driver tool or replayable recipe step makes a search a step; the start route searches by itself.
             Operation::Read | Operation::Done | Operation::Search => Err(Flow::Agent(crate::AgentError::Invalid(
                 format!("{} is handled by the loop, not dispatched", decision.operation),

@@ -157,6 +157,9 @@ pub(super) enum Act {
         tab: String,
     },
     Back,
+    /// Presses Escape to close the open modal. Controls behind a modal are not listed, so one that lists none of its
+    /// own left the model no control to press Escape in, and the run stalled behind it.
+    Close,
     /// Shows the model the viewport as an image in its next turn.
     Screenshot,
     /// Waits until the page changes, for at most `seconds`: a page that never changes would otherwise hold the run
@@ -253,7 +256,7 @@ canvas, give to as null and the path is drawn from a screenshot.
 - hover(id) moves the pointer over a control, for a menu or tooltip that opens on hover.
 - switch_tab(tab) shows the open tab with that id from the Tabs list.
 - scroll(id, down) scrolls the control, or the page when id is null; goto(url) opens an address; \
-back() goes back.
+back() goes back; close() presses Escape to close the open modal.
 - screenshot() shows you the viewport as an image in your next turn, for what the text does not give: pictures, \
 colours, icons, charts, a canvas, or where things sit. Actions after it in the same turn are not run.
 - wait(seconds) waits until the page changes, for at most that many seconds, for a page that is still loading or \
@@ -338,6 +341,7 @@ impl ResponseSchema for Actions {
             Actions::tool("scroll", &[("id", nullable), ("down", json!({"type": "boolean"}))]),
             Actions::tool("goto", &[("url", string.clone())]),
             Actions::tool("back", &[]),
+            Actions::tool("close", &[]),
             Actions::tool("screenshot", &[]),
             Actions::tool("wait", &[("seconds", json!({"type": "number"}))]),
             Actions::tool("dialog", &[]),
@@ -475,6 +479,7 @@ fn target_of(act: &Act) -> Option<&str> {
         Act::Goto { .. }
         | Act::SwitchTab { .. }
         | Act::Back
+        | Act::Close
         | Act::Screenshot
         | Act::Wait { .. }
         | Act::Dialog
@@ -1031,6 +1036,19 @@ impl Agent {
                 return Ok(None);
             }
             Act::Back => Some(decision(Operation::Back, None, None, None)),
+            // The modal stands as the control Escape is pressed in, so it is asked about as any key press is.
+            Act::Close => match observation.modal.as_deref().filter(|modal| !modal.is_empty()) {
+                Some(modal) => {
+                    let modal = Control::new("", "dialog", modal, [Operation::Escape]);
+                    Some(decision(Operation::Escape, Some(modal), None, Some(Given::Text("Escape".into()))))
+                }
+                None => {
+                    state.chat.queue.clear();
+                    state.chat.notices.push("close() was refused: no modal is open.".into());
+                    self.count_progress(state, false, observation, None.into(), Status::Stuck).await?;
+                    return Ok(None);
+                }
+            },
             Act::Wait { seconds } => Some(decision(Operation::Wait, None, None, Some(Given::Seconds(*seconds)))),
             Act::Dialog => Some(decision(Operation::Dialog, None, None, None)),
             // An address is read as a link on the page in front of the model is: the model copied `/cart` off one.
