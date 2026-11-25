@@ -2292,15 +2292,19 @@
       owner = record;
     // A card holding another card's controls is a different comment: neither the title climb nor the owner climb may
     // step out into it, or a reply would take its parent's heading while its sibling replies share the same one.
-    // Another record is a card that repeats among its siblings as the same markup: replies listed under a comment are
-    // each built alike, whatever their classes. A comment's layout rows are cards too but differ from each other (an
-    // author row beside an actions row), so they are parts of one record, not several.
-    const shape = memo(card => [...card.querySelectorAll('*')].map(e => e.localName).join(' '));
+    // Another record is a card that holds both an owner (its first line, when no control of its own says it) and
+    // controls of its own beyond that line, and that has a sibling of the same tag doing the same: replies listed under a
+    // comment each name their author and carry their own buttons, whatever their markup or classes. A layout row holds
+    // one or the other (an author row is a bare link, an actions row sits beside it), so a comment's rows never pair up.
+    const isRecordCard = memo(card => {
+      const [first] = renderedLines(card);
+      if (!first || !isCard(card)) return false;
+      return controls.some(c => c.label !== first && card.contains(registry.nodes.get(c.id)));
+    });
     const holdsOtherCard = (above, own) => {
       for (const card of above.querySelectorAll('*')) {
-        if (!isCard(card) || card.contains(own) || own.contains(card) || !controlsIn(card)) continue;
-        const kind = shape(card);
-        if ([...card.parentElement.children].filter(c => isCard(c) && controlsIn(c) && shape(c) === kind).length > 1) return true;
+        if (card.contains(own) || own.contains(card) || !isRecordCard(card)) continue;
+        if ([...card.parentElement.children].some(c => c !== card && c.localName === card.localName && isRecordCard(c))) return true;
       }
       return false;
     };
