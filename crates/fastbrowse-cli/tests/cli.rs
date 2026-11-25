@@ -177,26 +177,34 @@ async fn test_fetch_starts_no_browser_and_asks_for_no_cloud_key() {
 
 #[tokio::test]
 async fn test_fetch_refuses_flags_that_shape_a_browser() {
-    for (flag, field) in [
-        (&["--local"][..], "local"),
-        (&["--headed"], "chrome"),
-        (&["--cdp-port", "9222"], "cdp_port"),
-        (&["--cursor"], "cursor"),
-        (&["--downloads", "/tmp/d"], "downloads"),
+    for (flag, expected) in [
+        (&["--local"][..], "--local"),
+        (&["--headed"], "--headed"),
+        (&["--cdp-port", "9222"], "--cdp-port"),
+        (&["--save-recipe", "f.json"], "--save-recipe"),
+        (&["--target-match", "x"], "--target-match"),
+        (&["--extension-browser", "Work"], "--extension-browser"),
+        // Both set one option, and naming only one sent the user back for a second refusal.
+        (&["--extension", "--extension-browser", "Work"], "--extension, --extension-browser"),
+        (&["--cursor"], "--cursor"),
+        (&["--downloads", "/tmp/d"], "--downloads"),
         // A fetched page can only follow links, so nothing it is given is ever typed, attached or submitted (#1337).
-        (&["--input", "name=Ada"], "inputs"),
+        (&["--input", "name=Ada"], "--input"),
         // A file that does not exist: read before the check, its read error was reported in place of the conflict.
-        (&["--file", "/nonexistent/upload.pdf"], "attachments"),
-        (&["--authorize"], "authorization"),
+        (&["--file", "/nonexistent/upload.pdf"], "--file"),
+        (&["--authorize"], "--authorize"),
         // Refused before either is resolved: an unset variable or a vault lookup was reported in its place.
-        (&["--secret", "p=NOT_SET"], "secrets"),
-        (&["--bitwarden", "vault-item"], "secrets"),
+        (&["--secret", "p=NOT_SET"], "--secret"),
+        (&["--bitwarden", "vault-item"], "--bitwarden"),
     ] {
         let mut argv = vec!["t", "--start", "https://example.com", "--fetch"];
         argv.extend_from_slice(flag);
         let ran = cli(&argv).await;
         assert!(ran.call.is_none());
-        assert_eq!(ran.err, format!("fastbrowse: fetch starts no browser, so it cannot be combined with {field}\n"));
+        assert_eq!(
+            ran.err,
+            format!("fastbrowse: --fetch starts no browser, so it cannot be combined with {expected}\n")
+        );
     }
 }
 
@@ -208,26 +216,59 @@ async fn test_browser_skips_the_read_first_and_refuses_fetch() {
     assert!(call.task.browser && !call.task.fetch && call.task.extension && call.task.chrome.is_none());
     let ran = cli(&["t", "--start", "https://example.com", "--browser", "--fetch"]).await;
     assert!(ran.call.is_none());
-    assert!(ran.err.contains("fetch"), "{}", ran.err);
+    assert!(ran.err.contains("--fetch") && ran.err.contains("--browser"), "{}", ran.err);
 }
 
 #[tokio::test]
-async fn local_browser_launch_and_cdp_options_cannot_bypass_the_extension() {
-    for (flags, field) in [
-        (&["--headed"][..], "chrome.headed"),
-        (&["--profile", "/tmp/kept"], "chrome.profile"),
-        (&["--cdp-url", "ws://browser.test/devtools"], "cdp_url"),
-        (&["--cdp-port", "9222"], "cdp_port"),
-        (&["--cloud-profile", "prof_1"], "cloud_profile"),
-        (&["--proxy-country", "uk"], "proxy_country"),
-        (&["--viewport", "800x600"], "viewport"),
+async fn extension_and_cloud_refusals_name_the_cli_flags() {
+    for (flags, expected) in [
+        (&["--headed"][..], "--headed"),
+        (&["--profile", "/tmp/kept"], "--profile"),
+        (&["--cdp-url", "ws://browser.test/devtools"], "--cdp-url"),
+        (&["--cdp-port", "9222"], "--cdp-port"),
+        (&["--cloud-profile", "prof_1"], "--cloud-profile"),
+        (&["--proxy-country", "uk"], "--proxy-country"),
+        (&["--viewport", "800x600"], "--viewport"),
     ] {
         let mut argv = vec!["task", "--json"];
         argv.extend_from_slice(flags);
         let ran = cli(&argv).await;
         assert!(ran.call.is_none());
         let error = ran.json()["error"].as_str().unwrap().to_string();
-        assert!(error.contains("extension") && error.contains(field), "{error}");
+        // Nothing chose the extension: it is the CLI's browser whenever --cloud and --fetch are absent.
+        assert!(
+            error.starts_with(
+                "a run without --cloud drives the browser the fastbrowse extension is connected in; drop "
+            ),
+            "{error}"
+        );
+        assert!(error.contains(expected) && !error.contains('_') && !error.contains("chrome."), "{error}");
+    }
+
+    let ran = cli(&["task", "--json", "--extension-browser", "Work", "--headed"]).await;
+    let error = ran.json()["error"].as_str().unwrap().to_string();
+    assert_eq!(error, "--extension-browser drives the browser the fastbrowse extension is connected in; drop --headed");
+
+    // `--local` chose the extension, so the refusal names it rather than a flag that was never passed.
+    let ran = cli(&["task", "--json", "--local", "--headed"]).await;
+    let error = ran.json()["error"].as_str().unwrap().to_string();
+    assert_eq!(error, "--local drives the browser the fastbrowse extension is connected in; drop --headed");
+
+    // Only the given options are named as the ones to drop: never `launch`, which the CLI has no flag for.
+    let ran = cli(&["task", "--json", "--headed", "--proxy-country", "uk"]).await;
+    let error = ran.json()["error"].as_str().unwrap().to_string();
+    assert_eq!(
+        error,
+        "--proxy-country needs the cloud browser: drop it, or drop --headed (and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)"
+    );
+
+    // A cloud run has no running browser to pick a tab in, and the CLI cannot attach over DevTools.
+    for flag in [&["--attach"][..], &["--target-match", "x"]] {
+        let mut argv = vec!["task", "--json", "--cloud"];
+        argv.extend_from_slice(flag);
+        let ran = cli(&argv).await;
+        assert!(ran.call.is_none());
+        assert_eq!(ran.json()["error"].as_str().unwrap(), format!("--cloud cannot be combined with {}", flag[0]));
     }
 }
 
@@ -338,7 +379,7 @@ async fn test_cannot_combine_cdp_url_and_cdp_port() {
         "ws://browser.test/devtools",
     ];
     let ran = cli(&argv).await;
-    assert!(ran.json()["error"].as_str().unwrap().contains("cdp_url and cdp_port both name"));
+    assert!(ran.json()["error"].as_str().unwrap().contains("--cdp-url and --cdp-port both name"));
 }
 
 #[tokio::test]
