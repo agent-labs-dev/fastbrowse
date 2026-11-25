@@ -1805,8 +1805,8 @@ fn test_an_answered_dialog_is_recorded_with_its_question_and_answer() {
         message: "Delete Holiday post permanently?".into(),
         default_prompt: None,
     };
-    assert_eq!(dialog.answered(true), "accepted the confirm dialog 'Delete Holiday post permanently?'");
-    assert_eq!(dialog.answered(false), "dismissed the confirm dialog 'Delete Holiday post permanently?'");
+    assert_eq!(dialog.answered(true), r#"accepted the confirm dialog "Delete Holiday post permanently?""#);
+    assert_eq!(dialog.answered(false), r#"dismissed the confirm dialog "Delete Holiday post permanently?""#);
 }
 
 /// A task that orders a delete after opening a dialog and cancelling it ("then delete") was refused because the
@@ -10530,4 +10530,16 @@ async fn test_a_click_inside_a_drawn_surface_is_authorized_for_the_thing_it_land
         asked.push(questions);
     }
     assert_ne!(asked[0], asked[1]);
+}
+
+/// A dialog message that holds a password with a quote in it is recorded as the page wrote it, so the redactor that
+/// registered the password finds it: an escaped copy matched none of its forms.
+#[test]
+fn test_an_answered_dialog_keeps_the_message_unescaped_for_redaction() {
+    let dialog = fastbrowse_core::page::Dialog {
+        kind: "alert".into(),
+        message: "Saved with vault'42 \"now\"".into(),
+        default_prompt: None,
+    };
+    assert!(dialog.answered(true).contains("vault'42"), "{}", dialog.answered(true));
 }
