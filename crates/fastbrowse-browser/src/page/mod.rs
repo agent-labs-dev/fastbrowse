@@ -163,6 +163,7 @@ struct SnapshotControl {
     #[serde(default)]
     read_only: bool,
     layer: Option<u32>,
+    disabled: Option<bool>,
     required: Option<bool>,
     invalid: Option<bool>,
     validation_message: Option<String>,
@@ -575,6 +576,7 @@ fn control_from_raw(
         offscreen: c.offscreen,
         read_only: c.read_only,
         layer: c.layer,
+        disabled: c.disabled,
         required: c.required,
         invalid: c.invalid,
         validation_message: c.validation_message.clone(),

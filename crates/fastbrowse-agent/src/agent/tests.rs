@@ -9266,6 +9266,59 @@ async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again
     assert_eq!(placed, 1, "{sent:?}");
 }
 
+/// The chat driver, keeping the last message of each turn it is asked for: the page and what code told it.
+struct Heard(Arc<crate::scripted::ScriptedDriver>, Mutex<Vec<String>>);
+
+impl LLMClient for Heard {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
+        if purpose == LLMPurpose::Action
+            && let Some(last) = messages.last()
+        {
+            self.1.lock().unwrap().push(last.content.clone());
+        }
+        self.0.generate_value(purpose, messages, schema, ledger)
+    }
+}
+
+#[tokio::test]
+async fn test_a_disabled_save_is_listed_as_disabled_and_acting_on_it_is_refused_as_such() {
+    // A disabled Save was left out of the driver's list, so it pressed Enter in the bio to submit the form and typed a
+    // newline into the bio (#1561). Listed, it is marked disabled; a click, a key or a drop on it reaches no page.
+    let save = Control { disabled: Some(true), ..Control::new("save", "button", "Save", []) };
+    let bio = Control::new("bio", "textbox", "Bio", [Operation::Fill]);
+    let page = Arc::new(Unmoved {
+        now: at("https://console.test/profile", &[bio, save]),
+        sent: Mutex::new(Vec::new()),
+        handed_over: Default::default(),
+        waits: Mutex::default(),
+        swap: Mutex::default(),
+        swap_on_capture: Mutex::default(),
+        waited_on: Mutex::default(),
+    });
+    let script = crate::scripted::steps("click Save; enter Save; drag Bio = Save").unwrap();
+    let llm = Arc::new(Heard(driven(script.clone()), Mutex::default()));
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), llm.clone());
+    let options = super::RunOptions {
+        start: Some("https://console.test/profile".into()),
+        limits: Some(Limits { max_steps: Some(4), ..Limits::default() }),
+        ..Default::default()
+    };
+    let _ = agent.run("Save the profile", options).await;
+    assert!(page.sent.lock().unwrap().iter().all(|(_, label)| label.as_deref() != Some("Save")));
+    let heard = llm.1.lock().unwrap().clone();
+    assert!(heard[0].contains(r#"button "Save" (disabled)"#), "{}", heard[0]);
+    for turn in &heard[1..4] {
+        assert!(turn.contains("was refused: [2] is disabled, so the page lets nothing act on it"), "{turn}");
+    }
+    assert!(heard[3].contains("Drag"), "{}", heard[3]);
+}
+
 #[tokio::test]
 async fn test_a_wait_lasts_what_the_driver_asked_within_the_time_left_to_browse() {
     // A fixed five seconds ended a WAIT before a page that updates less often had moved, and a WAIT bounded only by the

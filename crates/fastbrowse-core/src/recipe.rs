@@ -290,9 +290,10 @@ impl RecipeTarget {
 }
 
 /// The one control on the page the target names, or None when none or several do: a guess between twins is the
-/// choice a model is for.
+/// choice a model is for. A disabled control is no twin: a step cannot be replayed on it, and counting it sent an
+/// enabled "Add to cart" beside a sold-out one back to the model (#1415).
 pub fn find<'a>(target: &RecipeTarget, controls: &'a [Control], page_url: &str) -> Option<&'a Control> {
-    let mut matching = controls.iter().filter(|control| target.matches(control, page_url));
+    let mut matching = controls.iter().filter(|control| control.actionable() && target.matches(control, page_url));
     let first = matching.next()?;
     matching.next().is_none().then_some(first)
 }
@@ -309,7 +310,7 @@ mod tests {
     use super::*;
 
     fn control(id: &str, role: &str, label: &str) -> Control {
-        Control::new(id, role, label, [])
+        Control::new(id, role, label, [Operation::Click])
     }
 
     /// A derived `Debug` printed a recipe's start and steps whole, an address's credentials included (#1381).
@@ -337,6 +338,14 @@ mod tests {
         let target = RecipeTarget::of(&control("a:1", "button", "Add to cart"), "https://shop.test/");
         let page = [control("b:1", "button", "Add to cart"), control("b:2", "button", "Add to cart")];
         assert!(find(&target, &page, "https://shop.test/").is_none());
+    }
+
+    #[test]
+    fn a_disabled_twin_leaves_the_enabled_control_to_replay() {
+        let target = RecipeTarget::of(&control("a:1", "button", "Add to cart"), "https://shop.test/");
+        let sold_out = Control { disabled: Some(true), ..Control::new("b:1", "button", "Add to cart", []) };
+        let page = [sold_out, control("b:2", "button", "Add to cart")];
+        assert_eq!(find(&target, &page, "https://shop.test/").map(|c| c.id.as_str()), Some("b:2"));
     }
 
     #[test]

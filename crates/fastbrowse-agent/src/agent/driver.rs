@@ -41,6 +41,9 @@ pub(super) struct Chat {
     planned_on: Option<(String, String, String)>,
     /// Each control as id, role, label and record context: a list redrawn in place reuses its element ids for others.
     planned_ids: HashSet<ControlIdentity>,
+    /// The ids of the controls that were disabled when the queue was planned. A planned click on a delete that an
+    /// earlier action disabled ran anyway and was refused as no progress; one the page enables meanwhile still runs.
+    planned_disabled: HashSet<String>,
     /// The origins whose secret names the model has been told.
     secrets_told: HashSet<String>,
     /// Whether the model has been told no screenshot is taken for the rest of the run (`Agent::images_withheld`).
@@ -467,6 +470,19 @@ fn chat_images(messages: &mut [Message]) -> impl DoubleEndedIterator<Item = &mut
     messages.iter_mut().filter(|message| !message.images.is_empty())
 }
 
+/// Where a drag drops its control, the second control an action names.
+fn destination_of(act: &Act) -> Option<&str> {
+    match act {
+        Act::Drag { to, .. } => to.as_deref(),
+        _ => None,
+    }
+}
+
+/// The ids of the page's disabled controls.
+fn disabled_ids(observation: &Observation) -> HashSet<String> {
+    observation.controls.iter().filter(|control| control.disabled == Some(true)).map(|c| c.id.clone()).collect()
+}
+
 /// What the action acts on, for a refusal that names it.
 fn target_of(act: &Act) -> Option<&str> {
     match act {
@@ -550,7 +566,7 @@ impl Agent {
             if let Some(notice) = state.replay.as_mut().and_then(|replay| replay.take_notice()) {
                 state.chat.notices.push(notice);
             }
-            let act = match self.queued(state, &observation) {
+            let act = match state.chat.queued(&observation) {
                 Some(act) => act,
                 None => self.turn(state, &observation).await?,
             };
@@ -582,6 +598,55 @@ impl Chat {
     pub(super) fn queue_clear(&mut self) {
         self.queue.clear();
     }
+
+    /// The next planned action, while the page it was planned on keeps the same controls. A plan is dropped once a
+    /// control appears or goes, or the document changes, and the model is told: after a popup or redraw the ids it named
+    /// may mean other controls. A field taking a value changes the page but no control, and dropping the plan there ran
+    /// one field of a form per turn.
+    fn queued(&mut self, observation: &Observation) -> Option<Act> {
+        let next = self.queue.front()?;
+        let planned_on = self.planned_on.as_ref();
+        // A field taking a value changes only the page key; a done or give_up planned behind actions that changed the
+        // page would end the run on what the model has not seen, as a submission's error banner or a "Load more"'s
+        // results add text and no control.
+        let unseen =
+            matches!(next, Act::Done { .. } | Act::GiveUp { .. }) && planned_on != Some(&read_key(observation));
+        let changed = planned_on.map(|(url, document, _)| (url, document))
+            != Some((&observation.url, &observation.document_key))
+            || unseen
+            || observation.controls.len() != self.planned_ids.len()
+            || observation.controls.iter().any(|control| !self.planned_ids.contains(&identity(control)));
+        let named = [target_of(next), destination_of(next)].into_iter().flatten();
+        let found: Vec<(&str, Option<&Control>)> = named
+            .map(|shown| {
+                let id = self.id_of(&observation.document_key, shown);
+                (shown, observation.controls.iter().find(|control| control.id == id))
+            })
+            .collect();
+        // A control an earlier action of the plan disabled is a change to the page the plan was made on.
+        let changed = changed
+            || found.iter().any(|(_, control)| {
+                control.is_some_and(|c| c.disabled == Some(true) && !self.planned_disabled.contains(&c.id))
+            });
+        let gone = found.iter().find(|(_, control)| control.is_none()).map(|(shown, _)| shown.to_string());
+        let dropped = self.queue.len();
+        // On a page that kept every control, a missing id was never one: told the page changed, a driver that named
+        // `*` for a Save the list left out looked for a change that had not happened (#1561).
+        let notice = match gone {
+            _ if changed => {
+                format!(
+                    "{dropped} planned action(s) were not run because the page changed; plan again from the page below."
+                )
+            }
+            Some(id) => format!(
+                "{dropped} planned action(s) were not run: there is no control [{id}] on the page; use an id listed below."
+            ),
+            None => return self.queue.pop_front(),
+        };
+        self.queue.clear();
+        self.notices.push(notice);
+        None
+    }
 }
 
 impl Agent {
@@ -606,38 +671,6 @@ impl Agent {
                 chosen: chosen.contains(&control.id.as_str()),
             })
             .collect()
-    }
-
-    /// The next planned action, while the page it was planned on keeps the same controls. A plan is dropped once a
-    /// control appears or goes, or the document changes, and the model is told: after a popup or redraw the ids it named
-    /// may mean other controls. A field taking a value changes the page but no control, and dropping the plan there ran
-    /// one field of a form per turn.
-    fn queued(&self, state: &mut RunState, observation: &Observation) -> Option<Act> {
-        let chat = &mut state.chat;
-        let next = chat.queue.front()?;
-        let planned_on = chat.planned_on.as_ref();
-        // A field taking a value changes only the page key; a done or give_up planned behind actions that changed the
-        // page would end the run on what the model has not seen, as a submission's error banner or a "Load more"'s
-        // results add text and no control.
-        let unseen =
-            matches!(next, Act::Done { .. } | Act::GiveUp { .. }) && planned_on != Some(&read_key(observation));
-        let changed = planned_on.map(|(url, document, _)| (url, document))
-            != Some((&observation.url, &observation.document_key))
-            || unseen
-            || observation.controls.len() != chat.planned_ids.len()
-            || observation.controls.iter().any(|control| !chat.planned_ids.contains(&identity(control)));
-        let gone = target_of(next)
-            .map(|id| chat.id_of(&observation.document_key, id))
-            .is_some_and(|id| !observation.controls.iter().any(|control| control.id == id));
-        if changed || gone {
-            let dropped = chat.queue.len();
-            chat.queue.clear();
-            chat.notices.push(format!(
-                "{dropped} planned action(s) were not run because the page changed; plan again from the page below."
-            ));
-            return None;
-        }
-        chat.queue.pop_front()
     }
 
     /// One request to the model: what happened since its last turn, then the page. Its first action is returned and
@@ -715,7 +748,7 @@ impl Agent {
         // A link a script adds, or one an unread frame holds, is missing from markup read without a browser, so a page
         // whose markup has none is not known to lead nowhere: example.com's served page builds its one link with a
         // script, and a run told nothing of it ended complete without following it (#1380).
-        if observation.controls.is_empty() {
+        if !observation.controls.iter().any(Control::actionable) {
             content += &format!("Note: {}\n", page_reach(self.page.unread()));
         }
         // Links to pages already read are marked, so the model sees which pages of a list it has covered.
@@ -774,6 +807,7 @@ impl Agent {
         state.chat.queue = actions;
         state.chat.planned_on = Some(read_key(observation));
         state.chat.planned_ids = observation.controls.iter().map(identity).collect();
+        state.chat.planned_disabled = disabled_ids(observation);
         Ok(first)
     }
 
@@ -1128,6 +1162,21 @@ impl Agent {
             self.count_progress(state, false, observation, None.into(), Status::Stuck).await?;
             return Ok(None);
         };
+        // A disabled control is listed so a Save an edit left disabled does not read as no Save (#1561); the page lets
+        // nothing act on it, a key included, and the driver is told that rather than which operations it lacks.
+        // A drag onto a disabled destination is refused as one from a disabled control, naming the one that is.
+        let disabled = [(&decision.target, target_of(&act)), (&decision.destination, destination_of(&act))]
+            .into_iter()
+            .find(|(control, _)| control.as_ref().is_some_and(|control| control.disabled == Some(true)));
+        if let Some((_, id)) = disabled {
+            state.chat.queue.clear();
+            state.chat.notices.push(format!(
+                "{act:?} was refused: [{}] is disabled, so the page lets nothing act on it until the page enables it.",
+                id.unwrap_or_default()
+            ));
+            self.count_progress(state, false, observation, Idle::tried(&decision), Status::Stuck).await?;
+            return Ok(None);
+        }
         // The page lists what each control takes; a secret typed into a field that takes no typing went to the browser.
         // A key is left out: the driver may press any key in any control, and the page lists keys for none.
         if let Some(target) = &decision.target
@@ -1245,6 +1294,67 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn page(controls: &[Control]) -> Observation {
+        serde_json::from_value(serde_json::json!({
+            "url": "https://example.test/", "title": "t", "page_key": "k", "document_key": "d",
+            "captured_at": "2026-09-26T20:00:00Z", "viewport_text": "", "tabs": [],
+            "controls": controls.iter().map(|control| serde_json::to_value(control).unwrap()).collect::<Vec<_>>(),
+        }))
+        .unwrap()
+    }
+
+    /// A chat that planned `queue` on `planned`.
+    fn planned(planned: &Observation, queue: Vec<Act>) -> Chat {
+        Chat {
+            queue: queue.into(),
+            planned_on: Some(read_key(planned)),
+            planned_ids: planned.controls.iter().map(identity).collect(),
+            planned_disabled: disabled_ids(planned),
+            ..Chat::default()
+        }
+    }
+
+    /// The driver clicked `*` for a Save the list left out, and was told its plan was dropped because the page changed,
+    /// though nothing had (#1561). An id no control has is told as missing; a real change is still told as one.
+    #[test]
+    fn a_planned_id_no_control_has_is_told_missing_and_a_change_as_a_change() {
+        let bio = Control::new("main:1", "textbox", "Bio", [Operation::Fill]);
+        let before = page(std::slice::from_ref(&bio));
+        let mut chat = planned(&before, vec![Act::Click { id: "*".into(), on: None }]);
+        assert_eq!(chat.queued(&before), None);
+        assert_eq!(
+            chat.notices,
+            ["1 planned action(s) were not run: there is no control [*] on the page; use an id listed below."]
+        );
+        let after = page(&[bio.clone(), Control::new("main:2", "button", "Save", [Operation::Click])]);
+        let mut chat = planned(&before, vec![Act::Click { id: "*".into(), on: None }]);
+        assert_eq!(chat.queued(&after), None);
+        assert!(chat.notices[0].contains("because the page changed"), "{:?}", chat.notices);
+        let mut chat = planned(&before, vec![Act::Type { id: "main:1".into(), text: "x".into() }]);
+        assert!(chat.queued(&before).is_some());
+        assert!(chat.notices.is_empty());
+        // A drag names two controls, and a destination no control has is as missing as a target.
+        let mut chat = planned(&before, vec![Act::Drag { id: "main:1".into(), to: Some("*".into()) }]);
+        assert_eq!(chat.queued(&before), None);
+        assert!(chat.notices[0].contains("there is no control [*]"), "{:?}", chat.notices);
+    }
+
+    /// A toggle that disables Delete makes a Delete planned behind it a step on a page the plan was not made for; a
+    /// Save the page enables meanwhile is the form working as planned.
+    #[test]
+    fn a_plan_stops_when_its_next_control_was_disabled_since_but_not_when_enabled() {
+        let save = Control::new("main:1", "button", "Save", [Operation::Click]);
+        let mut disabled = save.clone();
+        disabled.disabled = Some(true);
+        disabled.operations.clear();
+        let click = || vec![Act::Click { id: "main:1".into(), on: None }];
+        let mut chat = planned(&page(std::slice::from_ref(&save)), click());
+        assert_eq!(chat.queued(&page(std::slice::from_ref(&disabled))), None);
+        assert!(chat.notices[0].contains("because the page changed"), "{:?}", chat.notices);
+        let mut chat = planned(&page(std::slice::from_ref(&disabled)), click());
+        assert!(chat.queued(&page(&[save])).is_some(), "{:?}", chat.notices);
+    }
 
     #[test]
     fn numbers_name_a_control_of_the_document_they_were_given_on() {
