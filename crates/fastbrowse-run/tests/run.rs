@@ -1964,7 +1964,7 @@ async fn test_a_declared_secret_in_the_start_query_reaches_no_model_or_exit() {
     };
     let handed = Handed::default();
     let trace = fastbrowse_core::telemetry::Trace::collecting();
-    let mut host = handed.host("read", &trace);
+    let mut host = handed.host("", &trace);
     host.secrets = Some(declared());
     let result = run_task(
         RunTask {
@@ -1991,7 +1991,7 @@ async fn test_a_declared_secret_in_the_start_query_reaches_no_model_or_exit() {
     sinks.extend(handed.events.lock().unwrap().iter().map(|text| ("event", text.clone())));
     sinks.extend(handed.checked.lock().unwrap().iter().map(|url| ("until", url.clone())));
     sinks.extend(trace.events().iter().map(|record| ("trace", record.to_string())));
-    assert!(sinks.iter().any(|(sink, text)| *sink == "jev" && text.contains("Shop")), "the page was not read");
+    assert!(sinks.iter().any(|(sink, text)| *sink == "llm" && text.contains("Shop")), "the page was not read");
     let mut leaks: Vec<String> = sinks
         .iter()
         .filter(|(_, text)| text.contains(token))
