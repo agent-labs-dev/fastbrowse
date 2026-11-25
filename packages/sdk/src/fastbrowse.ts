@@ -7,6 +7,7 @@ import { InProcess, loadAddon, readPdfsWith } from './addon.ts';
 import { Callbacks } from './callbacks.ts';
 import { resolveBinary } from './binary.ts';
 import { FastbrowseError, ProcessExitedError } from './errors.ts';
+import { type ExtensionStatus, readExtensionStatus } from './extension.ts';
 import { type OutputSchema, type TypedRunResult, withOutput } from './output.ts';
 import {
   type InitializeParams,
@@ -73,10 +74,20 @@ export class Fastbrowse {
   readonly fastbrowseVersion: string;
   readonly #backend: Backend;
   readonly #browser: Partial<RunParams>;
+  readonly #binary: () => string;
+  readonly #env: NodeJS.ProcessEnv;
   #closed: Promise<void> | undefined;
 
-  private constructor(backend: Backend, fastbrowseVersion: string, browser: Partial<RunParams>) {
+  private constructor(
+    backend: Backend,
+    fastbrowseVersion: string,
+    browser: Partial<RunParams>,
+    binary: () => string,
+    env: NodeJS.ProcessEnv,
+  ) {
     this.#backend = backend;
+    this.#binary = binary;
+    this.#env = env;
     this.fastbrowseVersion = fastbrowseVersion;
     this.#browser = browser;
   }
@@ -93,7 +104,13 @@ export class Fastbrowse {
         throw mismatch(addon.version(), 'the addon', addon.protocolVersion());
       }
       readPdfsWith(addon, env, options.binaryPath);
-      return new Fastbrowse(new InProcess(addon, options.env ?? {}), addon.version(), browserParams(options));
+      return new Fastbrowse(
+        new InProcess(addon, options.env ?? {}),
+        addon.version(),
+        browserParams(options),
+        () => resolveBinary(options.binaryPath, env),
+        env,
+      );
     }
     const binary = resolveBinary(options.binaryPath, env);
     const server = new Server(binary, env, options.stderr ?? 'inherit');
@@ -103,7 +120,13 @@ export class Fastbrowse {
       if (reply.protocol_version !== PROTOCOL_VERSION) {
         throw mismatch(reply.fastbrowse_version, binary, reply.protocol_version);
       }
-      return new Fastbrowse(new Subprocess(server), reply.fastbrowse_version, browserParams(options));
+      return new Fastbrowse(
+        new Subprocess(server),
+        reply.fastbrowse_version,
+        browserParams(options),
+        () => binary,
+        env,
+      );
     } catch (error) {
       await server.kill();
       throw error;
@@ -133,6 +156,15 @@ export class Fastbrowse {
     const params = runParams(runId, task, this.#browser, options);
     const result = await this.#backend.run(runId, params, options);
     return withOutput(result, options.output);
+  }
+
+  /**
+   * Read the browser extension's state without starting a run: whether this fastbrowse is registered as its native
+   * host, which browsers are connected (by the label `extensionBrowser` takes), and which hosts are present but
+   * unreachable from this process. It spends nothing and may be polled. It reads the same host records a run does.
+   */
+  extensionStatus(): Promise<ExtensionStatus> {
+    return readExtensionStatus(this.#binary(), this.#env);
   }
 
   /**
