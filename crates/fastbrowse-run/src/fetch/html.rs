@@ -216,6 +216,14 @@ struct Element {
     control_role: bool,
     /// Inside `svg` or `math`, where a self-closing tag ends its element.
     foreign: bool,
+    /// Under a `disabled` fieldset and outside that fieldset's first `legend`, which disables a form control in it.
+    in_disabled_fieldset: bool,
+    /// `aria-disabled="true"` on it or an element around it, which disables any control.
+    aria_disabled: bool,
+    /// Disabled as a control: by `aria-disabled`, or as a form control by its own `disabled` or its fieldset's.
+    disabled: bool,
+    /// `inert` on it or an element around it, which leaves out every control inside.
+    inert: bool,
     /// Whether it shows any text.
     text: bool,
     /// The tag tokens that opened and closed it.
@@ -252,6 +260,10 @@ impl Tree {
             aria_hidden: false,
             control_role: false,
             foreign: false,
+            in_disabled_fieldset: false,
+            aria_disabled: false,
+            disabled: false,
+            inert: false,
             text: false,
             start: usize::MAX,
             close: usize::MAX,
@@ -397,6 +409,24 @@ impl Tags for Tree {
         let nonempty = |value: Option<String>| value.filter(|value| !value.is_empty());
         let i = self.elements.len();
         let foreign = foreign || matches!(name, "svg" | "math");
+        // A disabled fieldset disables the form controls inside it, except those in its first legend, which stay as
+        // enabled as the fieldset's own surroundings leave them.
+        let around = &self.elements[parent];
+        let first_legend = name == "legend"
+            && around.tag == "fieldset"
+            && !around.children.iter().any(|&child| self.elements[child].tag == "legend");
+        let in_disabled_fieldset = if name == "fieldset" && get("disabled").is_some() {
+            true
+        } else if first_legend {
+            self.elements[around.parent].in_disabled_fieldset
+        } else {
+            around.in_disabled_fieldset
+        };
+        let aria_disabled =
+            around.aria_disabled || get("aria-disabled").is_some_and(|value| value.trim().eq_ignore_ascii_case("true"));
+        let form_control = matches!(name, "button" | "input" | "select" | "textarea");
+        let disabled = aria_disabled || (form_control && (in_disabled_fieldset || get("disabled").is_some()));
+        let inert = around.inert || get("inert").is_some();
         self.elements.push(Element {
             tag: name.to_string(),
             parent,
@@ -415,6 +445,10 @@ impl Tags for Tree {
             aria_hidden: self.elements[parent].aria_hidden || get("aria-hidden").as_deref() == Some("true"),
             control_role: get("role").is_some_and(|role| CONTROL_ROLES.contains(&role.as_str())),
             foreign,
+            in_disabled_fieldset,
+            aria_disabled,
+            disabled,
+            inert,
             text: false,
             start: at,
             close: usize::MAX,
@@ -754,6 +788,10 @@ struct Reader<'a> {
     /// The links of the open table row, and of each row read so far, which each row's block holds.
     row_links: Vec<(String, String)>,
     rows_links: Vec<Vec<(String, String)>>,
+    /// The tag tokens opening disabled controls, and inert elements, which the first read found from what is around
+    /// them: a `<fieldset disabled>` or an `aria-disabled` container disables the controls inside it.
+    disabled: HashSet<usize>,
+    inert: HashSet<usize>,
 }
 
 impl Tags for Reader<'_> {
@@ -857,11 +895,13 @@ impl<'a> Reader<'a> {
             links: Vec::new(),
             row_links: Vec::new(),
             rows_links: Vec::new(),
+            disabled: HashSet::new(),
+            inert: HashSet::new(),
         }
     }
 
     /// The control a start tag makes, as the served markup describes it.
-    fn control(&mut self, tag: &str, attrs: &[Attribute]) {
+    fn control(&mut self, tag: &str, attrs: &[Attribute], at: usize) {
         let get = |name: &str| attrs.iter().find(|a| &*a.name.local == name).map(|a| a.value.to_string());
         let kind = get("type").unwrap_or_default().to_ascii_lowercase();
         let (role, operations): (&str, &[Operation]) = match tag {
@@ -878,15 +918,15 @@ impl<'a> Reader<'a> {
             },
             _ => return,
         };
-        // As a browser capture does, an `inert` control is left out and a disabled one (`disabled`, or
-        // `aria-disabled="true"`) is kept, marked and offering nothing, so a Save that stays disabled is not read as no
-        // Save (#1415). A disabled next link is no next page: the last page of GitHub's issue list keeps one pointing a
-        // page past the end, and each page past it does the same.
-        if get("inert").is_some() {
+        // As a browser capture does, a control in an `inert` element is left out and a disabled one is kept, marked
+        // and offering nothing, so a Save that stays disabled is not read as no Save (#1415). Both come from what is
+        // around the control too: a Save in a `<fieldset disabled>` was offered as clickable over HTTP. A disabled next
+        // link is no next page: the last page of GitHub's issue list keeps one pointing a page past the end, and each
+        // page past it does the same.
+        if self.inert.contains(&at) {
             return;
         }
-        let disabled = get("aria-disabled").is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
-            || (tag != "a" && get("disabled").is_some());
+        let disabled = self.disabled.contains(&at);
         let named = ["aria-label", "placeholder", "title", "value", "name"];
         let label = named.iter().find_map(|name| get(name).filter(|value| !clean(value).is_empty()));
         let id = format!("fetched-{}", self.controls.len());
@@ -982,7 +1022,7 @@ impl<'a> Reader<'a> {
         if tag == "label" {
             self.label = Some((get("for").map(str::to_string), String::new(), Vec::new()));
         }
-        self.control(tag, attrs);
+        self.control(tag, attrs, at);
         if tag == "a"
             && let Some(href) = get("href").filter(|href| !href.is_empty()).map(|href| join(self.url, href))
             && !href.starts_with("javascript:")
@@ -1435,7 +1475,11 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
         })
         .map(|element| element.start)
         .collect();
-    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends, empty))).into_inner();
+    let held = |is: fn(&Element) -> bool| tree.elements.iter().skip(1).filter(|e| is(e)).map(|e| e.start).collect();
+    let (disabled, inert) = (held(|e| e.disabled), held(|e| e.inert));
+    let mut reader = Reader::new(url, tree.records(), notes, ends, empty);
+    (reader.disabled, reader.inert) = (disabled, inert);
+    let mut reader = tokenize(html, Sink::new(reader)).into_inner();
     reader.emit_titles(usize::MAX);
     reader.close_record();
     reader.flush(None, None, false);
@@ -1928,6 +1972,26 @@ mod tests {
         let disabled: Vec<&str> =
             controls.iter().filter(|c| c.disabled == Some(true)).map(|c| c.label.as_str()).collect();
         assert_eq!(disabled, ["Next", "Send", "q"]);
+        assert!(controls.iter().all(|c| c.next_page.is_none()), "{controls:?}");
+    }
+
+    #[test]
+    fn a_control_is_disabled_by_what_is_around_it_as_a_browser_disables_it() {
+        // A fieldset disables the form controls inside it but not a link, and not what its first legend holds; an
+        // aria-disabled container disables every control in it, a pager link included.
+        let (_, _, controls, _) = read(
+            "<fieldset disabled><legend><input name=agree type=checkbox></legend><legend><button>Late</button>\
+             </legend><button>Save</button><a href='/help'>Help</a>\
+             <fieldset><legend><button>Inner</button></legend></fieldset></fieldset><button>Cancel</button>\
+             <nav aria-label='Pagination' aria-disabled='true'><span><a rel='next' href='/p/2'>Next</a></span></nav>\
+             <div inert><span><button>Hidden</button></span></div>",
+            "https://a.example/p/1",
+        );
+        let offered: Vec<&str> = controls.iter().filter(|c| c.actionable()).map(|c| c.label.as_str()).collect();
+        assert_eq!(offered, ["agree", "Help", "Cancel"]);
+        let disabled: Vec<&str> =
+            controls.iter().filter(|c| c.disabled == Some(true)).map(|c| c.label.as_str()).collect();
+        assert_eq!(disabled, ["Late", "Save", "Inner", "Next"]);
         assert!(controls.iter().all(|c| c.next_page.is_none()), "{controls:?}");
     }
 

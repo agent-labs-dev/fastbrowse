@@ -168,8 +168,10 @@ The ledger reserves the documented search price before dispatch and records the 
 price when the receipt is unavailable. No key leaves search unavailable.
 
 Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
-offered as what it has. A disabled control (`disabled` or `aria-disabled="true"` on the element) is kept offering
-nothing, as a browser capture keeps it, and an `inert` one is left out, so a disabled next link is no next page. A step only a browser can
+offered as what it has. A disabled control is kept offering nothing, as a browser capture keeps it, and one inside an
+`inert` element is left out. A control is disabled by its own `disabled`, by a `<fieldset disabled>` around it (outside
+that fieldset's first legend), or by `aria-disabled="true"` on it or around it, so a disabled next link is no next page
+and a click on one follows nothing. A step only a browser can
 take starts one on the same page, and the run carries on with
 what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
 build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a

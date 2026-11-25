@@ -41,6 +41,9 @@ pub(super) struct Chat {
     planned_on: Option<(String, String, String)>,
     /// Each control as id, role, label and record context: a list redrawn in place reuses its element ids for others.
     planned_ids: HashSet<ControlIdentity>,
+    /// The ids of the controls that were disabled when the queue was planned. A planned click on a delete that an
+    /// earlier action disabled ran anyway and was refused as no progress; one the page enables meanwhile still runs.
+    planned_disabled: HashSet<String>,
     /// The origins whose secret names the model has been told.
     secrets_told: HashSet<String>,
     /// Whether the model has been told no screenshot is taken for the rest of the run (`Agent::images_withheld`).
@@ -467,6 +470,19 @@ fn chat_images(messages: &mut [Message]) -> impl DoubleEndedIterator<Item = &mut
     messages.iter_mut().filter(|message| !message.images.is_empty())
 }
 
+/// Where a drag drops its control, the second control an action names.
+fn destination_of(act: &Act) -> Option<&str> {
+    match act {
+        Act::Drag { to, .. } => to.as_deref(),
+        _ => None,
+    }
+}
+
+/// The ids of the page's disabled controls.
+fn disabled_ids(observation: &Observation) -> HashSet<String> {
+    observation.controls.iter().filter(|control| control.disabled == Some(true)).map(|c| c.id.clone()).collect()
+}
+
 /// What the action acts on, for a refusal that names it.
 fn target_of(act: &Act) -> Option<&str> {
     match act {
@@ -600,12 +616,19 @@ impl Chat {
             || unseen
             || observation.controls.len() != self.planned_ids.len()
             || observation.controls.iter().any(|control| !self.planned_ids.contains(&identity(control)));
-        let gone = target_of(next)
-            .filter(|id| {
-                let id = self.id_of(&observation.document_key, id);
-                !observation.controls.iter().any(|control| control.id == id)
+        let named = [target_of(next), destination_of(next)].into_iter().flatten();
+        let found: Vec<(&str, Option<&Control>)> = named
+            .map(|shown| {
+                let id = self.id_of(&observation.document_key, shown);
+                (shown, observation.controls.iter().find(|control| control.id == id))
             })
-            .map(str::to_string);
+            .collect();
+        // A control an earlier action of the plan disabled is a change to the page the plan was made on.
+        let changed = changed
+            || found.iter().any(|(_, control)| {
+                control.is_some_and(|c| c.disabled == Some(true) && !self.planned_disabled.contains(&c.id))
+            });
+        let gone = found.iter().find(|(_, control)| control.is_none()).map(|(shown, _)| shown.to_string());
         let dropped = self.queue.len();
         // On a page that kept every control, a missing id was never one: told the page changed, a driver that named
         // `*` for a Save the list left out looked for a change that had not happened (#1561).
@@ -784,6 +807,7 @@ impl Agent {
         state.chat.queue = actions;
         state.chat.planned_on = Some(read_key(observation));
         state.chat.planned_ids = observation.controls.iter().map(identity).collect();
+        state.chat.planned_disabled = disabled_ids(observation);
         Ok(first)
     }
 
@@ -1140,11 +1164,15 @@ impl Agent {
         };
         // A disabled control is listed so a Save an edit left disabled does not read as no Save (#1561); the page lets
         // nothing act on it, a key included, and the driver is told that rather than which operations it lacks.
-        if decision.target.as_ref().is_some_and(|target| target.disabled == Some(true)) {
+        // A drag onto a disabled destination is refused as one from a disabled control, naming the one that is.
+        let disabled = [(&decision.target, target_of(&act)), (&decision.destination, destination_of(&act))]
+            .into_iter()
+            .find(|(control, _)| control.as_ref().is_some_and(|control| control.disabled == Some(true)));
+        if let Some((_, id)) = disabled {
             state.chat.queue.clear();
             state.chat.notices.push(format!(
                 "{act:?} was refused: [{}] is disabled, so the page lets nothing act on it until the page enables it.",
-                target_of(&act).unwrap_or_default()
+                id.unwrap_or_default()
             ));
             self.count_progress(state, false, observation, Idle::tried(&decision), Status::Stuck).await?;
             return Ok(None);
@@ -1282,6 +1310,7 @@ mod tests {
             queue: queue.into(),
             planned_on: Some(read_key(planned)),
             planned_ids: planned.controls.iter().map(identity).collect(),
+            planned_disabled: disabled_ids(planned),
             ..Chat::default()
         }
     }
@@ -1305,6 +1334,26 @@ mod tests {
         let mut chat = planned(&before, vec![Act::Type { id: "main:1".into(), text: "x".into() }]);
         assert!(chat.queued(&before).is_some());
         assert!(chat.notices.is_empty());
+        // A drag names two controls, and a destination no control has is as missing as a target.
+        let mut chat = planned(&before, vec![Act::Drag { id: "main:1".into(), to: Some("*".into()) }]);
+        assert_eq!(chat.queued(&before), None);
+        assert!(chat.notices[0].contains("there is no control [*]"), "{:?}", chat.notices);
+    }
+
+    /// A toggle that disables Delete makes a Delete planned behind it a step on a page the plan was not made for; a
+    /// Save the page enables meanwhile is the form working as planned.
+    #[test]
+    fn a_plan_stops_when_its_next_control_was_disabled_since_but_not_when_enabled() {
+        let save = Control::new("main:1", "button", "Save", [Operation::Click]);
+        let mut disabled = save.clone();
+        disabled.disabled = Some(true);
+        disabled.operations.clear();
+        let click = || vec![Act::Click { id: "main:1".into(), on: None }];
+        let mut chat = planned(&page(std::slice::from_ref(&save)), click());
+        assert_eq!(chat.queued(&page(std::slice::from_ref(&disabled))), None);
+        assert!(chat.notices[0].contains("because the page changed"), "{:?}", chat.notices);
+        let mut chat = planned(&page(std::slice::from_ref(&disabled)), click());
+        assert!(chat.queued(&page(&[save])).is_some(), "{:?}", chat.notices);
     }
 
     #[test]

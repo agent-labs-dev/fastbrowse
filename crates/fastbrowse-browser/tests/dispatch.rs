@@ -1020,14 +1020,63 @@ async fn test_hydration_marking_a_control_enabled_does_not_make_it_stale() {
     h.goto("").await;
     eval_active(
         &h.page,
-        "document.body.innerHTML = '<button onclick=\"this.dataset.clicked = 1\">Round trip</button>'; true",
+        "document.body.innerHTML = '<button onclick=\"this.dataset.clicked = 1\">Round trip</button>\
+         <span role=button tabindex=0 onclick=\"1\">One way</span>'; true",
     )
     .await;
     let obs = h.observe().await;
-    eval_active(&h.page, "document.querySelector('button').setAttribute('aria-disabled', 'false'); true").await;
+    let before = h.page.fingerprint().await.expect("fingerprint");
+    eval_active(
+        &h.page,
+        "for (const e of document.querySelectorAll('button,span')) e.setAttribute('aria-disabled', 'false'); true",
+    )
+    .await;
+    // A Wait watches the fingerprint, and enabled is enabled whether the attribute is absent or "false".
+    assert_eq!(h.page.fingerprint().await.expect("fingerprint"), before);
     let target = obs.controls.iter().find(|c| c.label == "Round trip").expect("Round trip");
     let result = h.page.act(&action(Operation::Click, target), &obs).await.expect("act");
     assert_eq!(result.outcome, StepOutcome::Executed);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_disabled_control_offers_no_hover_and_enabling_it_keeps_it_the_same_control() {
+    // A disabled control offers nothing, even when the page listens for the pointer on it; and a redraw that enables
+    // it pairs it with the disabled one, so the change reads as Save enabled rather than one Save gone, another shown.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<button disabled>Save</button><button disabled>Preview</button>'; \
+         document.querySelectorAll('button')[1].addEventListener('mouseenter', () => {}); true",
+    )
+    .await;
+    let obs = h.observe().await;
+    let preview = find(&obs, "Preview");
+    assert!(preview.disabled == Some(true) && preview.operations.is_empty(), "{preview:?}");
+    let save = find(&obs, "Save");
+    eval_active(&h.page, "document.querySelector('button').disabled = false; true").await;
+    let enabled = h.observe().await;
+    let now = find(&enabled, "Save");
+    assert!(now.disabled != Some(true) && !now.operations.is_empty(), "{now:?}");
+    assert!(save.retarget_key.is_some());
+    assert_eq!(now.retarget_key, save.retarget_key);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_card_holding_only_a_disabled_control_is_still_offered_a_hover() {
+    // A picture card's controls can appear only under the pointer; a disabled one it already shows offers nothing.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<ul><li><div role=img aria-label=Cat style=\"width:40px;height:40px;\
+         background:red\"></div><button disabled>Delete</button></li></ul>'; true",
+    )
+    .await;
+    let obs = h.observe().await;
+    assert!(obs.controls.iter().any(|c| c.operations == [Operation::Hover].into()), "{:?}", obs.controls);
     h.close().await;
 }
 

@@ -9289,7 +9289,7 @@ impl LLMClient for Heard {
 #[tokio::test]
 async fn test_a_disabled_save_is_listed_as_disabled_and_acting_on_it_is_refused_as_such() {
     // A disabled Save was left out of the driver's list, so it pressed Enter in the bio to submit the form and typed a
-    // newline into the bio (#1561). Listed, it is marked disabled; a click or a key on it reaches no page.
+    // newline into the bio (#1561). Listed, it is marked disabled; a click, a key or a drop on it reaches no page.
     let save = Control { disabled: Some(true), ..Control::new("save", "button", "Save", []) };
     let bio = Control::new("bio", "textbox", "Bio", [Operation::Fill]);
     let page = Arc::new(Unmoved {
@@ -9301,21 +9301,22 @@ async fn test_a_disabled_save_is_listed_as_disabled_and_acting_on_it_is_refused_
         swap_on_capture: Mutex::default(),
         waited_on: Mutex::default(),
     });
-    let script = crate::scripted::steps("click Save; enter Save").unwrap();
+    let script = crate::scripted::steps("click Save; enter Save; drag Bio = Save").unwrap();
     let llm = Arc::new(Heard(driven(script.clone()), Mutex::default()));
     let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), llm.clone());
     let options = super::RunOptions {
         start: Some("https://console.test/profile".into()),
-        limits: Some(Limits { max_steps: Some(3), ..Limits::default() }),
+        limits: Some(Limits { max_steps: Some(4), ..Limits::default() }),
         ..Default::default()
     };
     let _ = agent.run("Save the profile", options).await;
     assert!(page.sent.lock().unwrap().iter().all(|(_, label)| label.as_deref() != Some("Save")));
     let heard = llm.1.lock().unwrap().clone();
     assert!(heard[0].contains(r#"button "Save" (disabled)"#), "{}", heard[0]);
-    for turn in &heard[1..3] {
+    for turn in &heard[1..4] {
         assert!(turn.contains("was refused: [2] is disabled, so the page lets nothing act on it"), "{turn}");
     }
+    assert!(heard[3].contains("Drag"), "{}", heard[3]);
 }
 
 #[tokio::test]

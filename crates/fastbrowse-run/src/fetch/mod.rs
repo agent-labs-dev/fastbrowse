@@ -406,6 +406,10 @@ impl FetchedPage {
     fn link_target(&self, id: &str) -> Option<String> {
         let loaded = self.loaded.lock().unwrap();
         let link = loaded.controls.iter().find(|control| control.id == id && control.role == "link")?;
+        // A disabled link is listed offering nothing, as a browser capture lists it, and a click follows it nowhere.
+        if !link.actionable() {
+            return None;
+        }
         let target = url::Url::parse(link.href.as_deref()?).ok()?;
         let mut here = url::Url::parse(&loaded.capture.as_ref()?.url).ok()?;
         here.set_fragment(target.fragment());

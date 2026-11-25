@@ -631,9 +631,10 @@
             ]),
           );
         // A fill whose only visible effect is enabling Save changed the page: a Wait that ignored it waited out its
-        // whole budget for a change that had already happened (#1415).
+        // whole budget for a change that had already happened (#1415). Only the effective state counts: an absent
+        // aria-disabled and "false" both mean enabled, and a page that adds the "false" as it hydrates changed nothing.
         if (
-          (e.matches('button,input,select,textarea,fieldset') || e.hasAttribute('aria-disabled')) &&
+          (e.matches('button,input,select,textarea,fieldset') || e.getAttribute('aria-disabled') === 'true') &&
           e.checkVisibility({checkVisibilityCSS: true})
         )
           hashText(JSON.stringify([e.matches(':disabled'), e.getAttribute('aria-disabled') === 'true']));
@@ -1400,7 +1401,10 @@
       e.getAttribute('aria-label'), e.getAttribute('aria-labelledby'), e.getAttribute('title'),
       e.ownerDocument.location.origin, e.ownerDocument.defaultView.performance.timeOrigin, identity(e)];
     const source = sourceOf(e);
-    if (source !== e && (source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))) return null;
+    // A redraw that disables or enables a label's field is still the same control, so the pairing key skips the
+    // field's disabled state; the live guard still refuses it.
+    const sourceDisabled = () => source.matches(':disabled') || !!source.closest('[aria-disabled="true"]');
+    if (source !== e && (source.closest('[inert]') || (!stable && sourceDisabled()))) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
     const own = value => (stable ? null : value);
     // An absent aria-disabled and "false" both mean enabled. Google Flights adds the "false" as it hydrates, and
@@ -1413,8 +1417,11 @@
       own(nativeProperty(source, 'checked') ?? null),
       own(chosen(e)),
       nativeProperty(e, 'readOnly') ?? null,
-      e.matches(':disabled'),
-      e.getAttribute('aria-disabled') === 'true',
+      // Disabling or enabling is the control's own state: a redraw that also enabled Save left it unpaired, so the
+      // change was reported as one Save removed and another shown. A container's aria-disabled disables it as its
+      // own does, as the capture reads it.
+      own(e.matches(':disabled')),
+      own(!!e.closest('[aria-disabled="true"]')),
       own(e.getAttribute('aria-expanded')),
       own(e.getAttribute('aria-checked')),
       own(e.getAttribute('aria-pressed')),
@@ -1618,9 +1625,12 @@
         !activation && !['textbox', 'searchbox'].includes(rname) &&
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
       base.operations.push('press');
+    // A disabled next link is no next page, as the HTTP reader has it: GitHub's last issue page keeps one pointing past
+    // the end.
     if (disabled) {
       base.disabled = true;
       base.operations = [];
+      delete base.next_page;
     }
     controls.push(base);
   }
@@ -1880,12 +1890,16 @@
   // from assistive technology is decoration, not a picture: GitHub's license badge (a law icon beside
   // "BSD-3-Clause") was offered as a hover target on every repository card, and the run hovered one instead of
   // opening the repository. Only the outermost such card is offered.
-  const holding = new Set();
-  for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
   // Looked up per hovered card: a scan of every control for each card was quadratic on a long feed.
   for (const c of controls) {
     const element = registry.nodes.get(c.id);
     if (!controlByElement.has(element)) controlByElement.set(element, c);
+  }
+  // A disabled control is listed but offers nothing, so a card holding only one still has nothing to act on.
+  const holding = new Set();
+  for (const e of offered) {
+    if (controlByElement.get(e)?.disabled) continue;
+    for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
   }
   for (const doc of docs) {
     let host = null;
@@ -1896,7 +1910,8 @@
         // gains Hover beside Click, as one choice rather than a second control for the same element.
         if (hoverListened(e)) {
           const own = controlByElement.get(e);
-          if (own && !own.operations.includes('hover')) own.operations.push('hover');
+          // A disabled control offers nothing, Hover included.
+          if (own && !own.disabled && !own.operations.includes('hover')) own.operations.push('hover');
         }
         continue;
       }
