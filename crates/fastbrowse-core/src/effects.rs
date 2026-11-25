@@ -160,6 +160,9 @@ pub fn added_text(before: &Observation, after: &Observation) -> Vec<String> {
 pub struct ShownPiece {
     pub text: String,
     pub added: bool,
+    /// Listed after the viewport's text: an observation puts the text outside the viewport last, whatever its place
+    /// in the document.
+    pub offscreen: bool,
 }
 
 /// `after`'s text pieces, in the order the page lists them, each marked added or kept.
@@ -178,6 +181,7 @@ pub fn shown_text(before: &Observation, after: &Observation) -> Vec<ShownPiece> 
             .collect()
     }
     let (old, new) = (pieces(before), pieces(after));
+    let viewport = after.viewport_text.lines().map(text::strip).filter(|piece| !piece.is_empty()).count();
     let mut surplus: IndexMap<&str, usize> = IndexMap::new();
     for piece in &new {
         *surplus.entry(piece).or_default() += 1;
@@ -204,7 +208,11 @@ pub fn shown_text(before: &Observation, after: &Observation) -> Vec<ShownPiece> 
             added[at] = true;
         }
     }
-    new.into_iter().zip(added).map(|(text, added)| ShownPiece { text: text.to_string(), added }).collect()
+    new.into_iter()
+        .zip(added)
+        .enumerate()
+        .map(|(at, (text, added))| ShownPiece { text: text.to_string(), added, offscreen: at >= viewport })
+        .collect()
 }
 
 /// What changed from `before` to `after`. With `chosen`, the option clicked in between, a field showing it counts as

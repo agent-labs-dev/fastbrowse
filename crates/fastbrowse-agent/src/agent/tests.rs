@@ -720,7 +720,7 @@ fn test_the_reply_to_a_sent_commit_is_a_note_a_claim_can_cite() {
 #[test]
 fn test_a_repeated_notice_is_quoted_at_the_line_that_was_added() {
     let page = capture(&[(BlockKind::Paragraph, "Saved\nEdited\nSaved")]);
-    let shown = |text: &str, added| fastbrowse_core::effects::ShownPiece { text: text.into(), added };
+    let shown = |text: &str, added| fastbrowse_core::effects::ShownPiece { text: text.into(), added, offscreen: false };
     let quotes =
         crate::retrieval::line_quotes(&page, &[shown("Saved", false), shown("Edited", false), shown("Saved", true)]);
     assert_eq!(quotes.len(), 1);
@@ -732,7 +732,11 @@ async fn a_sent_notice_capture_is_kept_for_its_citation() {
     let agent = agent();
     let page = capture(&[(BlockKind::Paragraph, "Changes saved successfully")]);
     let mut state = run_state();
-    let shown = [fastbrowse_core::effects::ShownPiece { text: "Changes saved successfully".into(), added: true }];
+    let shown = [fastbrowse_core::effects::ShownPiece {
+        text: "Changes saved successfully".into(),
+        added: true,
+        offscreen: false,
+    }];
     agent.record_sent_notice(&mut state, &page, &shown);
     let mut result = fastbrowse_core::models::RunResult {
         status: Status::Complete,
@@ -10673,3 +10677,6 @@ fn test_an_answered_dialog_keeps_the_message_unescaped_for_redaction() {
     };
     assert!(dialog.answered(true).contains("vault'42"), "{}", dialog.answered(true));
 }
+
+#[path = "tests/sent_notice_offscreen_decoy.rs"]
+mod sent_notice_offscreen_decoy;

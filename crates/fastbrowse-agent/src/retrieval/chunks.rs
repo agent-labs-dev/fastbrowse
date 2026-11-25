@@ -122,8 +122,10 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
     let page = Page::new(capture);
     let pieces: Vec<(String, bool)> =
         shown.iter().map(|piece| (squeezed(&piece.text), piece.added)).filter(|(text, _)| !text.is_empty()).collect();
-    let added: Vec<&str> = pieces.iter().filter(|(_, added)| *added).map(|(text, _)| text.as_str()).collect();
-    // Only a line holding some added text can be the reply, and only such lines compete for its pieces.
+    let viewport =
+        shown.iter().filter(|piece| !squeezed(&piece.text).is_empty()).take_while(|piece| !piece.offscreen).count();
+    // Every line takes part in the alignment, so the text around an added piece places it; only a line whose run holds
+    // an added piece is quoted.
     let lines: Vec<(i64, i64, String, &Block)> = super::text::splitlines(&page.chars)
         .into_iter()
         .filter_map(|(start, end)| {
@@ -135,7 +137,7 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
                 end -= 1;
             }
             let line = squeezed(page.slice(start, end));
-            if line.is_empty() || !added.iter().any(|piece| line.contains(piece)) {
+            if line.is_empty() {
                 return None;
             }
             let block = capture.blocks.iter().find(|block| {
@@ -154,16 +156,23 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
     // order, for the most text the pairs explain. A capture line can hold text the observation lacks (a tooltip the
     // capture appends), so an unchanged help line reading the added words and more fits the added piece as well as the
     // status does; the order and the text each line explains put each line on its own piece.
-    for (at, run) in aligned(&pieces, lines.iter().map(|(_, _, line, _)| line.as_str())) {
-        matched[at] = true;
-        used[run.clone()].fill(true);
-        if pieces[run].iter().any(|(_, added)| *added) {
-            let (start, end, _, block) = &lines[at];
-            quotes.push(evidence(&page, block, *start, *end));
+    // The viewport's pieces keep the document's order among themselves, as do the pieces outside it, but an
+    // observation lists all of the first before any of the second. So each is aligned on its own, the viewport's
+    // first, over the lines it left: a line above the viewport repeating the new text can no longer take its piece.
+    for (offset, section) in [(0, &pieces[..viewport]), (viewport, &pieces[viewport..])] {
+        let open: Vec<usize> = (0..lines.len()).filter(|at| !matched[*at]).collect();
+        for (line, run) in aligned(section, open.iter().map(|at| lines[*at].2.as_str())) {
+            let at = open[line];
+            let run = run.start + offset..run.end + offset;
+            matched[at] = true;
+            used[run.clone()].fill(true);
+            if pieces[run].iter().any(|(_, added)| *added) {
+                let (start, end, _, block) = &lines[at];
+                quotes.push(evidence(&page, block, *start, *end));
+            }
         }
     }
-    // The observation lists the text outside the viewport after the viewport's, which the capture does not, so a
-    // line the order left unmatched takes what no other line did. A line that reads as a whole run takes it first, then
+    // A line the order left unmatched takes what no other line did. A line that reads as a whole run takes it first, then
     // the part of it a run reads as, so a short piece never claims an unrelated longer line while a line that is its
     // own exists.
     for whole in [true, false] {
