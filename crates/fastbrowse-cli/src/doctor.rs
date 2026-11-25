@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+#[cfg(not(windows))]
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
@@ -95,6 +96,7 @@ async fn check_chrome(binary: &Path) -> (Level, String) {
     }
 }
 
+#[cfg(not(windows))]
 async fn probe_version(command: &mut Command, limit: Duration) -> Result<String, String> {
     #[cfg(unix)]
     command.process_group(0);
@@ -131,10 +133,52 @@ async fn probe_version(command: &mut Command, limit: Duration) -> Result<String,
             });
         }
     };
+    version_text(status, &bytes)
+}
+
+#[cfg(windows)]
+async fn probe_version(command: &mut Command, limit: Duration) -> Result<String, String> {
+    use std::io::Read;
+
+    // A wrapper's helper can keep a stdout pipe open after the wrapper exits. Tokio's Windows pipe reader waits
+    // on a blocking thread, so cancelling that read would still leave the CLI waiting during runtime shutdown.
+    let output = tempfile::NamedTempFile::new().map_err(|error| format!("could not capture --version: {error}"))?;
+    let writer = output.reopen().map_err(|error| format!("could not capture --version: {error}"))?;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(writer))
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("could not run --version: {error}"))?;
+    let status = match tokio::time::timeout(limit, child.wait()).await {
+        Ok(Ok(status)) => status,
+        failure => {
+            let _ = child.kill().await;
+            return Err(match failure {
+                Ok(Err(error)) => format!("could not wait for --version: {error}"),
+                _ => format!("--version timed out after {} ms", limit.as_millis()),
+            });
+        }
+    };
+    // Reopen an independent file cursor. A helper still holding the inherited handle can change its cursor and
+    // append data, so read only the bytes present when the wrapper exited.
+    let bytes = (|| {
+        let reader = output.reopen()?;
+        let length = reader.metadata()?.len();
+        let mut bytes = Vec::new();
+        reader.take(length).read_to_end(&mut bytes)?;
+        Ok::<_, std::io::Error>(bytes)
+    })()
+    .map_err(|error| format!("could not read --version: {error}"))?;
+    version_text(status, &bytes)
+}
+
+fn version_text(status: std::process::ExitStatus, bytes: &[u8]) -> Result<String, String> {
     if !status.success() {
         return Err(format!("--version exited with {status}"));
     }
-    let text = String::from_utf8_lossy(&bytes);
+    let text = String::from_utf8_lossy(bytes);
     let version = text.trim();
     if version.is_empty() {
         return Err("--version returned no output".into());
@@ -171,6 +215,14 @@ fn memory() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn chrome_probe_captures_windows_command_output() {
+        let mut shell = Command::new("cmd.exe");
+        shell.args(["/d", "/c", "echo Chrome 123"]);
+        assert_eq!(probe_version(&mut shell, Duration::from_secs(5)).await.unwrap(), "Chrome 123");
+    }
 
     #[cfg(unix)]
     #[tokio::test]
