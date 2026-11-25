@@ -1795,6 +1795,26 @@ async fn test_a_conditional_gate_describes_press_chords_and_navigation_addresses
     }
 }
 
+/// `confirm-dialog` ended stuck one run in three: the step that confirmed "Delete Holiday post permanently?" was shown
+/// to Jev as a bare "dialog" and a reloaded page, and `carried` scored 0.39 on the very page the passing runs scored
+/// 0.57 and 0.67. The record now says which question the dialog asked and how it was answered.
+#[test]
+fn test_an_answered_dialog_is_recorded_with_its_question_and_answer() {
+    let dialog = fastbrowse_core::page::Dialog {
+        kind: "confirm".into(),
+        message: "Delete Holiday post permanently?".into(),
+        default_prompt: None,
+    };
+    assert_eq!(
+        super::helpers::dialog_answered(&dialog, true),
+        "accepted the confirm dialog 'Delete Holiday post permanently?'"
+    );
+    assert_eq!(
+        super::helpers::dialog_answered(&dialog, false),
+        "dismissed the confirm dialog 'Delete Holiday post permanently?'"
+    );
+}
+
 /// A task that orders a delete after opening a dialog and cancelling it ("then delete") was refused because the
 /// condition check judged only from a page that cannot show a dialog that was opened and cancelled (#1006). Each of the
 /// check's questions now states the steps the run took, in order, and none a refused, stale or secret one.
