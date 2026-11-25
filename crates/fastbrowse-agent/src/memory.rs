@@ -405,10 +405,18 @@ impl Notes {
             .entry(key.clone())
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
         let mut sources: HashMap<CaptureIdentity, Vec<SourceBlock>> = HashMap::new();
-        let offsets: Vec<usize> = capture.text.char_indices().map(|(at, _)| at).chain([capture.text.len()]).collect();
+        // Block spans count characters; map only the positions a block starts or ends at to bytes, in one pass, so a
+        // large capture does not hold an offset for every character.
+        let wanted: std::collections::BTreeSet<usize> =
+            capture.blocks.iter().flat_map(|block| [block.start, block.end]).map(|at| at.max(0) as usize).collect();
+        let mut chars = capture.text.char_indices().map(|(at, _)| at).chain([capture.text.len()]).enumerate();
+        let offsets: HashMap<usize, usize> = wanted
+            .into_iter()
+            .filter_map(|at| chars.find(|(index, _)| *index == at).map(|(_, byte)| (at, byte)))
+            .collect();
         let slice = |start: i64, end: i64| {
-            let clamp = |at: i64| offsets[(at.max(0) as usize).min(offsets.len() - 1)];
-            &capture.text[clamp(start)..clamp(end).max(clamp(start))]
+            let byte = |at: i64| offsets.get(&(at.max(0) as usize)).copied().unwrap_or(capture.text.len());
+            &capture.text[byte(start)..byte(end).max(byte(start))]
         };
         let records: Vec<&fastbrowse_core::page::Block> =
             capture.blocks.iter().filter(|block| block.whole_record).collect();

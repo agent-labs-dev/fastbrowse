@@ -3362,7 +3362,7 @@ mod tests {
         notes.add(new);
         let answer = assemble_answer(&[Claim::new("Report A is available", ids)], &notes, &[]);
         assert_eq!(answer.citations.len(), 1, "{:?}", answer.citations);
-        assert!(answer.citations[0].quote.contains("Available"));
+        assert_eq!(answer.citations[0].text, "Draft saved Available");
     }
 
     #[test]
