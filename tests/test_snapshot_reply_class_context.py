@@ -10,8 +10,9 @@ ROOT = Path(__file__).parents[1]
 
 
 @pytest.mark.parametrize("card", ["li", "article", 'div role="listitem"', "div"])
+@pytest.mark.parametrize("root", ["comment", "comment root"])
 @pytest.mark.parametrize("title", ["h3", "b"])
-def test_reply_class_modifier_keeps_the_reply_owner(card: str, title: str) -> None:
+def test_reply_class_modifier_keeps_the_reply_owner(card: str, title: str, root: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     chrome = os.environ.get("FASTBROWSE_CHROME") or shutil.which("chromium") or shutil.which("google-chrome")
     if chrome is None:
@@ -19,13 +20,13 @@ def test_reply_class_modifier_keeps_the_reply_owner(card: str, title: str) -> No
     tag = card.split()[0]
     html = (
         "<section><h2>Comments</h2><ul>"
-        f'<{card} class="comment"><{title}>Ada</{title}><p>Parent comment.</p><button>Reply</button>'
+        f'<{card} class="{root}"><{title}>Ada</{title}><p>Parent comment.</p><button>Reply</button>'
         "<button>Hide 2 Replies</button><ul>"
         f'<{card} class="comment reply"><b>Grace</b><p>A reply to Ada.</p><button>Reply</button>'
         f"<button>Hide 3 Replies</button></{tag}>"
         f'<{card} class="comment reply"><b>Linus</b><p>Another reply to Ada.</p><button>Reply</button>'
         f"<button>Hide 4 Replies</button></{tag}></ul></{tag}>"
-        f'<{card} class="comment"><h3>Ruth</h3><p>Another comment.</p><button>Reply</button>'
+        f'<{card} class="{root}"><h3>Ruth</h3><p>Another comment.</p><button>Reply</button>'
         f"<button>Hide 5 Replies</button></{tag}></ul></section>"
     )
     snapshot = (ROOT / "crates/fastbrowse-browser/js/snapshot.js").read_text()

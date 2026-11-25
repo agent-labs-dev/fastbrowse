@@ -2292,20 +2292,15 @@
       owner = record;
     // A card holding another card's controls is a different comment: neither the title climb nor the owner climb may
     // step out into it, or a reply would take its parent's heading while its sibling replies share the same one.
-    // Another record is another card of the kind the candidate is (a comment among comments, wherever it nests); a
-    // card of a different kind inside it, however many wrappers deep, is one of its layout rows, a part of one record.
-    // A reply styled `comment reply` is still a comment: its classes extend the parent's, so the kinds match by the
-    // tag and the class tokens one holds of the other, not by the whole attribute.
-    const classes = e => new Set((e.getAttribute('class') || '').split(/\s+/).filter(Boolean));
-    const sameKind = (a, b) => {
-      if (a.localName !== b.localName) return false;
-      const [x, y] = [classes(a), classes(b)];
-      const [small, large] = x.size <= y.size ? [x, y] : [y, x];
-      return [...small].every(token => large.has(token));
-    };
+    // Another record is a card that repeats among its siblings as the same markup: replies listed under a comment are
+    // each built alike, whatever their classes. A comment's layout rows are cards too but differ from each other (an
+    // author row beside an actions row), so they are parts of one record, not several.
+    const shape = memo(card => [...card.querySelectorAll('*')].map(e => e.localName).join(' '));
     const holdsOtherCard = (above, own) => {
       for (const card of above.querySelectorAll('*')) {
-        if (sameKind(card, above) && isCard(card) && !card.contains(own) && !own.contains(card) && controlsIn(card)) return true;
+        if (!isCard(card) || card.contains(own) || own.contains(card) || !controlsIn(card)) continue;
+        const kind = shape(card);
+        if ([...card.parentElement.children].filter(c => isCard(c) && controlsIn(c) && shape(c) === kind).length > 1) return true;
       }
       return false;
     };
