@@ -1991,8 +1991,8 @@ impl CdpPage {
                 }
             }
         }
-        if out.get("exceptionDetails").is_some() {
-            return Err(BrowserError::Script);
+        if let Some(details) = out.get("exceptionDetails") {
+            return Err(BrowserError::Script(exception_text(details)));
         }
         Ok(out["result"]["value"].take())
     }
@@ -2013,6 +2013,13 @@ impl CdpPage {
             () = self.session.wait_for_dialog() => None,
         }
     }
+}
+
+/// The first line of the exception's description (`Error: message`, as the scripts here throw it), else CDP's own text
+/// for it, so a `Script` failure names the branch that threw.
+fn exception_text(details: &Value) -> String {
+    let described = details["exception"]["description"].as_str().and_then(|text| text.lines().next());
+    described.or_else(|| details["text"].as_str()).unwrap_or("no exception text").to_string()
 }
 
 /// Lift a browser failure to the variant the decision loop reads; the loop holds the page as `Arc<dyn Page>`.
@@ -2310,6 +2317,14 @@ mod tests {
         assert!(!viewport.contains("token") && !viewport.contains("/card"));
         // A page with no text of its own starts with the first frame's label.
         assert_eq!(frame_text(&frames, Snapshot::offscreen), "[Frame: https://pay.test:8443]\nHelp");
+    }
+
+    #[test]
+    fn a_script_failure_keeps_the_exceptions_own_text() {
+        let thrown = json!({"text": "Uncaught", "exception": {"description": "Error: the look is unread\n    at <anonymous>:1:7"}});
+        assert_eq!(exception_text(&thrown), "Error: the look is unread");
+        assert_eq!(exception_text(&json!({"text": "Uncaught"})), "Uncaught");
+        assert_eq!(exception_text(&json!({})), "no exception text");
     }
 
     #[test]
