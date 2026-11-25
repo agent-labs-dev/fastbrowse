@@ -1636,6 +1636,9 @@ impl CdpPage {
                         return Err(error);
                     }
                     Err(_) if is_main => return Ok(true),
+                    // A frame that detached while its watch was installing was removed from the page, as one that
+                    // detaches under a hold is. The connection clears a detached session before refusing its calls.
+                    Err(_) if !self.wait_sessions(main).contains(&session_id) => return Ok(true),
                     Err(_) => continue,
                 }
             }
