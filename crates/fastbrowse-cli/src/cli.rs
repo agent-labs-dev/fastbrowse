@@ -21,6 +21,7 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Style};
 use fastbrowse_core::safety::{ScopedSecrets, origin_of};
 use fastbrowse_core::telemetry::{TRACE_ENV, Trace, trace_to};
+use fastbrowse_run::Field;
 use indexmap::IndexMap;
 
 use crate::argparse::{Exit, Opt, Parsed, Parser, py_float, py_int};
@@ -459,13 +460,28 @@ fn progress(streams: Streams, steps: Arc<std::sync::atomic::AtomicUsize>) -> fas
 
 /// The exit code of a run that got as far as starting, or the configuration error that stopped it.
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
-    let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let explicit_extension = args.extension || args.extension_browser.is_some();
     let extension = explicit_extension || (!args.cloud && !args.fetch);
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension) {
-        return Err(ConfigurationError(
-            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
-        ));
+    if args.cloud {
+        // `--attach` and `--target-match` pick a tab in a browser already running, which a cloud run never has.
+        // Name only the flags given: a list of every incompatible flag points at ones the user never passed.
+        let given: Vec<&str> = [
+            (args.headed, "--headed"),
+            (args.profile.is_some(), "--profile"),
+            (args.cdp_url.is_some(), "--cdp-url"),
+            (args.cdp_port.is_some(), "--cdp-port"),
+            (args.fetch, "--fetch"),
+            (args.extension, "--extension"),
+            (args.extension_browser.is_some(), "--extension-browser"),
+            (args.attach, "--attach"),
+            (args.target_match.is_some(), "--target-match"),
+        ]
+        .into_iter()
+        .filter_map(|(present, name)| present.then_some(name))
+        .collect();
+        if !given.is_empty() {
+            return Err(ConfigurationError(format!("--cloud cannot be combined with {}", given.join(", "))));
+        }
     }
     let cdp_port = args
         .cdp_port
@@ -516,7 +532,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         ..RunTask::default()
     };
     let secrets_given = !args.secret.is_empty() || args.bitwarden.is_some();
-    fastbrowse_run::check(&task, secrets_given).map_err(|error| ConfigurationError(error.to_string()))?;
+    fastbrowse_run::check_named(&task, secrets_given, &|field| flag_name(field, args))
+        .map_err(|error| ConfigurationError(error.to_string()))?;
     read_attachments(&mut task.attachments, &args.file)?;
     // Check secrets before browser setup so a missing credential names what the operator needs to supply.
     let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
@@ -725,4 +742,64 @@ fn json_result(
     }
     fields.insert("build".into(), build.fields().into());
     fields.into()
+}
+
+/// The flags the user typed for a run option a refusal names. Several flags can set one option (`--extension`,
+/// `--extension-browser` and `--local`; `--secret` and `--bitwarden`), so the ones passed are the ones named; an option
+/// with no flag keeps its SDK name.
+fn flag_name(field: Field, args: &Args) -> String {
+    let flags: Vec<&str> = match field {
+        Field::Fetch => vec!["--fetch"],
+        Field::Browser => vec!["--browser"],
+        Field::Local => vec!["--local"],
+        Field::Chrome => [(args.headed, "--headed"), (args.profile.is_some(), "--profile")]
+            .into_iter()
+            .filter_map(|(given, flag)| given.then_some(flag))
+            .collect(),
+        Field::ChromeHeaded => vec!["--headed"],
+        Field::ChromeProfile => vec!["--profile"],
+        Field::CloudProfile => vec!["--cloud-profile"],
+        Field::CdpUrl => vec!["--cdp-url"],
+        Field::CdpPort => vec!["--cdp-port"],
+        Field::Attach => vec!["--attach"],
+        Field::TargetMatch => vec!["--target-match"],
+        Field::Foreground => vec!["--foreground"],
+        Field::ProxyCountry => vec!["--proxy-country"],
+        Field::Viewport => vec!["--viewport"],
+        Field::Record => vec!["--record"],
+        Field::Recipe => vec!["--recipe"],
+        Field::SaveRecipe => vec!["--save-recipe"],
+        Field::Cursor => vec!["--cursor"],
+        Field::Downloads => vec!["--downloads"],
+        // Without `--cloud` or `--fetch` the CLI drives the extension whatever was passed, and `--local` means it too.
+        Field::Extension => {
+            let chose: Vec<&str> = [
+                (args.extension, "--extension"),
+                (args.extension_browser.is_some(), "--extension-browser"),
+                (args.local, "--local"),
+            ]
+            .into_iter()
+            .filter_map(|(given, flag)| given.then_some(flag))
+            .collect();
+            if chose.is_empty() {
+                return "a run without --cloud".into();
+            }
+            chose
+        }
+        Field::Inputs => vec!["--input"],
+        Field::Attachments => vec!["--file"],
+        Field::Authorization => vec!["--authorize"],
+        Field::Secrets => [(!args.secret.is_empty(), "--secret"), (args.bitwarden.is_some(), "--bitwarden")]
+            .into_iter()
+            .filter_map(|(given, flag)| given.then_some(flag))
+            .collect(),
+        Field::Launch
+        | Field::ChromeBinary
+        | Field::CloudExtensions
+        | Field::CloudTimeoutMinutes
+        | Field::AllowedOrigins => {
+            vec![]
+        }
+    };
+    if flags.is_empty() { field.sdk_name().to_string() } else { flags.join(", ") }
 }
