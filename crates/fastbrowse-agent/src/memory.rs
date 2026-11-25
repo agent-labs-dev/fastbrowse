@@ -326,6 +326,22 @@ struct SourceBlock {
     record: String,
 }
 
+/// One capture's blocks, indexed by source id so a read finds its block without scanning the capture.
+#[derive(Clone)]
+struct CaptureBlocks {
+    by_source: HashMap<String, Vec<SourceBlock>>,
+}
+
+impl From<Vec<SourceBlock>> for CaptureBlocks {
+    fn from(blocks: Vec<SourceBlock>) -> Self {
+        let mut by_source: HashMap<String, Vec<SourceBlock>> = HashMap::new();
+        for block in blocks {
+            by_source.entry(block.source_id.clone()).or_default().push(block);
+        }
+        Self { by_source }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Notes {
     facts: IndexMap<String, Fact>,
@@ -341,7 +357,7 @@ pub struct Notes {
     /// A table's structure belongs to its capture, even when another page renders identical text.
     tables: HashMap<CaptureIdentity, Arc<[TableBlock]>>,
     /// A fragment keeps its captured block type, so a heading is not mistaken for the record it names.
-    source_blocks: HashMap<CaptureIdentity, Arc<[SourceBlock]>>,
+    source_blocks: HashMap<CaptureIdentity, Arc<CaptureBlocks>>,
     /// Where code blanked a secret value in each capture's text.
     masked: HashMap<CaptureIdentity, Arc<[(i64, i64)]>>,
     /// Each step that typed into a control, in order.
@@ -463,7 +479,7 @@ impl Notes {
         for (identity, blocks) in sources {
             self.tables.entry(identity.clone()).or_insert_with(|| table_blocks(capture).into());
             self.masked.entry(identity.clone()).or_insert_with(|| capture.masked.clone().into());
-            self.source_blocks.entry(identity).or_insert_with(|| blocks.into());
+            self.source_blocks.entry(identity).or_insert_with(|| Arc::new(blocks.into()));
         }
     }
 
@@ -530,10 +546,8 @@ impl Notes {
 
     fn source_block(&self, evidence: &Evidence) -> Option<&SourceBlock> {
         let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
-        let blocks = self.source_blocks.get(&key)?;
-        let mut matching = blocks.iter().filter(|block| {
-            block.source_id == evidence.source_id && block.start <= evidence.start && evidence.end <= block.end
-        });
+        let blocks = self.source_blocks.get(&key)?.by_source.get(&evidence.source_id)?;
+        let mut matching = blocks.iter().filter(|block| block.start <= evidence.start && evidence.end <= block.end);
         let block = matching.next()?;
         matching.next().is_none().then_some(block)
     }

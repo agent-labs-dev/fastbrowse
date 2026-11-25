@@ -2601,8 +2601,12 @@ pub(crate) fn latest_reads<T>(
             .any(|o| o.capture_sha256 == e.capture_sha256 && (o.start, o.end) != (e.start, e.end) && alike(e, o))
     };
     let same_record = |a: &Evidence, b: &Evidence| {
-        let distinct = a.capture_sha256 != b.capture_sha256 && record(a).zip(record(b)).is_some_and(|(a, b)| a != b);
-        alike(a, b) && !distinct && !ambiguous(a) && !ambiguous(b)
+        // Alike first: the record lookups and the sibling scan only matter for reads that quote the same thing.
+        alike(a, b) && {
+            let distinct =
+                a.capture_sha256 != b.capture_sha256 && record(a).zip(record(b)).is_some_and(|(a, b)| a != b);
+            !distinct && !ambiguous(a) && !ambiguous(b)
+        }
     };
     let newest = |e: &Evidence| {
         let mut newest = e.captured_at.timestamp();
