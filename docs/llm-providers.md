@@ -25,7 +25,7 @@ from, how the schema is asked for and where a reasoning effort goes. The table i
 
 | `FASTBROWSE_LLM_PROVIDER` | Address | Key | Schema | Reasoning effort | Default model |
 |:--|:--|:--|:--|:--|:--|
-| `openrouter` | `https://openrouter.ai/api/v1` (`/responses` for an `openai/...` model) | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for GPT-6 Luna and Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `openai/gpt-6-luna` |
+| `openrouter` | `https://openrouter.ai/api/v1` (`/responses` for an `openai/...` model), or a proxy in front of it in `FASTBROWSE_LLM_BASE_URL` | `OPENROUTER_API_KEY`; `FASTBROWSE_LLM_API_KEY` for a proxy | strict `json_schema` | `reasoning.effort`: `low` for GPT-6 Luna and Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `openai/gpt-6-luna` |
 | `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for GPT-6 Luna and Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `openai/gpt-6-luna` |
 | `openai` | `https://api.openai.com/v1 (`/responses`)` | `OPENAI_API_KEY` | strict `json_schema` (`text.format`) | `reasoning.effort` | none |
 | `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, only when set | `claude-haiku-5-5`, `claude-haiku-5-5` for field text and shortcuts |

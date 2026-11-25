@@ -15,8 +15,7 @@ PUBLIC_MODULES = {
     "fastbrowse.build",
 }
 """The pydantic models and `Config` a `run_task` call is made of, the `serve` protocol's messages, the build
-identity the CLI's `--json` reports, which the harness records in every row from the same source, and the OpenRouter
-routing a run sends, which the record proxy sends for a run aimed at it."""
+identity the CLI's `--json` reports, which the harness records in every row from the same source."""
 
 CORE_LIBRARIES = ("tests",)
 """The test suite's own helpers."""

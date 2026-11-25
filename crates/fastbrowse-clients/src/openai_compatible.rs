@@ -30,15 +30,6 @@ pub fn openrouter_provider_routing() -> Value {
     json!({"require_parameters": true, "sort": "latency"})
 }
 
-/// The OpenRouter routing a request for `model` sends: [`openrouter_provider_routing`], with the endpoints a model was
-/// measured on pinned. The eval record proxy sends this too, through `fastbrowse.routing`, so a cassette holds answers
-/// from the endpoints a run is routed to.
-pub fn openrouter_routing_for(model: &str) -> Value {
-    let mut routing = openrouter_provider_routing();
-    pin_endpoints(&mut routing, model);
-    routing
-}
-
 /// Sorting by latency sent DeepSeek V4.1 Flash composes to whichever of about 50 endpoints was fastest, and Together,
 /// the one it chose most, changed words the model copied: the same compose request at temperature 0 named "Clerkwell
 /// Coffee" or "GBP 9.99" in 3 to 6 of 100 replays there. Parasail, DeepInfra and InferenceNet wrote it correctly 100 of
