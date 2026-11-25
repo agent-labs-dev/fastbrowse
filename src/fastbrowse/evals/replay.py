@@ -249,8 +249,14 @@ def describe_request(path: str, body: Any) -> tuple[str, str | None]:
         return "unknown", None
     model = body.get("model") if isinstance(body.get("model"), str) else None
     if path.startswith(LLM_MOUNT):
-        schema = body.get("response_format", {})
-        name = schema.get("json_schema", {}).get("name") if isinstance(schema, dict) else None
+        # Chat Completions names the schema in `response_format`, the Responses API in `text.format`.
+        chat, responses = body.get("response_format"), body.get("text")
+        if isinstance(chat, dict) and isinstance(chat.get("json_schema"), dict):
+            name = chat["json_schema"].get("name")
+        elif isinstance(responses, dict) and isinstance(responses.get("format"), dict):
+            name = responses["format"].get("name")
+        else:
+            name = None
         return f"llm:{name or 'unknown'}", model
     questions = body.get("questions")
     names = sorted(questions) if isinstance(questions, dict) else []
@@ -445,16 +451,10 @@ class Spend:
 
 
 def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
-    """Forward to OpenRouter as a run keyed only with OPENROUTER_API_KEY would call it.
-
-    A run pointed at a custom LLM endpoint leaves out OpenRouter's provider routing, which a normal run sends, so it
-    is put back here: the recorded answers then come from the endpoints a normal run is routed to. The core builds
-    that routing for the request's model, endpoint pins included, so the proxy keeps no copy of it. The core is
-    loaded here rather than on import, since reading or replaying a cassette needs none. Usage accounting is asked
-    for so every response carries its cost; the key is computed from the body the agent sent.
+    """Forward to OpenRouter with the real key. The agent speaks to the proxy as it speaks to OpenRouter, provider
+    routing included, so the body goes on as it is, but for usage accounting, asked for so every response carries its
+    cost; the key is computed from the body the agent sent.
     """
-    from fastbrowse.routing import openrouter_routing
-
     client = httpx.Client(timeout=timeout)
 
     def forward(path: str, body: bytes) -> tuple[int, str, str]:
@@ -462,7 +462,6 @@ def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
         url = UPSTREAMS[mount] + path[len(mount) :]
         payload = json.loads(body)
         if mount == LLM_MOUNT and isinstance(payload, dict):
-            payload.setdefault("provider", openrouter_routing(str(payload.get("model", ""))))
             payload.setdefault("usage", {"include": True})
         try:
             response = client.post(url, json=payload, headers={"Authorization": f"Bearer {api_key}"})

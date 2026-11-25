@@ -22,7 +22,8 @@
 //!
 //! FASTBROWSE_LLM_PROVIDER names the LLM provider outright instead: openrouter, gateway, openai, anthropic, gemini,
 //! groq, together, mistral, deepseek, xai, fireworks, azure, ollama, lmstudio, vllm or custom. Each reads its own key
-//! variable and sends it to its own host only; [`crate::providers`] holds what each one takes.
+//! variable and sends it to its own host only; [`crate::providers`] holds what each one takes. openrouter with
+//! FASTBROWSE_LLM_BASE_URL speaks OpenRouter's API to a proxy at that address, with FASTBROWSE_LLM_API_KEY.
 //!
 //! Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_CHROME names the Chrome binary; FASTBROWSE_HEADED=1 shows its window
 //! and FASTBROWSE_PROFILE keeps its profile between runs. A real environment variable beats `.env`.
@@ -935,22 +936,27 @@ impl Settings {
     pub fn llm(&self, http: &Http) -> Result<Box<dyn LLMClient>, ConfigurationError> {
         self.validate_client_credentials(http)?;
         let source = self.llm_source();
-        if matches!(source, LLMProvider::OpenRouter | LLMProvider::Gateway)
-            && self.llm_provider.is_some()
-            && self.llm_base_url().is_some()
-        {
-            return Err(ConfigurationError(format!(
-                "FASTBROWSE_LLM_BASE_URL cannot be used with FASTBROWSE_LLM_PROVIDER={source}, whose key goes to its own \
+        if source == LLMProvider::Gateway && self.llm_provider.is_some() && self.llm_base_url().is_some() {
+            return Err(ConfigurationError(
+                "FASTBROWSE_LLM_BASE_URL cannot be used with FASTBROWSE_LLM_PROVIDER=gateway, whose key goes to its own \
                  host only; use FASTBROWSE_LLM_PROVIDER=custom for another endpoint"
-            )));
+                    .into(),
+            ));
+        }
+        if let (LLMProvider::OpenRouter, Some(base_url)) = (source, self.llm_base_url()) {
+            // A proxy in front of OpenRouter is spoken to as OpenRouter is, routing and the Responses wire for OpenAI's
+            // models included, so a run through it makes the requests a direct run makes. It gets
+            // FASTBROWSE_LLM_API_KEY, never OPENROUTER_API_KEY, which goes to OpenRouter alone.
+            let key = self.llm_api_key.as_ref().map(|key| key.expose().trim()).unwrap_or_default();
+            return self.routed_llm(source, key, base_url, openrouter_provider_routing(), http);
         }
         let (key, base_url, routing) = match source {
             LLMProvider::OpenRouter => match &self.openrouter_api_key {
-                Some(key) if key.is_set() => (key, LLM_OPENROUTER_URL, openrouter_provider_routing()),
+                Some(key) if key.is_set() => (key.expose(), LLM_OPENROUTER_URL, openrouter_provider_routing()),
                 _ => return Err(ConfigurationError("set OPENROUTER_API_KEY or AI_GATEWAY_API_KEY for the LLM".into())),
             },
             LLMProvider::Gateway => match &self.ai_gateway_api_key {
-                Some(key) if key.is_set() => (key, LLM_GATEWAY_URL, gateway_provider_routing()),
+                Some(key) if key.is_set() => (key.expose(), LLM_GATEWAY_URL, gateway_provider_routing()),
                 _ => return Err(ConfigurationError("set AI_GATEWAY_API_KEY or OPENROUTER_API_KEY for the LLM".into())),
             },
             provider => return self.preset_llm(provider.preset(), http),
@@ -961,7 +967,13 @@ impl Settings {
         match (source, self.llm_provider, gateway) {
             (LLMProvider::OpenRouter, None, Some(gateway)) => Ok(Box::new(FailoverLLMClient::new(
                 primary,
-                self.routed_llm(LLMProvider::Gateway, gateway, LLM_GATEWAY_URL, gateway_provider_routing(), http)?,
+                self.routed_llm(
+                    LLMProvider::Gateway,
+                    gateway.expose(),
+                    LLM_GATEWAY_URL,
+                    gateway_provider_routing(),
+                    http,
+                )?,
                 http.clone(),
             ))),
             _ => Ok(primary),
@@ -971,7 +983,7 @@ impl Settings {
     fn routed_llm(
         &self,
         provider: LLMProvider,
-        key: &Secret,
+        key: &str,
         base_url: &str,
         routing: Value,
         http: &Http,
@@ -985,7 +997,7 @@ impl Settings {
             responses_for_openai: provider == LLMProvider::OpenRouter,
             ..LLMOptions::default()
         };
-        OpenAICompatibleLLM::new(key.expose(), http.clone(), base_url, self.models(), options)
+        OpenAICompatibleLLM::new(key, http.clone(), base_url, self.models(), options)
             .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
             .map_err(ConfigurationError)
     }

@@ -13,7 +13,6 @@ PUBLIC_MODULES = {
     "fastbrowse.config",
     "fastbrowse.protocol",
     "fastbrowse.build",
-    "fastbrowse.routing",
 }
 """The pydantic models and `Config` a `run_task` call is made of, the `serve` protocol's messages, the build
 identity the CLI's `--json` reports, which the harness records in every row from the same source, and the OpenRouter
