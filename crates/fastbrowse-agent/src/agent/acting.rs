@@ -2609,8 +2609,14 @@ impl Agent {
         // A run that has only read can find a page already showing what the task asks to be made, such as an editor
         // that restored a draft, and nothing in the recent actions says the run did not make it (#1186).
         let untouched = (!state.history.iter().any(HistoryEntry::acted)).then(|| NOTHING_ACTED.to_string());
+        // A step that opens a page is carried out by the navigation that did it: asked to open the first link and report
+        // its title, a run on that link's page was refused for a step it had already taken (#1174).
+        let opened = self
+            .reached_by(state, observation)
+            .map(|how| format!("This page was opened by the run's own action: {how}."));
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
+            .chain(opened)
             .chain(state.to_carry_out.then(|| empty_fields_fact(&state.missing, observation)).flatten())
             .chain(untouched)
             .collect();
