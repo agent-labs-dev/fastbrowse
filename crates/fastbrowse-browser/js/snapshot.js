@@ -1135,12 +1135,14 @@
   const namedByContent = (e, seen) => {
     const flat = text => text.replace(/\s+/g, ' ').trim();
     // A picture may sit in a wrapper (<picture>, a thumbnail span): the wrapper counts as the picture when it holds
-    // an image and no words of its own.
+    // an image and no words of its own. A <source> beside the <img> in a <picture> shows nothing itself.
     const isPicture = n =>
       n.nodeType === 1 &&
       (n.tagName === 'IMG' ||
         (n.children.length > 0 &&
-          [...n.childNodes].every(c => (c.nodeType === 3 ? !c.textContent.trim() : c.nodeType !== 1 || isPicture(c)))));
+          [...n.childNodes].every(
+            c => (c.nodeType === 3 ? !c.textContent.trim() : c.nodeType !== 1 || c.tagName === 'SOURCE' || isPicture(c)),
+          )));
     const parts = [...e.childNodes].map(n => ({
       image: isPicture(n),
       text:
@@ -1155,7 +1157,11 @@
     }));
     const words = parts.filter(part => !part.image).map(part => part.text);
     // Words split across inline nodes ("Test <b>image</b>") repeat the alt as a whole.
-    const shownText = new Set([...words.map(flat), flat(words.join(' '))]);
+    // A badge or status beside the title must not hide it, so every run of adjacent texts counts.
+    const shownText = new Set();
+    for (let i = 0; i < words.length; i++) {
+      for (let j = i; j < words.length; j++) shownText.add(flat(words.slice(i, j + 1).join(' ')));
+    }
     return parts
       .filter(part => !part.image || !shownText.has(flat(part.text)))
       .map(part => part.text)

@@ -1540,14 +1540,24 @@ async fn test_an_image_alt_that_repeats_the_visible_title_does_not_double_the_la
           '<li role="button" tabindex="0"><img alt="Cover art" width="16" height="16"><span>Second image</span></li>' +
           '<li role="button" tabindex="0"><img alt="Third image" width="16" height="16"></li>' +
           '<li role="button" tabindex="0"><span><img alt="Wrapped image" width="16" height="16"></span><span>Wrapped image</span></li>' +
-          '<li role="button" tabindex="0"><img alt="Split image" width="16" height="16">Split <b>image</b></li></ul>';"##,
+          '<li role="button" tabindex="0"><img alt="Split image" width="16" height="16">Split <b>image</b></li>' +
+          '<li role="button" tabindex="0"><picture><source srcset="a.webp"><img alt="Responsive image" width="16" height="16"></picture><span>Responsive image</span></li>' +
+          '<li role="button" tabindex="0"><img alt="Badged image" width="16" height="16">Badged <b>image</b><span>New</span></li></ul>';"##,
     )
     .await;
     let obs = h.observe().await;
     let labels: Vec<&str> = obs.controls.iter().filter(|c| c.role == "button").map(|c| c.label.as_str()).collect();
     assert_eq!(
         labels,
-        ["Test image", "Cover art Second image", "Third image", "Wrapped image", "Split image"],
+        [
+            "Test image",
+            "Cover art Second image",
+            "Third image",
+            "Wrapped image",
+            "Split image",
+            "Responsive image",
+            "Badged image New"
+        ],
         "{:?}",
         obs.controls
     );
