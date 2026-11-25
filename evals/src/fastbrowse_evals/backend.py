@@ -153,12 +153,13 @@ class FastbrowseHarness(BrowserHarness):
                     downloads=Path(kept.name),
                     settings=self.settings(),
                 )
-            # The answer is in: reading the final page and stopping the browser are not the agent's time.
+            # The answer is in: retaining artifacts, reading the final page and stopping the browser are not the
+            # agent's time.
+            latency_ms = round((time.perf_counter() - began) * 1000)
             self._agent_finished()
             with kept:
                 self.retain(output.artifacts)
             self._product_status = output.status
-            latency_ms = round((time.perf_counter() - began) * 1000)
             # A run that read every page over HTTP never drove the browser, which still shows the blank tab it
             # opened on; what it saw is in `pages`.
             page = None if output.browser is None else await self.observe(browser.cdp_url, url=output.final_url)

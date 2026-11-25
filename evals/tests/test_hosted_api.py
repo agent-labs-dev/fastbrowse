@@ -66,6 +66,62 @@ async def test_the_hosted_arm_preserves_action_outcomes_for_the_judge(monkeypatc
     assert result["step_log"][0]["action"] == "click (failed): This action needs confirmation"
 
 
+async def _executed(monkeypatch: pytest.MonkeyPatch, run: dict[str, object], wall: float) -> dict[str, object]:
+    async def finished(*args: object) -> tuple[dict[str, object], float]:
+        return run, wall
+
+    monkeypatch.setattr(hosted_api, "submit_and_wait", finished)
+    harness = hosted_api.FastbrowseHostedHarness(observer="plain-cdp")
+    harness.bind_task(TASK)
+    return await harness.execute(TurnInput(index=0, text=TASK.turns[0].text, new_session=True))
+
+
+async def test_the_hosted_arm_charges_the_workers_time_not_the_queue_and_polling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = json.loads(RUN.read_text())
+    result = await _executed(monkeypatch, run, 108.4)
+    assert result["latency_ms"] == run["usage"]["duration_ms"]
+
+
+async def test_the_hosted_arm_falls_back_to_wall_time_without_a_worker_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = json.loads(RUN.read_text())
+    del run["usage"]["duration_ms"]
+    result = await _executed(monkeypatch, run, 108.4)
+    assert result["latency_ms"] == 108400
+
+
+async def test_a_wall_timed_hosted_run_says_its_time_includes_the_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = json.loads(RUN.read_text())
+    del run["usage"]["duration_ms"]
+    harness = hosted_api.FastbrowseHostedHarness(observer="plain-cdp")
+    harness.bind_task(TASK)
+
+    async def finished(*args: object) -> tuple[dict[str, object], float]:
+        return run, 108.4
+
+    monkeypatch.setattr(hosted_api, "submit_and_wait", finished)
+    await harness.execute(TurnInput(index=0, text=TASK.turns[0].text, new_session=True))
+    assert harness.trial_timing().basis == "session-included"
+
+
+async def test_the_hosted_arm_reports_the_billed_charge_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = json.loads(RUN.read_text())
+    result = await _executed(monkeypatch, run, 1.0)
+    # Components carry no dollars in the API body: an unpriced line beside the charge would make the row unknown.
+    assert result["cost_lines"] == [{"component": "charge", "basis": "billed", "dollars": pytest.approx(0.5742)}]
+
+
+async def test_the_hosted_arm_without_a_charge_keeps_its_component_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = json.loads(RUN.read_text())
+    del run["usage"]["charged_micros"]
+    result = await _executed(monkeypatch, run, 1.0)
+    assert {line["component"] for line in result["cost_lines"]} == set(run["usage"]["components"])
+    assert all(line["basis"] == "metered" for line in result["cost_lines"])
+
+
 @pytest.mark.parametrize("data", [{"name": "widget", "revision": 3}, [], False, 0])
 async def test_the_hosted_arm_submits_structured_data_as_the_answer(
     monkeypatch: pytest.MonkeyPatch, data: object

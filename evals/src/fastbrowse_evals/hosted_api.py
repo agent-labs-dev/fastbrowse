@@ -19,8 +19,9 @@ from urllib.parse import urlsplit
 import httpx
 from fastbrowse.models import Status
 from parallax.harnesses.browser import BrowserHarness
+from parallax.harnesses.browser.clock import SESSION_INCLUDED
 from parallax.harnesses.browser.site import TRANSIENT_TRANSPORT, Unavailable, retryable_status
-from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
+from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, Timing, TurnInput
 
 from fastbrowse_evals.evidence import result_answer, step_action
 from fastbrowse_evals.task_specs import secrets_origin, start_url
@@ -224,6 +225,7 @@ class FastbrowseHostedHarness(BrowserHarness):
         super().__init__(observer=observer)
         self._task: Task | None = None
         self._product_status: Status | None = None
+        self._wall_timed = False
 
     def bind_task(self, task: Task) -> None:
         super().bind_task(task)
@@ -236,13 +238,21 @@ class FastbrowseHostedHarness(BrowserHarness):
             run, wall = await submit_and_wait(http, self._task, turn.text)
         self._agent_finished()
         self._product_status = _product_status(status_of(run))
+        self._wall_timed = report_fields(run, wall)["timing_basis"] is not None
         fields = report_fields(run, wall)
         components = fields.get("components") or {}
-        lines = [
-            {"component": name, "basis": "metered", "dollars": data.get("dollars")}
-            for name, data in components.items()
-            if isinstance(data, dict)
-        ]
+        charged = fields.get("dollars")
+        duration_ms = (run.get("usage") or {}).get("duration_ms")
+        if charged is not None:
+            # The customer charge covers every component, which the API reports without dollars: a component line
+            # beside it would add an unpriced (or double counted) cost.
+            lines = [{"component": "charge", "basis": "billed", "dollars": charged}]
+        else:
+            lines = [
+                {"component": name, "basis": "metered", "dollars": data.get("dollars")}
+                for name, data in components.items()
+                if isinstance(data, dict)
+            ]
         usage = [
             {
                 "model": str(data.get("model") or name),
@@ -272,9 +282,17 @@ class FastbrowseHostedHarness(BrowserHarness):
             "cost_lines": lines,
             "usage": usage,
             "actual_model": run.get("model"),
-            "latency_ms": round(wall * 1000),
+            # The worker's own time, else the wall time: queueing, boot and the poll interval are not the arm's.
+            "latency_ms": round(duration_ms if duration_ms is not None else wall * 1000),
             "session_id": run.get("id"),
         }
+
+    def trial_timing(self) -> Timing:
+        """A run the API reported no duration for is timed by the wall clock from submit (queue, boot and polling
+        included), and says so rather than sharing the clean arms' basis."""
+        if self._wall_timed:
+            return Timing(basis=SESSION_INCLUDED, breakdown={})
+        return super().trial_timing()
 
     def trial_details(self) -> dict[str, Any]:
         details = super().trial_details()

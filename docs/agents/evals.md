@@ -93,7 +93,8 @@ The mapping preserves these public arm names:
 - other `browser-use-cloud` results to `browser-use`;
 - `browser-harness` to `browser-harness`;
 - `agent-browser` on its pinned model to `agent-browser`, a campaign arm that no publication group carries yet;
-- `browser-use-oss` to `browser-use-oss`.
+- `browser-use-oss` to `browser-use-oss`;
+- `browser-use-1-luna` on `openai/gpt-6-luna` to `browser-use-1-luna`, a campaign arm that no publication group carries.
 
 `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` remain diagnostic. Candidate schema 7,
 `GROUPS`, site groups, and all files under `docs/results` stay as recorded.

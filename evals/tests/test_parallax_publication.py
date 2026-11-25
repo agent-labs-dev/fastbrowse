@@ -211,6 +211,17 @@ def test_agent_browser_is_a_one_model_arm_beside_browser_harness() -> None:
     assert [(b.harness, b.model) for b in invocations(["agent-browser"])] == [("agent-browser", "openai/gpt-6-luna")]
 
 
+def test_browser_use_1_luna_arm_runs_the_parallax_harness() -> None:
+    from fastbrowse_evals.arms import public_arm as arm_for
+    from fastbrowse_evals.catalog import ARMS
+
+    for name in ("browser-use-1-luna",):
+        assert arm_for(name, "openai/gpt-6-luna") == name
+        assert arm_for(name, "anthropic/claude-haiku-5.5") is None
+        assert not ARMS[name].default
+        assert [(b.harness, b.model) for b in invocations([name])] == [(name, "openai/gpt-6-luna")]
+
+
 def test_cua_codex_runs_its_pinned_model() -> None:
     from fastbrowse_evals.arms import public_arm as arm_for
     from fastbrowse_evals.catalog import ARMS
@@ -286,7 +297,7 @@ def _support(
 
 
 def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
-    tasks = [task for suite in CATALOG.suites.values() for task in suite]
+    tasks = [task for suite in CATALOG.suites.values() for task in suite if task.arms]
     source_task_map = {task.id: task for task in source_tasks(source_names=("fastbrowse",))}
     run = tmp_path / "run"
     run.mkdir()
@@ -325,14 +336,14 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
     )
 
     assert len(candidate.groups) == 1
-    assert len(candidate.groups[0].rows) == 53 * 3
+    assert len(candidate.groups[0].rows) == len(tasks) * 3
     assert len(candidate.groups[0].sources) == 1
     assert candidate.groups[0].sources[0].run_id == "synthetic-run"
     assert candidate.groups[0].sources[0].tasks == sorted(task.id for task in tasks)
     check_catalog(candidate, CATALOG_PATH)
 
     duplicate = candidate_from_runs([run, run], campaign_id="synthetic-campaign")
-    assert len(duplicate.groups[0].rows) == 53 * 3
+    assert len(duplicate.groups[0].rows) == len(tasks) * 3
 
     out = tmp_path / "candidate.json"
     assert (
@@ -532,7 +543,7 @@ def test_an_arm_on_a_model_pinning_harness_names_its_model() -> None:
 
 
 def test_a_changed_task_drops_only_its_own_earlier_rows(tmp_path: Path) -> None:
-    tasks = [task for suite in CATALOG.suites.values() for task in suite]
+    tasks = [task for suite in CATALOG.suites.values() for task in suite if task.arms]
     source_task_map = {task.id: task for task in source_tasks(source_names=("fastbrowse",))}
     changed = tasks[0].id
 

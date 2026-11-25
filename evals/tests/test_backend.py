@@ -329,6 +329,34 @@ async def test_a_cloud_browser_lives_only_as_long_as_its_turn(monkeypatch: pytes
     assert asked == [10]
 
 
+async def test_the_local_arms_latency_stops_when_the_run_returns_not_after_retaining_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @asynccontextmanager
+    async def cloud_browser(http: object, *, screen: tuple[int, int], minutes: int):
+        yield Browser(cdp_url="ws://browser")
+
+    async def run_task(*args: object, **kwargs: object) -> RunResult:
+        return RunResult(
+            status=Status.COMPLETE, answer="a", data=None, evidence=(), steps=(), cost=CostBreakdown(), artifacts=()
+        )
+
+    def slow_retain(artifacts: object) -> None:
+        time.sleep(0.4)
+
+    monkeypatch.setattr(backend, "cloud_browser", cloud_browser)
+    monkeypatch.setattr(backend, "run_task", run_task)
+    monkeypatch.setattr(backend, "start_url", lambda task: "https://example.com/")
+    monkeypatch.setattr(backend, "answer_model", lambda task_id: None)
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    monkeypatch.setattr(harness, "retain", slow_retain)
+    harness._task = SimpleNamespace(id="t", secrets={}, meta=SimpleNamespace(authorizes=False))  # ty: ignore[invalid-assignment]
+    monkeypatch.setattr(backend, "secrets_origin", lambda task: "https://example.com")
+    harness._turn_ends_at = time.monotonic() + 600
+    result = await harness.execute(SimpleNamespace(text="t"))  # ty: ignore[invalid-argument-type]
+    assert result["latency_ms"] < 300  # ty: ignore[unsupported-operator]
+
+
 def _kept(directory: Path, kind: ArtifactKind, name: str, mime_type: str, content: bytes) -> Artifact:
     """An artifact as fastbrowse's directory sink keeps it: the bytes on disk and a `file://` reference."""
     path = directory / kind.value / name
