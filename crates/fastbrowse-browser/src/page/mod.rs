@@ -2015,14 +2015,13 @@ impl CdpPage {
     }
 }
 
-/// Where the evaluated script threw: CDP's own text for it and the line and column in the script, so a `Script` failure
-/// names the branch that threw. The exception's description is left out: a page can throw from a getter it replaced,
-/// and the message is then the page's own text.
+/// Where the evaluated script threw, as the line and column in the script, so a `Script` failure names the branch that
+/// threw. Neither the exception's description nor CDP's `text` is carried: a page can throw from a getter it replaced,
+/// and both then hold the page's own message (`Uncaught (in promise) Error: ...` for a rejected promise).
 fn exception_text(details: &Value) -> String {
-    let text = details["text"].as_str().unwrap_or("exception");
     match (details["lineNumber"].as_u64(), details["columnNumber"].as_u64()) {
-        (Some(line), Some(column)) => format!("{text} at line {line}, column {column}"),
-        _ => text.to_string(),
+        (Some(line), Some(column)) => format!("thrown at line {line}, column {column}"),
+        _ => "thrown at an unknown position".to_string(),
     }
 }
 
@@ -2325,10 +2324,13 @@ mod tests {
 
     #[test]
     fn a_script_failure_names_where_it_threw_and_never_the_exception_message() {
-        let thrown = json!({"text": "Uncaught", "lineNumber": 3, "columnNumber": 7, "exception": {"description": "Error: page text"}});
-        assert_eq!(exception_text(&thrown), "Uncaught at line 3, column 7");
-        assert_eq!(exception_text(&json!({"text": "Uncaught"})), "Uncaught");
-        assert_eq!(exception_text(&json!({})), "exception");
+        let thrown = json!({"text": "Uncaught (in promise) Error: page text", "lineNumber": 3, "columnNumber": 7,
+            "exception": {"description": "Error: page text"}});
+        assert_eq!(exception_text(&thrown), "thrown at line 3, column 7");
+        assert_eq!(
+            exception_text(&json!({"text": "Uncaught (in promise) Error: page text"})),
+            "thrown at an unknown position"
+        );
     }
 
     #[test]

@@ -1285,15 +1285,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn every_install_stays_registered_and_the_newest_serves() {
-        use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!("fastbrowse-installs-{}", std::process::id()));
         let mut programs = vec![];
         for name in ["bundled", "user"] {
             let bin = root.join(name);
-            std::fs::create_dir_all(&bin).unwrap();
             let program = bin.join("fastbrowse");
-            std::fs::write(&program, format!("#!/bin/sh\necho {name} \"$@\"\n")).unwrap();
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            script(&program, &format!("echo {name} \"$@\""));
             programs.push(program);
         }
         let install = |path: &Path, version: &str| Install { path: path.to_path_buf(), version: version.into() };
