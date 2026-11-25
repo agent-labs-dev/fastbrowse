@@ -6,7 +6,7 @@ use fastbrowse_core::citations::{page_text, text_fragment};
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema, Typed};
 use fastbrowse_core::models::{Citation, Evidence, JevPurpose, LLMPurpose, Link, UNTRUSTED};
-use fastbrowse_core::page::BlockKind;
+use fastbrowse_core::page::{BlockKind, ItemPlace};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
@@ -511,6 +511,7 @@ impl BoundClaim {
                 page: None,
                 headings: Vec::new(),
                 source_kind: None,
+                item_place: None,
                 links: Vec::new(),
                 after_step: None,
                 fields: Vec::new(),
@@ -760,6 +761,10 @@ struct ComposeItem {
     headings: Vec<String>,
     #[serde(default)]
     source_kind: Option<BlockKind>,
+    /// Where the list item a read note quotes stands among its list's items. A claim that a value is the third of a
+    /// list rested on a note that held the value alone, which does not say where it stood, and was dropped (#1108).
+    #[serde(default)]
+    item_place: Option<ItemPlace>,
     /// The links inside a read note's quote: a link's text does not say where it leads, and asked for a description's
     /// hyperlinks with their hrefs, the composer had the texts alone and wrote each href as not captured.
     links: Vec<Link>,
@@ -781,6 +786,10 @@ impl ComposeItem {
         if let Some(kind) = self.source_kind {
             note["source_kind"] = json!(kind);
         }
+        if let Some(place) = self.item_place {
+            note["list_position"] = place.position.into();
+            note["list_size"] = place.count.into();
+        }
         if !self.quotable {
             note["source_binding"] = false.into();
         } else if !self.fields.is_empty() {
@@ -796,7 +805,11 @@ impl ComposeItem {
 
 // Told only "self-contained", the composer split a price off its record as "It costs £56.88.", which its support
 // check, judging that claim alone, rightly failed (6 of 10 first drafts; 0 of 15 once told how claims are checked).
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. A page that reports what other pages say, such as a search engine's results and the summaries it writes of them, is not the source of a value when the notes hold the page it reports on: cite that page instead. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. A claim is never a bare quote: prose beside each quoted value says what that value is, which record it belongs to and which field of it the task asks about, such as \"A remaining item is titled \" before a title, because the check judges a quoted text only through the claim around it, and a lone quote can read as more than the requested value. A list of values is one such claim per item, each saying what the item is without its place in the list. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, such as \"quote\", \"book\" or \"package\"), scope (which of those records the task lets count, such as \"by Albert Einstein\", \"in the Mystery category\", or \"httpx or requests\" when the task names the records it compares; null when every record of that kind counts; a record is never left out of scope for its value, so a selection by value, such as the cheapest or each store's newest listing, belongs to the tally or within, never to scope), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price, in which form code writes the computed part, so prose beside it never repeats a unit written there; the value as the notes write it even when the claim names only the record that holds it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record (\"quote\"), scope without the group, by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. When the records a min or max compares are each group's lowest or highest by another value, such as each supplier's latest offer, set within: by (the field that groups them, such as \"supplier\"), op (min or max) and field (the value compared inside each group, such as \"date\"); code selects each group's tied extremes before the outer tally, which is a min or max with a field and no by or group. Otherwise set within null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false.\n\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. A page that reports what other pages say, such as a search engine's results and the summaries it writes of them, is not the source of a value when the notes hold the page it reports on: cite that page instead. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. A claim is never a bare quote: prose beside each quoted value says what that value is, which record it belongs to and which field of it the task asks about, such as \"A remaining item is titled \" before a title, because the check judges a quoted text only through the claim around it, and a lone quote can read as more than the requested value. A list of values is one such claim per item, each saying what the item is without its place in the list. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, such as \"quote\", \"book\" or \"package\"), scope (which of those records the task lets count, such as \"by Albert Einstein\", \"in the Mystery category\", or \"httpx or requests\" when the task names the records it compares; null when every record of that kind counts; a record is never left out of scope for its value, so a selection by value, such as the cheapest or each store's newest listing, belongs to the tally or within, never to scope), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price, in which form code writes the computed part, so prose beside it never repeats a unit written there; the value as the notes write it even when the claim names only the record that holds it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record (\"quote\"), scope without the group, by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. When the records a min or max compares are each group's lowest or highest by another value, such as each supplier's latest offer, set within: by (the field that groups them, such as \"supplier\"), op (min or max) and field (the value compared inside each group, such as \"date\"); code selects each group's tied extremes before the outer tally, which is a min or max with a field and no by or group. Otherwise set within null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false. A note with list_position and list_size says where its item stands among its list's items, counted from 1, so a claim may state that place, such as that an item is the first or the third of its list, only from those fields; a note without them gives no place, and a place the notes do not give is left out.\n\n";
+
+/// What the place beside a quote means. Told only the value, the check could not tell a value that is the third of a
+/// list from one that is not, and a claim stating the place was dropped as unsupported (#1108).
+const LIST_PLACE: &str = " A quote's list_position and list_size say where the list item it is, or sits inside, stands among that list's items, counted from 1: a statement of that item's place, such as first, third or last, follows from them and from nothing else.";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
@@ -1783,6 +1796,7 @@ async fn review_composition(
         }
         let records_rule = if sources.iter().any(|quote| quote["whole_record"] == true) { RECORDS } else { "" };
         let typed = typed_rule(&sources);
+        let place_rule = if sources.iter().any(|quote| quote.get("list_position").is_some()) { LIST_PLACE } else { "" };
         let position_rule = quote_positions(&sources, steps.len());
         let mut cited = json!({"columns": columns, "claim": shown.text, "quotes": sources});
         let computed_rule = if let Some(Ok(done)) = worked.get(&index) {
@@ -1808,7 +1822,7 @@ async fn review_composition(
         };
         for (key, focus) in checks {
             let question = support_question(format!(
-                "{UNTRUSTED}\n{focus} {SUPPORTED} A cell marked unavailable is supported only when these quotes give no value for that field of the same record. {SCOPE}{records_rule}{computed_rule}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}{steps_rule}{position_rule}{typed}"
+                "{UNTRUSTED}\n{focus} {SUPPORTED} A cell marked unavailable is supported only when these quotes give no value for that field of the same record. {SCOPE}{records_rule}{place_rule}{computed_rule}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}{steps_rule}{position_rule}{typed}"
             ));
             required[index].push(key.clone());
             questions.insert(key, question);
@@ -2301,6 +2315,7 @@ fn quote_states<'a>(ids: impl Iterator<Item = &'a String>, notes: &Notes, steps:
             fact.evidence.as_ref().map(|quote| {
                 let after_step = notes.steps_taken(quote).filter(|_| !steps.is_empty());
                 let whole_record = notes.whole_record(quote);
+                let place = notes.item_place(quote);
                 json!(QuoteState {
                     quote,
                     superseded: notes.superseded(&fact_id(fact)),
@@ -2309,6 +2324,8 @@ fn quote_states<'a>(ids: impl Iterator<Item = &'a String>, notes: &Notes, steps:
                     source_kind: notes.source_kind(quote),
                     whole_element: notes.whole_element(quote),
                     typed_by_step: notes.typed_by_step(quote),
+                    list_position: place.map(|place| place.position),
+                    list_size: place.map(|place| place.count),
                 })
             })
         })
@@ -2335,6 +2352,11 @@ struct QuoteState<'a> {
     /// that read as what the document says (#1398). Provenance is the control's identity and its page, never the words.
     #[serde(skip_serializing_if = "Option::is_none")]
     typed_by_step: Option<usize>,
+    /// Where the list item the quote is, or sits inside, stands among its list's items, counted from 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    list_position: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    list_size: Option<i64>,
 }
 
 const SUPPORTED: &str =
@@ -2495,6 +2517,7 @@ fn initial_items(notes: &Notes, steps: bool) -> Vec<ComposeItem> {
                 page: fact_page(fact),
                 headings: fact.evidence.as_ref().map(|evidence| evidence.heading_path.clone()).unwrap_or_default(),
                 source_kind: fact.evidence.as_ref().and_then(|evidence| notes.source_kind(evidence)),
+                item_place: fact.evidence.as_ref().and_then(|evidence| notes.item_place(evidence)),
                 links: fact.evidence.as_ref().map(|evidence| evidence.links.clone()).unwrap_or_default(),
                 after_step: fact.evidence.as_ref().filter(|_| steps).and_then(|evidence| notes.steps_taken(evidence)),
                 fields: fact
@@ -3100,6 +3123,7 @@ mod tests {
             page: None,
             headings: vec![],
             source_kind: None,
+            item_place: None,
             links: vec![],
             after_step: None,
             fields: Vec::new(),
@@ -3553,6 +3577,7 @@ mod tests {
                         page: None,
                         headings: vec![],
                         source_kind: None,
+                        item_place: None,
                         links: vec![],
                         after_step: None,
                         fields: Vec::new(),
@@ -5528,6 +5553,101 @@ mod tests {
         let field = crate::retrieval::fields::ScalarField::new(crate::retrieval::fields::Annotation::Str);
         let candidates = crate::retrieval::fields::field_candidates_from_notes(&notes, &field, None).unwrap();
         assert_eq!(candidates[0].context, "(document title) Service documentation");
+    }
+
+    /// Asked for the first three links in order, the composer wrote "The third example link is 'Add/Remove Elements'",
+    /// and the check, shown only that link's text, judged the place unsupported at 0.38 and dropped the claim (#1108).
+    /// The note and the quote the check reads both state where the item stands in its list.
+    #[tokio::test]
+    async fn a_note_and_its_quote_state_where_the_item_stands_in_its_list() {
+        use fastbrowse_core::page::ItemPlace;
+        let mut capture = crate::retrieval::testing::capture(&[
+            (BlockKind::Link, "A/B Testing"),
+            (BlockKind::Link, "Accessibility Issues"),
+            (BlockKind::Link, "Add/Remove Elements"),
+        ]);
+        for (index, block) in capture.blocks.iter_mut().enumerate() {
+            block.item_place = Some(ItemPlace { position: index as i64 + 1, count: 3 });
+        }
+        let page = crate::retrieval::text::Page::new(&capture);
+        let block = &capture.blocks[2];
+        let evidence = crate::retrieval::chunks::evidence(&page, block, block.start, block.end);
+        let text = evidence.quote.clone();
+        let fact = Fact::read(&text, evidence, FactReader::JevChoice);
+        let id = fact_id(&fact);
+        let mut notes = Notes::new([fact]);
+        notes.remember_capture(&capture, 0);
+
+        let written = initial_items(&notes, false)[0].written();
+        let shown: Value = serde_json::from_str(written.split_once(": ").unwrap().1).unwrap();
+        assert_eq!((&shown["list_position"], &shown["list_size"]), (&json!(3), &json!(3)));
+
+        let jev = Support::new(true);
+        let claims = vec![Claim::new("The third example link is \"Add/Remove Elements\"", vec![id])];
+        let task = "Report the exact text of the first three links in the list, in order.";
+        review_claims(&jev, &READS, task, None, claims, &notes, None, false, &[]).await.unwrap();
+        let asked = jev.asked.lock().unwrap();
+        let Question::Noul(check) = &asked[0]["claim0"] else { panic!("the claim is checked") };
+        assert!(check.instructions.contains("\"list_position\":3,\"list_size\":3"), "{}", check.instructions);
+        assert!(check.instructions.contains("a statement of that item's place"), "{}", check.instructions);
+    }
+
+    /// Parts copied from two notes and set side by side assert what neither note says, and a whole quote can still name
+    /// the wrong item for the task: a claim made only of copied parts is judged by Jev like any other.
+    #[tokio::test]
+    async fn a_claim_of_only_copied_parts_is_still_judged() {
+        let notes = Notes::new([fact(0, "Alice joined".into()), fact(1, "Bob paid $20".into())]);
+        let items = initial_items(&notes, false);
+        let spliced = bind_claim(
+            &items,
+            json!([{"note": "e0", "quoted": true, "part": "Alice"}, {"note": "e1", "quoted": true, "part": "$20"}]),
+            None,
+        );
+        let jev = Support::new(true);
+        review_composition(
+            &jev,
+            &READS,
+            "Report what Alice paid",
+            None,
+            vec![spliced],
+            &notes,
+            None,
+            false,
+            Screenshot::Absent,
+            false,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+        let asked = jev.asked.lock().unwrap();
+        assert!(asked.iter().any(|pass| pass.contains_key("claim0")), "{:?}", asked);
+    }
+
+    /// A quote with no place gets no instruction about places: the rule would invite a claim the quote cannot hold.
+    #[tokio::test]
+    async fn a_quote_without_a_place_gets_no_place_rule() {
+        let fact = fact(0, "Add/Remove Elements".into());
+        let id = fact_id(&fact);
+        let notes = Notes::new([fact]);
+        let jev = Support::new(true);
+        let claims = vec![Claim::new("The third example link is \"Add/Remove Elements\"", vec![id])];
+        review_claims(&jev, &READS, "Name the third link.", None, claims, &notes, None, false, &[]).await.unwrap();
+        let asked = jev.asked.lock().unwrap();
+        let Question::Noul(check) = &asked[0]["claim0"] else { panic!("the claim is checked") };
+        assert!(!check.instructions.contains("list_position"), "{}", check.instructions);
+    }
+
+    /// The composer states a place only from a note that gives one: told to list items in order, it wrote places no
+    /// note held (#1108).
+    #[test]
+    fn the_composer_states_a_list_place_only_from_the_notes_that_give_it() {
+        assert!(
+            COMPOSER
+                .contains("A note with list_position and list_size says where its item stands among its list's items")
+        );
+        assert!(COMPOSER.contains("only from those fields"));
+        assert!(COMPOSER.contains("a place the notes do not give is left out"));
     }
 
     #[tokio::test]

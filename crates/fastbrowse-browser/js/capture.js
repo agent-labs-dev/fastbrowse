@@ -387,10 +387,10 @@
       text = `${text} (title: ${title})`;
       linkTitles.add(link);
     }
-    const { hosts = hostsOf(nodes), ...rest } = extra;
+    const { hosts = hostsOf(nodes), at = first, ...rest } = extra;
     blocks.push({
       kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath,
-      control_context: controlOf(nodes), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
+      control_context: controlOf(nodes), ...itemPlace(at), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
       ...(inherited ? { href: hrefOf(link), links: [{ text, href: link.href }, ...(extra.links ?? [])] } : {}),
     });
   };
@@ -494,6 +494,8 @@
         text: name ? `${name}: ${value}` : value,
         control_context: { role: e.tagName.toLowerCase(), label: name || '', context: null },
         ...(e.tagName === 'SELECT' ? {} : { hosts: [e] }),
+        // The control sits in its own list item, which the block of its value stands in.
+        at: e,
       }));
   const pushFields = root => {
     for (const { text, ...control } of fields(root)) push('paragraph', text, control);
@@ -575,6 +577,8 @@
   function leaf(el) {
     return ![...el.children].some(c => !SKIP.has(c.tagName) && !hidden(c) && isBlock(c));
   }
+  // A list item read as one block: a leaf holding no other item, whose text would otherwise take the outer item's place.
+  const wholeItem = el => el.tagName === 'LI' && leaf(el) && !holdsPlaced(el);
 
   // A classless div repeated three times is usually page layout; a record is a styled unit or a semantic item.
   function repeated(el) {
@@ -625,8 +629,9 @@
     if (!descendants.some(c => !SKIP.has(c.tagName) && !hidden(c) && isBlock(c))) return null;
     const text = [textOf(el), ...drawnFacts(descendants)].filter(Boolean).join(' ');
     if (!text) return null;
-    // A repeated wrapper around another list is a group, so keep the inner records separately citable.
-    if (descendants.some(c => (c.tagName === 'LI' && leaf(c)) || recordText(c) !== null)) return null;
+    // A repeated wrapper around another list is a group, so keep the inner records and items separately citable: read
+    // whole, a card's list of variants gave none of them its place.
+    if (descendants.some(c => c.matches(PLACED) || recordText(c) !== null)) return null;
     records.set(el, text);
     return text;
   }
@@ -668,7 +673,23 @@
         continue;
       }
       if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
+        // An inline element holding items is read through, so no block joins two items' text: read in one run, an inner
+        // list's first item took its outer item's place. A host holding them in its shadow tree is read there, in place.
+        if (holdsPlaced(node)) {
+          flushRun(false);
+          if (node.shadowRoot) {
+            enteredShadows.add(node);
+            scope(node.shadowRoot, framePath, `${sourcePath}/shadow:${identity(node)}`, path);
+          } else {
+            walk(node);
+          }
+          continue;
+        }
+        // An inline item has no line break around it, yet it is one place of its list: its text is its own block.
+        const inlineItem = node.matches(PLACED);
+        if (inlineItem) flushRun(false);
         run.push(node);
+        if (inlineItem) flushRun(false);
         continue;
       }
       flushRun(false);
@@ -682,6 +703,63 @@
       headingLevels.pop();
       path.pop();
     }
+  }
+
+  // Where an item sits in its list: "the third link" is a place, which neither its text nor the page's text states.
+  // A block inside an item (a card's link, an item's paragraph) is a part of that item, so it carries the place of the
+  // nearest item around it. The page's own `aria-posinset` and `aria-setsize` say it where it declares them, as a
+  // virtualised list must, and a size of -1 says the page does not know its count; otherwise it is the item's place
+  // among the rendered items of its list.
+  const LIST = 'ul,ol,menu,[role="list"]';
+  const ITEM = 'li,[role="listitem"]';
+  // What has a place of its own, which no block may share with another.
+  const PLACED = `${ITEM},[aria-posinset]`;
+  // The DOM's tree walks follow the light DOM: `closest` and `parentElement` end at a shadow root, `querySelectorAll`
+  // does not enter one, and neither follows a slot. Where an item sits is where it renders, so it is read on the
+  // flattened tree: a host's children are its shadow root's, a slot's are the nodes assigned to it (or its fallback
+  // content), and a slotted node's parent is its slot. A card's shadow paragraph is then in the item around the card,
+  // and slotted items belong to the list their slots render them in, in the slots' order.
+  const flatParent = n => n.assignedSlot ?? n.parentElement ?? n.parentNode?.host ?? null;
+  const flatChildren = n => {
+    if (n.shadowRoot) return [...n.shadowRoot.childNodes];
+    const assigned = n.localName === 'slot' ? n.assignedNodes({ flatten: true }) : [];
+    return [...(assigned.length ? assigned : n.childNodes)];
+  };
+  const flatClosest = (n, selector) => {
+    for (let at = n; at; at = flatParent(at)) if (at.nodeType === 1 && at.matches(selector)) return at;
+    return null;
+  };
+  const flatAll = (root, selector) =>
+    flatChildren(root).flatMap(n => (n.nodeType === 1 ? [...(n.matches(selector) ? [n] : []), ...flatAll(n, selector)] : []));
+  const holdsPlaced = e => flatAll(e, PLACED).length > 0;
+  function itemPlace(node) {
+    const el = node && flatClosest(node, PLACED);
+    if (!el) return {};
+    const declared = Number.parseInt(el.getAttribute('aria-posinset'), 10);
+    // The page says it does not know its list's size, so no count is stated for the item.
+    if (el.getAttribute('aria-setsize')?.trim() === '-1') return {};
+    let position;
+    let count;
+    if (declared > 0) {
+      position = declared;
+      count = Number.parseInt(el.getAttribute('aria-setsize'), 10);
+    } else {
+      // The items its nearest list owns, through any layout wrappers between them, but not those of a list nested in it.
+      const list = flatClosest(flatParent(el), LIST);
+      const siblings = list ? flatAll(list, ITEM).filter(c => {
+        if (flatClosest(flatParent(c), LIST) !== list || hidden(c)) return false;
+        if (visible(c)) return true;
+        // The capture also reads display:contents items, which have children on screen but no box of their own.
+        const style = getComputedStyle(c);
+        if (!(style.display === 'contents' && style.visibility === 'visible')) return false;
+        // A box-less item still renders only when no ancestor between it and its list is removed from the page.
+        for (let a = flatParent(c); a && a !== list; a = flatParent(a)) if (hidden(a)) return false;
+        return true;
+      }) : [];
+      position = siblings.indexOf(el) + 1;
+      count = siblings.length;
+    }
+    return position > 0 && count > 1 && position <= count ? { item_place: { position, count } } : {};
   }
 
   function block(el) {
@@ -705,15 +783,18 @@
       }
       return;
     }
-    if (el.tagName === 'TABLE') {
+    // A table or code block holding items is read through: read whole, each item in it would share the place of the
+    // item around the block, and a nested list's items would lose their own.
+    const atomic = (el.tagName === 'TABLE' || el.tagName === 'PRE') && !holdsPlaced(el);
+    if (el.tagName === 'TABLE' && atomic) {
       for (const { text, links, hosts } of renderTable(el)) push('table', text, { links, hosts }, [el]);
       // A form laid out in a table: its cells render as text, which holds none of the controls' values.
       pushFields(el);
       return;
     }
-    if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
+    if (el.tagName === 'PRE' && atomic) return push('code', textOf(el), {}, [el]);
     const record = recordText(el);
-    if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
+    if (wholeItem(el) || record !== null) {
       // A card's heading still ends an earlier sibling's heading, even when the card is read without walking it.
       const heading = [...el.querySelectorAll('h1,h2,h3,h4,h5,h6')].find(visible);
       if (heading) endHeading(HEADINGS[heading.tagName]);
@@ -779,8 +860,8 @@
       if (CONTROLS.has(e.tagName) && !e.labels?.length && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;
       const name = nameOf(e) || clean(e.innerText ?? '');
       if (!name || e.dataset?.fastbrowseSecret === '1') continue;
-      if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) push('observation', `${name}: [empty]`);
-      if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
+      if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) push('observation', `${name}: [empty]`, { at: e });
+      if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`, { at: e });
     }
     // Which option is chosen is element state no text node carries, and a page often shows what follows from it in
     // place: a checkout re-rendered one order total per shipping method, and the read could not say which method the
@@ -791,7 +872,7 @@
       if (!(native ? e.checked : e.getAttribute('aria-checked') === 'true')) continue;
       if (!visible(e) && ![...(e.labels || [])].some(visible)) continue;
       const name = nameOf(e);
-      if (name) push('observation', `${name}: checked`);
+      if (name) push('observation', `${name}: checked`, { at: e });
     }
     // The text of the nearest enclosing element that has any, naming the row a textless link sits in, since its
     // observation is not read where the link stands. An empty image paragraph must not borrow another paragraph's text
@@ -809,10 +890,10 @@
     // and the row was left out of the answer (#929). The item is what this capture reads as one: a list item, a
     // record, or a figure, whose caption HTML defines as its content's. Any nearer ancestor with text would do for a
     // gallery, but an image placed in an article or beside a menu then quoted the whole article or the menu, once
-    // per image, for an item it is not part of. A list item counts only when block() reads it as one, a leaf: one
-    // holding blocks is read as those blocks, and quoting it tied each of its images to every caption inside. An image
-    // in no item quotes nothing.
-    const isItem = e => (e.tagName === 'LI' && leaf(e)) || e.tagName === 'FIGURE' || recordText(e) !== null;
+    // per image, for an item it is not part of. A list item counts only when block() reads it as one, a leaf with no
+    // item in it: one holding blocks is read as those blocks, and quoting it tied each of its images to every caption
+    // inside. An image in no item quotes nothing.
+    const isItem = e => wholeItem(e) || e.tagName === 'FIGURE' || recordText(e) !== null;
     const item = element => {
       let e = element.parentElement;
       while (e && e !== root && !isItem(e)) e = e.parentElement;
@@ -824,7 +905,7 @@
       const metadata = { alt: image.getAttribute('alt') ?? null,
         src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false,
         near: item(image) };
-      push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}`);
+      push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}`, { at: image });
     }
     // A player's clock and whether it plays are element state, drawn by native controls the text never holds. Each
     // read records them, so two reads of a playing player are two citable times. Hidden players count: they can play.
@@ -847,7 +928,7 @@
         duration_seconds: seconds(player.duration),
       };
       const kind = player.tagName === 'AUDIO' ? 'Audio' : 'Video';
-      push('observation', `${kind} element state: ${JSON.stringify(state)}`);
+      push('observation', `${kind} element state: ${JSON.stringify(state)}`, { at: player });
     }
     // A link drawn only as an icon has no text, so its destination, the one thing it says, was nowhere a reader
     // could quote: asked for a release's download URL beside an icon-only download link, a run read every other
@@ -869,7 +950,7 @@
       if (target.protocol === 'javascript:' || fragment) continue;
       const metadata = { label: nameOf(link) || drawn(link) || null, href: imageSource(link.href), near: near(link) };
       // choices.rs (LINK_METADATA) keeps `near` out of a read's answer candidates by the line's opening words.
-      push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
+      push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`, { at: link });
     }
     if (root === document.body) {
       const doc = document.documentElement;

@@ -83,6 +83,7 @@ impl Page for SearchPage {
                                 href: href.map(str::to_owned),
                                 links: Vec::new(),
                                 whole_record: true,
+                                item_place: None,
                                 fields: Vec::new(),
                             }
                         })

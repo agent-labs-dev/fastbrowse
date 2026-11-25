@@ -246,6 +246,7 @@ fn block(redactor: &Redactor, block: &Block) -> Block {
         href,
         links,
         whole_record,
+        item_place,
         fields,
     } = block;
     Block {
@@ -280,6 +281,7 @@ fn block(redactor: &Redactor, block: &Block) -> Block {
             })
             .collect(),
         whole_record: *whole_record,
+        item_place: *item_place,
         fields: fields
             .iter()
             .map(|SourceField { path, start, end }| SourceField {

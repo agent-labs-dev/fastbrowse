@@ -533,6 +533,216 @@ async fn test_json_in_an_html_pre_stays_one_code_block() {
     h.close().await;
 }
 
+/// "The third link" is a place the link's text does not state; the page's own `aria-posinset` wins where it declares one,
+/// as a virtualised list must, and a list of one has no place to state (#1108).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_list_item_block_carries_its_place_in_the_list() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<h2>Available Examples</h2><ul>\
+         <li><a href='/abtest'>A/B Testing</a></li>\
+         <li hidden><a href='/hidden'>Hidden</a></li>\
+         <li style='visibility:hidden'><a href='/invisible'>Invisible</a></li>\
+         <li><a href='/accessibility'>Accessibility Issues</a></li>\
+         <li><a href='/add'>Add/Remove Elements</a></li></ul>\
+         <ul><li>Alone</li></ul>\
+         <ul><li aria-posinset='41' aria-setsize='90'>Forty-first</li><li>Next</li></ul>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).unwrap();
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("A/B Testing"), Some((1, 3)));
+    assert_eq!(place("Accessibility Issues"), Some((2, 3)), "a hidden item takes no place");
+    assert_eq!(place("Add/Remove Elements"), Some((3, 3)));
+    assert_eq!(place("Alone"), None);
+    assert_eq!(place("Forty-first"), Some((41, 90)));
+    h.close().await;
+}
+
+/// A block inside an item is a part of it: a card item that is not a leaf, or an ARIA list item, gives its place to the
+/// blocks read inside it, and a declared size of -1 is an unknown count, not the rendered one.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_blocks_inside_a_list_item_carry_its_place() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<ul><li><h3>First card</h3><p>First body</p></li><li style='display:contents'><h3>Second card</h3><p>Second body</p></li></ul>\
+         <div role='list'><div role='listitem'><p>One</p></div><div role='listitem'><p>Two</p></div></div>\
+         <ul><li aria-posinset='5' aria-setsize='-1'>Unsized</li><li aria-posinset='6' aria-setsize='-1'>Also</li></ul>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).unwrap();
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("Second body"), Some((2, 2)));
+    assert_eq!(place("Two"), Some((2, 2)));
+    assert_eq!(place("Unsized"), None);
+    h.close().await;
+}
+
+/// An item belongs to its nearest list through layout wrappers, and the block of a field's value stands in the item
+/// its control is in.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wrapped_item_and_a_field_value_carry_their_place() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<div role='list'><div><div role='listitem'><p>First</p></div></div>\
+         <div><div role='listitem'><p>Second</p></div></div></div>\
+         <ul><li><label>Name <input value='alpha'></label></li>\
+         <li><label>Other <input value='beta'></label></li></ul>\
+         <div role='list'><span role='listitem'>Inline first</span> <span role='listitem'>Inline second</span></div>\
+         <div role='list'><span><a href='/w1' role='listitem'>Wrapped first</a> <a href='/w2' role='listitem'>Wrapped second</a></span></div>\
+         <ul><div style='display:none'><li style='display:contents'>Hidden</li></div><li>Visible one</li><li>Visible two</li></ul>\
+         <ul><li style='display:inline'><a href='/n1'>Native first</a></li><li style='display:inline'><a href='/n2'>Native second</a></li></ul>\
+         <div role='list'><div role='listitem' aria-setsize='-1'>Unsized one</div><div role='listitem' aria-setsize='-1'>Unsized two</div></div>\
+         <ul><li>Row one</li><li><img src='data:image/gif;base64,R0lGODlhAQABAAAAACw=' width='20' height='20' alt='Second pic'></li></ul>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).unwrap();
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("First"), Some((1, 2)));
+    assert_eq!(place("Second"), Some((2, 2)));
+    assert_eq!(place("Other: beta"), Some((2, 2)));
+    assert_eq!(place("Inline first"), Some((1, 2)));
+    assert_eq!(place("Inline second"), Some((2, 2)));
+    assert_eq!(place("Wrapped first"), Some((1, 2)));
+    assert_eq!(place("Wrapped second"), Some((2, 2)));
+    assert_eq!(place("Visible one"), Some((1, 2)));
+    assert_eq!(place("Visible two"), Some((2, 2)));
+    assert_eq!(place("Unsized one"), None);
+    assert_eq!(place("Unsized two"), None);
+    assert_eq!(place("Native first"), Some((1, 2)));
+    assert_eq!(place("Native second"), Some((2, 2)));
+    let full = h.page.capture().await.expect("capture");
+    let image = full.blocks.iter().find(|b| text_of(&full, b).starts_with("Image element DOM metadata")).unwrap();
+    assert_eq!(image.item_place.map(|place| (place.position, place.count)), Some((2, 2)));
+    h.close().await;
+}
+
+/// A block holds one item's text: an inner list in an item, inline tabs that declare their own places, and a list inside
+/// a repeated card each give every quote the place of its own item, never another item's or none.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_block_never_spans_two_items() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<ul><li>First outer</li><li>Second outer <span role='list'>\
+         <span role='listitem'>Inner first</span> <span role='listitem'>Inner second</span></span></li></ul>\
+         <div role='tablist'><span role='tab' aria-posinset='1' aria-setsize='3'>First tab</span> \
+         <span role='tab' aria-posinset='2' aria-setsize='3'>Second tab</span></div>\
+         <h1>Products</h1><div class='card'><h2>Product A</h2><div role='list'>\
+         <span role='listitem'>Red</span> <span role='listitem'>Blue</span></div></div>\
+         <div class='card'><h2>Product B</h2><div role='list'>\
+         <span role='listitem'>Green</span> <span role='listitem'>Yellow</span></div></div>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b).contains(text)).unwrap();
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("Second outer"), Some((2, 2)));
+    assert_eq!(place("Inner first"), Some((1, 2)));
+    assert_eq!(place("Inner second"), Some((2, 2)));
+    assert_eq!(place("First tab"), Some((1, 3)));
+    assert_eq!(place("Second tab"), Some((2, 3)));
+    for (text, position) in [("Red", 1), ("Blue", 2), ("Green", 1), ("Yellow", 2)] {
+        assert_eq!(place(text), Some((position, 2)), "{text}");
+    }
+    h.close().await;
+}
+
+/// A shadow tree is part of the item around its host, and its items are items of the list around it: text a card
+/// renders in its shadow tree, in an element or directly under the root, keeps the item's place; tabs an inline host
+/// renders keep their own places; and items each host renders count among their list's items.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_shadow_content_keeps_item_places() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<ul><li><div id='first'></div></li><li><div id='second'></div></li></ul>\
+         <ul><li><div id='third'></div></li><li><div id='fourth'></div></li></ul>\
+         <ul><li>First outer</li><li><p>Choices: <span id='tabs'></span></p></li></ul>\
+         <div role='list'><div class='host'></div><div class='host'></div></div>",
+    )
+    .await;
+    eval_active(
+        &h.session,
+        "const attach = (selector, html) => (document.querySelector(selector).attachShadow({mode:'open'}).innerHTML = html); \
+         attach('#first', '<p>First card</p>'); attach('#second', '<p>Second card</p>'); \
+         attach('#third', 'Third card<p>Third details</p>'); attach('#fourth', 'Fourth card<p>Fourth details</p>'); \
+         attach('#tabs', '<span role=tab aria-posinset=1 aria-setsize=3>First tab</span> \
+         <span role=tab aria-posinset=2 aria-setsize=3>Second tab</span>'); \
+         document.querySelectorAll('.host').forEach((host, i) => \
+           host.attachShadow({mode:'open'}).innerHTML = `<div role=listitem><p>Hosted ${i + 1}</p></div>`)",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).unwrap_or_else(|| panic!("{text}"));
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("First card"), Some((1, 2)));
+    assert_eq!(place("Second card"), Some((2, 2)));
+    assert_eq!(place("Third card"), Some((1, 2)), "text directly under a shadow root");
+    assert_eq!(place("Fourth card"), Some((2, 2)), "text directly under a shadow root");
+    assert_eq!(place("First tab"), Some((1, 3)));
+    assert_eq!(place("Second tab"), Some((2, 3)));
+    assert_eq!(place("Hosted 1"), Some((1, 2)));
+    assert_eq!(place("Hosted 2"), Some((2, 2)));
+    h.close().await;
+}
+
+/// Slotted items sit where their slots render them: their list, their order and their count are the rendered tree's,
+/// not the light DOM's, and their text is kept. Each layout puts the items in the light DOM in the opposite order.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_slotted_items_keep_their_rendered_places() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    let host = "<span id='host'><a href='/two' role='listitem' slot='two'>Two</a>\
+                <a href='/one' role='listitem' slot='one'>One</a></span>";
+    let slots = "<slot name=one></slot><slot name=two></slot>";
+    let shadow_list = format!("<span role=list>{slots}</span>");
+    for (layout, body, shadow) in [
+        ("shadow list", host.to_string(), shadow_list.clone()),
+        ("host list", host.replace("<span id='host'>", "<span id='host' role='list'>"), slots.to_string()),
+        ("inline host", format!("<ul><li>Outer first</li><li>{host}</li></ul>"), shadow_list.clone()),
+    ] {
+        set_body(&h.session, &body).await;
+        eval_active(
+            &h.session,
+            &format!("document.querySelector('#host').attachShadow({{mode:'open'}}).innerHTML = '{shadow}'"),
+        )
+        .await;
+        let capture = content_capture(&h.page).await;
+        let place = |text: &str| {
+            let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text);
+            block.map(|block| block.item_place.map(|place| (place.position, place.count)))
+        };
+        assert_eq!(place("One"), Some(Some((1, 2))), "{layout}");
+        assert_eq!(place("Two"), Some(Some((2, 2))), "{layout}");
+        if layout == "inline host" {
+            assert_eq!(place("Outer first"), Some(Some((1, 2))), "{layout}");
+        }
+    }
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_quote_cards_are_whole_records_with_local_titles() {
     let Some(h) = harness().await else { return };

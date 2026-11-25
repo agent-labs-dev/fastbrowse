@@ -394,6 +394,17 @@ str_enum! {
     }
 }
 
+/// Where an item sits in the list the page draws it in: the page's own `aria-posinset` and `aria-setsize` where it
+/// declares them, otherwise its place among the rendered items of its list. Counted from 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ItemPlace {
+    #[serde(deserialize_with = "lax::int_ge0")]
+    pub position: i64,
+    #[serde(deserialize_with = "lax::int_ge0")]
+    pub count: i64,
+}
+
 /// One structured value's exact place in the rendered capture, in Unicode code points.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -449,6 +460,9 @@ pub struct Block {
     /// show. A record can be a `list_item` as well as a `record`, so its kind does not say this.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub whole_record: bool,
+    /// The place of the list item this block is, or sits inside: a label does not say it is the third of the list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_place: Option<ItemPlace>,
     /// Structured values retain their boundaries, so copying one never requires retyping its whitespace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<SourceField>,
@@ -495,6 +509,7 @@ impl Capture {
             href: None,
             links: Vec::new(),
             whole_record: false,
+            item_place: None,
             fields: Vec::new(),
         });
         self.sha256 = crate::py::sha256_hex(self.text.as_bytes());

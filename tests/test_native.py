@@ -942,6 +942,26 @@ def test_capture_field_spans_cross_the_python_model_boundary() -> None:
     assert Capture.model_validate(legacy).blocks[0].fields == ()
 
 
+def test_capture_item_place_crosses_the_python_model_boundary() -> None:
+    from fastbrowse.page import Capture
+
+    block = {"source_id": "s0", "kind": "list_item", "frame_id": None, "start": 0, "end": 6}
+    written = {
+        "url": "https://example.test/list",
+        "title": "",
+        "captured_at": 0,
+        "sha256": "capture-hash",
+        "text": "Second",
+        "blocks": [{**block, "item_place": {"position": 2, "count": 3}}, {**block, "source_id": "s1"}],
+    }
+    capture = Capture.model_validate(written)
+    place = capture.blocks[0].item_place
+    assert place is not None and (place.position, place.count) == (2, 3)
+    assert capture.blocks[1].item_place is None
+    assert Capture.model_validate_json(capture.model_dump_json()).blocks == capture.blocks
+    assert "item_place" not in capture.model_dump(mode="json")["blocks"][1]
+
+
 def test_capture_document_title_kind_crosses_the_python_model_boundary() -> None:
     from fastbrowse.page import BlockKind, Capture
 
