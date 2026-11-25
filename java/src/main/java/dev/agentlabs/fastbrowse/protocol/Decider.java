@@ -5,7 +5,7 @@ package dev.agentlabs.fastbrowse.protocol;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * Who chose a step: the model driving the run (llm), Jev, a rule in code, or a saved recipe action.
+ * Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
  */
 public enum Decider {
     @JsonProperty("llm")

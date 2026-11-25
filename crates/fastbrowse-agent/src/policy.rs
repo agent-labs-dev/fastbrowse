@@ -378,13 +378,13 @@ pub struct Decision {
     pub target: Option<Control>,
     pub tab_id: Option<String>,
     pub operation_confidence: f64,
-    /// Drop target of a drag: the control the element Jev chose to drag is released onto.
+    /// Drop target of a drag: the control the element the driver chose to drag is released onto.
     #[serde(default)]
     pub destination: Option<Control>,
     /// A recipe step carried out again: no model chose it in this run, so no model's confidence vouches for it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replayed: bool,
-    /// A step the run's own code chose rather than Jev, such as opening an unread next page of a whole-list task.
+    /// A step the run's own code chose rather than the driver, such as opening an unread next page of a whole-list task.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub by_code: bool,
     /// The value the chat driver gave for a fill, select, key press or wait, which the action uses instead of asking for
@@ -403,7 +403,7 @@ pub enum Given {
 }
 
 impl Decision {
-    /// Who chose this step: a replayed recipe, the run's own code, or Jev.
+    /// Who chose this step: a replayed recipe, the run's own code, or the driver.
     pub fn decider(&self) -> fastbrowse_core::models::Decider {
         use fastbrowse_core::models::Decider;
         if self.replayed {

@@ -172,9 +172,9 @@ Benchmarking makes three comparisons:
   with our figures.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.10.0 (fastbrowse-evals at
-commit `2e94d24`, run 2026-11-09, judged by anthropic/claude-opus-5.5 through OpenRouter). 0.10.0, tagged
-2026-11-10, is the current release, so the published campaign measures the build that ships; no campaign
-measured on a 0.10.1 build has been published yet, so nothing above describes 0.10.1.
+commit `2e94d24`, run 2026-11-09, judged by anthropic/claude-opus-5.5 through OpenRouter). It measures 0.10.0,
+whose agent had Jev pick each step; the LLM-driven agent in this release has not been through a published campaign,
+so none of the figures above describe it.
 [Benchmark results](docs/benchmarks.md) gives the sources, cost basis, each arm's excluded runs and the
 limitations, and [eval results and workflow](docs/evals.md) covers the diagnostic suites.
 

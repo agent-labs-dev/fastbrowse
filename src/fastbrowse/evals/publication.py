@@ -739,8 +739,8 @@ def moves(
 
     Wall time and cloud load move together, so a median wall-time comparison is noise across releases. LLM calls and
     model throughput are properties of the build, so those are what a release is compared on, and wall time stays a
-    diagnostic. Jev calls are not compared: Jev decides every step, so asking it more is how the agent works, not a
-    regression.
+    diagnostic. Jev calls are not compared: Jev answers the gates' questions, so asking it more is how the agent works,
+    not a regression.
     """
     findings = []
     base_calls = _median_metric(measured_base, "llm_calls")

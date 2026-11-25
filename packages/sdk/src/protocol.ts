@@ -54,7 +54,7 @@ export type Operation =
   | 'navigate'
   | 'search';
 /**
- * Who chose a step: the model driving the run (llm), Jev, a rule in code, or a saved recipe action.
+ * Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
  */
 export type Decider = 'llm' | 'jev' | 'code' | 'recipe';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';

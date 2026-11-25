@@ -26,8 +26,7 @@ evals rather than taken from Typesafe.
 
 Every limit and price above is Jev's, and fastbrowse reads them from the model's `DecisionProfile`
 (`crates/fastbrowse-core/src/decision.rs`) rather than from constants. A model's limits bound every request, including
-a caller's own `Config`: the choices the policy offers, the group size and shortlist that follow from them, the
-token budget, and the questions per request. Its thresholds apply only when the caller passes no `Config`.
+a caller's own `Config`: the choices the policy offers, the token budget, and the questions per request. Its thresholds apply only when the caller passes no `Config`.
 
 A model fastbrowse has no record of, such as one pinned with `FASTBROWSE_DECISION_MODEL`, gets the tightest limits any
 documented System One host sets: 26 options a Choice, 64 questions and 64 KiB a request ([System
@@ -109,7 +108,7 @@ runs on that click as on any other.
 
 ## What Jev is asked
 
-The LLM driver picks every action, so Jev answers only the questions code gates on: whether a click, key chord, file or dialog acceptance is irreversible and whether the task asked for it; whether the task's steps were carried out; which quoted spans a read keeps; and whether a claim, tally or coverage holds against its quotes. Questions that share one state go in one request, and an answer cannot see another.
+The LLM driver picks every action, so Jev answers only the questions code gates on: whether a click, key chord, file or dialog acceptance is irreversible and whether the task asked for it; whether the task's steps were carried out; which quoted spans a read keeps; and whether a claim, tally or coverage holds against its quotes. The one choice it makes outside a gate is the entry: a run with no start page and an Exa key has it pick among the LLM's proposed addresses and search queries. Questions that share one state go in one request, and an answer cannot see another.
 
 A question that decides whether an action is harmless sees only the task and the page's origin: the page's own text is what would argue a harmful action is harmless. The questions for a control that saves a form also state what the run changed in that form, from its own steps: each field it filled, the value the field held before and the value typed, and the control the run clicked to open the form. Only the run's steps since it last opened that form count, so a form a page reuses for another record starts clean.
 

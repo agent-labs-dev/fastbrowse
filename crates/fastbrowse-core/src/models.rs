@@ -25,9 +25,10 @@ pub const BACKGROUND: &str =
 
 str_enum! {
     pub enum Status {
-        /// Jev judged the task done and the caller's `until` check (if any) passed.
+        /// The finish checks accepted the result, and the caller's `until` check (if any) passed. The result is the
+        /// driver's `done`, or, for a read-only run that stopped stuck, the answer composed from what it read.
         Complete = "complete",
-        /// Jev finished, but code could not confirm the result: for example, an answer failed its check against
+        /// The run produced a result code could not confirm: for example, an answer failed its check against
         /// the page, part of a list the task covers went unread, or the site refused a requested step.
         Unverified = "unverified",
         /// Stopped before an irreversible action the caller has not authorized, having committed nothing.
@@ -128,8 +129,9 @@ impl Operation {
 }
 
 str_enum! {
-    /// Who chose a step: the model driving the run, Jev, a rule in code, or a saved recipe action.
-    doc: "Who chose a step: the model driving the run (llm), Jev, a rule in code, or a saved recipe action.";
+    /// Who chose a step: the model driving the run, a rule in code, or a saved recipe action. A run never writes `jev`,
+    /// which stays in the protocol for traces and SDKs that name it.
+    doc: "Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.";
     pub enum Decider {
         Llm = "llm",
         Jev = "jev",

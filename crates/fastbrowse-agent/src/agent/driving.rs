@@ -105,7 +105,7 @@ impl Agent {
     ///
     /// A page can draw after it settles, and nothing says it will: picking a day in Google Flights' date picker blanks
     /// the prices, the page waits about 400ms with no request, spinner or mutation, and then fetches and draws them.
-    /// Watching while Jev decides and gates finds the work doomed, and the next decision is made on the settled page.
+    /// Watching while the driver's action is gated finds the work doomed, and the next decision is made on the settled page.
     /// Only one redraw per action: a control that never stops changing is still acted on.
     ///
     /// Doomed work still runs before `Redrawn` is returned, to finish the requests it already sent and record what they

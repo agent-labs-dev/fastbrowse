@@ -23,10 +23,10 @@ class Frozen(BaseModel):
 
 class Status(StrEnum):
     COMPLETE = "complete"
-    """Jev judged the task done and the caller's `until` check (if any) passed."""
+    """The driver called done, the finish checks accepted it and the caller's `until` check (if any) passed."""
     UNVERIFIED = "unverified"
-    """Jev finished, but code could not confirm the result: for example, an answer failed its check against the page,
-    part of a list the task covers went unread, or the site refused a requested step."""
+    """The driver finished, but code could not confirm the result: for example, an answer failed its check against the
+    page, part of a list the task covers went unread, or the site refused a requested step."""
     NEEDS_CONFIRMATION = "needs_confirmation"
     """Stopped before an irreversible action the caller has not authorized, having committed nothing."""
     NEEDS_LOGIN = "needs_login"
@@ -105,7 +105,7 @@ class Operation(StrEnum):
 
 
 class Decider(StrEnum):
-    """Who chose a step: the model driving the run (llm), Jev, a rule in code, or a saved recipe action."""
+    """Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev."""
 
     LLM = "llm"
     JEV = "jev"

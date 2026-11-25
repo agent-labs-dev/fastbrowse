@@ -52,10 +52,9 @@ can only follow links, so it refuses every browser flag (`--browser`, `--cloud`,
 `--file`, `--authorize`). `--cloud` refuses `--headed`, `--profile`, `--cdp-url`, `--cdp-port`, `--extension`,
 `--extension-browser`, `--attach` and `--target-match`. `fastbrowse --help` ends with the same list.
 
-Trace events also record code state: `decision_context` and `list_continuation` describe read scope,
-known page ordinals and unread pages; `authorization_gate` records the authorization flag, thresholds and
-branch outcome; `run_finished` records the final status after spend and screenshot checks. Page ordinals
-start where the run entered a list. These events describe internal state, not which facts a model saw;
+Trace events also record code state: `authorization_gate` records the authorization flag, thresholds and
+branch outcome; `run_finished` records the final status after spend and screenshot checks. These events describe
+internal state, not which facts a model saw;
 use the recorded model request for that. They add no page text, URLs or secret values.
 
 ```sh
