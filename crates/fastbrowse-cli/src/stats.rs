@@ -23,17 +23,17 @@ pub fn destination(environ: &HashMap<String, String>) -> Option<PathBuf> {
 
 /// Append one line for `result`. A log that cannot be written is reported to stderr and never fails the run: the run's
 /// own answer is what the caller asked for.
-pub fn record(environ: &HashMap<String, String>, result: &RunResult, elapsed: Duration) {
+pub fn record(environ: &HashMap<String, String>, result: &RunResult, started_at_ms: u64, elapsed: Duration) {
     let Some(path) = destination(environ) else { return };
-    if let Err(error) = append(&path, &line(result, elapsed)) {
+    if let Err(error) = append(&path, &line(result, started_at_ms, elapsed)) {
         eprintln!("fastbrowse: could not write the run stats to {}: {error}", path.display());
     }
 }
 
 /// The object one run adds to the log. No task text, address or secret ever appears in it.
-fn line(result: &RunResult, elapsed: Duration) -> Value {
+fn line(result: &RunResult, started_at_ms: u64, elapsed: Duration) -> Value {
     json!({
-        "at_ms": now_ms(),
+        "at_ms": started_at_ms,
         "status": result.status.as_str(),
         "steps": result.steps.len(),
         "duration_ms": elapsed.as_millis() as u64,
@@ -50,7 +50,7 @@ fn append(path: &Path, record: &Value) -> std::io::Result<()> {
     writeln!(file, "{record}")
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_millis() as u64)
 }
 
@@ -225,6 +225,43 @@ mod tests {
         assert_eq!(percentile(&[], 0.5), 0);
     }
 
+    #[tokio::test]
+    async fn a_runner_error_is_included_in_stats() {
+        use std::sync::{Arc, Mutex};
+
+        use fastbrowse_clients::environment::{Secret, Settings};
+        use fastbrowse_core::{BoxFuture, models::RunResult};
+
+        use crate::cli::{self, Context, Streams};
+        use crate::runner::{Host, RunError, RunTask};
+
+        let file = std::env::temp_dir().join(format!("fastbrowse-failed-run-stats-{}.jsonl", std::process::id()));
+        let run = |_: RunTask, _: Host| -> BoxFuture<'static, Result<RunResult, RunError>> {
+            Box::pin(async { Err(RunError::Recording("test recording failed".into())) })
+        };
+        let context = Context {
+            runner: Arc::new(run),
+            settings: Arc::new(|| {
+                Ok(Settings {
+                    openrouter_api_key: Some(Secret::new("or")),
+                    ai_gateway_api_key: Some(Secret::new("gw")),
+                    ..Settings::default()
+                })
+            }),
+            environ: [(STATS_ENV.to_owned(), file.display().to_string())].into(),
+            streams: Streams { out: Arc::new(Mutex::new(std::io::sink())), err: Arc::new(Mutex::new(std::io::sink())) },
+            build: Default::default(),
+            kept_at: Default::default(),
+        };
+        assert_eq!(cli::main(&["read".into(), "--fetch".into()], &context).await, 1);
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        let record: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(record["status"], "error");
+        assert_eq!(record["steps"], 0);
+        assert!(!text.contains("test recording failed"));
+    }
+
     #[test]
     fn a_written_line_carries_no_task_text_and_is_read_back() {
         let dir = std::env::temp_dir().join(format!("fb-stats-{}", std::process::id()));
@@ -249,10 +286,11 @@ mod tests {
             wall: None,
             browser: None,
         };
-        record(&environ, &result, Duration::from_millis(1234));
+        record(&environ, &result, 765, Duration::from_millis(1234));
         let text = std::fs::read_to_string(&file).unwrap();
         let value: Value = serde_json::from_str(text.trim()).unwrap();
         assert_eq!(value["status"], "complete");
+        assert_eq!(value["at_ms"], 765);
         assert_eq!(value["duration_ms"], 1234);
         assert!(value.get("task").is_none());
         let _ = std::fs::remove_dir_all(&dir);

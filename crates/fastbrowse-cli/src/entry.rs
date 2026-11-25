@@ -172,7 +172,7 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
                 return 1;
             }
         };
-        let (text, code) = crate::doctor::command(&build, &settings, &identity);
+        let (text, code) = runtime().block_on(crate::doctor::command(&build, &settings, &identity));
         if code == 0 {
             print!("{text}");
         } else {

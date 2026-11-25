@@ -4,6 +4,11 @@
 //! It reports names and paths only, never a secret's value: a missing key is named by its variable, never printed.
 
 use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
+
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
 
 use fastbrowse_clients::environment::Settings;
 
@@ -40,7 +45,7 @@ fn report(lines: &[(Level, String)]) -> (String, i32) {
 
 /// `fastbrowse doctor`: build the checks, run them, and report. `program` is the command this install runs as, which
 /// the extension host registration is keyed on.
-pub fn command(build: &Build, settings: &Settings, program: &str) -> (String, i32) {
+pub async fn command(build: &Build, settings: &Settings, program: &str) -> (String, i32) {
     let mut lines: Vec<(Level, String)> = Vec::new();
     lines.push((Level::Ok, build.version_line()));
 
@@ -53,11 +58,7 @@ pub fn command(build: &Build, settings: &Settings, program: &str) -> (String, i3
 
     // Chrome, which a run that starts its own browser needs and which the extension also lives inside.
     match options::find_chrome(settings.chrome.as_deref()) {
-        Some(path) => {
-            let version = chrome_version(&path);
-            let detail = version.map_or_else(|| path.display().to_string(), |v| format!("{} ({v})", path.display()));
-            lines.push((Level::Ok, format!("chrome: {detail}")));
-        }
+        Some(path) => lines.push(check_chrome(&path).await),
         None => lines.push((Level::Fail, "chrome: not found; install Chrome, or name it in FASTBROWSE_CHROME".into())),
     }
 
@@ -85,14 +86,48 @@ pub fn command(build: &Build, settings: &Settings, program: &str) -> (String, i3
     report(&lines)
 }
 
-/// Chrome's own `--version`, bounded so a wrapper that never exits cannot hang the check.
-fn chrome_version(binary: &Path) -> Option<String> {
-    let output = std::process::Command::new(binary).arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
+async fn check_chrome(binary: &Path) -> (Level, String) {
+    let mut command = Command::new(binary);
+    command.arg("--version");
+    match probe_version(&mut command, Duration::from_secs(5)).await {
+        Ok(version) => (Level::Ok, format!("chrome: {} ({version})", binary.display())),
+        Err(error) => (Level::Fail, format!("chrome: {} {error}", binary.display())),
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    Some(text.trim().to_string()).filter(|text| !text.is_empty())
+}
+
+async fn probe_version(command: &mut Command, limit: Duration) -> Result<String, String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("could not run --version: {error}"))?;
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let mut bytes = Vec::new();
+    // A wrapper may keep stdout open after exiting, so the deadline covers reading and waiting together.
+    let result = tokio::time::timeout(limit, async { tokio::try_join!(child.wait(), stdout.read_to_end(&mut bytes)) });
+    let status = match result.await {
+        Ok(Ok((status, _))) => status,
+        failure => {
+            drop(stdout);
+            // Kill and reap the child even if its I/O failed before the deadline.
+            let _ = child.kill().await;
+            return Err(match failure {
+                Ok(Err(error)) => format!("could not read --version: {error}"),
+                _ => format!("--version timed out after {} ms", limit.as_millis()),
+            });
+        }
+    };
+    if !status.success() {
+        return Err(format!("--version exited with {status}"));
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let version = text.trim();
+    if version.is_empty() {
+        return Err("--version returned no output".into());
+    }
+    Ok(version.into())
 }
 
 /// Whether the temporary directory can be written to, which a download, a recording or an attachment needs.
@@ -124,6 +159,31 @@ fn memory() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn chrome_probe_requires_output_and_success() {
+        let limit = Duration::from_secs(5);
+        let mut shell = Command::new("/bin/sh");
+        shell.args(["-c", "printf 'Chrome 123\n'"]);
+        assert_eq!(probe_version(&mut shell, limit).await.unwrap(), "Chrome 123");
+        let mut shell = Command::new("/bin/sh");
+        shell.args(["-c", "printf 'Chrome 123\n'; exit 7"]);
+        assert!(probe_version(&mut shell, limit).await.unwrap_err().contains("exit status: 7"));
+        let mut shell = Command::new("/bin/sh");
+        shell.args(["-c", "exit 0"]);
+        assert_eq!(probe_version(&mut shell, limit).await.unwrap_err(), "--version returned no output");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn chrome_probe_times_out_after_stdout_closes() {
+        let mut shell = Command::new("/bin/sh");
+        // The shell itself stalls, so this test leaves no separate process to clean up.
+        shell.args(["-c", "exec 1>&-; while :; do :; done"]);
+        let error = probe_version(&mut shell, Duration::from_millis(50)).await.unwrap_err();
+        assert_eq!(error, "--version timed out after 50 ms");
+    }
 
     #[test]
     fn a_failed_line_makes_the_exit_code_one() {

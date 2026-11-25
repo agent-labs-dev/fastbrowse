@@ -149,7 +149,8 @@ pub fn start_url(value: &str) -> String {
         Some(bracketed) => bracketed.split(']').next().unwrap_or(""),
         None => host_port.split(':').next().unwrap_or(""),
     };
-    let loopback = host.eq_ignore_ascii_case("localhost") || host == "::1" || host.starts_with("127.");
+    let loopback =
+        host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
     format!("{}://{rest}", if loopback { "http" } else { "https" })
 }
 
@@ -318,6 +319,7 @@ mod tests {
         assert_eq!(start_url("example.com:8080/x"), "https://example.com:8080/x");
         assert_eq!(start_url("localhost:3000"), "http://localhost:3000");
         assert_eq!(start_url("127.0.0.1:8080"), "http://127.0.0.1:8080");
+        assert_eq!(start_url("127.example.com:8080"), "https://127.example.com:8080");
         assert_eq!(start_url("[::1]:8000"), "http://[::1]:8000");
         assert_eq!(start_url("//example.com/x"), "https://example.com/x");
         assert_eq!(start_url("  example.com  "), "https://example.com");
