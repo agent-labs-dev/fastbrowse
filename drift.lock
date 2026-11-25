@@ -63,7 +63,7 @@ sig = "c6bcf04c590a3473"
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-cli/src/options.rs"
-sig = "d1bf2d17e5cb3e06"
+sig = "da6d942ecd98c92e"
 
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
