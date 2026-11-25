@@ -136,7 +136,7 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
             while end > start && page.chars[end as usize - 1].is_whitespace() {
                 end -= 1;
             }
-            let line = squeezed(page.slice(start, end));
+            let line = squeezed(&without_advice(page.slice(start, end)));
             if line.is_empty() {
                 return None;
             }
@@ -297,6 +297,33 @@ fn aligned<'a>(pieces: &[(String, bool)], lines: impl Iterator<Item = &'a str>) 
     }
     found.reverse();
     found
+}
+
+/// `text` without the " (title: ...)" advice the capture inserts beside a tooltip's host, wherever in the line it
+/// sits: the observation reads the host's words joined, so a notice with a tooltip in its middle matches only once the
+/// advice is out. This is the capture's own syntax, parsed by balanced parentheses; the quote is still cut from the
+/// capture, advice included.
+fn without_advice(text: &str) -> String {
+    const OPEN: &str = " (title: ";
+    let mut plain = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(OPEN) {
+        let after = at + OPEN.len();
+        let mut depth = 1;
+        let close = rest[after..].char_indices().find_map(|(i, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(after + i + 1)
+        });
+        let Some(close) = close else { break };
+        plain.push_str(&rest[..at]);
+        rest = &rest[close..];
+    }
+    plain.push_str(rest);
+    plain
 }
 
 fn squeezed(text: &str) -> String {

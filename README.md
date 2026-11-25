@@ -298,7 +298,7 @@ async def main() -> None:
 
 **Citations.** `result.citations` holds a `Citation` per numbered link in `result.answer`: `id`, `text`,
 `url`, `quote` and `deep_link`. Each claim cites the notes it states. A count, total, cheapest or largest
-value is worked out in code from every note read and cites each record it rests on. A `quote` is the page's text, a table row as its cells separated by spaces. A `deep_link` is a [text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that
+value is worked out in code from every note read and cites each record it rests on. The text a site shows in reply to a step the run sent, such as a save confirmation, is a note too, and a claim about it cites it. A `quote` is the page's text, a table row as its cells separated by spaces. A `deep_link` is a [text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that
 scrolls to the quote; it may not resolve on a page that changes or needs a session. Each page a quote was read from
 is kept as a `capture` artifact in `result.artifacts`, holding the masked page text, and the quote's `Evidence`
 names it in `capture_artifact`; `start` and `end` index into that text. Its `links` lists each link inside the
