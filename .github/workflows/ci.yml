@@ -146,7 +146,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check:browser
       - run: uv run --no-sync actionlint
-      # The Jev review's base-only pull_request_target use needs human review of zizmor's warning.
+      # registry-parity's workflow_run trigger needs human review of zizmor's warning.
       - name: Zizmor (advisory)
         continue-on-error: true
         run: uvx zizmor==1.32.0 --offline .github/workflows
