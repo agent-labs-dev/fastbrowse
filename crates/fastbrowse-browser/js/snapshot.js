@@ -2225,7 +2225,8 @@
   const listsRecordsOutside = (section, element) => {
     if (recordCount(section) < 2) return false;
     for (let e = element; e && e !== section; e = e.parentElement) if (e.matches(RECORD)) return false;
-    return true;
+    // A class-styled comment card is a record too: its own controls are named by it, not outside every record.
+    return !section.contains(recordOf(element));
   };
   // The section's name, and whether the control sits outside every record the section lists.
   const nearestHeading = (element, label) => {
