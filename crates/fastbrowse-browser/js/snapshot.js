@@ -1781,7 +1781,13 @@
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    return firstLine(linesOf(scope, element, label, own).join('\n'));
+    // A line kept though other controls share it, as a commenter's name link is under each of their comments, does
+    // not name the card alone: an "Edit" link in one card of several would name that card "Edit" and drop the
+    // product it edits. The card's lines run on to its first one no control shares, so "Edit" and "Delete" links
+    // ahead of a product's name keep it beside them.
+    const lines = linesOf(scope, element, label, own);
+    const named = lines.findIndex(line => !repeated.has(line));
+    return (named < 0 ? lines.slice(0, 2) : lines.slice(0, named + 1)).join(' / ');
   };
   // The lines of `scope` that can name `element`, in reading order.
   const linesOf = (scope, element, label, own = null) => {
@@ -2185,10 +2191,46 @@
   // is attached here on its own, without the twin-avoidance `contextOf` needs to keep a card from naming its neighbour.
   // Each ancestor is asked only for titles outside the one below it, whose own were already turned down; a title
   // inside the control is its own content, never the section it sits in.
+  // A comments section's own "Comment text area" sits before the list of comments and inside none of them, yet got
+  // only the section's heading, the same context every comment's own Reply has, so a task to reply to one comment
+  // filled the page's new-comment box (#1476). The DOM states whether a control is in a record: a record is what
+  // `scopeOf` already stops at (an article or list item), and a section lists records when at least two hold a control.
+  // A record also holds text of its own beside its controls: an editor's toolbar is a list whose items each hold one
+  // button and nothing else, and counted as records it named the editor's Save "outside every item listed".
+  const RECORD = 'article,li,[role="listitem"]';
+  // Built on first use: most captures name every control without asking whether a section lists records.
+  let controlNodes = null;
+  let recordsHoldingControls = null;
+  const holdingControls = record => {
+    if (!recordsHoldingControls) {
+      controlNodes = new Set(controls.map(c => registry.nodes.get(c.id)));
+      recordsHoldingControls = new Set();
+      for (const e of controlNodes) for (let r = e?.closest(RECORD); r; r = r.parentElement?.closest(RECORD)) recordsHoldingControls.add(r);
+    }
+    return recordsHoldingControls.has(record);
+  };
+  const holdsOwnText = memo(record => {
+    const texts = record.ownerDocument.createTreeWalker(record, NodeFilter.SHOW_TEXT);
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      if (!node.data.trim()) continue;
+      let inControl = false;
+      for (let e = node.parentElement; e && !inControl; e = e === record ? null : e.parentElement) inControl = controlNodes.has(e);
+      if (!inControl) return true;
+    }
+    return false;
+  });
+  const recordCount = memo(section =>
+    [...descendants(section, RECORD)].filter(r => holdingControls(r) && holdsOwnText(r)).length);
+  const listsRecordsOutside = (section, element) => {
+    if (recordCount(section) < 2) return false;
+    for (let e = element; e && e !== section; e = e.parentElement) if (e.matches(RECORD)) return false;
+    return true;
+  };
+  // The section's name, and whether the control sits outside every record the section lists.
   const nearestHeading = (element, label) => {
     for (let inner = element, e = element.parentElement; e && e !== e.ownerDocument.body; inner = e, e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
-      if (aria && aria !== label) return aria;
+      if (aria && aria !== label) return { name: aria, outside: listsRecordsOutside(e, element) };
       let first = '',
         before = '';
       for (const title of openTitles(e)) {
@@ -2198,15 +2240,19 @@
         first ||= text;
         if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
       }
-      if (before || first) return before || first;
+      const name = before || first;
+      if (name) return { name, outside: listsRecordsOutside(e, element) };
     }
-    return '';
+    return { name: '' };
   };
+  // A twin already has a context that tells it from its twins, but a reply editor opening beside the page's own box
+  // made both labels twins and the box lost the note that it sits outside the comments, so it keeps that note too.
   for (const c of controls) {
-    if (!c.context) {
-      const context = nearestHeading(registry.nodes.get(c.id), c.label);
-      if (context) c.context = context;
-    }
+    const { name, outside } = nearestHeading(registry.nodes.get(c.id), c.label);
+    if (!name) continue;
+    const note = outside ? `${name}, outside every item listed under ${name}` : name;
+    if (!c.context) c.context = note;
+    else if (outside) c.context = `${note} / ${c.context}`;
   }
 
   // Flattened text loses empty cells: a calendar day then has no weekday, and the chooser picked a Tuesday
