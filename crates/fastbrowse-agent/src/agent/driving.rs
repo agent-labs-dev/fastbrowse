@@ -1239,7 +1239,7 @@ impl Agent {
         reason: &str,
         label: &str,
     ) -> Step {
-        let decided_by = if decision.replayed { Decider::Recipe } else { Decider::Jev };
+        let decided_by = decision.decider();
         let step = (
             decision.operation,
             reason,
