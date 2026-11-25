@@ -34,7 +34,7 @@ use ring::digest::{SHA256, digest};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::time::{Instant, sleep, timeout};
+use tokio::time::{Instant, sleep, timeout, timeout_at};
 
 use crate::PdfUnread;
 use crate::cdp::secs;
@@ -1959,15 +1959,18 @@ impl CdpPage {
             };
             // A look that first touches a frame's document makes Chrome create that frame's page world, and reports it
             // before the look's own answer, so a look still unread after its marks has met a world it can mark now.
-            // Worlds are marked once each, and a round that finds no new world ends the retries.
+            // Chrome can also report a change only after that answer: an iframe that moved to its own process had its
+            // world destroyed after a look that touched it, and a round that saw no new world gave up on a page whose
+            // next look would have read. So a look still unread waits for the next world change, as long as a frame's
+            // read may take, and looks again. Worlds are marked once each.
             let mut marked = std::collections::HashSet::new();
+            let mut changed = self.session.worlds_changed();
+            let deadline = Instant::now() + secs(FRAME_READ_SECONDS);
             loop {
+                changed.borrow_and_update();
                 let worlds: Vec<String> =
                     self.session.main_worlds(session_id).into_iter().filter(|world| !marked.contains(world)).collect();
-                if worlds.is_empty() {
-                    if !marked.is_empty() {
-                        break;
-                    }
+                if worlds.is_empty() && marked.is_empty() {
                     self.session.send("Runtime.evaluate", mark(None), Some(session_id)).await?;
                     marked.insert(String::new());
                 }
@@ -1981,7 +1984,9 @@ impl CdpPage {
                 .await;
                 marked.extend(worlds);
                 out = self.session.send("Runtime.evaluate", params.clone(), Some(session_id)).await?;
-                if !out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD)) {
+                if !out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD))
+                    || !matches!(timeout_at(deadline, changed.changed()).await, Ok(Ok(())))
+                {
                     break;
                 }
             }

@@ -85,6 +85,7 @@ pub async fn upload(
         lifecycle: watch::channel(0).0,
         snapshot,
         popup_signal: watch::channel(0).0,
+        worlds_changed: watch::channel(0).0,
         screencast_lock: tokio::sync::Mutex::new(()),
     }));
     CdpPage::new(sibling, Config::default()).upload(Some(&target), files, Point::At(1.0, 1.0)).await
