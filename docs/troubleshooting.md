@@ -69,10 +69,12 @@ Configuration refusals also exit 1.
 **What it means.** The run stopped before an action Jev judged irreversible, such as submit, pay, delete or
 send, because the run was not authorized to take it, or was authorized but Jev judged the task did not ask
 for it. That action was not taken. A run that has already carried out a commit the task asked for does not stop
-here: it refuses the extra action as a failed step and goes on.
+here: it refuses the extra action as a `refused` step and goes on.
 
-**Common causes.** The task leads to an irreversible action, and the run had no authorization. The error is
-`<operation> '<control>' needs confirmation`, and the refusal appears as a failed step.
+**Common causes.** The task leads to an irreversible action, and the run had no authorization. The error
+names the step and why it waits, such as `click 'Post' needs confirmation: this run is not authorized to take
+actions that cannot be undone`, and the refusal appears as a `refused` step. The answer ends with the pending
+step and what lets the run take it.
 
 **Next step.** Read the step the run stopped on, since the irreversible check can be wrong. If the action is
 what you want, run again with authorization:
