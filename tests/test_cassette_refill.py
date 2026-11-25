@@ -516,8 +516,10 @@ def publish_split(
     unchanged: bool = False,
     delayed_reads: int = 0,
     sleeps: list[float] | None = None,
+    timeout_commit: int | None = None,
 ) -> tuple[int, list, str]:
-    """`publish` of three cassettes, one per commit, with GitHub refusing commit number `refuse_commit`."""
+    """`publish` of three cassettes, one per commit, with GitHub refusing commit number `refuse_commit` and the
+    gateway timing out on request number `timeout_commit` without applying it."""
     tasks = ["mock-basket", "mock-swatch", "mock-sign-in"]
     artifact, sha = tmp_path / "refill-result", "a" * 40
     artifact.mkdir()
@@ -545,6 +547,8 @@ def publish_split(
             commits.append(body["variables"]["input"])
             if len(commits) == refuse_commit:
                 return {"errors": [{"message": "refused"}]}
+            if len(commits) == timeout_commit:
+                raise refill.GitHubGatewayTimeout("gh api graphql failed: gh: HTTP 504")
             head = str(len(commits)) * 40
             if len(commits) == lose_response:
                 if lose_body:
@@ -629,6 +633,25 @@ def test_a_split_refill_stopped_partway_says_what_it_committed_and_leaves_the_re
     assert refill.refill_source(commits[0]["message"]["body"]) is None
     assert "Committed [111111111111]" in comment and "refused" in comment
     assert "Nothing was committed" not in comment
+
+
+def test_a_batch_that_times_out_unapplied_is_split_with_the_trailer_on_the_final_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sleeps: list[float] = []
+    code, commits, comment = publish_split(tmp_path, monkeypatch, unchanged=True, timeout_commit=1, sleeps=sleeps)
+    assert code == 0
+    assert [c["expectedHeadOid"] for c in commits] == ["a" * 40, "a" * 40, "2" * 40, "3" * 40]
+    assert [len(c["fileChanges"]["additions"]) for c in commits] == [2, 1, 1, 1]
+    assert [refill.refill_source(c["message"]["body"]) is not None for c in commits] == [False, False, False, True]
+    assert all(oid[:12] in comment for oid in ("2" * 40, "3" * 40, "4" * 40))
+
+
+def test_a_single_file_that_times_out_unapplied_still_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    code, commits, comment = publish_split(tmp_path, monkeypatch, timeout_commit=1, sleeps=[])
+    assert code == 1
+    assert len(commits) == 1
+    assert "No batch was confirmed" in comment
 
 
 @pytest.mark.parametrize("lose_body", [False, True])
