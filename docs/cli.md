@@ -15,7 +15,7 @@ beside `status` and `cost_complete` false when a call reported no cost.
 
 | Flag | Effect |
 |:--|:--|
-| `--start URL` | the first page; worked out from the task when omitted |
+| `--start URL` | the first page; a missing scheme gets `https`, or `http` for `localhost` and a loopback address, and an explicit scheme is never rewritten; worked out from the task when omitted |
 | `--context TEXT` | background the run may use but never treats as the task |
 | `--extension` | run in your own Chrome, signed in as you are, through the fastbrowse extension; this is the default for a browser task, see [Your own Chrome](#your-own-chrome) |
 | `--local` | an alias for `--extension` |
@@ -325,6 +325,19 @@ It reads what the installer recorded and makes no network call, and it never rep
 | A checkout | `git pull && uv sync --all-extras` |
 
 Another installer, or one that left no record, gets the [PyPI page](https://pypi.org/project/fastbrowse/).
+
+## Diagnostics
+
+`fastbrowse doctor` checks what a run needs and prints one line per check, each prefixed `ok`, `FAIL` or `skip`, then
+exits 1 when any check failed: the model keys (named by variable, never by value), the Chrome binary and its version,
+the extension host registration, and whether the temporary directory is writable. Memory is reported where the kernel
+offers it. It is the first thing to run when a setup problem surfaces as a bare CDP error.
+
+`fastbrowse stats` summarises an opt-in local run log. Set `FASTBROWSE_STATS` to a JSON Lines file and each run appends
+one object to it: a status, a step count, a duration, a cost and when it started, and nothing about the task, the page
+or a secret. `fastbrowse stats` then reports how many runs there are, the p50 and p95 duration, the error rate and the
+mean priced cost; `--file PATH` reads a log other than the one the variable names, and `--json` prints the summary as
+JSON.
 
 ## Troubleshooting
 

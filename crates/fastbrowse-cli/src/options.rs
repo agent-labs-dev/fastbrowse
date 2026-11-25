@@ -129,6 +129,40 @@ impl<'a> SplitUrl<'a> {
     }
 }
 
+/// The address a `--start` names, with a scheme added when it names none: `https` for a site and `http` for a
+/// loopback host, as a browser's address bar fills them in. An address that states its own scheme is left exactly as
+/// given, and an empty value stays empty so a caller that meant "no start" keeps it.
+pub fn start_url(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if states_scheme(trimmed) {
+        return trimmed.to_string();
+    }
+    // A leading `//` is protocol-relative; the host begins after it.
+    let rest = trimmed.strip_prefix("//").unwrap_or(trimmed);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // The userinfo a host may carry, then the host without its port or IPv6 brackets.
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = match host_port.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or(""),
+        None => host_port.split(':').next().unwrap_or(""),
+    };
+    let loopback = host.eq_ignore_ascii_case("localhost") || host == "::1" || host.starts_with("127.");
+    format!("{}://{rest}", if loopback { "http" } else { "https" })
+}
+
+/// Whether an address states its own scheme, so it must not be rewritten. A scheme is `name:` followed by `//`, or by
+/// anything that is not the start of a port: `about:blank` and `mailto:x@y` are addresses, while `example.com:8080`
+/// and `localhost:3000` are a host and a port.
+fn states_scheme(value: &str) -> bool {
+    let Some((head, tail)) = value.split_once(':') else { return false };
+    let named = head.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && head.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
+    named && (tail.starts_with("//") || !tail.chars().next().is_some_and(|c| c.is_ascii_digit()))
+}
+
 /// The variables a `--secret` names that the environment does not hold, so a run fails before a browser opens.
 pub fn unset_variables(pairs: &[(String, String, Option<String>)], environ: &HashMap<String, String>) -> Vec<String> {
     let missing: BTreeSet<&String> =
@@ -275,6 +309,24 @@ pub fn check_model_keys(settings: &Settings) -> Result<(), ConfigurationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_start_url_with_no_scheme_gets_one_and_explicit_schemes_are_kept() {
+        assert_eq!(start_url("example.com"), "https://example.com");
+        assert_eq!(start_url("example.com/a?b=1#c"), "https://example.com/a?b=1#c");
+        assert_eq!(start_url("news.ycombinator.com"), "https://news.ycombinator.com");
+        assert_eq!(start_url("example.com:8080/x"), "https://example.com:8080/x");
+        assert_eq!(start_url("localhost:3000"), "http://localhost:3000");
+        assert_eq!(start_url("127.0.0.1:8080"), "http://127.0.0.1:8080");
+        assert_eq!(start_url("[::1]:8000"), "http://[::1]:8000");
+        assert_eq!(start_url("//example.com/x"), "https://example.com/x");
+        assert_eq!(start_url("  example.com  "), "https://example.com");
+        assert_eq!(start_url("http://example.com"), "http://example.com");
+        assert_eq!(start_url("https://example.com/x"), "https://example.com/x");
+        assert_eq!(start_url("about:blank"), "about:blank");
+        assert_eq!(start_url("file:///tmp/x.html"), "file:///tmp/x.html");
+        assert_eq!(start_url(""), "");
+    }
 
     #[test]
     fn a_secret_flag_takes_the_name_before_the_origin() {

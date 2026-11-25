@@ -234,7 +234,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
     let path = |flag: &str| parsed.value(flag).map(PathBuf::from);
     Ok(Args {
         task: parsed.positional.clone().unwrap_or_default(),
-        start: text("--start"),
+        start: text("--start").map(|value| options::start_url(&value)).filter(|value| !value.is_empty()),
         context: text("--context"),
         cloud: parsed.flag("--cloud"),
         local: parsed.flag("--local"),
@@ -540,6 +540,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         http: kept.as_ref().map(|kept| fastbrowse_clients::http::Http::hyper().with_trace(kept.trace())),
         ..Host::default()
     };
+    let started = std::time::Instant::now();
     let outcome = context.runner.run(task, host).await;
     let status = outcome.as_ref().ok().map(|result| result.status);
     let trace = kept.and_then(|kept| kept.finish(status));
@@ -558,6 +559,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         // Reported here rather than through `main`, which no longer has the kept trace's path to name.
         Err(error) => return Ok(fail(args, context, &error.to_string(), trace.as_deref())),
     };
+    // The opt-in local log, appended before anything is printed so a crash in reporting still leaves the run counted.
+    crate::stats::record(&context.environ, &result, started.elapsed());
     // Replay accounting only for a run that replayed: a run that only saved one printed "0 actions reused" (#1342).
     if args.recipe.is_some()
         && let Some(sink) = recipe_sink

@@ -164,6 +164,29 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
             eprint!("{text}");
         }
         code
+    } else if args.first().is_some_and(|arg| arg == "doctor") {
+        let settings = match serve::load_settings()() {
+            Ok(settings) => settings,
+            Err(error) => {
+                eprintln!("fastbrowse doctor: {}", error.0);
+                return 1;
+            }
+        };
+        let (text, code) = crate::doctor::command(&build, &settings, &identity);
+        if code == 0 {
+            print!("{text}");
+        } else {
+            eprint!("{text}");
+        }
+        code
+    } else if args.first().is_some_and(|arg| arg == "stats") {
+        let (text, code) = crate::stats::command(&args[1..], &options::environ());
+        if code == 0 {
+            print!("{text}");
+        } else {
+            eprint!("{text}");
+        }
+        code
     } else if args.first().is_some_and(|arg| arg == "self-update") {
         let (text, code) = crate::update::command(&args[1..], &build);
         let text = invocation.mask(&text);
