@@ -189,11 +189,8 @@ fn version_text(status: std::process::ExitStatus, bytes: &[u8]) -> Result<String
 /// Whether the temporary directory can be written to, which a download, a recording or an attachment needs.
 fn temp_space() -> (Level, String) {
     let dir = std::env::temp_dir();
-    match std::fs::File::create(dir.join(format!("fastbrowse-doctor-{}", std::process::id()))) {
-        Ok(_) => {
-            let _ = std::fs::remove_file(dir.join(format!("fastbrowse-doctor-{}", std::process::id())));
-            (Level::Ok, format!("temp space: {} is writable", dir.display()))
-        }
+    match tempfile::NamedTempFile::new_in(&dir) {
+        Ok(_) => (Level::Ok, format!("temp space: {} is writable", dir.display())),
         Err(error) => (Level::Fail, format!("temp space: {} is not writable: {error}", dir.display())),
     }
 }

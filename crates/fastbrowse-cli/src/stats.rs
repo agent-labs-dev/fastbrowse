@@ -47,7 +47,11 @@ fn append(path: &Path, record: &Value) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(file, "{record}")
+    let line = format!("{record}\n");
+    if file.write(line.as_bytes())? != line.len() {
+        return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "short stats append"));
+    }
+    Ok(())
 }
 
 pub(crate) fn now_ms() -> u64 {
