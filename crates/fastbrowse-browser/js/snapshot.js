@@ -2247,23 +2247,27 @@
     if (!record) continue;
     let context = '',
       owner = record;
+    // A card holding another card's controls is a different comment: neither the title climb nor the owner climb may
+    // step out into it, or a reply would take its parent's heading while its sibling replies share the same one.
+    const holdsOtherCard = (above, own) => {
+      for (const card of above.querySelectorAll('*')) {
+        if (isCard(card) && !card.contains(own) && !own.contains(card) && controlsIn(card)) return true;
+      }
+      return false;
+    };
     // A lone record is a record of its own (the only reply names itself, not the comment it answers); only a repeating
     // card can be a layout row that defers to the record around it.
-    for (let card = record; card && !context; card = cardCount(card.parentElement) > 1 ? recordAbove(card) : null) {
+    const above = card => (cardCount(card.parentElement) > 1 ? recordAbove(card) : null);
+    for (let card = record; card && !context; ) {
       context = titleOf(card, element, c.label);
+      const next = above(card);
+      card = next && !holdsOtherCard(next, card) ? next : null;
     }
     // No card has a title, so a first line names it. A comment that names its author in bold or by a link has no
     // heading: its counter read the layout row's "Actions" while the Reply beside it read the author. The record is
     // the widest card around the counter that holds no other card with controls, the card the twin path reaches for a
-    // Reply: the author's own link or text sits in the comment beside its rows, but a card holding another card's
-    // controls is a different comment.
-    const holdsOtherCard = above => {
-      for (const card of above.querySelectorAll('*')) {
-        if (isCard(card) && !card.contains(owner) && !owner.contains(card) && controlsIn(card)) return true;
-      }
-      return false;
-    };
-    for (let above = cardCount(record.parentElement) > 1 ? recordAbove(owner) : null; above && !holdsOtherCard(above); above = recordAbove(above)) owner = above;
+    // Reply: the author's own link or text sits in the comment beside its rows.
+    for (let next = cardCount(record.parentElement) > 1 ? recordAbove(owner) : null; next && !holdsOtherCard(next, owner); next = recordAbove(next)) owner = next;
     context ||= nameOf(owner, element, c.label, true);
     if (context) c.context = context;
   }
