@@ -98,6 +98,9 @@ pub(super) fn line(control: &Control, new: bool) -> String {
         (control.focused, "focused"),
         (control.required, "required"),
         (control.invalid, "invalid"),
+        // A disabled Save left out of the list read as no Save: the driver pressed Enter in a bio field to submit it
+        // and typed a newline into the bio (#1561).
+        (control.disabled, "disabled"),
     ] {
         if on == Some(true) {
             states.push(name.to_string());
@@ -146,8 +149,11 @@ pub(super) fn line(control: &Control, new: bool) -> String {
     if !states.is_empty() {
         out += &format!(" ({})", states.join(", "));
     }
-    let operations: Vec<String> = control.operations.iter().map(|operation| operation.to_string()).collect();
-    out += &format!(" can {}", operations.join("/"));
+    // A disabled control offers nothing, and its line says so by naming no operation.
+    if !control.operations.is_empty() {
+        let operations: Vec<String> = control.operations.iter().map(|operation| operation.to_string()).collect();
+        out += &format!(" can {}", operations.join("/"));
+    }
     if !control.options.is_empty() {
         let options: Vec<String> = control.options.iter().map(|option| q(option)).collect();
         out += &format!(" options {}", options.join(" | "));
@@ -243,5 +249,11 @@ mod tests {
             line(&select, false),
             r#"[3] combobox "Month" (required, collapsed) can select options "Jan" | "Feb""#
         );
+    }
+
+    #[test]
+    fn a_disabled_control_is_listed_as_disabled_offering_nothing() {
+        let save = Control { disabled: Some(true), ..Control::new("5", "button", "Save", []) };
+        assert_eq!(line(&save, false), r#"[5] button "Save" (disabled)"#);
     }
 }
