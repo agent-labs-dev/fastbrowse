@@ -28,8 +28,8 @@ pub enum BrowserError {
     PageUnresponsive(Failure),
     /// A document outside `allowed_origins`. The message never names it: an address can carry a credential.
     OriginNotAllowed,
-    /// A script this layer evaluated threw in the page. Holds the exception's own description (its class and message,
-    /// which these scripts write), or CDP's text for it, so a failure says which branch threw.
+    /// A script this layer evaluated threw in the page. Holds where it threw (CDP's text and the script's line and
+    /// column), never the exception's message, which a page can write: the failure says which branch threw.
     Script(String),
 }
 
@@ -139,10 +139,10 @@ mod tests {
             ),
             (BrowserError::SiteUnreachable(Failure::new("r", "s")), PageError::SiteUnreachable(Failure::new("r", "s"))),
             (
-                BrowserError::Script("Error: no listeners".into()),
+                BrowserError::Script("Uncaught at line 3, column 7".into()),
                 PageError::failed(
                     "Runtime.evaluate/JavaScriptError",
-                    "Runtime.evaluate failed (JavaScriptError): Error: no listeners",
+                    "Runtime.evaluate failed (JavaScriptError): Uncaught at line 3, column 7",
                 ),
             ),
         ];

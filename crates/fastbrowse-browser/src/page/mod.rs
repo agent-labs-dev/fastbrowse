@@ -2015,11 +2015,15 @@ impl CdpPage {
     }
 }
 
-/// The first line of the exception's description (`Error: message`, as the scripts here throw it), else CDP's own text
-/// for it, so a `Script` failure names the branch that threw.
+/// Where the evaluated script threw: CDP's own text for it and the line and column in the script, so a `Script` failure
+/// names the branch that threw. The exception's description is left out: a page can throw from a getter it replaced,
+/// and the message is then the page's own text.
 fn exception_text(details: &Value) -> String {
-    let described = details["exception"]["description"].as_str().and_then(|text| text.lines().next());
-    described.or_else(|| details["text"].as_str()).unwrap_or("no exception text").to_string()
+    let text = details["text"].as_str().unwrap_or("exception");
+    match (details["lineNumber"].as_u64(), details["columnNumber"].as_u64()) {
+        (Some(line), Some(column)) => format!("{text} at line {line}, column {column}"),
+        _ => text.to_string(),
+    }
 }
 
 /// Lift a browser failure to the variant the decision loop reads; the loop holds the page as `Arc<dyn Page>`.
@@ -2320,11 +2324,11 @@ mod tests {
     }
 
     #[test]
-    fn a_script_failure_keeps_the_exceptions_own_text() {
-        let thrown = json!({"text": "Uncaught", "exception": {"description": "Error: the look is unread\n    at <anonymous>:1:7"}});
-        assert_eq!(exception_text(&thrown), "Error: the look is unread");
+    fn a_script_failure_names_where_it_threw_and_never_the_exception_message() {
+        let thrown = json!({"text": "Uncaught", "lineNumber": 3, "columnNumber": 7, "exception": {"description": "Error: page text"}});
+        assert_eq!(exception_text(&thrown), "Uncaught at line 3, column 7");
         assert_eq!(exception_text(&json!({"text": "Uncaught"})), "Uncaught");
-        assert_eq!(exception_text(&json!({})), "no exception text");
+        assert_eq!(exception_text(&json!({})), "exception");
     }
 
     #[test]
