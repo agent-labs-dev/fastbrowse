@@ -1143,18 +1143,34 @@
           [...n.childNodes].every(
             c => (c.nodeType === 3 ? !c.textContent.trim() : c.nodeType !== 1 || c.tagName === 'SOURCE' || isPicture(c)),
           )));
-    const parts = [...e.childNodes].map(n => ({
-      image: isPicture(n),
-      text:
-        n.nodeType === 3
-          ? n.textContent
-          : n.nodeType === 1 &&
-              !CODE.has(n.tagName) &&
-              n.getAttribute('aria-hidden') !== 'true' &&
-              (shown(n) || !shown(e))
-            ? labelFrom(n, seen)
-            : '',
-    }));
+    // A wrapper that is named only by its content ("<span><span>Test image</span><span>New</span></span>") is read
+    // through, so each picture and each run of words keeps what it is: flattening the wrapper to one string lost
+    // which part was the picture's alt and left the title doubled beside a badge.
+    const namedByOwnContent = n =>
+      !n.getAttribute('aria-labelledby') &&
+      !n.getAttribute('aria-label') &&
+      !n.hasAttribute('alt') &&
+      !labelsFor(n).length &&
+      !['button', 'submit', 'reset'].includes(nativeProperty(n, 'type')) &&
+      !['INPUT', 'SELECT', 'TEXTAREA'].includes(n.tagName) &&
+      !FIELD_CONTAINERS.has(n.getAttribute('role'));
+    const contentParts = parent =>
+      [...parent.childNodes].flatMap(n => {
+        if (n.nodeType === 3) return [{ image: false, text: n.textContent }];
+        if (n.nodeType !== 1 || CODE.has(n.tagName) || n.getAttribute('aria-hidden') === 'true') return [];
+        if (!shown(n) && shown(parent)) return [];
+        if (isPicture(n)) return [{ image: true, text: labelFrom(n, seen) }];
+        if (!seen.has(n) && namedByOwnContent(n)) {
+          seen.add(n);
+          nameReads?.nodes.add(n);
+          const inner = contentParts(n);
+          return inner.some(part => part.text.trim())
+            ? inner
+            : [{ image: false, text: n.getAttribute('title') || '' }];
+        }
+        return [{ image: false, text: labelFrom(n, seen) }];
+      });
+    const parts = contentParts(e);
     const words = parts.filter(part => !part.image).map(part => part.text);
     // Words split across inline nodes ("Test <b>image</b>") repeat the alt as a whole.
     // A badge or status beside the title must not hide it, so any run of adjacent texts may match. A run is grown only
