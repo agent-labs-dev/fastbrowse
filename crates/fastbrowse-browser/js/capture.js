@@ -578,6 +578,8 @@
   function leaf(el) {
     return ![...el.children].some(c => !SKIP.has(c.tagName) && !hidden(c) && isBlock(c));
   }
+  // A list item read as one block: a leaf holding no other item, whose text would otherwise take the outer item's place.
+  const wholeItem = el => el.tagName === 'LI' && leaf(el) && !el.querySelector(PLACED);
 
   // A classless div repeated three times is usually page layout; a record is a styled unit or a semantic item.
   function repeated(el) {
@@ -628,8 +630,9 @@
     if (!descendants.some(c => !SKIP.has(c.tagName) && !hidden(c) && isBlock(c))) return null;
     const text = [textOf(el), ...drawnFacts(descendants)].filter(Boolean).join(' ');
     if (!text) return null;
-    // A repeated wrapper around another list is a group, so keep the inner records separately citable.
-    if (descendants.some(c => (c.tagName === 'LI' && leaf(c)) || recordText(c) !== null)) return null;
+    // A repeated wrapper around another list is a group, so keep the inner records and items separately citable: read
+    // whole, a card's list of variants gave none of them its place.
+    if (descendants.some(c => c.matches(PLACED) || recordText(c) !== null)) return null;
     records.set(el, text);
     return text;
   }
@@ -671,8 +674,15 @@
         continue;
       }
       if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
-        // An inline ARIA item has no line break around it, yet it is one place of its list: its text is its own block.
-        const inlineItem = node.matches('li,[role="listitem"]');
+        // An inline element holding items is read through, so no block joins two items' text: read in one run, an inner
+        // list's first item took its outer item's place.
+        if (node.querySelector(PLACED)) {
+          flushRun(false);
+          walk(node);
+          continue;
+        }
+        // An inline item has no line break around it, yet it is one place of its list: its text is its own block.
+        const inlineItem = node.matches(PLACED);
         if (inlineItem) flushRun(false);
         run.push(node);
         if (inlineItem) flushRun(false);
@@ -698,8 +708,19 @@
   // among the rendered items of its list.
   const LIST = 'ul,ol,menu,[role="list"]';
   const ITEM = 'li,[role="listitem"]';
+  // What has a place of its own, which no block may share with another.
+  const PLACED = `${ITEM},[aria-posinset]`;
+  // `closest` stops at a shadow root, so the search goes on from its host: a card's shadow paragraph is in the item
+  // around the card.
+  const closestPlaced = e => {
+    for (let at = e; at; at = at.getRootNode().host) {
+      const found = at.closest(PLACED);
+      if (found) return found;
+    }
+    return null;
+  };
   function itemPlace(node) {
-    const el = (node?.nodeType === 1 ? node : node?.parentElement)?.closest(`${ITEM},[aria-posinset]`);
+    const el = closestPlaced(node?.nodeType === 1 ? node : node?.parentElement);
     if (!el) return {};
     const declared = Number.parseInt(el.getAttribute('aria-posinset'), 10);
     // The page says it does not know its list's size, so no count is stated for the item.
@@ -757,7 +778,7 @@
     }
     if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
     const record = recordText(el);
-    if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
+    if (wholeItem(el) || record !== null) {
       // A card's heading still ends an earlier sibling's heading, even when the card is read without walking it.
       const heading = [...el.querySelectorAll('h1,h2,h3,h4,h5,h6')].find(visible);
       if (heading) endHeading(HEADINGS[heading.tagName]);
@@ -853,10 +874,10 @@
     // and the row was left out of the answer (#929). The item is what this capture reads as one: a list item, a
     // record, or a figure, whose caption HTML defines as its content's. Any nearer ancestor with text would do for a
     // gallery, but an image placed in an article or beside a menu then quoted the whole article or the menu, once
-    // per image, for an item it is not part of. A list item counts only when block() reads it as one, a leaf: one
-    // holding blocks is read as those blocks, and quoting it tied each of its images to every caption inside. An image
-    // in no item quotes nothing.
-    const isItem = e => (e.tagName === 'LI' && leaf(e)) || e.tagName === 'FIGURE' || recordText(e) !== null;
+    // per image, for an item it is not part of. A list item counts only when block() reads it as one, a leaf with no
+    // item in it: one holding blocks is read as those blocks, and quoting it tied each of its images to every caption
+    // inside. An image in no item quotes nothing.
+    const isItem = e => wholeItem(e) || e.tagName === 'FIGURE' || recordText(e) !== null;
     const item = element => {
       let e = element.parentElement;
       while (e && e !== root && !isItem(e)) e = e.parentElement;

@@ -882,11 +882,8 @@ impl Tags for Reader<'_> {
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
         }
-        // A start tag can close the open item (`<li>` after `<li>`): what was read in it is flushed while it holds.
-        if self.places.iter().any(|open| open.close == at) {
-            self.flush(None, None, false);
-        }
-        while self.places.pop_if(|open| open.close == at).is_some() {}
+        // A start tag can close the open item (`<li>` after `<li>`).
+        self.end_places(at);
         if let Some(open) = self.item_places.remove(&at) {
             // What was read before the item belongs to the item before it, not to this one.
             self.flush(None, None, false);
@@ -902,6 +899,8 @@ impl Tags for Reader<'_> {
                 self.data(&label.value);
             }
         }
+        // A void element closes at its own start tag: a radio's declared place lent it to the paragraph after its group.
+        self.end_places(at);
     }
 
     fn end(&mut self, name: &str, at: usize) {
@@ -910,11 +909,7 @@ impl Tags for Reader<'_> {
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
         }
-        // An inline item ends with no block break after it: its text is flushed while its place still holds.
-        if self.places.iter().any(|open| open.close == at) {
-            self.flush(None, None, false);
-        }
-        while self.places.pop_if(|open| open.close == at).is_some() {}
+        self.end_places(at);
     }
 
     fn data(&mut self, data: &str) {
@@ -945,6 +940,15 @@ impl Tags for Reader<'_> {
 }
 
 impl<'a> Reader<'a> {
+    /// Ends the items the tag token at `at` closes. An item can end with no block break after it (an inline item, or one
+    /// a start tag implies the end of), so what was read in it is flushed while its place still holds.
+    fn end_places(&mut self, at: usize) {
+        if self.places.iter().any(|open| open.close == at) {
+            self.flush(None, None, false);
+        }
+        while self.places.pop_if(|open| open.close == at).is_some() {}
+    }
+
     fn new(
         url: &'a str,
         records: HashMap<usize, Record>,
@@ -2495,6 +2499,48 @@ mod tests {
             assert_eq!(place(&nested, "Second outer"), Some((2, 2)));
             assert_eq!(place(&nested, "Only inner link"), None, "{nested}");
         }
+    }
+
+    /// A block holds one item's text, as `capture.js` reads it: an inner list in an item, inline tabs that declare
+    /// their own places, and a list inside a repeated card each give every quote its own item's place.
+    #[test]
+    fn a_block_never_spans_two_items() {
+        let (_, found) = blocks(
+            "<ul><li>First outer</li><li>Second outer <span role='list'>\
+             <span role='listitem'>Inner first</span> <span role='listitem'>Inner second</span></span></li></ul>\
+             <div role='tablist'><span role='tab' aria-posinset='1' aria-setsize='3'>First tab</span> \
+             <span role='tab' aria-posinset='2' aria-setsize='3'>Second tab</span></div>\
+             <h1>Products</h1><div class='card'><h2>Product A</h2><div role='list'>\
+             <span role='listitem'>Red</span> <span role='listitem'>Blue</span></div></div>\
+             <div class='card'><h2>Product B</h2><div role='list'>\
+             <span role='listitem'>Green</span> <span role='listitem'>Yellow</span></div></div>",
+            "https://example.test/",
+        );
+        let place = |text: &str| {
+            let block = found.iter().find(|block| block.text.contains(text)).unwrap();
+            block.item_place.map(|place| (place.position, place.count))
+        };
+        assert_eq!(place("Second outer"), Some((2, 2)));
+        assert_eq!(place("Inner first"), Some((1, 2)));
+        assert_eq!(place("Inner second"), Some((2, 2)));
+        assert_eq!(place("First tab"), Some((1, 3)));
+        assert_eq!(place("Second tab"), Some((2, 3)));
+        for (text, position) in [("Red", 1), ("Blue", 2), ("Green", 1), ("Yellow", 2)] {
+            assert_eq!(place(text), Some((position, 2)), "{text}");
+        }
+    }
+
+    /// A void element closes at its own start tag, so a control's declared place ends with the control and lends
+    /// nothing to the text after it.
+    #[test]
+    fn a_void_elements_declared_place_ends_with_the_element() {
+        let (_, found) = blocks(
+            "<div role='radiogroup'><input type='radio' aria-label='Second choice' \
+             aria-posinset='2' aria-setsize='3'></div><p>Unrelated paragraph</p>",
+            "https://example.test/",
+        );
+        let paragraph = found.iter().find(|block| block.text == "Unrelated paragraph").unwrap();
+        assert_eq!(paragraph.item_place, None);
     }
 
     /// An item closed by the next item's start tag keeps its place, the page's declared place stands where it gives a

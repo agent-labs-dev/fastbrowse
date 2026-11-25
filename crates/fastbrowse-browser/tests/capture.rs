@@ -632,6 +632,60 @@ async fn test_a_wrapped_item_and_a_field_value_carry_their_place() {
     h.close().await;
 }
 
+/// A block holds one item's text: an inner list in an item, inline tabs that declare their own places, and a list inside
+/// a repeated card each give every quote the place of its own item, never another item's or none.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_block_never_spans_two_items() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<ul><li>First outer</li><li>Second outer <span role='list'>\
+         <span role='listitem'>Inner first</span> <span role='listitem'>Inner second</span></span></li></ul>\
+         <div role='tablist'><span role='tab' aria-posinset='1' aria-setsize='3'>First tab</span> \
+         <span role='tab' aria-posinset='2' aria-setsize='3'>Second tab</span></div>\
+         <h1>Products</h1><div class='card'><h2>Product A</h2><div role='list'>\
+         <span role='listitem'>Red</span> <span role='listitem'>Blue</span></div></div>\
+         <div class='card'><h2>Product B</h2><div role='list'>\
+         <span role='listitem'>Green</span> <span role='listitem'>Yellow</span></div></div>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b).contains(text)).unwrap();
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("Second outer"), Some((2, 2)));
+    assert_eq!(place("Inner first"), Some((1, 2)));
+    assert_eq!(place("Inner second"), Some((2, 2)));
+    assert_eq!(place("First tab"), Some((1, 3)));
+    assert_eq!(place("Second tab"), Some((2, 3)));
+    for (text, position) in [("Red", 1), ("Blue", 2), ("Green", 1), ("Yellow", 2)] {
+        assert_eq!(place(text), Some((position, 2)), "{text}");
+    }
+    h.close().await;
+}
+
+/// Text a card renders in its shadow tree is still inside the list item around the card.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_shadow_text_keeps_the_enclosing_items_place() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(&h.session, "<ul><li><div id='first'></div></li><li><div id='second'></div></li></ul>").await;
+    eval_active(
+        &h.session,
+        "document.querySelector('#first').attachShadow({mode:'open'}).innerHTML='<p>First card</p>'; \
+         document.querySelector('#second').attachShadow({mode:'open'}).innerHTML='<p>Second card</p>'",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    for (text, position) in [("First card", 1), ("Second card", 2)] {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).expect("shadow text");
+        assert_eq!(block.item_place.map(|place| (place.position, place.count)), Some((position, 2)), "{text}");
+    }
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_quote_cards_are_whole_records_with_local_titles() {
     let Some(h) = harness().await else { return };
