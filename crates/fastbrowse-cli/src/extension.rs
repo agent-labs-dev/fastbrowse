@@ -858,12 +858,20 @@ mod tests {
         assert!(precedence("1.0.0") > precedence("1.0.0-rc.9"));
     }
 
+    /// Writes an executable script through a child shell, so no thread of this process ever holds the file open for
+    /// writing. A thread that forks while this one has it open hands the child a copy of that handle until the child
+    /// execs, and `execve` of a file open for writing anywhere fails with `ETXTBSY`; other tests in this process spawn
+    /// children all the time. The shell has exited, and its handle closed, before the script is returned.
     #[cfg(unix)]
     fn script(path: &Path, body: &str) {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let status = std::process::Command::new("sh")
+            .args(["-c", "printf '%s\\n' \"$1\" > \"$0\" && chmod 755 \"$0\""])
+            .arg(path)
+            .arg(format!("#!/bin/sh\n{body}"))
+            .status()
+            .unwrap();
+        assert!(status.success(), "could not write {}", path.display());
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -1277,15 +1285,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn every_install_stays_registered_and_the_newest_serves() {
-        use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!("fastbrowse-installs-{}", std::process::id()));
         let mut programs = vec![];
         for name in ["bundled", "user"] {
             let bin = root.join(name);
-            std::fs::create_dir_all(&bin).unwrap();
             let program = bin.join("fastbrowse");
-            std::fs::write(&program, format!("#!/bin/sh\necho {name} \"$@\"\n")).unwrap();
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            script(&program, &format!("echo {name} \"$@\""));
             programs.push(program);
         }
         let install = |path: &Path, version: &str| Install { path: path.to_path_buf(), version: version.into() };

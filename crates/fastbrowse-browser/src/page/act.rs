@@ -481,7 +481,7 @@ impl CdpPage {
                 self.before_action(target.as_ref(), hit, false, false, true, false).await
             };
             let measured = match measured {
-                Err(BrowserError::Script) => {
+                Err(BrowserError::Script(_)) => {
                     // A page can replace those timers with ones that throw while leaving the renderer responsive.
                     drawn = false;
                     self.before_action(target.as_ref(), hit, false, false, true, false).await?

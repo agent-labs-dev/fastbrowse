@@ -1991,8 +1991,8 @@ impl CdpPage {
                 }
             }
         }
-        if out.get("exceptionDetails").is_some() {
-            return Err(BrowserError::Script);
+        if let Some(details) = out.get("exceptionDetails") {
+            return Err(BrowserError::Script(exception_text(details)));
         }
         Ok(out["result"]["value"].take())
     }
@@ -2012,6 +2012,16 @@ impl CdpPage {
             }
             () = self.session.wait_for_dialog() => None,
         }
+    }
+}
+
+/// Where the evaluated script threw, as the line and column in the script, so a `Script` failure names the branch that
+/// threw. Neither the exception's description nor CDP's `text` is carried: a page can throw from a getter it replaced,
+/// and both then hold the page's own message (`Uncaught (in promise) Error: ...` for a rejected promise).
+fn exception_text(details: &Value) -> String {
+    match (details["lineNumber"].as_u64(), details["columnNumber"].as_u64()) {
+        (Some(line), Some(column)) => format!("thrown at line {line}, column {column}"),
+        _ => "thrown at an unknown position".to_string(),
     }
 }
 
@@ -2310,6 +2320,17 @@ mod tests {
         assert!(!viewport.contains("token") && !viewport.contains("/card"));
         // A page with no text of its own starts with the first frame's label.
         assert_eq!(frame_text(&frames, Snapshot::offscreen), "[Frame: https://pay.test:8443]\nHelp");
+    }
+
+    #[test]
+    fn a_script_failure_names_where_it_threw_and_never_the_exception_message() {
+        let thrown = json!({"text": "Uncaught (in promise) Error: page text", "lineNumber": 3, "columnNumber": 7,
+            "exception": {"description": "Error: page text"}});
+        assert_eq!(exception_text(&thrown), "thrown at line 3, column 7");
+        assert_eq!(
+            exception_text(&json!({"text": "Uncaught (in promise) Error: page text"})),
+            "thrown at an unknown position"
+        );
     }
 
     #[test]
