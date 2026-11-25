@@ -399,7 +399,7 @@ dev = [
 requires-dist = [
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1,<1" },
     { name = "packaging", specifier = ">=24,<27" },
-    { name = "parallax-evals", marker = "extra == 'evals'", specifier = "==2.0.0.dev57" },
+    { name = "parallax-evals", marker = "extra == 'evals'", specifier = "==2.0.0.dev58" },
     { name = "pydantic", specifier = ">=2.14.2,<3" },
     { name = "pyyaml", marker = "extra == 'eval-data'", specifier = ">=6.0.3,<7" },
 ]
@@ -409,7 +409,7 @@ provides-extras = ["eval-data", "evals"]
 bench = [{ name = "pytest-codspeed", specifier = ">=5.0.4,<6" }]
 dev = [
     { name = "actionlint-py", specifier = "==1.7.12.25" },
-    { name = "parallax-evals", specifier = "==2.0.0.dev57" },
+    { name = "parallax-evals", specifier = "==2.0.0.dev58" },
     { name = "pre-commit", specifier = ">=4.7.0" },
     { name = "pytest", specifier = ">=9.2,<10" },
     { name = "pytest-asyncio", specifier = ">=1.4.1,<2" },
@@ -829,7 +829,7 @@ wheels = [
 
 [[package]]
 name = "parallax-evals"
-version = "2.0.0.dev57"
+version = "2.0.0.dev58"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "croniter" },
@@ -845,9 +845,9 @@ dependencies = [
     { name = "tzdata" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b6/b9/afb5850ae82eb1ba972be6ec4cf79fbccb627688645c5c6cd41ec6519f55/parallax_evals-2.0.0.dev57.tar.gz", hash = "sha256:0441b64bd66f35a291128c153442e85de32d7ea8204d41715ee3b75f8afdcb00", size = 2287631, upload-time = "2026-11-25T09:57:06.76Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/11/12b853792432eee6204b4ca58aeec96c43d61ac82b88d6c0663cc828310c/parallax_evals-2.0.0.dev58.tar.gz", hash = "sha256:4dac5da4358cc85345563ce2281be885c51c8327f305398edb326e4b55bc2e2b", size = 2291299, upload-time = "2026-11-25T11:23:08.359Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/9b/75b876c4fce776a9f48de9448390b561dd5952953d6a9b7b651b4219a8b5/parallax_evals-2.0.0.dev57-py3-none-any.whl", hash = "sha256:64d0d097e7d2ae1b2df638f9092800387f39ace775b7c0779f24c18a83a9b6e3", size = 1222368, upload-time = "2026-11-25T09:57:05.118Z" },
+    { url = "https://files.pythonhosted.org/packages/61/eb/fd4cd859dbf2a5c4318960927cb6f28d91086d701d6a964102d83ccbfbb0/parallax_evals-2.0.0.dev58-py3-none-any.whl", hash = "sha256:54b88393df17c788139e62ba7bc6c6080fe3af2409c09389827f88d345d20f55", size = 1224081, upload-time = "2026-11-25T11:23:06.429Z" },
 ]
 
 [[package]]
