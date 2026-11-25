@@ -84,7 +84,10 @@ fn serve_console() -> (u16, Arc<AtomicUsize>) {
             std::thread::spawn(move || {
                 let mut reader = BufReader::new(stream.try_clone().expect("clone"));
                 let mut request = String::new();
-                let _ = reader.read_line(&mut request);
+                // A socket Chrome opens and closes unused sends no request: answered, it counted as a refused page.
+                if !reader.read_line(&mut request).is_ok_and(|n| n > 0) {
+                    return;
+                }
                 let (mut signed_in, mut length) = (false, 0usize);
                 let mut line = String::new();
                 while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
