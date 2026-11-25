@@ -2236,12 +2236,14 @@
     isRecordCard(card) && [...card.parentElement.children].some(c => c !== card && isRecordCard(c));
   const listsRecordsOutside = (section, element) => {
     if (recordCount(section) < 2) return false;
-    // A class-styled comment card is a record too: its own controls are named by it, not outside every record, and a
-    // comment whose replies are listed inside it names its own Reply. A page-level comment form laid out in repeated
-    // rows is not: those rows are cards, but no record, and counting them took the note that the form sits outside
-    // every comment off its field and its Post button.
-    for (let e = element; e; e = e === section ? null : e.parentElement) if (e.matches(RECORD) || isListedRecord(e)) return false;
-    return true;
+    // A class-styled comment card is a record too: its own controls are named by it, not outside every record. A
+    // page-level comment form laid out in repeated rows is not: those rows are cards, but no record, and counting them
+    // took the note that the form sits outside every comment off its field and its Post button.
+    for (let e = element; e !== section; e = e.parentElement) if (e.matches(RECORD) || isListedRecord(e)) return false;
+    // The section is the control's own record only when it is one of a list: a comment whose replies are listed inside
+    // it names its own Reply plainly, while a lone post that holds its comments form and comments list is the page's
+    // article, and its form sits outside every comment listed in it.
+    return !isListedRecord(section);
   };
   // The section's name, and whether the control sits outside every record the section lists.
   const nearestHeading = (element, label) => {
