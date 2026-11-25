@@ -335,7 +335,7 @@ public sealed record CostLine
 }
 
 /// <summary>
-/// Who chose a step: the model driving the run (llm), Jev, a rule in code, or a saved recipe action.
+/// Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<Decider>))]
 public enum Decider

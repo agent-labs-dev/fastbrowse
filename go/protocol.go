@@ -183,7 +183,7 @@ type CostLine struct {
 	Model *string `json:"model,omitempty"`
 }
 
-// Who chose a step: the model driving the run (llm), Jev, a rule in code, or a saved recipe action.
+// Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
 type Decider string
 
 const (

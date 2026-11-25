@@ -1,6 +1,6 @@
 //! The seam between the browser layer and the decision loop.
 //!
-//! The browser layer produces `Observation` (bounded, for Jev's action choice) and `Capture` (complete, for reading),
+//! The browser layer produces `Observation` (bounded, for the driver's action choice) and `Capture` (complete, for reading),
 //! and executes `Action`s. Nothing above this seam touches CDP.
 
 use std::collections::BTreeSet;
@@ -54,7 +54,7 @@ pub fn cut_with(text: &str, max_chars: usize, json_encoded: bool, marker: impl F
 }
 
 /// A set of operations, written sorted by value: Python writes a `frozenset` in hash order, which changes from one
-/// process to the next, and `sorted(control.operations)` is the order the policy shows Jev.
+/// process to the next, and `sorted(control.operations)` is the order the policy shows the driver.
 pub type Operations = BTreeSet<Operation>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -246,7 +246,7 @@ pub fn native_date_form(input_type: &str) -> Option<&'static str> {
 }
 
 /// Whether the page marks this control as the link to the next page of a list (`rel="next"`), in any language and
-/// behind any icon. Its label is never read for it: Jev picks a pager the page does not mark.
+/// behind any icon. Its label is never read for it: a pager the page does not mark is not recorded as a next page.
 pub fn pager_link(control: &Control) -> bool {
     control.role == "link"
         && control.next_page == Some(true)

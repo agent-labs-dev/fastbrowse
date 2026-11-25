@@ -1619,7 +1619,7 @@
       // Only an element that names itself draggable, a drawn surface to draw on, or one the page gives a grab cursor
       // is offered as a drag source: `draggable` reports true for every <a> and <img> by default, which would offer
       // the whole page as draggable. A custom widget names itself with an `aria-roledescription` (a sortable card,
-      // which its pointer sensor also takes by drag), as a press is offered it; Jev reads the description and decides
+      // which its pointer sensor also takes by drag), as a press is offered it; the driver reads the description and decides
       // whether to drag or press.
       if (e.getAttribute('draggable') === 'true' || base.drawn || draggedByPointer(e) ||
           e.hasAttribute('aria-roledescription')) base.operations.push('drag');
