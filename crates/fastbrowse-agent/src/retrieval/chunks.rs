@@ -124,7 +124,7 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
         shown.iter().map(|piece| (squeezed(&piece.text), piece.added)).filter(|(text, _)| !text.is_empty()).collect();
     let added: Vec<&str> = pieces.iter().filter(|(_, added)| *added).map(|(text, _)| text.as_str()).collect();
     // Only a line holding some added text can be the reply, and only such lines compete for its pieces.
-    let mut lines: Vec<(i64, i64, String, &Block)> = super::text::splitlines(&page.chars)
+    let lines: Vec<(i64, i64, String, &Block)> = super::text::splitlines(&page.chars)
         .into_iter()
         .filter_map(|(start, end)| {
             let (mut start, mut end) = (start as i64, end as i64);
@@ -147,13 +147,25 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
             Some((start, end, line, block))
         })
         .collect();
-    lines.sort_by_key(|(_, _, line, _)| std::cmp::Reverse(line.chars().count()));
     let mut used = vec![false; pieces.len()];
     let mut matched = vec![false; lines.len()];
     let mut quotes = Vec::new();
-    // A line that reads as a whole run takes it first. Only a line no run fills takes the part of it a run reads as
-    // (a capture can hold text beside the pieces the observation listed), so a short piece never claims an unrelated
-    // longer line while a line that is its own exists.
+    // The capture and the observation list the page in one order, so the lines are matched to runs of pieces in that
+    // order, for the most text the pairs explain. A capture line can hold text the observation lacks (a tooltip the
+    // capture appends), so an unchanged help line reading the added words and more fits the added piece as well as the
+    // status does; the order and the text each line explains put each line on its own piece.
+    for (at, run) in aligned(&pieces, lines.iter().map(|(_, _, line, _)| line.as_str())) {
+        matched[at] = true;
+        used[run.clone()].fill(true);
+        if pieces[run].iter().any(|(_, added)| *added) {
+            let (start, end, _, block) = &lines[at];
+            quotes.push(evidence(&page, block, *start, *end));
+        }
+    }
+    // The observation lists the text outside the viewport after the viewport's, which the capture does not, so a
+    // line the order left unmatched takes what no other line did. A line that reads as a whole run takes it first, then
+    // the part of it a run reads as, so a short piece never claims an unrelated longer line while a line that is its
+    // own exists.
     for whole in [true, false] {
         for (at, (start, end, line, block)) in lines.iter().enumerate() {
             if matched[at] {
@@ -171,6 +183,72 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
     }
     quotes.sort_by_key(|quote| quote.start);
     quotes
+}
+
+/// The runs of consecutive pieces the lines read as, one per line at most, both in order, chosen for the most text
+/// explained: a run is a line's when the line holds all of it.
+fn aligned<'a>(pieces: &[(String, bool)], lines: impl Iterator<Item = &'a str>) -> Vec<(usize, Range<usize>)> {
+    let lines: Vec<&str> = lines.collect();
+    let (n, m) = (lines.len(), pieces.len());
+    // runs[i][s] lists the ends e with pieces[s..e] a part of lines[i], and the length of what they read.
+    let runs: Vec<Vec<Vec<(usize, usize)>>> = lines
+        .iter()
+        .map(|line| {
+            (0..m)
+                .map(|from| {
+                    let mut joined = String::new();
+                    let mut found = Vec::new();
+                    for at in from..m {
+                        joined.push_str(&pieces[at].0);
+                        if !line.contains(&joined) {
+                            break;
+                        }
+                        found.push((at + 1, joined.chars().count()));
+                    }
+                    found
+                })
+                .collect()
+        })
+        .collect();
+    // best[i][j]: the most text lines[..i] explain with pieces[..j].
+    let mut best = vec![vec![0usize; m + 1]; n + 1];
+    for i in 0..n {
+        for j in 0..=m {
+            let mut here = best[i][j];
+            if j > 0 {
+                here = here.max(best[i + 1][j - 1]);
+            }
+            for (s, ends) in runs[i].iter().enumerate() {
+                for &(end, len) in ends.iter().filter(|(end, _)| *end == j) {
+                    here = here.max(best[i][s] + len);
+                    let _ = end;
+                }
+            }
+            best[i + 1][j] = here;
+        }
+    }
+    let mut found = Vec::new();
+    let (mut i, mut j) = (n, m);
+    while i > 0 {
+        if best[i][j] == best[i - 1][j] {
+            i -= 1;
+        } else if j > 0 && best[i][j] == best[i][j - 1] {
+            j -= 1;
+        } else {
+            let (s, _) = runs[i - 1]
+                .iter()
+                .enumerate()
+                .find_map(|(s, ends)| {
+                    ends.iter().find(|&&(end, len)| end == j && best[i - 1][s] + len == best[i][j]).map(|_| (s, ()))
+                })
+                .expect("a best score is reached by some run");
+            found.push((i - 1, s..j));
+            i -= 1;
+            j = s;
+        }
+    }
+    found.reverse();
+    found
 }
 
 fn squeezed(text: &str) -> String {
