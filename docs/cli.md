@@ -230,8 +230,8 @@ The LLM defaults to `openai/gpt-6-luna` at low reasoning, for proposing a first 
 |:--|:--|
 | `FASTBROWSE_LLM_MODEL` | the model for every purpose |
 | `FASTBROWSE_LLM_REASONING` | `none`, `low`, `medium` or `high`; `none` turns reasoning off for a model such as DeepSeek V4.1 Flash that otherwise reasons at every effort |
-| `FASTBROWSE_LLM_PROVIDER` | `openrouter`, `gateway`, `openai`, `anthropic`, `gemini`, `groq`, `together`, `mistral`, `deepseek`, `xai`, `fireworks`, `azure`, `ollama`, `lmstudio`, `vllm` or `custom`; each reads its own key, such as `OPENAI_API_KEY`, and sends it to that provider alone |
-| `FASTBROWSE_LLM_BASE_URL`, `FASTBROWSE_LLM_API_KEY` | any OpenAI-compatible endpoint, such as a local vLLM at `http://127.0.0.1:8000/v1`; it needs `FASTBROWSE_LLM_MODEL`, and never receives the OpenRouter or gateway key. With `FASTBROWSE_LLM_PROVIDER=openrouter`, the address is a proxy in front of OpenRouter and gets OpenRouter's requests |
+| `FASTBROWSE_LLM_PROVIDER` | `openrouter`, `gateway`, `openai`, `anthropic`, `gemini`, `groq`, `together`, `mistral`, `deepseek`, `xai`, `fireworks`, `azure`, `ollama`, `lmstudio`, `vllm` or `custom`; each reads its own key, such as `OPENAI_API_KEY`, and sends it to that provider alone (`openrouter` with a proxy address reads `FASTBROWSE_LLM_API_KEY` instead) |
+| `FASTBROWSE_LLM_BASE_URL`, `FASTBROWSE_LLM_API_KEY` | any OpenAI-compatible endpoint, such as a local vLLM at `http://127.0.0.1:8000/v1`; it needs `FASTBROWSE_LLM_MODEL` unless the provider is `openrouter`, and never receives the OpenRouter or gateway key. With `FASTBROWSE_LLM_PROVIDER=openrouter`, the address is a proxy in front of OpenRouter and gets OpenRouter's requests |
 | `FASTBROWSE_LLM_STRICT=0`, `FASTBROWSE_LLM_EXTRA_BODY` | for that endpoint: send schemas in non-strict form, and add a JSON object to every request |
 
 [LLM providers](llm-providers.md) lists what each preset sends and its default models. Jev still needs its
