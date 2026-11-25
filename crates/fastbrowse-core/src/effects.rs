@@ -112,8 +112,8 @@ fn dialog(name: &str) -> String {
 
 fn listed(controls: &[&Control]) -> String {
     let count = counted(controls.len());
-    // Named with the context the page gives it: two "Hide N Replies" counters read alike to Jev as the count of the
-    // replies it asked about, until each said which comment it belongs to (#1467).
+    // Named with the context the page gives it, as the driver's control lines name it: two "Hide N Replies" counters
+    // read alike in the account of what a step did until each said which comment it belongs to (#1467).
     let names: Vec<String> = controls
         .iter()
         .map(|c| {
@@ -512,8 +512,8 @@ mod tests {
     }
 
     /// A signed-in run replied in a nested CurseForge thread and was asked which replies sit under one reply. The
-    /// Post step's effect listed "Hide 3 Replies, Hide 4 Replies" with no comment named, and coverage read a counter
-    /// of another comment as the count asked about (#1467). An effect names a control with the context it has.
+    /// Post step's effect listed "Hide 3 Replies, Hide 4 Replies" with no comment named, so a counter of another
+    /// comment read as the one asked about (#1467). An effect names a control with the context it has.
     #[test]
     fn test_a_control_a_step_showed_or_removed_is_named_with_the_comment_it_belongs_to() {
         let counter = |id: &str, label: &str, context: Option<&str>| Control {
