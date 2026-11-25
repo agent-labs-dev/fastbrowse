@@ -158,14 +158,66 @@ pub(crate) fn sent_facts(history: &[HistoryEntry]) -> Vec<String> {
         .filter(|entry| entry.commit == Some(crate::policy::Commit::Taken))
         .map(|entry| {
             let step = commit_step(entry);
-            if entry.put.is_empty() {
-                format!("The run's {step} was sent.")
-            } else {
-                let shown: Vec<String> = entry.put.iter().map(|piece| text::repr(piece)).collect();
-                format!("The run's {step} was sent, and the page then showed the text {}.", shown.join(", "))
+            match &entry.put {
+                Some((_, put)) if !put.is_empty() => {
+                    let shown: Vec<String> = put.iter().map(|piece| text::repr(piece)).collect();
+                    format!("The run's {step} was sent, and the page then showed the text {}.", shown.join(", "))
+                }
+                _ => format!("The run's {step} was sent."),
             }
         })
         .collect()
+}
+
+/// The fact, when there is one, naming text on this page that an earlier step of the run put there.
+///
+/// A notice stays on the page after the step that raised it: two threads to reply in, the first reply's "Your reply
+/// was posted." still showed beside the second thread's open, unsent reply box, and Jev judged both replies posted and
+/// let the run finish with one. Told which step put the text there, in these words, it judged the second reply still to
+/// do; told it as a list of steps and their text, or with "after the run's step", it did not. The same names the run's
+/// own posts, so a check whether a thread already holds a reply can tell them from the thread's.
+pub(crate) fn earlier_text_fact(history: &[HistoryEntry], observation: &Observation) -> Option<String> {
+    let (_, earlier) = history.split_last()?;
+    // Each line the page shows is one step's: a notice an earlier post raised, gone and raised again by a later post,
+    // is the later post's, so the latest step to have put a line takes one of its occurrences first.
+    let mut shown: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for line in [&observation.viewport_text, &observation.offscreen_text].into_iter().flat_map(|text| text.lines()) {
+        *shown.entry(text::strip(line)).or_default() += 1;
+    }
+    let mut owned: Vec<Vec<&String>> = vec![Vec::new(); earlier.len()];
+    for (at, entry) in earlier.iter().enumerate().rev().filter(|(_, entry)| entry.outcome == StepOutcome::Executed) {
+        let Some((_, put)) = entry.put.as_ref().filter(|(url, _)| *url == observation.url) else { continue };
+        for piece in put.iter().rev() {
+            if let Some(left) = shown.get_mut(piece.as_str()).filter(|left| **left > 0) {
+                *left -= 1;
+                owned[at].push(piece);
+            }
+        }
+        owned[at].reverse();
+    }
+    let told: Vec<String> = earlier
+        .iter()
+        .zip(owned)
+        .filter(|(_, pieces)| !pieces.is_empty())
+        .map(|(entry, pieces)| {
+            let target = entry.target.as_deref().map(text::repr).unwrap_or_default();
+            let did = match entry.operation {
+                Some(Operation::Click) => format!("clicked {target}"),
+                Some(Operation::Enter) => format!("pressed Enter in {target}"),
+                Some(Operation::Press) => format!("pressed a key in {target}"),
+                Some(Operation::Drag) => format!("dragged {target}"),
+                Some(Operation::Dialog) => "answered the dialog".to_string(),
+                Some(operation) => format!("took the step {operation} {target}"),
+                None => "opened the page".to_string(),
+            };
+            let shown: Vec<String> = pieces.iter().map(|piece| format!("{piece:?}")).collect();
+            format!(
+                "The text {} appeared when the run {did}; it tells of that step, not of any later one.",
+                shown.join(", ")
+            )
+        })
+        .collect();
+    (!told.is_empty()).then(|| told.join(" "))
 }
 
 /// The fields still empty here on a task to carry out: Jev confirmed a form with its one field empty when nothing

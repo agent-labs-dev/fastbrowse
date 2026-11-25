@@ -21,7 +21,8 @@ use serde_json::{Map, Value as JsonValue, json};
 use super::Agent;
 use super::driving::require;
 use super::helpers::{
-    caller_link, describe, dialog_question, empty_fields_fact, navigation_question, sent_facts, unsent_fact,
+    caller_link, describe, dialog_question, earlier_text_fact, empty_fields_fact, navigation_question, sent_facts,
+    unsent_fact,
 };
 use super::seeing::cards;
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, Step, Stop, Unsure};
@@ -1044,6 +1045,9 @@ impl Agent {
             "notes": self.decision_notes(state),
             "recent_actions": recent_actions,
         });
+        if let Some(fact) = earlier_text_fact(&state.history, observation) {
+            page["page_facts"] = vec![fact].into();
+        }
         self.mask_strings(&mut page);
         page["task"] = self.caller_task(state).into();
         page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
@@ -1438,6 +1442,7 @@ impl Agent {
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
             .chain(opened)
+            .chain(earlier_text_fact(&state.history, observation))
             .chain(state.to_carry_out.then(|| empty_fields_fact(observation)).flatten())
             .chain(sent_facts(&state.history))
             .chain(untouched)

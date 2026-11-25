@@ -581,6 +581,44 @@ fn test_an_action_after_the_typing_may_have_sent_it() {
     assert!(unsent_fact(&[typed_into("Reference"), failed], &page).is_some());
 }
 
+/// Two threads to reply in: the first reply's "Your reply was posted." still showed beside the second thread's open
+/// reply box, and Jev judged both replies posted. The page now says which step put that text there, while it shows.
+#[test]
+fn test_text_an_earlier_commit_put_on_the_page_is_named_with_that_step() {
+    let url = "https://example.test/";
+    let posted = HistoryEntry {
+        put: Some((url.into(), vec!["Thanks.".into(), "Your reply was posted.".into()])),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post (Ada)"), StepOutcome::Executed, true)
+    };
+    let reply = HistoryEntry::new(Some(Operation::Click), Some("Reply (Grace)"), StepOutcome::Executed, true);
+    let page = Observation {
+        viewport_text: "Ada\nThanks.".into(),
+        offscreen_text: "Your reply was posted.".into(),
+        ..observation(&[])
+    };
+    let fact = super::helpers::earlier_text_fact(&[posted.clone(), reply.clone()], &page).expect("a fact");
+    assert_eq!(
+        fact,
+        "The text \"Thanks.\", \"Your reply was posted.\" appeared when the run clicked 'Post (Ada)'; it tells of that step, not of any later one."
+    );
+    // The step that just put it there says so in its own effect, text the page no longer shows is not named, and text
+    // put on another page is not this page's.
+    assert_eq!(super::helpers::earlier_text_fact(std::slice::from_ref(&posted), &page), None);
+    let cleared = Observation { viewport_text: "Ada".into(), ..observation(&[]) };
+    assert_eq!(super::helpers::earlier_text_fact(&[posted.clone(), reply.clone()], &cleared), None);
+    // A notice raised again by a later post is that post's, not the first's.
+    let again = HistoryEntry {
+        put: Some((url.into(), vec!["Your reply was posted.".into()])),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post (Grace)"), StepOutcome::Executed, true)
+    };
+    let fact = super::helpers::earlier_text_fact(&[posted.clone(), again, reply.clone()], &page).expect("a fact");
+    assert!(fact.contains("\"Your reply was posted.\" appeared when the run clicked 'Post (Grace)'"), "{fact}");
+    assert!(fact.contains("\"Thanks.\" appeared when the run clicked 'Post (Ada)'"), "{fact}");
+    assert!(!fact.contains("\"Your reply was posted.\" appeared when the run clicked 'Post (Ada)'"), "{fact}");
+    let elsewhere = Observation { url: "https://example.test/other".into(), ..page };
+    assert_eq!(super::helpers::earlier_text_fact(&[posted, reply], &elsewhere), None);
+}
+
 fn buttons_at(url: &str, labels: &[&str]) -> Observation {
     Observation { url: url.into(), ..observation(&labels.iter().map(|label| button(label)).collect::<Vec<_>>()) }
 }
@@ -2567,7 +2605,7 @@ async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opene
 #[tokio::test]
 async fn test_the_done_check_is_told_each_commit_the_run_sent_and_what_the_page_then_showed() {
     let post = |put: &[&str]| HistoryEntry {
-        put: put.iter().map(|piece| piece.to_string()).collect(),
+        put: Some(("https://example.test/".into(), put.iter().map(|piece| piece.to_string()).collect())),
         commit: Some(Commit::Taken),
         ..HistoryEntry::new(Some(Operation::Click), Some("Post (cjber / Author)"), StepOutcome::Executed, true)
     };
