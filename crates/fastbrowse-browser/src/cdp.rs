@@ -51,6 +51,8 @@ pub const CDP_PAGE_SECONDS: f64 = 10.0;
 pub const CDP_DEADLINES_BEFORE_STOP: u32 = 2;
 /// CDP's generic server error. Unclassified replies keep the existing document-loss recovery.
 pub const SERVER_ERROR: i64 = -32000;
+/// Chrome's reply to a command sent to a session that has detached.
+pub const SESSION_NOT_FOUND: i64 = -32001;
 
 const APPROVAL_HINT: &str = "If this is a Chrome you started yourself, it may be waiting for you to approve remote \
                              debugging, or the address may be stale; check the browser window and the address, then \
@@ -170,8 +172,14 @@ enum Outgoing {
 #[derive(Default)]
 struct State {
     next_id: u64,
-    pending: HashMap<u64, oneshot::Sender<Reply>>,
+    pending: HashMap<u64, Pending>,
     closed: Option<Arc<str>>,
+}
+
+/// A call waiting for its reply, and the session it addressed.
+struct Pending {
+    session: Option<Arc<str>>,
+    tx: oneshot::Sender<Reply>,
 }
 
 struct Inner {
@@ -403,7 +411,7 @@ impl Cdp {
             }
             state.next_id += 1;
             let id = state.next_id;
-            state.pending.insert(id, tx);
+            state.pending.insert(id, Pending { session: session.map(Arc::from), tx });
             id
         };
         // Removes the entry however this future ends: replied, failed, or dropped mid-wait.
@@ -614,7 +622,7 @@ impl Inner {
     fn dispatch(&self, message: Incoming) {
         if let Some(id) = message.id {
             // A reply nobody waits for any more (its caller was dropped) is read and discarded here.
-            let Some(tx) = self.state.lock().unwrap().pending.remove(&id) else { return };
+            let Some(Pending { tx, .. }) = self.state.lock().unwrap().pending.remove(&id) else { return };
             let reply = match message.error {
                 Some(error) => {
                     let failure = error.failure.or_else(|| ProtocolFailure::of_chrome_message(&error.message));
@@ -626,6 +634,17 @@ impl Inner {
             return;
         }
         let Some(method) = message.method else { return };
+        // Chrome drops the replies a detached session still owed, while a command sent after the detach is refused at
+        // once. A wait's hold on a frame removed from its page therefore ended or hung for good depending on which
+        // came first: both now get the refusal.
+        if method == "Target.detachedFromTarget"
+            && let Some(child) = message.params["sessionId"].as_str()
+        {
+            let mut state = self.state.lock().unwrap();
+            for (_, Pending { tx, .. }) in state.pending.extract_if(|_, p| p.session.as_deref() == Some(child)) {
+                let _ = tx.send(Err(CdpError::Protocol { code: SESSION_NOT_FOUND, failure: None, reason: None }));
+            }
+        }
         let event = Event { method, session: message.session_id, params: message.params };
         let handlers = self.handlers.lock().unwrap().clone();
         for handler in handlers {
@@ -638,7 +657,7 @@ impl Inner {
         if state.closed.is_none() {
             state.closed = Some(why.clone());
         }
-        for (_, tx) in state.pending.drain() {
+        for (_, Pending { tx, .. }) in state.pending.drain() {
             let _ = tx.send(Err(CdpError::Closed(why.clone())));
         }
     }
@@ -668,7 +687,10 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         let (out, _) = mpsc::unbounded_channel();
         let inner = Inner {
-            state: Mutex::new(State { pending: HashMap::from([(7, tx)]), ..Default::default() }),
+            state: Mutex::new(State {
+                pending: HashMap::from([(7, Pending { session: None, tx })]),
+                ..Default::default()
+            }),
             handlers: Default::default(),
             out,
             answered: false.into(),
@@ -677,6 +699,31 @@ mod tests {
         };
         inner.dispatch(serde_json::from_value(response).unwrap());
         rx.await.unwrap().unwrap_err()
+    }
+
+    /// A frame removed from its page detaches its session, and Chrome drops what that session owed: a wait's hold on it
+    /// hung, while one sent a moment later was refused and ended the wait.
+    #[tokio::test]
+    async fn a_detached_session_refuses_what_it_owed_and_only_that() {
+        let (gone, owed) = oneshot::channel();
+        let (kept, other) = oneshot::channel();
+        let (out, _) = mpsc::unbounded_channel();
+        let pending = HashMap::from([
+            (7, Pending { session: Some("frame".into()), tx: gone }),
+            (8, Pending { session: Some("tab".into()), tx: kept }),
+        ]);
+        let inner = Inner {
+            state: Mutex::new(State { pending, ..Default::default() }),
+            handlers: Default::default(),
+            out,
+            answered: false.into(),
+            deadlines: Default::default(),
+            pong: false.into(),
+        };
+        inner.dispatch(Incoming::event("Target.detachedFromTarget", serde_json::json!({"sessionId": "frame"})));
+        assert!(matches!(owed.await.unwrap(), Err(CdpError::Protocol { code: SESSION_NOT_FOUND, .. })));
+        assert_eq!(inner.state.lock().unwrap().pending.keys().collect::<Vec<_>>(), vec![&8]);
+        drop(other);
     }
 
     #[tokio::test]
@@ -725,7 +772,10 @@ mod tests {
             let (tx, rx) = oneshot::channel();
             let (out, _) = mpsc::unbounded_channel();
             let inner = Inner {
-                state: Mutex::new(State { pending: HashMap::from([(7, tx)]), ..Default::default() }),
+                state: Mutex::new(State {
+                    pending: HashMap::from([(7, Pending { session: None, tx })]),
+                    ..Default::default()
+                }),
                 handlers: Default::default(),
                 out,
                 answered: false.into(),
