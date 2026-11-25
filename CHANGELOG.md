@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- A control the page has disabled now shows in the page the driver reads, marked `disabled` and offering nothing ([#1415](https://github.com/agent-labs-dev/fastbrowse/issues/1415), [#1561](https://github.com/agent-labs-dev/fastbrowse/issues/1561)). It used to be left out, so a Save that stayed disabled after an edit read the same as a page with no Save: on a profile form whose Save waits for a required country, the driver found no Save, pressed Enter in the bio field to submit it and typed a newline into the bio. A click or key on a disabled control is refused with the reason that it is disabled, a step that enables or disables a control says so (`Save disabled: True -> False`), and a page whose Save became usable is a new page state. Over HTTP, a control inside a `<fieldset disabled>` or an `aria-disabled` container is disabled as a browser disables it. A planned action naming an id the page does not have is now reported as that missing id, not as a page change. `Control.disabled` carries the flag in the Python model.
+- A document served with a CSP `sandbox` that blocks script, such as a raw file on raw.githubusercontent.com, now loads in the extension's browser: readiness also waits on the browser's own lifecycle events, so a page that cannot run script is ready when its document has loaded and is no longer waited on until the deadline. An MCP result for a run that ended `unavailable` or `error` now carries the cause in `next_step`, which a caller reads first, instead of pointing to the `error` field.
 
 ## [0.12.0] - 2026-11-25
 
