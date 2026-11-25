@@ -215,6 +215,29 @@ async fn test_hung_input_reports_before_the_normal_command_deadline() {
     h.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_that_runs_no_script_navigates_and_observes() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = serve_on(
+        listener,
+        Arc::new(|_: &str| Reply {
+            headers: vec![
+                ("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox".into()),
+                ("X-Content-Type-Options", "nosniff".into()),
+            ],
+            ..Reply::of("text/plain; charset=utf-8", "# Title\nfirst line\n")
+        }),
+    );
+    let Some(h) = harness().await else { return };
+    let url = format!("http://127.0.0.1:{port}/README.md");
+    timeout(Duration::from_secs(30), h.page.navigate(&url, None)).await.expect("no hang").expect("navigate");
+    // A CSP sandbox without allow-scripts, as raw.githubusercontent.com serves its files: the page fires no timer, so
+    // nothing the load or the settle waits for may depend on one (#1548, #1539).
+    let observation = timeout(Duration::from_secs(30), h.page.observe()).await.expect("no hang").expect("observe");
+    assert!(observation.viewport_text.contains("first line"), "{observation:?}");
+    h.close().await;
+}
+
 // -- test_navigation.py: directed navigation to a caller-supplied address, through the real browser -------------
 
 /// What the agent's masking rests on (#1381): Chrome drops an address's userinfo from `location.href`, which the

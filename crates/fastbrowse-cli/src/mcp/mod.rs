@@ -107,9 +107,10 @@ impl Default for ServerConfig {
     }
 }
 
-/// What a caller can do about a status other than `complete`.
-pub fn next_step(status: Status, allow_authorize: bool) -> Option<&'static str> {
-    Some(match status {
+/// What a caller can do about a status other than `complete`. A run that ended `unavailable` or `error` names its
+/// cause too, since the caller reads this field first and "see error" sent it to a second one.
+pub fn next_step(status: Status, allow_authorize: bool, error: Option<&str>) -> Option<String> {
+    let fixed = match status {
         Status::Complete => return None,
         Status::Unverified => "The run could not verify every requirement or answer claim. Treat it as unconfirmed.",
         Status::NeedsConfirmation if allow_authorize => {
@@ -138,8 +139,12 @@ pub fn next_step(status: Status, allow_authorize: bool) -> Option<&'static str> 
         }
         Status::BudgetExceeded => "A limit was reached. Call again with a higher explicit limit or split the task.",
         Status::Stuck | Status::ObservationLimit => "Try a start URL closer to the goal, or a narrower task.",
-        Status::Unavailable => "A model or browser provider was unavailable; see error. Call again later.",
-        Status::Error => "A model or browser failure; see error.",
+        Status::Unavailable => "A model or browser provider was unavailable. Call again later.",
+        Status::Error => "A model or browser failure.",
+    };
+    Some(match (status, error.filter(|error| !error.is_empty())) {
+        (Status::Unavailable | Status::Error, Some(error)) => format!("{fixed} Cause: {error}"),
+        _ => fixed.to_owned(),
     })
 }
 
@@ -373,7 +378,7 @@ pub fn browse_result(
         "answer": result.answer,
         "data": result.data,
         "citations": citations,
-        "next_step": next_step(result.status, config.allow_authorize),
+        "next_step": next_step(result.status, config.allow_authorize, result.error.as_deref()),
         "error": result.error,
         "final_url": result.final_url,
         "live_url": live_url,

@@ -970,3 +970,16 @@ async fn a_deadline_keeps_an_assembly_error_receipt_returned_during_cleanup() {
     let kept: CancellationReceipt = parsed(result["_meta"]["fastbrowse.ai/receipt"].clone());
     assert_eq!(kept, receipt);
 }
+
+#[test]
+fn an_unavailable_or_failed_run_names_its_cause_in_next_step() {
+    use fastbrowse_cli::mcp::next_step;
+    let cause = "Runtime.evaluate exceeded its command deadline";
+    for status in [Status::Unavailable, Status::Error] {
+        let told = next_step(status, false, Some(cause)).expect("a failed run has a next step");
+        assert!(told.contains(cause), "{told}");
+        assert!(!next_step(status, false, None).expect("next step").contains("Cause"));
+    }
+    assert!(next_step(Status::Complete, false, Some(cause)).is_none());
+    assert!(!next_step(Status::Stuck, false, Some(cause)).expect("next step").contains(cause));
+}

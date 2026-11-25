@@ -1715,22 +1715,28 @@ impl CdpPage {
             }
             // Page.navigate can answer before the new document has its own context, so this can run in the document
             // being replaced, and Chrome drops the promise with it ("Promise was collected"). Ask the new one.
-            let state = match self
-                .evaluate(
-                    session_id,
-                    &format!(
-                        "new Promise(resolve => {{ \
-                         if (document.readyState !== 'loading') {{ resolve(document.readyState); return; }} \
-                         const done = () => {{ if (document.readyState !== 'loading') finish(); }}; \
-                         const finish = () => {{ clearTimeout(timer); \
-                         document.removeEventListener('readystatechange', done); resolve(document.readyState); }}; \
-                         const timer = setTimeout(finish, {}); \
-                         document.addEventListener('readystatechange', done); }})",
-                        py_float(remaining.as_secs_f64() * 1000.0)
-                    ),
-                )
-                .await
-            {
+            //
+            // The page resolves the promise from its own `readystatechange`, and a document served with a CSP
+            // `sandbox` that lacks `allow-scripts` (raw.githubusercontent.com does) runs no script, so it never would.
+            // The browser reports the same moment as a lifecycle event, so that is raced against it: a page that can
+            // run script answers in the one evaluation, one that cannot is ready when its document has loaded.
+            let script = format!(
+                "new Promise(resolve => {{ \
+                     if (document.readyState !== 'loading') {{ resolve(document.readyState); return; }} \
+                     const done = () => {{ if (document.readyState !== 'loading') finish(); }}; \
+                     const finish = () => {{ clearTimeout(timer); \
+                     document.removeEventListener('readystatechange', done); resolve(document.readyState); }}; \
+                     const timer = setTimeout(finish, {}); \
+                     document.addEventListener('readystatechange', done); }})",
+                py_float(remaining.as_secs_f64() * 1000.0)
+            );
+            let state = tokio::select! {
+                state = self.evaluate(session_id, &script) => state,
+                loaded = self.document_loaded(remaining.as_secs_f64()) => {
+                    return Ok(loaded);
+                }
+            };
+            let state = match state {
                 Err(BrowserError::ContextLost(_)) => {
                     sleep(secs(0.05)).await;
                     continue;
@@ -1831,6 +1837,28 @@ impl CdpPage {
         self.session.wait_for_lifecycle(mark, seconds).await
     }
 
+    /// Whether the document the active tab is navigating to has loaded within `seconds`, from the browser's own
+    /// lifecycle events. Pends for good when no navigation is under way, so a read of an already loaded document is
+    /// never preempted by it.
+    async fn document_loaded(&self, seconds: f64) -> bool {
+        if !self.session.navigating() {
+            return std::future::pending().await;
+        }
+        let deadline = Instant::now() + secs(seconds);
+        loop {
+            // The mark is taken before the check, so the event that lands the document between them wakes the wait.
+            let mark = self.session.lifecycle_mark();
+            if !self.session.navigating() {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            self.session.wait_for_lifecycle(mark, remaining.as_secs_f64()).await;
+        }
+    }
+
     #[doc(hidden)]
     pub async fn settled_fingerprint(&self) -> Result<(bool, Option<String>), BrowserError> {
         self.settled_within(SETTLE_SECONDS).await
@@ -1850,7 +1878,22 @@ impl CdpPage {
     /// as the poll it replaces did.
     pub async fn settled_within(&self, seconds: f64) -> Result<(bool, Option<String>), BrowserError> {
         let script = self.settle_script(seconds);
-        let result = self.evaluate(&self.session.active_session_id()?, &script).await?;
+        let session_id = self.session.active_session_id()?;
+        // The page's own deadline timer ends the promise at `seconds`, but a document that runs no scripts (a CSP
+        // `sandbox` without `allow-scripts`) fires no timer and no animation frame, and the evaluate then waited
+        // out the command deadline. The same bound is held here, and the page is sampled once without waiting: a
+        // page that cannot run a timer cannot be changing either.
+        let result = match timeout(secs(seconds.max(0.0)), self.evaluate(&session_id, &script)).await {
+            Ok(result) => result?,
+            Err(_) => {
+                let sample = format!(
+                    "(() => {{ const s = ({})('fingerprint'); \
+                     return [Boolean(s && s.ready), s && s.ready ? s.fingerprint : null, 'deadline']; }})()",
+                    self.page_js
+                );
+                self.evaluate(&session_id, &sample).await?
+            }
+        };
         match result.as_array().map(Vec::as_slice) {
             Some([Value::Bool(stable), fingerprint, Value::String(_end)])
                 if fingerprint.is_string() || fingerprint.is_null() =>

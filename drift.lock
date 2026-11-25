@@ -13,7 +13,7 @@ sig = "2f79d70307c4484c"
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-cli/src/mcp/mod.rs"
-sig = "bf4c86e284456ed0"
+sig = "18421c479344cb29"
 
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
@@ -78,7 +78,7 @@ sig = "fe9bf6648dd4bda9"
 [[bindings]]
 doc = "blog/mcp-browser-tool.md"
 target = "crates/fastbrowse-cli/src/mcp/mod.rs"
-sig = "bf4c86e284456ed0"
+sig = "18421c479344cb29"
 
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
