@@ -724,8 +724,11 @@ async fn test_slotted_items_keep_their_rendered_places() {
         ("inline host", format!("<ul><li>Outer first</li><li>{host}</li></ul>"), shadow_list.clone()),
     ] {
         set_body(&h.session, &body).await;
-        eval_active(&h.session, &format!("document.querySelector('#host').attachShadow({{mode:'open'}}).innerHTML = '{shadow}'"))
-            .await;
+        eval_active(
+            &h.session,
+            &format!("document.querySelector('#host').attachShadow({{mode:'open'}}).innerHTML = '{shadow}'"),
+        )
+        .await;
         let capture = content_capture(&h.page).await;
         let place = |text: &str| {
             let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text);
