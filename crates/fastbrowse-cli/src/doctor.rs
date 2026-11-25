@@ -96,6 +96,8 @@ async fn check_chrome(binary: &Path) -> (Level, String) {
     }
 }
 
+const VERSION_OUTPUT_LIMIT: usize = 4096;
+
 #[cfg(not(windows))]
 async fn probe_version(command: &mut Command, limit: Duration) -> Result<String, String> {
     #[cfg(unix)]
@@ -112,7 +114,10 @@ async fn probe_version(command: &mut Command, limit: Duration) -> Result<String,
     // Read before waiting: a wrapper can leave stdout open in a helper after exiting, and reaping it first would
     // release the PID that names the process group we need to signal if the read times out.
     let result = tokio::time::timeout(limit, async {
-        stdout.read_to_end(&mut bytes).await?;
+        (&mut stdout).take((VERSION_OUTPUT_LIMIT + 1) as u64).read_to_end(&mut bytes).await?;
+        if bytes.len() > VERSION_OUTPUT_LIMIT {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "--version output exceeds 4096 bytes"));
+        }
         child.wait().await
     });
     let status = match result.await {
