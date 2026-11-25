@@ -150,7 +150,7 @@ def test_a_campaign_takes_only_a_json_boolean_for_smoke(payload: str, passes: bo
         ("stretch-dev", True),
         ("core dev heldout", True),
         ("sweep", False),
-        ("   ", False),
+        ("", True),
         ("core --output /tmp/elsewhere", False),
         ("core,dev", False),
     ],

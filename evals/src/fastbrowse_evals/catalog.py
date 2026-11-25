@@ -79,3 +79,9 @@ def export(path: Path, *, check: bool = False) -> None:
             raise ValueError("public benchmark metadata differs from the canonical Parallax task source")
     else:
         path.write_text(content)
+
+
+def excluded_ids(arm: str) -> set[str]:
+    """The tasks the catalog says `arm` cannot attempt; campaign execution skips them whatever the arm advertises."""
+    catalog = json.loads(PATH.read_text())
+    return {task["id"] for tasks in catalog["suites"].values() for task in tasks if arm in task["excluded"]}

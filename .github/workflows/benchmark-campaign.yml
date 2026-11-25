@@ -92,9 +92,9 @@ on:
         required: true
         default: "3"
       suites:
-        description: Space separated Parallax suites
-        required: true
-        default: "core dev stretch-dev"
+        description: Space separated Parallax suites; empty runs every suite of the catalog, which is what a publication needs
+        required: false
+        default: ""
       smoke:
         description: One repeat to find bugs from traces. Never publishable; with groups all it runs the head-to-head group
         required: true
@@ -148,7 +148,7 @@ concurrency:
 env:
   UV_PYTHON: "3.13"
   CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
-  SUITES: ${{ inputs.suites || github.event.client_payload.suites || 'core dev stretch-dev' }}
+  SUITES: ${{ inputs.suites || github.event.client_payload.suites || '' }}
   # A smoke run has one repeat whatever `repeat` says.
   REPEAT: ${{ (inputs.smoke || github.event.client_payload.smoke == true) && '1' || inputs.repeat || github.event.client_payload.repeat || '3' }}
   SMOKE: ${{ inputs.smoke || github.event.client_payload.smoke == true }}
@@ -195,7 +195,6 @@ jobs:
           fi
           # Each word names a task-source suite that the run step translates to task ids.
           read -ra chosen <<< "$SUITES"
-          test "${#chosen[@]}" -gt 0 || { echo "::error::suites names no suite"; exit 1; }
           for suite in "${chosen[@]}"; do
             case "$suite" in
               core|dev|stretch-dev|heldout) ;;
@@ -493,6 +492,10 @@ jobs:
           mkdir -p "$(dirname "$OUT")"
           read -ra arms <<< "$ARMS"
           read -ra suites <<< "$SUITES"
+          # No suite named means every suite of the catalog, the set a publication requires.
+          if test "${#suites[@]}" -eq 0; then
+            mapfile -t suites < <(jq -r '.suites | keys[]' ../src/fastbrowse/evals/benchmark-catalog.json)
+          fi
           read -ra only <<< "$ONLY"
           if test "${#only[@]}" -gt 0; then
             selection=(source=fastbrowse "${only[@]}")
@@ -511,6 +514,23 @@ jobs:
             "${arms[@]}")
           for invocation in "${invocations[@]}"; do
             IFS=$'\t' read -r public harness model <<< "$invocation"
+            # The catalog lists each task an arm cannot attempt (a credential or pause task, for example); an arm
+            # that advertises the capability anyway must not run it, so exclusions come from the catalog, not the arm.
+            mapfile -t skip < <(uv run --no-sync python -c \
+              'import sys; from fastbrowse_evals.catalog import excluded_ids; print(*sorted(excluded_ids(sys.argv[1])), sep="\n")' \
+              "$public")
+            arm_selection=()
+            arm_tasks=0
+            for item in "${selection[@]}"; do
+              case "$item" in
+                source=*) arm_selection+=("$item"); continue ;;
+              esac
+              printf '%s\n' "${skip[@]}" | grep -Fxq -- "$item" && continue
+              arm_selection+=("$item"); arm_tasks=$((arm_tasks + 1))
+            done
+            if test "$arm_tasks" -eq 0; then
+              echo "::notice::$public has no task of this selection to run in the catalog"; continue
+            fi
             run_out="$OUT/$CAMPAIGN_ID-$GROUP-$public"
             mirror="$OUT/mirror-$CAMPAIGN_ID-$GROUP-$public"
             mkdir -p "$run_out" "$mirror"
@@ -565,7 +585,7 @@ jobs:
             test -z "${model:-}" || args+=(--model "$model")
             test -z "${{ matrix.conc }}" || args+=(--concurrency "${{ matrix.conc }}")
             set +e
-            uv run --no-sync parallax run "${selection[@]}" "${args[@]}"
+            uv run --no-sync parallax run "${arm_selection[@]}" "${args[@]}"
             status=$?
             set -e
             # Parallax writes this receipt once Langfuse holds the whole run, before it judges the run's quality, so a
