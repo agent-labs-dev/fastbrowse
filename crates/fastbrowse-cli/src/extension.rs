@@ -284,7 +284,7 @@ fn status_json(installs: &[Install], scan: &HostScan, directory: &Path) -> serde
     json!({
         "registered": !installs.is_empty(),
         "installs": installs,
-        "hostDirectory": directory,
+        "hostDirectory": directory.to_string_lossy(),
         "connected": scan.connected.iter().map(|(_, host)| json!({
             "label": host.label,
             "browser": host.browser,

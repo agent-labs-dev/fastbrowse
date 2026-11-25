@@ -6,6 +6,8 @@ import { test } from 'node:test';
 
 import { FastbrowseError } from '../src/errors.ts';
 import { readExtensionStatus } from '../src/extension.ts';
+import { Fastbrowse } from '../src/index.ts';
+import { serverBinary } from './server.ts';
 
 /** An executable that runs `body` as a shell script. */
 function script(body: string): string {
@@ -33,13 +35,25 @@ test('extension status passes the environment the caller gave', async () => {
   assert.equal(status.hostDirectory, '/somewhere');
 });
 
-test('extension status rejects with the binary\'s own message when it fails', async () => {
+test("extension status rejects with the binary's own message when it fails", async () => {
   const binary = script('echo "fastbrowse: cannot parse installs.json" >&2; exit 1');
   await assert.rejects(readExtensionStatus(binary, process.env), (error: unknown) => {
     assert.ok(error instanceof FastbrowseError);
     assert.match(error.message, /cannot parse installs.json/);
     return true;
   });
+});
+
+test('Fastbrowse.extensionStatus reads the state through the started binary', async () => {
+  const hosts = mkdtempSync(join(tmpdir(), 'fastbrowse-hosts-'));
+  const fb = await Fastbrowse.start({ binaryPath: serverBinary, env: { FASTBROWSE_EXTENSION_DIR: hosts } });
+  try {
+    const status = await fb.extensionStatus();
+    assert.equal(status.hostDirectory, hosts);
+    assert.deepEqual(status.connected, []);
+  } finally {
+    await fb.close();
+  }
 });
 
 test('extension status rejects when the binary prints something that is not a status', async () => {

@@ -109,7 +109,8 @@ export class Fastbrowse {
         addon.version(),
         browserParams(options),
         () => resolveBinary(options.binaryPath, env),
-        env,
+        // An in-process run reads the host records from this process's environment, not `options.env`.
+        process.env,
       );
     }
     const binary = resolveBinary(options.binaryPath, env);
@@ -163,7 +164,7 @@ export class Fastbrowse {
    * host, which browsers are connected (by the label `extensionBrowser` takes), and which hosts are present but
    * unreachable from this process. It spends nothing and may be polled. It reads the same host records a run does.
    */
-  extensionStatus(): Promise<ExtensionStatus> {
+  async extensionStatus(): Promise<ExtensionStatus> {
     return readExtensionStatus(this.#binary(), this.#env);
   }
 
