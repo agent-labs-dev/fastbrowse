@@ -210,7 +210,10 @@ async fn test_openrouter_at_another_address_is_spoken_to_as_openrouter_with_its_
     assert_eq!(request.url, "http://127.0.0.1:9000/llm/responses");
     assert!(body(&request).get("provider").is_some(), "{:?}", body(&request));
     assert_eq!(request.header("authorization"), Some("Bearer local-secret"));
-    assert!(!format!("{request:?}").contains("openrouter-secret"));
+    let sent = format!("{:?}{}", request.headers, String::from_utf8_lossy(&request.body));
+    let foreign: Vec<_> =
+        EVERY_KEY.iter().map(|(_, key)| *key).filter(|key| *key != "local-secret" && sent.contains(key)).collect();
+    assert!(foreign.is_empty(), "the proxy was sent {foreign:?}");
 }
 
 #[test]

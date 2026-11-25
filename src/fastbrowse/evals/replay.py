@@ -452,8 +452,8 @@ class Spend:
 
 def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
     """Forward to OpenRouter with the real key. The agent speaks to the proxy as it speaks to OpenRouter, provider
-    routing included, so the body goes on as it is, but for usage accounting, asked for so every response carries its
-    cost; the key is computed from the body the agent sent.
+    routing included, so the body goes on as it is, but for usage accounting on Chat Completions, asked for so every
+    response carries its cost; the key is computed from the body the agent sent.
     """
     client = httpx.Client(timeout=timeout)
 
@@ -461,7 +461,8 @@ def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
         mount = next(m for m in UPSTREAMS if path.startswith(m + "/"))
         url = UPSTREAMS[mount] + path[len(mount) :]
         payload = json.loads(body)
-        if mount == LLM_MOUNT and isinstance(payload, dict):
+        # Chat Completions reports cost only when asked; the Responses API always reports it and defines no `usage`.
+        if path == LLM_MOUNT + "/chat/completions" and isinstance(payload, dict):
             payload.setdefault("usage", {"include": True})
         try:
             response = client.post(url, json=payload, headers={"Authorization": f"Bearer {api_key}"})
