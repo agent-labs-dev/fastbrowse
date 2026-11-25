@@ -16,7 +16,7 @@ use fastbrowse_core::safety::may_be_irreversible;
 use serde_json::{Map, Value, json};
 
 use super::finishing::UNREPORTED;
-use super::helpers::{decision_label, describe, dialog_answered, drew_something, netloc_of, path_of, scheme_of};
+use super::helpers::{decision_label, describe, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, uncover, withheld};
 use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key};
 
@@ -663,16 +663,6 @@ impl Agent {
             // page change the next observation finds: a download leaves the page as it was.
             if effect_now.is_none() {
                 effect_now = result.detail.as_deref().map(|detail| self.redact(detail));
-            }
-            // A dialog answered leaves no control to name and often a page unchanged but for its reload, so the step is
-            // judged done only if it says which question it answered and how: told "dialog" and a reloaded page, Jev
-            // judged a confirmed delete not carried out and the finish was refused until the run stalled.
-            if executed && let (Some(dialog), Some(accepted)) = (&observation.dialog, action.accept_dialog) {
-                let answered = dialog_answered(dialog, accepted);
-                effect_now = Some(match effect_now {
-                    Some(detail) => format!("{answered}; {detail}"),
-                    None => answered,
-                });
             }
             act = result;
         }

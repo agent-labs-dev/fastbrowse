@@ -94,13 +94,6 @@ pub(crate) fn decision_label(decision: &Decision) -> Option<String> {
     }
 }
 
-/// What answering `dialog` did, for the step's record: the question it asked and whether the run accepted it. The
-/// message is the observation's, already masked.
-pub(crate) fn dialog_answered(dialog: &Dialog, accepted: bool) -> String {
-    let answer = if accepted { "accepted" } else { "dismissed" };
-    format!("{answer} the {} dialog {}", dialog.kind, text::repr(&dialog.message))
-}
-
 pub(crate) fn dialog_question(task: &str, dialog: Option<&Dialog>) -> Option<NoulQuestion> {
     let dialog = dialog?;
     if !["confirm", "prompt", "beforeunload"].contains(&dialog.kind.as_str()) {

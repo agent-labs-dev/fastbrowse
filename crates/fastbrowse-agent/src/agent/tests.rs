@@ -1805,14 +1805,8 @@ fn test_an_answered_dialog_is_recorded_with_its_question_and_answer() {
         message: "Delete Holiday post permanently?".into(),
         default_prompt: None,
     };
-    assert_eq!(
-        super::helpers::dialog_answered(&dialog, true),
-        "accepted the confirm dialog 'Delete Holiday post permanently?'"
-    );
-    assert_eq!(
-        super::helpers::dialog_answered(&dialog, false),
-        "dismissed the confirm dialog 'Delete Holiday post permanently?'"
-    );
+    assert_eq!(dialog.answered(true), "accepted the confirm dialog 'Delete Holiday post permanently?'");
+    assert_eq!(dialog.answered(false), "dismissed the confirm dialog 'Delete Holiday post permanently?'");
 }
 
 /// A task that orders a delete after opening a dialog and cancelling it ("then delete") was refused because the

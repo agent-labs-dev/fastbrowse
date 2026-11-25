@@ -275,6 +275,16 @@ pub struct Dialog {
     pub default_prompt: Option<String>,
 }
 
+impl Dialog {
+    /// What answering this dialog did, for the step's record: the question it asked and whether the run accepted it.
+    /// Without it a confirmed delete reads as a bare "dialog" step, and the check on whether the task's steps were
+    /// carried out scored a real delete 0.39 to 0.67.
+    pub fn answered(&self, accepted: bool) -> String {
+        let answer = if accepted { "accepted" } else { "dismissed" };
+        format!("{answer} the {} dialog {}", self.kind, text::repr(&self.message))
+    }
+}
+
 fn http_status<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
     match lax::opt_int(d)? {
         Some(status) if !(100..=999).contains(&status) => {
