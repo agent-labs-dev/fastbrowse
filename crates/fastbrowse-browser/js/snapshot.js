@@ -630,6 +630,13 @@
               e.getAttribute('aria-selected'),
             ]),
           );
+        // A fill whose only visible effect is enabling Save changed the page: a Wait that ignored it waited out its
+        // whole budget for a change that had already happened (#1415).
+        if (
+          (e.matches('button,input,select,textarea,fieldset') || e.hasAttribute('aria-disabled')) &&
+          e.checkVisibility({checkVisibilityCSS: true})
+        )
+          hashText(JSON.stringify([e.matches(':disabled'), e.getAttribute('aria-disabled') === 'true']));
         // A role key can change only the widget's announced value, without editing text or an input field.
         if (
           (e.matches('input[type="range"],input[type="number"]') || ['slider', 'spinbutton'].includes(e.getAttribute('role'))) &&
@@ -958,7 +965,7 @@
       return false;
     if (!choice) return true;
     const r = boxOf(e);
-    return r.width > 0 && r.height > 0 && !e.matches(':disabled') && !e.closest('[aria-disabled="true"]');
+    return r.width > 0 && r.height > 0;
   });
   registry.visible = visible;
   // Styled checkboxes and radios often hide the native input. Its visible label is the click
@@ -1453,13 +1460,13 @@
     return null;
   };
   for (const e of walk(document)) {
-    if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) continue;
+    if (!safe(e) || !visible(e) || e.closest('[inert]')) continue;
     const source = sourceOf(e);
-    if (
-      source !== e &&
-      (visible(source) || source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))
-    )
-      continue;
+    if (source !== e && (visible(source) || source.closest('[inert]'))) continue;
+    // A disabled control stays in the observation, marked and offered nothing: left out, a Save the page keeps
+    // disabled after a fill read the same as a page with no Save, and a run on the CurseForge description editor ended
+    // stuck without knowing its edit had not taken (#1415).
+    const disabled = [e, source].some(n => n.matches(':disabled') || !!n.closest('[aria-disabled="true"]'));
     const r = boxOf(e),
       x = r.x + r.width / 2,
       y = r.y + r.height / 2,
@@ -1611,6 +1618,10 @@
         !activation && !['textbox', 'searchbox'].includes(rname) &&
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
       base.operations.push('press');
+    if (disabled) {
+      base.disabled = true;
+      base.operations = [];
+    }
     controls.push(base);
   }
 

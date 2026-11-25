@@ -486,7 +486,8 @@ fn control_description(control: &Control, shared: bool) -> Map<String, Value> {
     if control.offscreen {
         element.insert("offscreen".into(), true.into());
     }
-    for (key, marked) in [("required", control.required), ("invalid", control.invalid)] {
+    for (key, marked) in [("required", control.required), ("invalid", control.invalid), ("disabled", control.disabled)]
+    {
         if marked == Some(true) {
             element.insert(key.into(), true.into());
         }

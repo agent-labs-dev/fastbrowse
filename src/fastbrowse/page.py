@@ -50,6 +50,8 @@ class Control(Frozen):
     layer: int | None = Field(default=None, exclude_if=lambda layer: layer is None)
     """The layer the control is drawn in, numbered from 1 per observation: an element out of flow, positioned against
     the page and drawn over it, as a popup a page appends to `<body>` is. None for a control in the page itself."""
+    disabled: bool | None = Field(default=None, exclude_if=lambda disabled: disabled is None)
+    """A control the page has disabled: it offers no operation until the page enables it."""
     required: bool | None = None
     """A field the page marks required (`required` or `aria-required`)."""
     invalid: bool | None = None
