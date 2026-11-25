@@ -40,7 +40,13 @@ pub fn record(environ: &HashMap<String, String>, result: &RunResult, started_at_
 fn write(environ: &HashMap<String, String>, record: &Value) {
     let Some(path) = destination(environ) else { return };
     if let Err(error) = append(&path, record) {
-        eprintln!("fastbrowse: could not write the run stats to {}: {error}", path.display());
+        eprintln!(
+            "{}",
+            fastbrowse_core::safety::logged(&format!(
+                "fastbrowse: could not write the run stats to {}: {error}",
+                path.display()
+            ))
+        );
     }
 }
 
@@ -52,12 +58,25 @@ pub struct Pending<'a> {
     started_at_ms: u64,
     started: std::time::Instant,
     elapsed: Option<Duration>,
+    /// Completed steps the runner has reported, so a run dropped mid-flight keeps the count it reached.
+    steps: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     recorded: bool,
 }
 
 impl<'a> Pending<'a> {
     pub fn start(environ: &'a HashMap<String, String>) -> Pending<'a> {
-        Pending { environ, started_at_ms: now_ms(), started: std::time::Instant::now(), elapsed: None, recorded: false }
+        Pending {
+            environ,
+            started_at_ms: now_ms(),
+            started: std::time::Instant::now(),
+            elapsed: None,
+            steps: Default::default(),
+            recorded: false,
+        }
+    }
+
+    pub fn steps(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        self.steps.clone()
     }
 
     /// Fix the duration at the moment the runner returned, before the trace and the report take their time.
@@ -83,7 +102,7 @@ impl Drop for Pending<'_> {
             &json!({
                 "at_ms": self.started_at_ms,
                 "status": Status::Cancelled.as_str(),
-                "steps": 0,
+                "steps": self.steps.load(std::sync::atomic::Ordering::Relaxed),
                 "duration_ms": elapsed.as_millis() as u64,
                 "dollars": 0.0,
                 "cost_complete": false,

@@ -434,9 +434,10 @@ fn limits(args: &Args) -> Result<Limits, ConfigurationError> {
     Ok(Limits { max_steps: args.max_steps, max_dollars: args.max_dollars, ..Limits::default() })
 }
 
-fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
+fn progress(streams: Streams, steps: Arc<std::sync::atomic::AtomicUsize>) -> fastbrowse_core::models::EventHandler {
     Arc::new(move |event: Event| {
         let streams = streams.clone();
+        let steps = steps.clone();
         Box::pin(async move {
             match event {
                 Event::Browser(browser) => {
@@ -445,6 +446,7 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
                     }
                 }
                 Event::Step(event) => {
+                    steps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let step = &event.step;
                     let label = options::step_label(step);
                     streams.eprint(&format!("  {:>2} {label} -> {}", step.index, step.outcome.as_str()));
@@ -531,16 +533,16 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         kept.trace().event("build", || context.build.fields());
         *context.kept_at.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(kept.path().to_owned());
     }
+    let mut pending = crate::stats::Pending::start(&context.environ);
     let host = Host {
         recipe_sink: recipe_sink.clone(),
         browser_api_key,
         settings: Some(settings),
         secrets: secrets.map(|secrets| Arc::new(secrets) as _),
-        on_event: Some(progress(context.streams.clone())),
+        on_event: Some(progress(context.streams.clone(), pending.steps())),
         http: kept.as_ref().map(|kept| fastbrowse_clients::http::Http::hyper().with_trace(kept.trace())),
         ..Host::default()
     };
-    let mut pending = crate::stats::Pending::start(&context.environ);
     let outcome = context.runner.run(task, host).await;
     pending.stop();
     let status = outcome.as_ref().ok().map(|result| result.status);
