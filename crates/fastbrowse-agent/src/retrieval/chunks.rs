@@ -149,6 +149,30 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
             Some((start, end, line, block))
         })
         .collect();
+    // A capture keeps the newlines a text node had in the page's source, where the observation reads the node as one
+    // piece, so the lines of one block that read as exactly one piece together are one more candidate beside each line.
+    // Only one piece: lines that read as several are separate text nodes, and the quote stays on the line that holds the
+    // reply.
+    let longest = pieces.iter().map(|(text, _)| text.chars().count()).max().unwrap_or(0);
+    let mut spans = Vec::new();
+    for first in 0..lines.len() {
+        let mut joined = lines[first].2.clone();
+        for last in first + 1..lines.len() {
+            if !std::ptr::eq(lines[first].3, lines[last].3) {
+                break;
+            }
+            joined.push_str(&lines[last].2);
+            if joined.chars().count() > longest {
+                break;
+            }
+            if pieces.iter().any(|(text, _)| *text == joined) {
+                spans.push((lines[first].0, lines[last].1, joined.clone(), lines[first].3));
+            }
+        }
+    }
+    let mut lines = lines;
+    lines.extend(spans);
+    lines.sort_by_key(|(start, end, _, _)| (*start, std::cmp::Reverse(*end)));
     let mut used = vec![false; pieces.len()];
     let mut matched = vec![false; lines.len()];
     let mut quotes = Vec::new();
@@ -164,7 +188,10 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
         for (line, run) in aligned(section, open.iter().map(|at| lines[*at].2.as_str())) {
             let at = open[line];
             let run = run.start + offset..run.end + offset;
-            matched[at] = true;
+            if matched[at] {
+                continue;
+            }
+            claim(&lines, &mut matched, at);
             used[run.clone()].fill(true);
             if pieces[run].iter().any(|(_, added)| *added) {
                 let (start, end, _, block) = &lines[at];
@@ -183,41 +210,23 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
             let Some(run) = (0..pieces.len()).find_map(|from| run_in(&pieces, &used, from, line, whole)) else {
                 continue;
             };
-            matched[at] = true;
+            claim(&lines, &mut matched, at);
             used[run.clone()].fill(true);
             if pieces[run].iter().any(|(_, added)| *added) {
                 quotes.push(evidence(&page, block, *start, *end));
             }
         }
     }
-    // A capture keeps the newlines a text node had in the page's source, where the observation reads the node as one
-    // piece, so a reply can span any number of lines of one block that none holds whole: the shortest run of
-    // consecutive lines that reads as it is one candidate.
-    for whole in [true, false] {
-        for first in 0..lines.len() {
-            let mut joined = String::new();
-            for last in first..lines.len() {
-                if matched[last] || !std::ptr::eq(lines[first].3, lines[last].3) {
-                    break;
-                }
-                joined.push_str(&lines[last].2);
-                if last == first {
-                    continue;
-                }
-                let Some(run) = (0..pieces.len()).find_map(|from| run_in(&pieces, &used, from, &joined, whole)) else {
-                    continue;
-                };
-                matched[first..=last].fill(true);
-                used[run.clone()].fill(true);
-                if pieces[run].iter().any(|(_, added)| *added) {
-                    quotes.push(evidence(&page, lines[first].3, lines[first].0, lines[last].1));
-                }
-                break;
-            }
-        }
-    }
     quotes.sort_by_key(|quote| quote.start);
     quotes
+}
+
+/// Mark the candidate at `at`, and every other that overlaps it, as taken: a line and the span it is part of are one
+/// stretch of the page.
+fn claim(lines: &[(i64, i64, String, &Block)], matched: &mut [bool], at: usize) {
+    for (other, (start, end, _, _)) in lines.iter().enumerate() {
+        matched[other] |= *start < lines[at].1 && lines[at].0 < *end;
+    }
 }
 
 /// The runs of consecutive pieces the lines read as, one per line at most, both in order, chosen for the most text

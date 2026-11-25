@@ -10683,3 +10683,6 @@ mod sent_notice_offscreen_decoy;
 
 #[path = "tests/sent_notice_multiline_source.rs"]
 mod sent_notice_multiline_source;
+
+#[path = "tests/sent_notice_multiline_repeated_word.rs"]
+mod sent_notice_multiline_repeated_word;
