@@ -142,6 +142,25 @@ async fn test_an_error_reply_to_the_check_ends_the_run_as_an_error_result_after_
     assert_eq!(after["result"]["status"], "complete");
 }
 
+/// A reply to a callback is learnt before it is settled, like every message the client sends: an error reply's
+/// message becomes the run's error, and with only requests learnt, a credential in it reached the result whole, the
+/// one holding a quote even past the structural scan (#1381).
+#[tokio::test]
+async fn test_an_error_reply_to_a_callback_is_learnt_before_the_result_quotes_it() {
+    for (message, password) in [("https://u:reply-pw@h.test/", "reply-pw"), ("https://u:re\"ply-pw@h.test/", "ply-pw")]
+    {
+        let mut client = serving(Browsing::default().runner(), settings());
+        let run = client.call("run", Some(run_params("run-1", json!({"until": true}))));
+        let asked = client.asked("run/until").await;
+        client.refuse(&asked, 400, message);
+        let reply = client.reply(run).await;
+        assert_eq!(reply["result"]["failure_kind"], "Callback/run/until/error/400", "{reply}");
+        let error = reply["result"]["error"].as_str().unwrap();
+        assert!(error.starts_with("run/until: ") && error.contains("@h.test/"), "{error}");
+        assert!(!error.contains(password), "{error}");
+    }
+}
+
 #[tokio::test]
 async fn test_a_reply_to_the_check_that_is_not_a_boolean_ends_the_run_as_an_error_result() {
     for answer in [Value::Null, json!("yes"), json!(1), json!({"ok": true})] {

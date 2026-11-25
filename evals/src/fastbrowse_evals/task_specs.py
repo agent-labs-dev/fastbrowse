@@ -33,7 +33,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "pypi-version",
         "https://pypi.org/project/httpx/",
-        "What is the latest released version of httpx?",
+        "What is the latest stable (non pre-release) version of httpx?",
         "lookup",
         "core",
         "complete",
@@ -45,7 +45,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "pypi-structured",
         "https://pypi.org/project/httpx/",
-        "Find the httpx package and report its name and latest released version.",
+        "Find the httpx package and report its name and latest stable (non pre-release) version.",
         "lookup",
         "core",
         "complete",
@@ -81,7 +81,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "pypi-newer",
         "https://pypi.org/",
-        "Which has the more recent latest release on PyPI, httpx or requests?",
+        "Which has the more recent latest stable (non pre-release) release on PyPI, httpx or requests?",
         "lookup",
         "core",
         "complete",
@@ -189,7 +189,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "google-flights",
         "https://www.google.com/travel/flights",
-        "Find the cheapest nonstop flight from London to New York on {today+28} and tell me the airline and price.",
+        "Today's date is {today}. Find the cheapest nonstop flight from London to New York on {today+28} and tell me the airline and price.",
         "widget",
         "core",
         "complete",
@@ -261,7 +261,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "flights-search",
         "https://www.google.com/travel/flights",
-        "Search for one-way nonstop flights from London to New York on {today+28}.",
+        "Today's date is {today}. Search for one-way nonstop flights from London to New York on {today+28}.",
         "navigate",
         "core",
         "complete",
@@ -477,7 +477,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "httpx-requires-python",
         "https://pypi.org/project/httpx/",
-        "What is the oldest Python version the latest httpx release supports?",
+        "What is the oldest Python version the latest stable (non pre-release) httpx release supports?",
         "lookup",
         "dev",
         "complete",
@@ -549,7 +549,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "stretch-date-range-monday",
         "https://testautomationpractice.blogspot.com/",
-        "Find Date Picker 3, the date range picker. Book a stay starting the next Monday that is strictly after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as.",
+        "Today's date is {today}. Find Date Picker 3, the date range picker. Book a stay starting on {next_monday}, the first Monday after today, for nine nights, then submit. Tell me the start and end dates you chose and what the page reports the length of the stay as.",
         "widget",
         "stretch-dev",
         "complete",
@@ -585,7 +585,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "stretch-calendar-first-friday",
         "https://practice.softwaretestingmentor.com/calendar/",
-        "Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows.",
+        "Today's date is {today}. Using the jQuery UI Datepicker (the calendar popup, not the native date input), navigate to next month and select its first Friday. Tell me the date, day, and month it shows.",
         "widget",
         "stretch-dev",
         "complete",
@@ -621,7 +621,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "stretch-datepicker-last-saturday",
         "https://testautomationpractice.blogspot.com/",
-        "Using Date Picker 2, the dd/mm/yyyy calendar, select the last Saturday of the month after next. Tell me the date the field shows.",
+        "Today's date is {today}. Using Date Picker 2, the dd/mm/yyyy calendar, select the last Saturday of the month after next. Tell me the date the field shows.",
         "widget",
         "stretch-dev",
         "complete",
@@ -645,7 +645,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "stretch-datepicker-last-sunday",
         "https://testautomationpractice.blogspot.com/",
-        "Using Date Picker 2, the dd/mm/yyyy calendar, select the last Sunday of the month after next. Tell me the date the field shows.",
+        "Today's date is {today}. Using Date Picker 2, the dd/mm/yyyy calendar, select the last Sunday of the month after next. Tell me the date the field shows.",
         "widget",
         "stretch-dev",
         "complete",
@@ -660,6 +660,78 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
         "Across every page of the Sequential Art category, how many books are rated one star, and which of them is the most expensive, at what price?",
         "lookup",
         "stretch-dev",
+        "complete",
+        False,
+        ("fastbrowse", "browser-use"),
+        (),
+        None,
+    ),
+    (
+        "heldout-laptops-priciest",
+        "https://webscraper.io/test-sites/e-commerce/static/computers/laptops",
+        "Across every page of the Laptops category, which is the most expensive laptop, and what does it cost?",
+        "lookup",
+        "heldout",
+        "complete",
+        False,
+        ("fastbrowse", "browser-use"),
+        (),
+        None,
+    ),
+    (
+        "heldout-tablets-cheapest",
+        "https://webscraper.io/test-sites/e-commerce/static/computers/tablets",
+        "Across every page of the Tablets category, which is the cheapest tablet, and what does it cost?",
+        "lookup",
+        "heldout",
+        "complete",
+        False,
+        ("fastbrowse", "browser-use"),
+        (),
+        None,
+    ),
+    (
+        "heldout-tables-username",
+        "https://webscraper.io/test-sites/tables",
+        "In the second table, what is the first name of the user whose username is @hp?",
+        "widget",
+        "heldout",
+        "complete",
+        False,
+        ("fastbrowse", "browser-use"),
+        (),
+        None,
+    ),
+    (
+        "heldout-turtles-discoverer",
+        "https://www.scrapethissite.com/pages/frames/",
+        "Open the turtle family Carettochelyidae from the list of families, and tell me who first discovered it and in what year.",
+        "widget",
+        "heldout",
+        "complete",
+        False,
+        ("fastbrowse", "browser-use"),
+        (),
+        None,
+    ),
+    (
+        "heldout-rfc-421",
+        "https://www.rfc-editor.org/rfc/rfc9110.html",
+        "Which section of RFC 9110 defines the 421 status code, and what is that section's title?",
+        "lookup",
+        "heldout",
+        "complete",
+        False,
+        ("fastbrowse", "browser-use"),
+        (),
+        None,
+    ),
+    (
+        "heldout-python-bit-count",
+        "https://docs.python.org/3.12/library/stdtypes.html",
+        "In the Python 3.12 documentation of built-in types, in which Python version was int.bit_count() added?",
+        "lookup",
+        "heldout",
         "complete",
         False,
         ("fastbrowse", "browser-use"),
@@ -793,6 +865,38 @@ def answer_model(task_id: str) -> type[BaseModel] | None:
     return _ANSWER_MODELS.get(task_id)
 
 
+# What a correct answer is, for the judge to read from the task's `data`. A task whose answer moves with the site
+# states the rule that finds it instead of a value.
+_STABLE_RELEASE = (
+    "The answer follows the latest stable release: the newest version that is not a pre-release or dev upload."
+    " Judge against the version the project page shows as the latest stable release when the run happened."
+)
+_INTENDED: dict[str, str] = {
+    "pypi-version": _STABLE_RELEASE,
+    "pypi-structured": _STABLE_RELEASE,
+    "pypi-newer": _STABLE_RELEASE + " Compare the upload dates of each project's latest stable release.",
+    "httpx-requires-python": _STABLE_RELEASE + " The oldest Python version is the lower bound of its Requires-Python.",
+    "stretch-books-sequential-art-one-star": "13 books are rated one star; the most expensive is The Sandman, Vol. 2: The Doll's House (The Sandman (volumes) #2) at £54.81.",
+    "stretch-books-young-adult-one-star": "11 books are rated one star; the most expensive is Don't Get Caught at £55.35.",
+    "stretch-books-nonfiction-five-star": "The three cheapest five-star books are Agnostic: A Spirited Manifesto at £12.51, Disrupted: My Misadventure in the Start-Up Bubble at £15.28 and Mother, Can You Not? at £16.89.",
+    "stretch-quotes-top-authors": "Albert Einstein has 10 quotes, J.K. Rowling 9 and Marilyn Monroe 7.",
+    "quotes-einstein-count": "Albert Einstein has 10 quotes across the site's 10 pages.",
+    "quotes-rowling-count": "J.K. Rowling has 9 quotes across the site's 10 pages.",
+    "books-mystery-cheapest": "The cheapest Mystery book is Tastes Like Fear (DI Marnie Rome #3) at £10.69.",
+    "books-travel-priciest": "The most expensive Travel book is A Year in Provence (Provence #1) at £56.88.",
+    "stretch-bstack-apple-samsung": "The three most expensive Samsung phones are Galaxy S20 Ultra at $1399, Galaxy Note 20 Ultra at $1299 and Galaxy S20+ at $1199.",
+    "stretch-bstack-apple-google": "The two cheapest Google phones are Pixel 2 at $399 and Pixel 3 at $599.",
+    "table-largest-due": "Jason Doe has the largest amount due in the first table, $100.00.",
+    "table-total-due": "The second table's four rows total $251.00 due: $50.00, $51.00, $100.00 and $50.00.",
+    "heldout-laptops-priciest": "The most expensive laptop is Asus ROG Strix SCAR Edition GL503VM-ED115T at $1799.00.",
+    "heldout-tablets-cheapest": "The cheapest tablet is Lenovo IdeaTab at $69.99.",
+    "heldout-tables-username": "The user with username @hp is Harry Potter, so the first name is Harry.",
+    "heldout-turtles-discoverer": "Carettochelyidae, the Pig-nosed turtle, was first discovered in 1887 by Boulenger.",
+    "heldout-rfc-421": "Section 15.5.20, titled 421 Misdirected Request.",
+    "heldout-python-bit-count": "int.bit_count() was added in Python 3.10.",
+}
+
+
 def _task_prompt(spec: TaskSpec) -> str:
     return f"Start at {spec.start_url}. {spec.task}"
 
@@ -809,8 +913,13 @@ def record(spec: TaskSpec) -> TaskRecord:
     }
     if spec.bitwarden_item is not None:
         data["bitwarden_item"] = spec.bitwarden_item
+    if outcome := _INTENDED.get(spec.id):
+        data["intended_outcome"] = outcome
     secrets = secret_env(spec)
     requires = {Capability.BROWSER}
+    # A task that passes by stopping before an unauthorized step needs a harness that can be told it is unauthorized.
+    if spec.expected_status == "needs_confirmation":
+        requires.add(Capability.AUTHORIZATION)
     if login := _LOGINS.get(spec.id):
         data["login_origin"] = login.origin
         requires.add(Capability.CREDENTIALS)

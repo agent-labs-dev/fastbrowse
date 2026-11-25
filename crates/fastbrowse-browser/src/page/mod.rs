@@ -9,6 +9,7 @@ mod delta;
 mod pointer;
 pub mod scripts;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -33,7 +34,7 @@ use ring::digest::{SHA256, digest};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::time::{Instant, sleep, timeout};
+use tokio::time::{Instant, sleep, timeout, timeout_at};
 
 use crate::PdfUnread;
 use crate::cdp::secs;
@@ -159,6 +160,10 @@ struct SnapshotControl {
     sensitive: bool,
     #[serde(default)]
     offscreen: bool,
+    #[serde(default)]
+    read_only: bool,
+    layer: Option<u32>,
+    disabled: Option<bool>,
     required: Option<bool>,
     invalid: Option<bool>,
     validation_message: Option<String>,
@@ -252,6 +257,40 @@ struct Snapshot {
     /// The page's number for this read when it kept it; null for a read it did not keep.
     #[serde(default)]
     read: Option<u64>,
+    /// The frame document's MIME type, sent only with `json_text`.
+    #[serde(default)]
+    content_type: String,
+    /// The served text of a JSON document, as Chrome renders it into the body's first `pre`.
+    #[serde(default)]
+    json_text: Option<String>,
+}
+
+impl Snapshot {
+    /// The frame's text in the viewport, or a JSON document's whole text as a capture of it reads: the text shown is
+    /// the text a quote of it is checked against.
+    fn viewport(&self) -> Cow<'_, str> {
+        match json_read(&self.content_type, self.json_text.as_deref()) {
+            Some(found) => found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>().join("\n\n").into(),
+            None => Cow::Borrowed(&self.viewport_text),
+        }
+    }
+
+    /// The frame's text outside the viewport; a JSON document's is all in `viewport`.
+    fn offscreen(&self) -> Cow<'_, str> {
+        match json_read(&self.content_type, self.json_text.as_deref()) {
+            Some(_) => Cow::Borrowed(""),
+            None => Cow::Borrowed(&self.offscreen_text),
+        }
+    }
+}
+
+/// A JSON document's blocks by its structure, as a browserless fetch reads it, when the document's type is JSON and all
+/// of its served text parses. Any other document is read by its rendered blocks.
+fn json_read(content_type: &str, json_text: Option<&str>) -> Option<Vec<json_document::Found>> {
+    if !json_document::is_json(content_type) {
+        return None;
+    }
+    json_document::blocks(json_text?).filter(|found| !found.is_empty())
 }
 
 impl FrameText for Snapshot {
@@ -336,13 +375,8 @@ struct CaptureSnapshot {
 }
 
 impl CaptureSnapshot {
-    /// A JSON document's blocks by its structure, as a browserless fetch reads it, when the document's type is JSON
-    /// and all of its served text parses. Any other document is read by its rendered blocks.
     fn json_blocks(&self) -> Option<Vec<json_document::Found>> {
-        if !json_document::is_json(&self.content_type) {
-            return None;
-        }
-        json_document::blocks(self.json_text.as_deref()?).filter(|found| !found.is_empty())
+        json_read(&self.content_type, self.json_text.as_deref())
     }
 }
 
@@ -374,8 +408,9 @@ struct FrameObservation<T> {
 
 /// The page's own text, then each cross-origin frame's in `frames` order under a `[Frame: origin]` line. Only the
 /// origin is named: a frame's address often carries tokens. A frame with no text adds no line.
-fn frame_text(frames: &[(String, FrameObservation<Snapshot>)], part: fn(&Snapshot) -> &str) -> String {
-    let mut text = frames.iter().find(|(key, _)| key == MAIN).map(|(_, f)| part(&f.raw).to_owned()).unwrap_or_default();
+fn frame_text(frames: &[(String, FrameObservation<Snapshot>)], part: fn(&Snapshot) -> Cow<'_, str>) -> String {
+    let mut text =
+        frames.iter().find(|(key, _)| key == MAIN).map(|(_, f)| part(&f.raw).into_owned()).unwrap_or_default();
     for (_, frame) in frames.iter().filter(|(key, _)| key != MAIN) {
         let own = part(&frame.raw);
         if own.trim().is_empty() {
@@ -542,6 +577,9 @@ fn control_from_raw(
         expanded: c.expanded,
         sensitive: c.sensitive,
         offscreen: c.offscreen,
+        read_only: c.read_only,
+        layer: c.layer,
+        disabled: c.disabled,
         required: c.required,
         invalid: c.invalid,
         validation_message: c.validation_message.clone(),
@@ -556,7 +594,6 @@ fn control_from_raw(
         pictured: c.pictured,
         already_read: None,
         other_site: None,
-        shown_by: None,
     }
 }
 
@@ -788,7 +825,7 @@ impl CdpPage {
             };
             // Each frame splits its text in its own viewport's terms, like its controls' `offscreen` flag;
             // same-process frames are already inlined by snapshot.js.
-            let mut viewport_text = frame_text(&frames, |s| &s.viewport_text);
+            let mut viewport_text = frame_text(&frames, Snapshot::viewport);
             let mut notices = String::new();
             if bind {
                 for download in self.session.pending_download_texts() {
@@ -857,7 +894,7 @@ impl CdpPage {
                 controls: kept,
                 viewport_text,
                 viewport_key,
-                offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
+                offscreen_text: frame_text(&frames, Snapshot::offscreen),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 modal: main.and_then(|m| m.raw.modal.clone()),
@@ -1414,6 +1451,11 @@ impl CdpPage {
                 "screenshots are unavailable for scoped documents".into(),
             ));
         }
+        if self.session.images_held() {
+            return Err(BrowserError::ScreenshotsUnavailable(
+                "screenshots are withheld: the run holds an address credential, which a page can paint".into(),
+            ));
+        }
         // The model reads the page, not the agent's own cursor drawn over it.
         match &self.cursor {
             Some(cursor) => cursor.hidden(self.capture_screenshot()).await.unwrap_or_else(|| {
@@ -1658,7 +1700,8 @@ impl CdpPage {
         // A timeout says nothing about the page's content; a caller with no step of its own yet needs the distinct
         // type, not this message, to tell a slow site or session from its own broken navigation. The address is the
         // caller's own, and a run that failed before its first step has no other record of where it was going.
-        let message = format!("Page.navigate failed ({failure}) for {url}");
+        // Its credentials stay out: the error reaches the result and an embedder's logs before any redactor sees it.
+        let message = format!("Page.navigate failed ({failure}) for {}", fastbrowse_core::safety::mask_address(url));
         if timed_out {
             return Err(BrowserError::NavigationTimeout(Failure::new(format!("Page.navigate/{failure}"), message)));
         }
@@ -1678,22 +1721,28 @@ impl CdpPage {
             }
             // Page.navigate can answer before the new document has its own context, so this can run in the document
             // being replaced, and Chrome drops the promise with it ("Promise was collected"). Ask the new one.
-            let state = match self
-                .evaluate(
-                    session_id,
-                    &format!(
-                        "new Promise(resolve => {{ \
-                         if (document.readyState !== 'loading') {{ resolve(document.readyState); return; }} \
-                         const done = () => {{ if (document.readyState !== 'loading') finish(); }}; \
-                         const finish = () => {{ clearTimeout(timer); \
-                         document.removeEventListener('readystatechange', done); resolve(document.readyState); }}; \
-                         const timer = setTimeout(finish, {}); \
-                         document.addEventListener('readystatechange', done); }})",
-                        py_float(remaining.as_secs_f64() * 1000.0)
-                    ),
-                )
-                .await
-            {
+            //
+            // The page resolves the promise from its own `readystatechange`, and a document served with a CSP
+            // `sandbox` that lacks `allow-scripts` (raw.githubusercontent.com does) runs no script, so it never would.
+            // The browser reports the same moment as a lifecycle event, so that is raced against it: a page that can
+            // run script answers in the one evaluation, one that cannot is ready when its document has loaded.
+            let script = format!(
+                "new Promise(resolve => {{ \
+                     if (document.readyState !== 'loading') {{ resolve(document.readyState); return; }} \
+                     const done = () => {{ if (document.readyState !== 'loading') finish(); }}; \
+                     const finish = () => {{ clearTimeout(timer); \
+                     document.removeEventListener('readystatechange', done); resolve(document.readyState); }}; \
+                     const timer = setTimeout(finish, {}); \
+                     document.addEventListener('readystatechange', done); }})",
+                py_float(remaining.as_secs_f64() * 1000.0)
+            );
+            let state = tokio::select! {
+                state = self.evaluate(session_id, &script) => state,
+                loaded = self.document_loaded(remaining.as_secs_f64()) => {
+                    return Ok(loaded);
+                }
+            };
+            let state = match state {
                 Err(BrowserError::ContextLost(_)) => {
                     sleep(secs(0.05)).await;
                     continue;
@@ -1794,6 +1843,28 @@ impl CdpPage {
         self.session.wait_for_lifecycle(mark, seconds).await
     }
 
+    /// Whether the document the active tab is navigating to has loaded within `seconds`, from the browser's own
+    /// lifecycle events. Pends for good when no navigation is under way, so a read of an already loaded document is
+    /// never preempted by it.
+    async fn document_loaded(&self, seconds: f64) -> bool {
+        if !self.session.navigating() {
+            return std::future::pending().await;
+        }
+        let deadline = Instant::now() + secs(seconds);
+        loop {
+            // The mark is taken before the check, so the event that lands the document between them wakes the wait.
+            let mark = self.session.lifecycle_mark();
+            if !self.session.navigating() {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            self.session.wait_for_lifecycle(mark, remaining.as_secs_f64()).await;
+        }
+    }
+
     #[doc(hidden)]
     pub async fn settled_fingerprint(&self) -> Result<(bool, Option<String>), BrowserError> {
         self.settled_within(SETTLE_SECONDS).await
@@ -1813,7 +1884,22 @@ impl CdpPage {
     /// as the poll it replaces did.
     pub async fn settled_within(&self, seconds: f64) -> Result<(bool, Option<String>), BrowserError> {
         let script = self.settle_script(seconds);
-        let result = self.evaluate(&self.session.active_session_id()?, &script).await?;
+        let session_id = self.session.active_session_id()?;
+        // The page's own deadline timer ends the promise at `seconds`, but a document that runs no scripts (a CSP
+        // `sandbox` without `allow-scripts`) fires no timer and no animation frame, and the evaluate then waited
+        // out the command deadline. The same bound is held here, and the page is sampled once without waiting: a
+        // page that cannot run a timer cannot be changing either.
+        let result = match timeout(secs(seconds.max(0.0)), self.evaluate(&session_id, &script)).await {
+            Ok(result) => result?,
+            Err(_) => {
+                let sample = format!(
+                    "(() => {{ const s = ({})('fingerprint'); \
+                     return [Boolean(s && s.ready), s && s.ready ? s.fingerprint : null, 'deadline']; }})()",
+                    self.page_js
+                );
+                self.evaluate(&session_id, &sample).await?
+            }
+        };
         match result.as_array().map(Vec::as_slice) {
             Some([Value::Bool(stable), fingerprint, Value::String(_end)])
                 if fingerprint.is_string() || fingerprint.is_null() =>
@@ -1924,15 +2010,18 @@ impl CdpPage {
             };
             // A look that first touches a frame's document makes Chrome create that frame's page world, and reports it
             // before the look's own answer, so a look still unread after its marks has met a world it can mark now.
-            // Worlds are marked once each, and a round that finds no new world ends the retries.
+            // Chrome can also report a change only after that answer: an iframe that moved to its own process had its
+            // world destroyed after a look that touched it, and a round that saw no new world gave up on a page whose
+            // next look would have read. So a look still unread waits for the next world change, as long as a frame's
+            // read may take, and looks again. Worlds are marked once each.
             let mut marked = std::collections::HashSet::new();
+            let mut changed = self.session.worlds_changed();
+            let deadline = Instant::now() + secs(FRAME_READ_SECONDS);
             loop {
+                changed.borrow_and_update();
                 let worlds: Vec<String> =
                     self.session.main_worlds(session_id).into_iter().filter(|world| !marked.contains(world)).collect();
-                if worlds.is_empty() {
-                    if !marked.is_empty() {
-                        break;
-                    }
+                if worlds.is_empty() && marked.is_empty() {
                     self.session.send("Runtime.evaluate", mark(None), Some(session_id)).await?;
                     marked.insert(String::new());
                 }
@@ -1946,13 +2035,15 @@ impl CdpPage {
                 .await;
                 marked.extend(worlds);
                 out = self.session.send("Runtime.evaluate", params.clone(), Some(session_id)).await?;
-                if !out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD)) {
+                if !out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD))
+                    || !matches!(timeout_at(deadline, changed.changed()).await, Ok(Ok(())))
+                {
                     break;
                 }
             }
         }
-        if out.get("exceptionDetails").is_some() {
-            return Err(BrowserError::Script);
+        if let Some(details) = out.get("exceptionDetails") {
+            return Err(BrowserError::Script(exception_text(details)));
         }
         Ok(out["result"]["value"].take())
     }
@@ -1972,6 +2063,16 @@ impl CdpPage {
             }
             () = self.session.wait_for_dialog() => None,
         }
+    }
+}
+
+/// Where the evaluated script threw, as the line and column in the script, so a `Script` failure names the branch that
+/// threw. Neither the exception's description nor CDP's `text` is carried: a page can throw from a getter it replaced,
+/// and both then hold the page's own message (`Uncaught (in promise) Error: ...` for a rejected promise).
+fn exception_text(details: &Value) -> String {
+    match (details["lineNumber"].as_u64(), details["columnNumber"].as_u64()) {
+        (Some(line), Some(column)) => format!("thrown at line {line}, column {column}"),
+        _ => "thrown at an unknown position".to_string(),
     }
 }
 
@@ -2094,6 +2195,10 @@ impl Page for CdpPage {
 
     fn withhold_frames(&self, withheld: bool) {
         CdpPage::withhold_frames(self, withheld);
+    }
+
+    fn hold_images(&self) {
+        self.session.hold_images();
     }
 
     fn hand_over_tab(&self) {
@@ -2258,14 +2363,25 @@ mod tests {
             frame("f2", "https://ads.test/", "  \n ", ""),
             frame("f3", "about:srcdoc", "Embedded words", ""),
         ];
-        let viewport = frame_text(&frames, |s| &s.viewport_text);
+        let viewport = frame_text(&frames, Snapshot::viewport);
         assert_eq!(
             viewport,
             "Checkout\n\n[Frame: https://pay.test:8443]\nCard declined\n\n[Frame: embedded page]\nEmbedded words"
         );
         assert!(!viewport.contains("token") && !viewport.contains("/card"));
         // A page with no text of its own starts with the first frame's label.
-        assert_eq!(frame_text(&frames, |s| &s.offscreen_text), "[Frame: https://pay.test:8443]\nHelp");
+        assert_eq!(frame_text(&frames, Snapshot::offscreen), "[Frame: https://pay.test:8443]\nHelp");
+    }
+
+    #[test]
+    fn a_script_failure_names_where_it_threw_and_never_the_exception_message() {
+        let thrown = json!({"text": "Uncaught (in promise) Error: page text", "lineNumber": 3, "columnNumber": 7,
+            "exception": {"description": "Error: page text"}});
+        assert_eq!(exception_text(&thrown), "thrown at line 3, column 7");
+        assert_eq!(
+            exception_text(&json!({"text": "Uncaught (in promise) Error: page text"})),
+            "thrown at an unknown position"
+        );
     }
 
     #[test]

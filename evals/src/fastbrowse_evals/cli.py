@@ -1,5 +1,4 @@
-"""Fastbrowse's benchmarks: `fastbrowse-evals browser <command>`, each command with its own `--help`, and
-`fastbrowse-evals desktop` for desktop apps."""
+"""Fastbrowse's benchmarks: `fastbrowse-evals browser <command>`, each command with its own `--help`."""
 
 from __future__ import annotations
 
@@ -9,6 +8,7 @@ import sys
 from pathlib import Path
 
 from fastbrowse_evals.catalog import export
+from fastbrowse_evals.versions import relock
 
 FORWARDED = {
     "publish-candidate": "publication",
@@ -31,9 +31,9 @@ def parser() -> argparse.ArgumentParser:
     catalog = actions.add_parser("catalog", help="export or verify the public task metadata")
     catalog.add_argument("path", type=Path)
     catalog.add_argument("--check", action="store_true")
+    actions.add_parser("relock", help="recompute every task's lock fingerprint from its Parallax record")
     for name in FORWARDED:
         actions.add_parser(name, add_help=False, help=f"{name} benchmark command; use --help for its options")
-    families.add_parser("desktop", add_help=False, help="desktop app tasks through deskpilot; use --help for options")
     return root
 
 
@@ -42,9 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     # A forwarded command's flags, its --help included, belong to its own parser.
     if len(arguments) >= 2 and arguments[0] == "browser" and arguments[1] in FORWARDED:
         return run(arguments[1], arguments[2:])
-    if arguments[:1] == ["desktop"]:
-        importlib.import_module("fastbrowse_evals.desktop.bench").main(arguments[1:])
-        return 0
     args = parser().parse_args(arguments)
+    if args.action == "relock":
+        relock()
+        return 0
     export(args.path, check=args.check)
     return 0

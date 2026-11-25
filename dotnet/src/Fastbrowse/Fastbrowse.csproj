@@ -12,7 +12,7 @@
     <PackageId>Fastbrowse</PackageId>
     <Version>0.12.0</Version>
     <Authors>agent-labs-dev</Authors>
-    <Description>A browser agent that picks instead of generating: cited answers, structured output, and credentials and authorization held in code.</Description>
+    <Description>A browser agent that picks from the controls a page has: cited answers, structured output, and credentials and authorization held in code.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/agent-labs-dev/fastbrowse</PackageProjectUrl>
     <RepositoryUrl>https://github.com/agent-labs-dev/fastbrowse</RepositoryUrl>

@@ -5,9 +5,11 @@
 //! extraction and `answers` the answer built from what Jev read.
 
 mod answers;
+pub(crate) use answers::{
+    Draft, Screenshot, WrittenAnswer, WrittenClaim, compose_reviewed, draft_reviewed, noticed, review_written,
+};
 #[cfg(test)]
-pub(crate) use answers::SCREENSHOT_ATTACHED;
-pub(crate) use answers::{Draft, SCREENSHOT_PICTURED, Screenshot, compose_reviewed, draft_reviewed, noticed};
+pub(crate) use answers::{SCREENSHOT_ATTACHED, SCREENSHOT_PICTURED, SCREENSHOT_UNTAKEN, SCREENSHOT_WITHHELD};
 mod choices;
 mod chunks;
 mod fields;
@@ -18,10 +20,11 @@ mod tally;
 pub(crate) mod text;
 
 pub use answers::{Claim, ComposedAnswer, assemble_answer, compose, draft_answer, marked_partial, partial_answer};
-pub(crate) use answers::{cited_quote, latest_reads, noted_evidence};
+pub(crate) use answers::{cited_quote, context_limit, latest_reads, noted_evidence, request_bytes};
 pub use choices::read_candidates;
 pub(crate) use choices::{PageRead, read_page, whole_page_facts};
 pub use chunks::page_quotes;
+pub(crate) use chunks::quoted;
 pub use fields::{
     Annotation, Candidate, ScalarField, UnsupportedField, choose_candidate, copy_field, field_candidates,
     field_candidates_from_notes, field_question, merge_candidates,

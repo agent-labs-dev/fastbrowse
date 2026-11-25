@@ -215,7 +215,55 @@ async fn test_hung_input_reports_before_the_normal_command_deadline() {
     h.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_that_runs_no_script_navigates_and_observes() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = serve_on(
+        listener,
+        Arc::new(|_: &str| Reply {
+            headers: vec![
+                ("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox".into()),
+                ("X-Content-Type-Options", "nosniff".into()),
+            ],
+            ..Reply::of("text/plain; charset=utf-8", "# Title\nfirst line\n")
+        }),
+    );
+    let Some(h) = harness().await else { return };
+    let url = format!("http://127.0.0.1:{port}/README.md");
+    timeout(Duration::from_secs(30), h.page.navigate(&url, None)).await.expect("no hang").expect("navigate");
+    // A CSP sandbox without allow-scripts, as raw.githubusercontent.com serves its files: the page fires no timer, so
+    // nothing the load or the settle waits for may depend on one (#1548, #1539).
+    let observation = timeout(Duration::from_secs(30), h.page.observe()).await.expect("no hang").expect("observe");
+    assert!(observation.viewport_text.contains("first line"), "{observation:?}");
+    h.close().await;
+}
+
 // -- test_navigation.py: directed navigation to a caller-supplied address, through the real browser -------------
+
+/// What the agent's masking rests on (#1381): Chrome drops an address's userinfo from `location.href`, which the
+/// snapshot reads, but keeps it in `document.URL`, which a page can draw, and in the tab's DevTools target, which the
+/// session reports as the tab's address. Either way the credentials reach a model unless the agent masks them.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_chrome_keeps_an_addresss_credentials_in_document_url_and_its_target_but_not_location_href() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = serve_on(listener, Arc::new(|_: &str| Reply::html("<p>Orders</p>")));
+    // The agent's masking is designed on what this observes, so it fails by name without Chrome rather than pass
+    // having checked nothing; CI's rust job has Chrome.
+    let h = harness().await.expect(
+        "test_chrome_keeps_an_addresss_credentials_in_document_url_and_its_target_but_not_location_href needs Chrome",
+    );
+    let url = format!("http://shopper:pin-pw@127.0.0.1:{port}/orders");
+    h.page.navigate(&url, None).await.expect("navigate");
+    let active = h.session.active_session_id().expect("active session");
+    let href = eval_value(&h.session, &active, "location.href").await;
+    assert_eq!(href, json!(format!("http://127.0.0.1:{port}/orders")));
+    assert_eq!(eval_value(&h.session, &active, "document.URL").await, json!(url));
+    let targets = h.session.send("Target.getTargets", json!({}), None).await.expect("targets");
+    let addresses: Vec<&str> =
+        targets["targetInfos"].as_array().expect("targets").iter().filter_map(|t| t["url"].as_str()).collect();
+    assert!(addresses.contains(&url.as_str()), "{addresses:?}");
+    h.close().await;
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_navigate_crosses_origins_and_reports_the_landing() {

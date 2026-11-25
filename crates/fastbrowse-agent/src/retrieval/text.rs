@@ -311,35 +311,6 @@ mod tests {
         assert_eq!(super::words("a - b", None).len(), 2);
     }
 
-    #[test]
-    fn edge_options_cut_the_punctuation_next_to_a_value() {
-        let task = "say @x y. now";
-        let chars: Vec<char> = task.chars().collect();
-        let found = super::words(task, None);
-        let one = super::edge_options(&chars, (&found[1], &found[1]), (0, 0), None, 255);
-        assert_eq!(one.len(), 1);
-        assert_eq!(one[0].0, "lead");
-        assert_eq!(one[0].1, [(0, "x".to_string()), (1, "@x".to_string())]);
-        let both = super::edge_options(&chars, (&found[1], &found[2]), (0, 0), None, 255);
-        assert_eq!(both.iter().map(|edge| edge.0).collect::<Vec<_>>(), ["lead", "trail"]);
-        assert_eq!(both[0].1, [(0, "x y".to_string()), (1, "@x y".to_string())]);
-        assert_eq!(both[1].1, [(0, "x y".to_string()), (1, "x y.".to_string())]);
-        // A field that holds three characters is offered no longer cut, so nothing is left to ask.
-        assert!(super::edge_options(&chars, (&found[1], &found[2]), (0, 0), Some(3), 255).is_empty());
-        // A run longer than the provider's options keeps the cuts nearest the word.
-        let task = "(((x)))";
-        let chars: Vec<char> = task.chars().collect();
-        let found = super::words(task, None);
-        let few = super::edge_options(&chars, (&found[0], &found[0]), (0, 0), None, 3);
-        let cuts = |values: &[&str]| values.iter().enumerate().map(|(n, v)| (n, v.to_string())).collect::<Vec<_>>();
-        assert_eq!(few, [("lead", cuts(&["x", "(x", "((x"])), ("trail", cuts(&["x", "x)", "x))"]))]);
-        // A field limit drops the longer cuts, and an end asked after the beginning keeps only what fits beside it.
-        let fit = super::edge_options(&chars, (&found[0], &found[0]), (0, 0), Some(3), 255);
-        assert_eq!(fit, [("lead", cuts(&["x", "(x", "((x"])), ("trail", cuts(&["x", "x)", "x))"]))]);
-        let after = super::edge_options(&chars, (&found[0], &found[0]), (1, 0), Some(3), 255);
-        assert_eq!(after[1], ("trail", cuts(&["(x", "(x)"])));
-    }
-
     use super::*;
 
     #[test]
@@ -374,21 +345,6 @@ pub(crate) struct Word {
     pub outer_end: usize,
     /// Which piece this is, and of how many, of a word cut to a limit.
     pub piece: Option<(usize, usize)>,
-    /// The start of each word, this one's included, so context around it is found by counting words.
-    starts: std::sync::Arc<Vec<usize>>,
-    ends: std::sync::Arc<Vec<usize>>,
-}
-
-impl Word {
-    /// Where the word `count` before this one starts.
-    pub fn before(&self, count: usize) -> usize {
-        self.starts[self.index.saturating_sub(count)]
-    }
-
-    /// Where the word `count` after this one ends.
-    pub fn after(&self, count: usize) -> usize {
-        self.ends[(self.index + count).min(self.ends.len() - 1)]
-    }
 }
 
 /// `value`'s whitespace-separated words with the punctuation around each trimmed off.
@@ -430,8 +386,6 @@ pub(crate) fn words(value: &str, limit: Option<usize>) -> Vec<Word> {
             })
             .unzip();
     }
-    let starts: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(spans.iter().map(|span| span.1).collect());
-    let ends: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(spans.iter().map(|span| span.2).collect());
     spans
         .iter()
         .enumerate()
@@ -442,39 +396,6 @@ pub(crate) fn words(value: &str, limit: Option<usize>) -> Vec<Word> {
             outer_start,
             outer_end,
             piece: pieces[index],
-            starts: starts.clone(),
-            ends: ends.clone(),
-        })
-        .collect()
-}
-
-/// The questions that decide whether the punctuation at the edges of the value `first` to `last` belongs to it: for
-/// each edge with punctuation, every cut of that run from none to all, keyed by how many characters it keeps, each as
-/// the complete value with the other edge cut as `kept` says (how many characters the beginning and the end keep).
-///
-/// A cut longer than `max_length` is not offered, and a run with more cuts than `max_options`, the decision provider's
-/// limit on one choice, keeps those nearest the word. Keeping none is always offered, so every question has a valid
-/// answer, and an edge is asked only when some longer cut is left.
-pub(crate) fn edge_options(
-    chars: &[char],
-    (first, last): (&Word, &Word),
-    kept: (usize, usize),
-    max_length: Option<usize>,
-    max_options: usize,
-) -> Vec<(&'static str, Vec<(usize, String)>)> {
-    let edges = [("lead", first.start - first.outer_start), ("trail", last.outer_end - last.end)];
-    edges
-        .into_iter()
-        .filter_map(|(edge, run)| {
-            let options: Vec<(usize, String)> = (0..=run)
-                .take(max_options)
-                .map(|cut| {
-                    let (lead, trail) = if edge == "lead" { (cut, kept.1) } else { (kept.0, cut) };
-                    (cut, chars[first.start - lead..last.end + trail].iter().collect::<String>())
-                })
-                .filter(|(_, value)| max_length.is_none_or(|limit| value.chars().count() <= limit))
-                .collect();
-            (options.len() > 1).then_some((edge, options))
         })
         .collect()
 }

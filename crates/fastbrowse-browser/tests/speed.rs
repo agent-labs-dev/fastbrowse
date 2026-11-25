@@ -513,6 +513,54 @@ async fn test_a_settle_does_not_re_read_for_each_of_the_pages_writes() {
     h.close().await;
 }
 
+/// A same-origin iframe, itself inside a same-origin iframe, whose button rewrites a field of its own document.
+const NESTED_FRAMES: &str = "document.body.innerHTML = '<p>Outer</p><iframe></iframe>'; \
+    const outer = document.querySelector('iframe').contentDocument; \
+    outer.body.innerHTML = '<iframe></iframe>'; \
+    const inner = outer.querySelector('iframe').contentDocument; \
+    inner.body.innerHTML = '<button>Pick day</button><p id=day>none</p>'; \
+    inner.querySelector('button').onclick = () => { inner.getElementById('day').setAttribute('data-picked', 'yes'); \
+      inner.getElementById('day').textContent = 'picked'; };";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_click_that_changes_a_same_origin_iframe_counts_as_a_page_change() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(&h.session, NESTED_FRAMES).await;
+    let obs = h.observe().await;
+    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Pick day").id), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert!(result.page_changed, "the frame's own change was read as no change: {result:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_same_origin_iframe_stamps_the_document_clock_and_ignores_a_rewritten_attribute() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(&h.session, NESTED_FRAMES).await;
+    h.observe().await;
+    let inner = "document.querySelector('iframe').contentDocument.querySelector('iframe').contentDocument";
+    let clock = || eval_active(&h.session, "[__fastbrowse.lastMutation, __fastbrowse.rev]");
+    let settled = || async { sleep(Duration::from_millis(100)).await };
+    eval_active(&h.session, &format!("{inner}.getElementById('day').setAttribute('data-same', 'a')")).await;
+    settled().await;
+    let before = clock().await;
+    eval_active(&h.session, &format!("{inner}.getElementById('day').setAttribute('data-same', 'a')")).await;
+    settled().await;
+    assert_eq!(clock().await, before, "writing an attribute its existing value moved the page");
+    eval_active(&h.session, &format!("{inner}.getElementById('day').setAttribute('data-same', 'b')")).await;
+    settled().await;
+    assert_ne!(clock().await, before, "a changed attribute in a nested same-origin frame moved nothing");
+    let touched = clock().await;
+    eval_active(&h.session, &format!("{inner}.dispatchEvent(new Event('change', {{bubbles: true}}))")).await;
+    settled().await;
+    assert_ne!(clock().await, touched, "a change event in a nested same-origin frame moved nothing");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_page_generated_click_does_not_claim_background_work_as_input() {
     let _turn = turn().await;

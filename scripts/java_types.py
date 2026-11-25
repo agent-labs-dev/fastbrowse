@@ -41,10 +41,8 @@ BOXED = {"long": "Long", "double": "Double", "boolean": "Boolean"}
 # the shape before it is added as a set of its own, so no published constructor goes away.
 PUBLISHED_SHAPES = {
     "RunParams": [
-        {"recipe", "save_recipe", "desktop", "launch", "desktop_apps"},
-        {"desktop", "launch", "desktop_apps"},
-        {"launch", "desktop_apps"},
-        {"desktop_apps"},
+        {"recipe", "save_recipe", "launch"},
+        {"launch"},
     ],
     "CostLine": [
         {"images", "cache_read_tokens", "cache_write_tokens", "model"},

@@ -5,9 +5,11 @@ package dev.agentlabs.fastbrowse.protocol;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
+ * Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
  */
 public enum Decider {
+    @JsonProperty("llm")
+    LLM,
     @JsonProperty("jev")
     JEV,
     @JsonProperty("code")

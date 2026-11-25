@@ -416,10 +416,11 @@ async fn test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_f
     use fastbrowse_browser::recording::Recording;
     use fastbrowse_browser::session::{BoxError, CheckAccess};
 
-    if fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_none() {
-        eprintln!("recording needs ffmpeg; skipping");
-        return;
-    }
+    // A recording test that passed without ffmpeg checked nothing of what a recording holds, so it fails by name.
+    assert!(
+        fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_some(),
+        "recording needs ffmpeg on PATH; CI's rust job installs it"
+    );
     for page in ["clear", "showing a secret", "revealing a secret during the capture", "after access is revoked"] {
         let dir = temp_dir("recording");
         let still = dir.join("still.jpg");
@@ -473,129 +474,6 @@ async fn test_a_recording_whose_cast_sent_no_frame_ends_on_a_screenshot_unless_f
         assert!(!path.exists(), "{page}");
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
-
-#[cfg(feature = "recording")]
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_fed_recording_writes_both_videos_with_the_cursor_and_the_drawn_card() {
-    // A desktop run has no tab: it feeds window shots, and the card is drawn over the last one.
-    use fastbrowse_browser::pointer::PointerMark;
-    use fastbrowse_browser::recording::{Recording, ResultCard};
-    use fastbrowse_core::models::Operation;
-
-    if fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_none() {
-        eprintln!("recording needs ffmpeg; skipping");
-        return;
-    }
-    let dir = temp_dir("fed-recording");
-    let still = dir.join("window.png");
-    let made = tokio::process::Command::new("ffmpeg")
-        .args(["-loglevel", "error", "-f", "lavfi", "-i", "color=c=white:s=320x240", "-frames:v", "1"])
-        .arg(&still)
-        .status()
-        .await
-        .unwrap();
-    assert!(made.success());
-    let path = dir.join("clip.mp4");
-    let (mut recording, feed) = Recording::start_fed(&path).unwrap();
-    feed.show(std::fs::read(&still).unwrap());
-    feed.mark(PointerMark {
-        at: std::time::Instant::now(),
-        x: 160.0,
-        y: 120.0,
-        operation: Operation::Click,
-        pressed: true,
-        width: 320.0,
-        height: 240.0,
-    });
-    tokio::time::sleep(Duration::from_secs_f64(0.5)).await;
-    let card = ResultCard {
-        status: "complete".into(),
-        answer: Some("hello".into()),
-        error: None,
-        citations: vec![],
-        steps: 1,
-        known_dollars: 0.0,
-    };
-    recording.show_result("write hello", &card).await.unwrap();
-    let outputs = recording.finish().await;
-    assert_eq!(outputs, [path.clone(), dir.join("clip.plain.mp4")]);
-    // The last frame is the card's dark background, not the white window it covers.
-    let last = tokio::process::Command::new("ffmpeg")
-        .args(["-loglevel", "error", "-sseof", "-0.5", "-i"])
-        .arg(&path)
-        .args(["-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
-        .output()
-        .await
-        .unwrap();
-    assert!(last.status.success());
-    assert!(last.stdout.first().is_some_and(|&luma| luma < 64), "{:?}", last.stdout);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[cfg(feature = "recording")]
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_fed_recording_fits_a_window_of_another_size_inside_its_first_frame() {
-    // A desktop run's windows differ in size: a tall dialog after a wide editor is shrunk and centred, not stretched.
-    use fastbrowse_browser::recording::Recording;
-
-    if fastbrowse_browser::adapters::local_chrome::which("ffmpeg").is_none() {
-        eprintln!("recording needs ffmpeg; skipping");
-        return;
-    }
-    let dir = temp_dir("fed-sizes");
-    let shot = |name: &str, colour: &str, size: &str| {
-        let path = dir.join(name);
-        let source = format!("color=c={colour}:s={size}");
-        async move {
-            let made = tokio::process::Command::new("ffmpeg")
-                .args(["-loglevel", "error", "-f", "lavfi", "-i", &source, "-frames:v", "1"])
-                .arg(&path)
-                .status()
-                .await
-                .unwrap();
-            assert!(made.success());
-            std::fs::read(&path).unwrap()
-        }
-    };
-    let (wide, tall) = (shot("wide.png", "white", "320x240").await, shot("tall.png", "lime", "160x480").await);
-    let path = dir.join("clip.mp4");
-    let (recording, feed) = Recording::start_fed(&path).unwrap();
-    feed.show(wide);
-    tokio::time::sleep(Duration::from_secs_f64(0.5)).await;
-    feed.show(tall);
-    tokio::time::sleep(Duration::from_secs_f64(0.5)).await;
-    let outputs = recording.finish().await;
-    let plain = dir.join("clip.plain.mp4");
-    assert_eq!(outputs, [path.clone(), plain.clone()]);
-    let luma = |x: u32, y: u32| {
-        let plain = plain.clone();
-        async move {
-            let last = tokio::process::Command::new("ffmpeg")
-                .args(["-loglevel", "error", "-sseof", "-0.2", "-i"])
-                .arg(&plain)
-                .args([
-                    "-frames:v",
-                    "1",
-                    "-vf",
-                    &format!("crop=2:2:{x}:{y}"),
-                    "-f",
-                    "rawvideo",
-                    "-pix_fmt",
-                    "gray",
-                    "-",
-                ])
-                .output()
-                .await
-                .unwrap();
-            assert!(last.status.success(), "{}", String::from_utf8_lossy(&last.stderr));
-            last.stdout[0]
-        }
-    };
-    // The video keeps the first window's size, with the tall window centred on black.
-    assert!(luma(4, 4).await < 32);
-    assert!(luma(160, 120).await > 100);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // -- test_frame_callback.py ------------------------------------------------------------------------------------------

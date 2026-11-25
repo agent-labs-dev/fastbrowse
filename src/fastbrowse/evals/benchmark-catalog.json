@@ -7,8 +7,8 @@
     "live_tasks.py": "f38f85fb15765c6740f59875c7ccbc3a252a76b3e66e698877830ee6bfa24892",
     "more_tasks.py": "f4fd910a5a939052aa88e7450d0e65f0b6c34c44048805b61010d856fec502fe",
     "sweep_tasks.py": "794208a46b1ed4603869cc94a0a5d98264858b3c5b51f04901cc9f637867f643",
-    "task_specs.py": "02311d637ec8e271362f7cc314bce4c2faf158f351a1dc1b3c720e4e76af3db3",
-    "versions.json": "9f847c03e4e15f733e7b49c77b06ec3f0c42355054aaabd7d3f20343643f39d7"
+    "task_specs.py": "5714e29461bce020a4d7ccd5f6c68af583350702ddc87c84d302e8a3970146ce",
+    "versions.json": "f2f744d279308696cb2bacbaf3c0a5d088f440e9aa6866cb73ce94136edde189"
   },
   "suites": {
     "core": [
@@ -23,12 +23,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "ec87fb1a5e24afd4",
-        "task_version": 11
+        "source_fingerprint": "a6627d67addc5d32",
+        "task_version": 12
       },
       {
         "id": "pypi-structured",
@@ -41,12 +42,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "21c68d38638e3d4b",
-        "task_version": 11
+        "source_fingerprint": "8218ec8fe80e8d82",
+        "task_version": 12
       },
       {
         "id": "hn-top",
@@ -59,11 +61,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "8028cdf726e805de",
+        "source_fingerprint": "d429fba4e4a692a2",
         "task_version": 10
       },
       {
@@ -77,11 +80,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "beed2cca0721b8b8",
+        "source_fingerprint": "d9a17cd4673ca67b",
         "task_version": 10
       },
       {
@@ -95,12 +99,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "c15c138c3458eabb",
-        "task_version": 10
+        "source_fingerprint": "f9df42e7dfdb2a51",
+        "task_version": 11
       },
       {
         "id": "wiki-godel",
@@ -113,11 +118,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "f2917ea4fb0bef54",
+        "source_fingerprint": "613526868276aa4d",
         "task_version": 10
       },
       {
@@ -131,11 +137,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "8e1b6993a5e1f2b5",
+        "source_fingerprint": "f946e3c9f0392d08",
         "task_version": 10
       },
       {
@@ -149,10 +156,11 @@
         ],
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
-          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
-        "source_fingerprint": "2903df9452e2234b",
+        "source_fingerprint": "7a1bc3b81f4ef9d6",
         "task_version": 10
       },
       {
@@ -166,10 +174,11 @@
         ],
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
-          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
-        "source_fingerprint": "b4aedb1d23513f73",
+        "source_fingerprint": "b06c887b5d683a5b",
         "task_version": 10
       },
       {
@@ -183,10 +192,11 @@
         ],
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
-          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
-        "source_fingerprint": "1c634035bdaa0109",
+        "source_fingerprint": "6a98aba0ec9cc8fa",
         "task_version": 10
       },
       {
@@ -200,10 +210,11 @@
         ],
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
-          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
-        "source_fingerprint": "5d5437871a94202d",
+        "source_fingerprint": "156cab977ebf6845",
         "task_version": 10
       },
       {
@@ -217,10 +228,11 @@
         ],
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
-          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
-        "source_fingerprint": "ec2e03349b4bb8ce",
+        "source_fingerprint": "6605335ab4ef0697",
         "task_version": 10
       },
       {
@@ -234,11 +246,12 @@
           "browser-use": "the task passes only by stopping before an irreversible step it does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
           "browser-use-ultrafast": "the task passes only by stopping before an irreversible step it does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
           "browser-harness": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause",
-          "browser-use-oss": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause"
+          "browser-use-oss": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause",
+          "browser-use-1-luna": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause"
         },
         "expect": "needs_confirmation",
-        "source_fingerprint": "8640701afacac716",
-        "task_version": 9
+        "source_fingerprint": "6317aca38d903937",
+        "task_version": 10
       },
       {
         "id": "google-flights",
@@ -251,12 +264,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "eeb127e8b43f7ce9",
-        "task_version": 10
+        "source_fingerprint": "f85f3daf6919665f",
+        "task_version": 11
       },
       {
         "id": "wiki-open",
@@ -268,11 +282,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "285490e1a815cc74",
+        "source_fingerprint": "fac1901debfe8cd8",
         "task_version": 14
       },
       {
@@ -285,11 +300,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "f065e2f3c74bfac9",
+        "source_fingerprint": "79674a9127e29d27",
         "task_version": 14
       },
       {
@@ -302,11 +318,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "ccaa29a377c3a175",
+        "source_fingerprint": "16ccda62a51e94ea",
         "task_version": 14
       },
       {
@@ -319,11 +336,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "a71d20f3e584ddce",
+        "source_fingerprint": "45f515db12e31d0f",
         "task_version": 14
       },
       {
@@ -336,11 +354,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "66058d4b62d2865d",
+        "source_fingerprint": "e30692b292707370",
         "task_version": 14
       },
       {
@@ -353,12 +372,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "e6dcafad28325340",
-        "task_version": 14
+        "source_fingerprint": "ed06035fc664049d",
+        "task_version": 15
       }
     ],
     "dev": [
@@ -373,12 +393,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "25f52f7eb9ef134c",
-        "task_version": 10
+        "source_fingerprint": "45fb50503242d785",
+        "task_version": 11
       },
       {
         "id": "hockey-bruins-1990",
@@ -391,11 +412,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "4d4345174c603089",
+        "source_fingerprint": "000fb15cc68e5cfe",
         "task_version": 11
       },
       {
@@ -409,11 +431,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "567d61e630ce037b",
+        "source_fingerprint": "ef4160b44f455db6",
         "task_version": 10
       },
       {
@@ -427,11 +450,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "dad9f143af6ae41f",
+        "source_fingerprint": "1083e572d5332729",
         "task_version": 11
       },
       {
@@ -445,11 +469,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "f4099478c3952efe",
+        "source_fingerprint": "c3747e9242203cbe",
         "task_version": 7
       },
       {
@@ -463,11 +488,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "4463ee2f969c950c",
+        "source_fingerprint": "912086bade78d513",
         "task_version": 11
       },
       {
@@ -481,11 +507,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "3ddbad90ed98e3a0",
+        "source_fingerprint": "d9910f1f12cbcdf6",
         "task_version": 10
       },
       {
@@ -499,11 +526,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "cef9be2de85f599f",
+        "source_fingerprint": "466dc01b7ce0f311",
         "task_version": 10
       },
       {
@@ -517,11 +545,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "5e2812a58c9889c2",
+        "source_fingerprint": "aaffe169106f4ee3",
         "task_version": 11
       },
       {
@@ -535,11 +564,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "43594f984e1dd9a8",
+        "source_fingerprint": "c04caaf0b95833b1",
         "task_version": 10
       },
       {
@@ -553,12 +583,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "b344c8d6b3a8e250",
-        "task_version": 11
+        "source_fingerprint": "f9ec438b44323fb1",
+        "task_version": 12
       },
       {
         "id": "quotes-search",
@@ -571,11 +602,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "7d898e311b35b57d",
+        "source_fingerprint": "aa89cd2740d4e89d",
         "task_version": 10
       },
       {
@@ -589,12 +621,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "ac864e3ec29072ad",
-        "task_version": 7
+        "source_fingerprint": "50f1c6c0050b3f9d",
+        "task_version": 8
       },
       {
         "id": "books-mystery-cheapest",
@@ -607,12 +640,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "bdc43c83b654a006",
-        "task_version": 10
+        "source_fingerprint": "90f041c1e984f16b",
+        "task_version": 11
       },
       {
         "id": "quotes-einstein-count",
@@ -625,12 +659,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "cccb50e638ade584",
-        "task_version": 11
+        "source_fingerprint": "9f07027682d8b581",
+        "task_version": 12
       },
       {
         "id": "quotes-js-page2",
@@ -643,11 +678,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "df5e7ecf160b970f",
+        "source_fingerprint": "9129ac035e6aac45",
         "task_version": 10
       },
       {
@@ -661,11 +697,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "b5f4f93b20e013aa",
+        "source_fingerprint": "8984956996d852b0",
         "task_version": 10
       },
       {
@@ -679,12 +716,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "73b7938d8fbd4f60",
-        "task_version": 11
+        "source_fingerprint": "e6a9fb4aca9468bc",
+        "task_version": 12
       },
       {
         "id": "new-tab-page",
@@ -697,11 +735,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "d7d9dd333a7fecb6",
+        "source_fingerprint": "bba6ffdcf209dc10",
         "task_version": 6
       },
       {
@@ -715,11 +754,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "6da27160f5c3a11c",
+        "source_fingerprint": "c70e894d54ac373f",
         "task_version": 6
       },
       {
@@ -733,12 +773,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "a2bf16aa87d7b172",
-        "task_version": 6
+        "source_fingerprint": "6c343e0697c2acc3",
+        "task_version": 7
       },
       {
         "id": "quotes-search-lewis",
@@ -751,11 +792,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "79b99c4f2eb749b8",
+        "source_fingerprint": "e68cec6b54dcb58e",
         "task_version": 6
       }
     ],
@@ -771,11 +813,12 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "c3aadbebc89458ce",
+        "source_fingerprint": "5a97d90a6b0afd97",
         "task_version": 10
       },
       {
@@ -789,12 +832,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "32e2e96c6d07dfc6",
-        "task_version": 11
+        "source_fingerprint": "3661881ad56a1846",
+        "task_version": 13
       },
       {
         "id": "stretch-books-nonfiction-five-star",
@@ -807,12 +851,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "1db23544f2d56b46",
-        "task_version": 12
+        "source_fingerprint": "644bf7a56074e2f8",
+        "task_version": 13
       },
       {
         "id": "stretch-bstack-apple-google",
@@ -825,12 +870,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "1c06317cbe1508d8",
-        "task_version": 11
+        "source_fingerprint": "d0c463c8ef135b9c",
+        "task_version": 12
       },
       {
         "id": "stretch-calendar-first-friday",
@@ -843,12 +889,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "3c3c65271976bb50",
-        "task_version": 13
+        "source_fingerprint": "7cf8409311c264f2",
+        "task_version": 14
       },
       {
         "id": "stretch-quotes-top-authors",
@@ -861,12 +908,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "cb4cf3c1f073fcda",
-        "task_version": 11
+        "source_fingerprint": "b880fdea72d5f824",
+        "task_version": 12
       },
       {
         "id": "stretch-books-young-adult-one-star",
@@ -879,12 +927,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "8207847c2bab2231",
-        "task_version": 6
+        "source_fingerprint": "145ceb89e11e91c5",
+        "task_version": 7
       },
       {
         "id": "stretch-datepicker-last-saturday",
@@ -897,12 +946,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "c3d735b1c5b9208f",
-        "task_version": 6
+        "source_fingerprint": "e0c2741bf44197eb",
+        "task_version": 7
       },
       {
         "id": "stretch-bstack-apple-samsung",
@@ -915,12 +965,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "8ab46bdc538a22b1",
-        "task_version": 11
+        "source_fingerprint": "6e2271aab0dcfc84",
+        "task_version": 12
       },
       {
         "id": "stretch-datepicker-last-sunday",
@@ -933,12 +984,13 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "52664367c9f57543",
-        "task_version": 6
+        "source_fingerprint": "7671a0cf4240f818",
+        "task_version": 7
       },
       {
         "id": "stretch-books-sequential-art-one-star",
@@ -951,12 +1003,129 @@
           "cua-codex",
           "browser-harness",
           "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-oss",
+          "browser-use-1-luna"
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "4983bc3f1ad0d14b",
-        "task_version": 6
+        "source_fingerprint": "d30d65bacb16356d",
+        "task_version": 7
+      }
+    ],
+    "heldout": [
+      {
+        "id": "heldout-laptops-priciest",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use",
+          "fastbrowse-pool",
+          "fastbrowse-hosted",
+          "cua-codex",
+          "browser-harness",
+          "browser-use-ultrafast",
+          "browser-use-oss",
+          "browser-use-1-luna"
+        ],
+        "excluded": {},
+        "expect": "complete",
+        "source_fingerprint": "18f094888fb1dbe4",
+        "task_version": 1
+      },
+      {
+        "id": "heldout-tablets-cheapest",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use",
+          "fastbrowse-pool",
+          "fastbrowse-hosted",
+          "cua-codex",
+          "browser-harness",
+          "browser-use-ultrafast",
+          "browser-use-oss",
+          "browser-use-1-luna"
+        ],
+        "excluded": {},
+        "expect": "complete",
+        "source_fingerprint": "29b92a3b654f0b33",
+        "task_version": 1
+      },
+      {
+        "id": "heldout-tables-username",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use",
+          "fastbrowse-pool",
+          "fastbrowse-hosted",
+          "cua-codex",
+          "browser-harness",
+          "browser-use-ultrafast",
+          "browser-use-oss",
+          "browser-use-1-luna"
+        ],
+        "excluded": {},
+        "expect": "complete",
+        "source_fingerprint": "5eff646604c9c8ba",
+        "task_version": 1
+      },
+      {
+        "id": "heldout-turtles-discoverer",
+        "category": "widget",
+        "arms": [
+          "fastbrowse",
+          "browser-use",
+          "fastbrowse-pool",
+          "fastbrowse-hosted",
+          "cua-codex",
+          "browser-harness",
+          "browser-use-ultrafast",
+          "browser-use-oss",
+          "browser-use-1-luna"
+        ],
+        "excluded": {},
+        "expect": "complete",
+        "source_fingerprint": "0e99071d281d100f",
+        "task_version": 1
+      },
+      {
+        "id": "heldout-rfc-421",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use",
+          "fastbrowse-pool",
+          "fastbrowse-hosted",
+          "cua-codex",
+          "browser-harness",
+          "browser-use-ultrafast",
+          "browser-use-oss",
+          "browser-use-1-luna"
+        ],
+        "excluded": {},
+        "expect": "complete",
+        "source_fingerprint": "feb03b512d88cd12",
+        "task_version": 1
+      },
+      {
+        "id": "heldout-python-bit-count",
+        "category": "lookup",
+        "arms": [
+          "fastbrowse",
+          "browser-use",
+          "fastbrowse-pool",
+          "fastbrowse-hosted",
+          "cua-codex",
+          "browser-harness",
+          "browser-use-ultrafast",
+          "browser-use-oss",
+          "browser-use-1-luna"
+        ],
+        "excluded": {},
+        "expect": "complete",
+        "source_fingerprint": "457d6cd452715b44",
+        "task_version": 1
       }
     ]
   },
@@ -988,6 +1157,11 @@
     },
     "browser-use-oss": {
       "pin": "browser-use==1.0.6; model bu-4.0, its default",
+      "tier": "A",
+      "default": false
+    },
+    "browser-use-1-luna": {
+      "pin": "browser-use==1.0.8 accessibility-tree mode; openai/gpt-6-luna via OpenRouter, low reasoning",
       "tier": "A",
       "default": false
     },

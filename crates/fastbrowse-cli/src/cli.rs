@@ -151,7 +151,6 @@ pub fn parser(build: &Build) -> Parser {
             Opt::flag("--browser"),
             Opt::flag("--extension"),
             Opt::value("--extension-browser"),
-            Opt::append("--desktop"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
             Opt::flag("--no-cursor"),
@@ -198,9 +197,6 @@ pub struct Args {
     pub extension: bool,
     /// Which browser the extension is connected in, by its label; implies `extension`.
     pub extension_browser: Option<String>,
-    /// The desktop apps to start and drive through deskpilot instead of a browser, each a command line, one per
-    /// `--desktop`. Each is driven through its accessibility tree, so an app that exposes none cannot be.
-    pub desktop: Vec<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     /// `--cursor` or `--no-cursor`; neither draws the cursor wherever the page can be seen.
@@ -238,7 +234,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
     let path = |flag: &str| parsed.value(flag).map(PathBuf::from);
     Ok(Args {
         task: parsed.positional.clone().unwrap_or_default(),
-        start: text("--start"),
+        start: text("--start").map(|value| options::start_url(&value)).filter(|value| !value.is_empty()),
         context: text("--context"),
         cloud: parsed.flag("--cloud"),
         local: parsed.flag("--local"),
@@ -268,7 +264,6 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         browser: parsed.flag("--browser"),
         extension: parsed.flag("--extension"),
         extension_browser: text("--extension-browser"),
-        desktop: parsed.all("--desktop").to_vec(),
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
@@ -439,9 +434,10 @@ fn limits(args: &Args) -> Result<Limits, ConfigurationError> {
     Ok(Limits { max_steps: args.max_steps, max_dollars: args.max_dollars, ..Limits::default() })
 }
 
-fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
+fn progress(streams: Streams, steps: Arc<std::sync::atomic::AtomicUsize>) -> fastbrowse_core::models::EventHandler {
     Arc::new(move |event: Event| {
         let streams = streams.clone();
+        let steps = steps.clone();
         Box::pin(async move {
             match event {
                 Event::Browser(browser) => {
@@ -450,6 +446,7 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
                     }
                 }
                 Event::Step(event) => {
+                    steps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let step = &event.step;
                     let label = options::step_label(step);
                     streams.eprint(&format!("  {:>2} {label} -> {}", step.index, step.outcome.as_str()));
@@ -464,14 +461,10 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let explicit_extension = args.extension || args.extension_browser.is_some();
-    let extension = explicit_extension || (!args.cloud && !args.fetch && args.desktop.is_empty());
-    // A desktop run starts no browser, so a cloud one asked for beside it was silently never started (#1337).
-    let desktop = !args.desktop.is_empty();
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension || desktop) {
+    let extension = explicit_extension || (!args.cloud && !args.fetch);
+    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension) {
         return Err(ConfigurationError(
-            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch, --extension or \
-             --desktop"
-                .into(),
+            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
         ));
     }
     let cdp_port = args
@@ -520,8 +513,6 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         browser: args.browser,
         extension,
         extension_browser: args.extension_browser.clone(),
-        desktop: args.desktop.first().cloned(),
-        desktop_apps: args.desktop.iter().skip(1).cloned().collect(),
         ..RunTask::default()
     };
     let secrets_given = !args.secret.is_empty() || args.bitwarden.is_some();
@@ -542,15 +533,18 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         kept.trace().event("build", || context.build.fields());
         *context.kept_at.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(kept.path().to_owned());
     }
+    let mut pending = crate::stats::Pending::start(&context.environ);
     let host = Host {
         recipe_sink: recipe_sink.clone(),
         browser_api_key,
+        settings: Some(settings),
         secrets: secrets.map(|secrets| Arc::new(secrets) as _),
-        on_event: Some(progress(context.streams.clone())),
+        on_event: Some(progress(context.streams.clone(), pending.steps())),
         http: kept.as_ref().map(|kept| fastbrowse_clients::http::Http::hyper().with_trace(kept.trace())),
         ..Host::default()
     };
     let outcome = context.runner.run(task, host).await;
+    pending.stop();
     let status = outcome.as_ref().ok().map(|result| result.status);
     let trace = kept.and_then(|kept| kept.finish(status));
     *context.kept_at.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
@@ -566,8 +560,15 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
             options::cancelled_result(error.failure_kind(), error.to_string(), receipt)
         }
         // Reported here rather than through `main`, which no longer has the kept trace's path to name.
-        Err(error) => return Ok(fail(args, context, &error.to_string(), trace.as_deref())),
+        Err(error) => {
+            let message = error.to_string();
+            let result = options::error_result(error.failure_kind(), &message);
+            pending.record(&result);
+            return Ok(fail(args, context, &message, trace.as_deref()));
+        }
     };
+    // The opt-in local log, appended before anything is printed so a crash in reporting still leaves the run counted.
+    pending.record(&result);
     // Replay accounting only for a run that replayed: a run that only saved one printed "0 actions reused" (#1342).
     if args.recipe.is_some()
         && let Some(sink) = recipe_sink
@@ -630,19 +631,45 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     Ok(exit_code(result.status))
 }
 
+/// What a command learns from how it was started, before it says anything about it: every argument and every value of
+/// the environment and of the `.env` file the settings are read from, each read as one whole address, and counted
+/// among the live runs so a log line is masked by them too. A usage error, a refusal or a settings error quotes them,
+/// and masked after the fact by structure alone, a password holding a quote was printed whole (#1381). Every entry the
+/// binary has (the CLI, `fastbrowse serve`, `fastbrowse-mcp` and the subcommands) learns through this one path; when
+/// only the CLI did, `fastbrowse-mcp --port 'https://ops:pw"x@h/'` printed the password.
+pub struct Invocation(Arc<Mutex<fastbrowse_core::safety::Redactor>>);
+
+impl Invocation {
+    pub fn learn(argv: &[String], environ: &HashMap<String, String>) -> Invocation {
+        let dotenv = std::fs::read_to_string(".env").map(|text| fastbrowse_clients::environment::parse_dotenv(&text));
+        let dotenv: Vec<String> = dotenv.unwrap_or_default().into_iter().map(|(_, value)| value).collect();
+        let environment: Vec<&String> = environ.values().collect();
+        let learnt =
+            Arc::new(Mutex::new(fastbrowse_core::safety::learnt(&serde_json::json!([argv, environment, dotenv]))));
+        fastbrowse_core::safety::live(&learnt);
+        Invocation(learnt)
+    }
+
+    pub fn mask(&self, text: &str) -> String {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).mask(text)
+    }
+}
+
 /// What follows the `serve` check: parse, run, and report a configuration error on both streams when `--json`
 /// was asked for, so a caller parsing stdout still gets a result.
 pub async fn main(argv: &[String], context: &Context) -> i32 {
+    let invocation = Invocation::learn(argv, &context.environ);
+    let masked = |text: &str| invocation.mask(text);
     let args = match parse(argv, &context.build) {
         Ok(args) => args,
         Err(Exit::Print(text)) => {
             let mut out = context.streams.out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
+            let _ = out.write_all(masked(&text).as_bytes()).and_then(|()| out.flush());
             return 0;
         }
         Err(Exit::Usage(text)) => {
             let mut err = context.streams.err.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = err.write_all(text.as_bytes()).and_then(|()| err.flush());
+            let _ = err.write_all(masked(&text).as_bytes()).and_then(|()| err.flush());
             return 2;
         }
     };
@@ -650,13 +677,13 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
     if let Some(destination) = destination
         && let Err(error) = trace_to(Some(destination))
     {
-        context.streams.eprint(&format!("fastbrowse: cannot write the trace to {destination}: {error}"));
+        context.streams.eprint(&masked(&format!("fastbrowse: cannot write the trace to {destination}: {error}")));
         return 1;
     }
     Trace::disabled().event("build", || context.build.fields());
     match run(&args, context).await {
         Ok(code) => code,
-        Err(error) => fail(&args, context, &error.0, None),
+        Err(error) => fail(&args, context, &masked(&error.0), None),
     }
 }
 

@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,8 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from fastbrowse import native, run_task
 from fastbrowse.config import Config
 from fastbrowse.evals.harness import providers, transient_seconds
-from fastbrowse.jev import Evaluation, NoulAnswer, Question
+from fastbrowse.jev import Evaluation, Question
+from fastbrowse.llm import Generation, Message
 from fastbrowse.models import (
     Attachment,
     BrowserEvent,
@@ -42,7 +43,7 @@ from fastbrowse.models import (
     Status,
     StepEvent,
 )
-from fastbrowse.telemetry import BudgetExceeded, traced
+from fastbrowse.telemetry import BudgetExceeded, Ledger, traced
 from tests.scripted import ScriptedJev, ScriptedLLM, steps
 
 
@@ -343,6 +344,70 @@ async def test_the_callers_own_clients_serve_the_rust_run() -> None:
     assert counted.questions > 0
     assert LLMPurpose.START in counted.purposes
     assert result.cost.known_dollars == 0.0
+
+
+@pytest.mark.usefixtures("rust_core")
+async def test_a_start_with_credentials_reaches_no_model_callback_or_result_through_python() -> None:
+    """The Python layer forwards what the core gives it, so a task's address credentials stay masked end to end, the
+    page echoing them included (#1381). Reading over HTTP refuses an address with credentials, so they are in the task.
+    """
+    password, token = "Pyth0n9pw", "Tok3nPy9w"
+    echo = f"<p>{password} {base64.b64encode(f'ops:{password}'.encode()).decode()} {token}</p>"
+    counted = Counted()
+    sent: list[str] = []
+    evaluate, generate = counted.jev.evaluate, counted.llm.generate
+
+    async def recorded_evaluate(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        sent.append(json.dumps(state) + json.dumps({key: q.model_dump(mode="json") for key, q in questions.items()}))
+        return await evaluate(state, questions)
+
+    async def recorded_generate(purpose: LLMPurpose, messages: Any, *args: Any, **kwargs: Any) -> Any:
+        sent.extend(message.content for message in messages)
+        return await generate(purpose, messages, *args, **kwargs)
+
+    counted.jev.evaluate = recorded_evaluate
+    counted.llm.generate = recorded_generate
+
+    def page(request: httpx.Request) -> httpx.Response:
+        counted.requests.append(str(request.url))
+        return httpx.Response(
+            200, text=PAGE.replace("</main>", echo + "</main>"), headers={"content-type": "text/html"}
+        )
+
+    events: list[str] = []
+    checked: list[str] = []
+
+    async def on_event(event: Any) -> None:
+        events.append(event.model_dump_json())
+
+    async def until(url: str) -> bool:
+        checked.append(url)
+        return True
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(page)) as http:
+        result = await run_task(
+            f"Read the release. The login is https://ops:{password}@pypi.example/login and the mirror"
+            f" https://{token}@mirror.example/httpx, neither needed.",
+            start="https://pypi.example/httpx",
+            fetch=True,
+            jev=counted.jev,
+            llm=counted.llm,
+            http=http,
+            on_event=on_event,
+            until=until,
+            config=Config(step_frames=False),
+        )
+    assert counted.requests == ["https://pypi.example/httpx"], (result.status, result.error)
+    assert checked, "until was not asked"
+    assert any("0.28.1" in text for text in sent), "no model read the page"
+    for sink, texts in {
+        "model": sent,
+        "event": events,
+        "until": checked,
+        "result": [result.model_dump_json()],
+    }.items():
+        for text in texts:
+            assert password not in text and token not in text, f"a credential reached the {sink}"
 
 
 @pytest.mark.usefixtures("rust_core")
@@ -697,11 +762,19 @@ async def test_a_transient_model_failure_reaches_traced_on_its_clock(
         if request.url.host == "pypi.example":
             return httpx.Response(200, text=PAGE, headers={"content-type": "text/html; charset=utf-8"})
         asked.append(request.url.path)
-        if asked.count("/api/v1/chat/completions") == 1:
+        if len(asked) == 1:
             return httpx.Response(503, json={"error": "busy"})
-        # The known pages are asked beside the start page, each for its own schema.
-        known = "urls" in request.content.decode()
-        proposal = json.dumps({"urls": []} if known else {"url": "https://pypi.example/httpx"})
+        # Each purpose is asked for its own schema: the driver's turn calls the run done.
+        body = request.content.decode()
+        if "BrowserActions" in body:
+            proposal = json.dumps({"next": "", "actions": [{"tool": "done", "answer": [], "numbered": False}]})
+        else:
+            proposal = json.dumps({"urls": []} if "urls" in body else {"url": "https://pypi.example/httpx"})
+        # An OpenAI model is asked over the Responses API, every other model over chat completions.
+        if request.url.path.endswith("/responses"):
+            message = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": proposal}]}
+            usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+            return httpx.Response(200, json={"id": "x", "model": "m", "output": [message], "usage": usage})
         choice = {"index": 0, "message": {"role": "assistant", "content": proposal}, "finish_reason": "stop"}
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         return httpx.Response(200, json={"id": "x", "model": "m", "choices": [choice], "usage": usage})
@@ -787,18 +860,15 @@ def test_the_helper_script_reads_a_pdf_on_the_base_interpreter_without_site() ->
 
 @pytest.mark.usefixtures("rust_core")
 async def test_a_missing_browser_key_after_a_paid_fetch_keeps_the_configuration_receipt() -> None:
-    class PaidBotCheck(ScriptedJev):
-        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-            evaluation = await super().evaluate(state, questions)
-            answers = dict(evaluation.answers)
-            if "bot_check" in answers:
-                answers["bot_check"] = NoulAnswer(probability=1.0)
-            return evaluation.model_copy(
-                update={
-                    "answers": answers,
-                    "cost": CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.01),
-                }
-            )
+    class PaidWait(ScriptedLLM):
+        """Waits on the fetched check page, which sends the run to a browser, and is billed for the turn."""
+
+        async def generate[T: BaseModel](
+            self, purpose: LLMPurpose, messages: Sequence[Message], schema: type[T], *, ledger: Ledger | None = None
+        ) -> Generation[T]:
+            generation = await super().generate(purpose, messages, schema, ledger=ledger)
+            cost = CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.01, purpose=purpose)
+            return generation.model_copy(update={"cost": cost})
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(
@@ -814,8 +884,8 @@ async def test_a_missing_browser_key_after_a_paid_fetch_keeps_the_configuration_
                 "Read the release",
                 start="https://docs.example.test/value",
                 settings={},
-                jev=PaidBotCheck([]),
-                llm=ScriptedLLM("https://docs.example.test/value"),
+                jev=ScriptedJev([]),
+                llm=PaidWait("https://docs.example.test/value", script=steps("wait")),
                 http=http,
             )
     receipt = caught.value.receipt

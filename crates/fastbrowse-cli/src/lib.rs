@@ -9,6 +9,7 @@ pub use fastbrowse_run::helper;
 pub mod argparse;
 pub mod bitwarden;
 pub mod cli;
+pub mod doctor;
 pub mod embed;
 pub mod entry;
 pub mod extension;
@@ -19,6 +20,7 @@ pub mod runner;
 #[cfg(feature = "scripted")]
 pub mod scripted;
 pub mod serve;
+pub mod stats;
 pub mod totp;
 pub mod update;
 
@@ -39,7 +41,9 @@ pub mod log {
                     ::log::Level::Error => "ERROR",
                     _ => "WARNING",
                 };
-                eprintln!("{}: {level} {}", PREFIX.get().copied().unwrap_or("fastbrowse"), record.args());
+                // Every line passes the live runs' redactors: a message is built from whatever its writer held.
+                let message = fastbrowse_core::safety::logged(&record.args().to_string());
+                eprintln!("{}: {level} {message}", PREFIX.get().copied().unwrap_or("fastbrowse"));
             }
         }
 

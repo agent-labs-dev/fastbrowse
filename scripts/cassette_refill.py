@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +58,7 @@ MARKER = "<!-- cassette-refill -->"
 """Identifies the one pull request comment the refill keeps up to date."""
 
 _ATTEMPTED = re.compile(r"<!-- cassette-refill-attempted: ([0-9a-f,]*) -->")
+_REFILL_SOURCE = re.compile(rf"^{TRAILER}: ([0-9a-f]{{40}})$", re.MULTILINE)
 
 
 # What the replay check found
@@ -114,8 +116,10 @@ def attempted_shas(comment: str) -> list[str]:
     return [sha for sha in found.group(1).split(",") if sha] if found else []
 
 
-def is_refill_commit(message: str) -> bool:
-    return any(line.startswith(f"{TRAILER}: ") for line in message.splitlines())
+def refill_source(message: str) -> str | None:
+    """The original head named by the terminal batch, which may survive a rebase."""
+    found = _REFILL_SOURCE.search(message)
+    return found.group(1) if found else None
 
 
 def refill_decision(
@@ -124,8 +128,8 @@ def refill_decision(
     """Whether to spend on a refill of `tasks` for the check run on `run_sha`.
 
     The guards come first and each stops everything after it: a branch of a fork is never run with the model key, a
-    closed or moved-on pull request is not worth the spend, and the refill neither refills its own commit nor tries
-    one head commit twice, so it cannot loop. `retry` is a maintainer's explicit rerun and lifts only the last.
+    closed or moved-on pull request is not worth the spend, and the refill only tries a head once.
+    `retry` is a maintainer's explicit rerun and lifts only the last guard.
     """
     if pull.head_repo != pull.base_repo:
         return Decision(
@@ -135,8 +139,6 @@ def refill_decision(
         return Decision(False, "the pull request is not open")
     if pull.head_sha != run_sha:
         return Decision(False, f"the check ran on {run_sha[:12]} but the branch is now at {pull.head_sha[:12]}")
-    if is_refill_commit(pull.head_message):
-        return Decision(False, "the branch head is itself a refill commit; a refill is never refilled")
     if not tasks:
         return Decision(False, "the replay check recorded no missed task")
     if not retry and pull.head_sha in set(attempted):
@@ -390,19 +392,35 @@ mutation($input: CreateCommitOnBranchInput!) {
 """
 
 
+class GitHubGatewayTimeout(RuntimeError):
+    """GitHub's gateway returned HTTP 504, leaving the mutation outcome unknown."""
+
+
 def gh(*args: str, token: str, body: Any = None) -> Any:
     """One GitHub REST or GraphQL call as `token`; the body, if any, goes in on stdin."""
+    # A GraphQL mutation can commit even if the gateway loses its response. Read the HTTP status line
+    # directly because gh can render the same status with or without a server message on stderr.
+    with_status = args[0] == "graphql"
     done = subprocess.run(
-        ["gh", "api", *args, *(["--input", "-"] if body is not None else [])],
+        ["gh", "api", *args, *(["--include"] if with_status else []), *(["--input", "-"] if body is not None else [])],
         input=json.dumps(body) if body is not None else None,
         capture_output=True,
         text=True,
         env={**os.environ, "GH_TOKEN": token},
         check=False,
     )
+    response = done.stdout
+    status = []
+    if with_status:
+        headers, _, response = response.partition("\n\n")
+        status = headers.partition("\n")[0].split(maxsplit=2)
     if done.returncode != 0:
-        raise RuntimeError(f"gh api {args[0]} failed: {done.stderr.strip()[:500]}")
-    return json.loads(done.stdout) if done.stdout.strip() else None
+        stderr = done.stderr.strip()
+        error = f"gh api {args[0]} failed: {stderr[:500]}"
+        if len(status) >= 2 and status[0].startswith("HTTP/") and status[1] == "504":
+            raise GitHubGatewayTimeout(error)
+        raise RuntimeError(error)
+    return json.loads(response) if response.strip() else None
 
 
 def output(**values: str) -> None:
@@ -528,6 +546,33 @@ def refill_commit_tasks(repo: str, commit: Mapping[str, Any], token: str) -> dic
     return blobs
 
 
+def published_refill(repo: str, facts: PullFacts, comment: str, token: str) -> bool:
+    """Only the exact published tip is a refill of its own parent history."""
+    # A completed publication's last link names the terminal commit. A partial publication says "then stopped".
+    link = f"](https://github.com/{repo}/commit/{facts.head_sha}); CI runs again on it."
+    if any(
+        line.startswith("Committed the refilled cassettes as ") and line.endswith(link) for line in comment.splitlines()
+    ):
+        return True
+    original = refill_source(facts.head_message)
+    if original is None:
+        return False
+    # The status comment can be overwritten or the workflow can stop after pushing. In a split publication, each
+    # earlier batch is a signed cassette-only commit without a terminal trailer. The first non-batch ends the check.
+    sha = facts.head_sha
+    covered: set[str] = set()
+    while sha != original:
+        commit = read_commit(repo, sha, token)
+        if sha != facts.head_sha and refill_source(commit["commit"]["message"]) is not None:
+            return False
+        tasks = refill_commit_tasks(repo, commit, token)
+        if not tasks or tasks.keys() & covered:
+            return False
+        covered.update(tasks)
+        sha = commit["parents"][0]["sha"]
+    return True
+
+
 def git_blob_oid(data: bytes) -> str:
     blob = f"blob {len(data)}\0".encode() + data
     return hashlib.sha1(blob, usedforsecurity=False).hexdigest()
@@ -549,7 +594,7 @@ def retry_from_partial(repo: str, number: str, head: str, token: str) -> tuple[s
     facts, _ = pull_facts(repo, number, token)
     if not facts.open or facts.head_repo != repo or facts.base_repo != repo or facts.head_sha != head:
         return None, set()
-    if is_refill_commit(facts.head_message):
+    if refill_source(facts.head_message) is not None:
         return None, set()
     comment = find_comment(repo, number, token)
     attempted = set(attempted_shas(comment["body"])) if comment else set()
@@ -611,8 +656,11 @@ def plan() -> int:
     tasks = [task for task in tasks if task not in covered]
     facts, _ = pull_facts(repo, number, token)
     existing = find_comment(repo, number, token)
-    attempted = attempted_shas(existing["body"]) if existing else []
+    comment = existing["body"] if existing else ""
+    attempted = attempted_shas(comment)
     decision = refill_decision(facts, run_sha=sha, tasks=tasks, attempted=attempted, retry=env["RETRY"] == "true")
+    if decision.run and published_refill(repo, facts, comment, token):
+        decision = Decision(False, "the branch head is itself a published refill commit")
     summary(f"Refill {'runs' if decision.run else 'does not run'}: {decision.reason}.")
     output(run=str(decision.run).lower(), tasks=json.dumps(tasks))
     if decision.run:
@@ -669,17 +717,28 @@ def fill() -> int:
 
 
 def recover_commit(
-    repo: str, number: str, branch: str, parent: str, message: str, additions: Sequence[Mapping[str, str]], token: str
+    repo: str,
+    number: str,
+    branch: str,
+    parent: str,
+    message: str,
+    additions: Sequence[Mapping[str, str]],
+    token: str,
+    *,
+    wait_for_head: bool,
 ) -> dict[str, str] | None:
     """Recover a commit response only when the open branch tip is exactly the batch we sent."""
-    facts, actual_branch = pull_facts(repo, number, token)
-    if (
-        not facts.open
-        or facts.head_repo != repo
-        or facts.base_repo != repo
-        or actual_branch != branch
-        or facts.head_sha == parent
-    ):
+    # A gateway timeout can leave the commit in flight. Give the same branch two more reads one minute apart.
+    delays = (0, 60, 60) if wait_for_head else (0,)
+    for delay in delays:
+        if delay:
+            time.sleep(delay)
+        facts, actual_branch = pull_facts(repo, number, token)
+        if not facts.open or facts.head_repo != repo or facts.base_repo != repo or actual_branch != branch:
+            return None
+        if facts.head_sha != parent:
+            break
+    else:
         return None
     commit = read_commit(repo, facts.head_sha, token)
     if [entry["sha"] for entry in commit["parents"]] != [parent] or commit["commit"]["message"].rstrip(
@@ -722,12 +781,68 @@ def commit_batch(
         return commit_response(made)
     except (RuntimeError, json.JSONDecodeError) as error:
         try:
-            recovered = recover_commit(repo, number, branch, parent, message, additions, token)
+            recovered = recover_commit(
+                repo,
+                number,
+                branch,
+                parent,
+                message,
+                additions,
+                token,
+                wait_for_head=isinstance(error, GitHubGatewayTimeout),
+            )
         except (AttributeError, IndexError, KeyError, TypeError, ValueError, RuntimeError) as verification_error:
             raise ValueError(f"GitHub's commit result could not be verified: {error}; {verification_error}") from error
         if recovered is None:
-            raise ValueError(f"GitHub's commit result could not be verified: {error}") from error
+            reason = f"GitHub's commit result could not be verified: {error}"
+            if isinstance(error, GitHubGatewayTimeout) and tip_is(repo, number, branch, parent, token):
+                raise BatchTimedOut(reason) from error
+            raise ValueError(reason) from error
         return recovered
+
+
+class BatchTimedOut(ValueError):
+    """A commit that timed out at GitHub's gateway and never landed: the branch tip is still its parent."""
+
+
+def tip_is(repo: str, number: str, branch: str, parent: str, token: str) -> bool:
+    try:
+        facts, actual_branch = pull_facts(repo, number, token)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError, RuntimeError):
+        return False
+    return facts.open and actual_branch == branch and facts.head_sha == parent
+
+
+def commit_split(
+    repo: str,
+    number: str,
+    branch: str,
+    parent: str,
+    batch: Sequence[Path],
+    sha: str,
+    verdict: FillVerdict,
+    token: str,
+    commit_token: str,
+    *,
+    last: bool,
+) -> Iterator[dict[str, str]]:
+    """Yield the commits that publish a batch, each built on the one before it. Only the final one carries the
+    terminal trailer when `last`, so a split batch still ends in exactly one."""
+    tasks = [path.name.removesuffix(".jsonl") for path in batch]
+    try:
+        yield commit_batch(
+            repo, number, branch, parent, commit_message(tasks, sha, verdict, last=last), batch, token, commit_token
+        )
+        return
+    except BatchTimedOut:
+        # 40 MiB mutations fit GitHub's size cap but 504 at its gateway, so a batch that never landed is halved.
+        if len(batch) == 1:
+            raise
+    middle = len(batch) // 2
+    for half, is_last in ((batch[:middle], False), (batch[middle:], last)):
+        for commit in commit_split(repo, number, branch, parent, half, sha, verdict, token, commit_token, last=is_last):
+            parent = commit["oid"]
+            yield commit
 
 
 def publish() -> int:
@@ -758,11 +873,20 @@ def publish() -> int:
             head = sha
             batches = commit_batches(files, COMMIT_PAYLOAD_LIMIT)
             for position, batch in enumerate(batches, 1):
-                batch_tasks = [path.name.removesuffix(".jsonl") for path in batch]
-                message = commit_message(batch_tasks, sha, verdict, last=position == len(batches))
-                commit = commit_batch(repo, number, branch, head, message, batch, token, env["COMMIT_TOKEN"])
-                head = commit["oid"]
-                links.append(f"[{head[:12]}]({commit['url']})")
+                for commit in commit_split(
+                    repo,
+                    number,
+                    branch,
+                    head,
+                    batch,
+                    sha,
+                    verdict,
+                    token,
+                    env["COMMIT_TOKEN"],
+                    last=position == len(batches),
+                ):
+                    head = commit["oid"]
+                    links.append(f"[{head[:12]}]({commit['url']})")
             outcome = f"Committed the refilled cassettes as {', '.join(links)}; CI runs again on it."
             committed = True
         except (ValueError, RuntimeError) as error:

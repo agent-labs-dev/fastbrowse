@@ -271,7 +271,8 @@ async fn test_session_setup_rolls_back() {
         fake.stopped().await;
         let calls = fake.calls();
         assert_eq!(calls.last().map(String::as_str), Some("stop"));
-        assert_eq!(calls.iter().any(|m| m == "Target.closeTarget"), method != "Target.setDiscoverTargets", "{method}");
+        // The tab is created beside discovery and finishes even when discovery fails, so every rollback closes it.
+        assert!(calls.iter().any(|m| m == "Target.closeTarget"), "{method}");
     }
 }
 

@@ -1,15 +1,13 @@
-//! The start proposal and the scripted model clients, against what was asked, accepted and answered.
+//! The start proposal and the scripted task, against what was asked, accepted and answered.
 
 mod common;
 
 use common::*;
-use fastbrowse_agent::scripted::{ScriptedJev, steps};
+use fastbrowse_agent::scripted::steps;
 use fastbrowse_agent::start::{accept_start, propose_start};
-use fastbrowse_core::decision::{DecisionClient, Question};
 use fastbrowse_core::models::Limits;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::Ledger;
-use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 #[test]
@@ -42,11 +40,5 @@ fn scripts_read_and_answer() {
             Err(_) => json!({"error": "ValueError"}),
         };
         assert_eq!(parsed, case["steps"], "{case}");
-    }
-    let jev = ScriptedJev::new(steps("click Add one; fill Token = secret:token").unwrap());
-    for exchange in golden["scripted_jev"].as_array().unwrap() {
-        let questions: IndexMap<String, Question> = parse(&exchange["questions"]);
-        let evaluation = block_on(jev.evaluate(&json!({}), &questions)).unwrap();
-        assert_eq!(evaluation.dump(), exchange["evaluation"], "{exchange}");
     }
 }

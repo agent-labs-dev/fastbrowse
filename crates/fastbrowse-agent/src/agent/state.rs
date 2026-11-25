@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use fastbrowse_core::decision::{Answer, DecisionError};
-use fastbrowse_core::llm::{Generation, LLMError};
+use fastbrowse_core::llm::LLMError;
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
@@ -13,10 +13,9 @@ use indexmap::IndexMap;
 use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes, address, fact_id};
-use crate::policy::{Decision, Form, HistoryEntry, Look};
+use crate::policy::{Form, HistoryEntry, Look};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
-use crate::start::KnownPages;
 
 /// Reads a page gets between finished reads: one that did not finish is tried once more, then the page counts as read.
 const READ_TRIES: u8 = 2;
@@ -115,7 +114,7 @@ impl Written {
     }
 }
 
-/// The step cannot go on as Jev picked it: Jev is asked again, not the caller.
+/// The step cannot go on as the driver named it: the driver is told, not the caller.
 #[derive(Debug, Clone)]
 pub(crate) struct Unsure {
     pub reason: String,
@@ -259,38 +258,11 @@ impl SiteFailure {
     }
 }
 
-/// The known pages request a run sent while its first page opened, answered with its cost unrecorded: the run that
-/// takes the answer records it, which after an escalation to a browser is the browser run's ledger. Dropped, the request
-/// is aborted, so a cancelled run's request stops with it and records what it was billed.
-pub(crate) struct KnownAsked(tokio::task::JoinHandle<crate::error::Result<Generation<KnownPages>>>);
-
-impl KnownAsked {
-    pub fn new(asked: tokio::task::JoinHandle<crate::error::Result<Generation<KnownPages>>>) -> KnownAsked {
-        KnownAsked(asked)
-    }
-
-    pub async fn answer(mut self) -> crate::error::Result<Generation<KnownPages>> {
-        (&mut self.0).await.unwrap_or_else(|error| Err(AgentError::Invalid(format!("not answered: {error}"))))
-    }
-}
-
-impl Drop for KnownAsked {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-/// Jev's recovery pick, tied to the page state that was shown when it was made.
-pub(crate) struct Picked {
-    pub url: String,
-    pub page_key: String,
-    pub document_key: String,
-    pub decision: Decision,
-    pub look: Option<Look>,
-}
-
 pub(crate) struct RunState {
-    pub task: String,
+    /// The task with its inputs written in, as the caller gave it: for code that opens, types or compares what it
+    /// writes. A model or an output is shown it through `Agent::model_task` or `Agent::caller_task`, masked: written
+    /// out raw, an address in it carried its credentials to every model shown the task (#1381).
+    pub raw_task: String,
     /// The recipe this run replays, while it has steps left to offer.
     pub replay: Option<super::replay::Replay>,
     /// The steps this run carried out, kept as a recipe a later run can replay.
@@ -299,26 +271,14 @@ pub(crate) struct RunState {
     pub text_source: Option<fastbrowse_core::recipe::RecipeText>,
     /// The task as the caller wrote it, before `with_inputs`, which is what a recipe keeps.
     pub given_task: String,
-    /// The caller's background: shown beside the task, never read as what it asks for.
-    pub context: Option<String>,
+    /// The caller's background: shown beside the task, never read as what it asks for. A model is shown it through
+    /// `Agent::model_context`, masked, as the task is.
+    pub raw_context: Option<String>,
     pub inputs: IndexMap<String, String>,
     pub attachments: Vec<Attachment>,
     pub authorization: Authorization,
     pub ledger: Arc<Ledger>,
     pub notes: Notes,
-    /// Bot-check documents this run has already reloaded once, so a challenge that survives is reported.
-    pub challenge_reloads: HashSet<String>,
-    /// Addresses where a bot check did not clear, and the routes proposed around them, each opened once.
-    pub walled: Vec<String>,
-    pub routes: HashSet<String>,
-    /// Pages the site is known to serve for the items the task names, offered as places to navigate until each has
-    /// been open (#983).
-    pub known_pages: Vec<String>,
-    /// The request for `known_pages` while it is out. A run decides its first step while it is, and waits for it only
-    /// before acting on a decision or proposing another route, so the request is not on every run's first step.
-    pub known_asked: Option<KnownAsked>,
-    /// The known pages the run has been on: each stays one the run may navigate to, and is not offered again.
-    pub reached_known_pages: Vec<String>,
     pub steps: Vec<StepResult>,
     /// What Jev was offered for the latest decision, for the next step recorded, which is the one that decision led to.
     pub choices: Vec<StepChoice>,
@@ -334,14 +294,9 @@ pub(crate) struct RunState {
     /// whose start page answered 404 searched the site, stalled on the results and ended `no_progress`, since leaving
     /// the address forgot its failure (#931).
     pub start_failure: Option<SiteFailure>,
-    pub http_seen: HashSet<(String, String, i64)>,
-    pub hint: Option<String>,
-    /// Jev's pick when asked again after a stall, kept only for the page state and target it was asked about, with the
-    /// card of the target it chose.
-    pub picked: Option<Picked>,
-    /// The action the next step carries out, built while the page was read.
-    pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,
     pub unchanged: i64,
+    /// The conversation the chat driver holds with the LLM, when it picks the run's actions.
+    pub(super) chat: super::driver::Chat,
     /// What a fill or select has written, by page address, so only a field's first new value counts as progress by
     /// itself. A submit that loads the same address again is still the same form: a new document there does not make
     /// its fields new.
@@ -349,21 +304,12 @@ pub(crate) struct RunState {
     pub recoveries: i64,
     /// Rejected drafts sent back to the navigator. Unlike `recoveries`, no new page or read renews it.
     pub rewrites: i64,
-    pub blank_opening_checked: bool,
-    /// Blank states waited out during this loading episode, cleared once a readable page appears.
-    pub blank_waited: HashSet<(String, String)>,
     /// The one renderer hang this run may recover without risking a replay of the action.
     pub hung_page_reopened: bool,
-    pub last_page: Option<(String, String)>,
-    /// The document in which Jev was last asked whether the task needs an action inside a drawn surface, and its
-    /// answer, which places every click on that document's surface.
-    pub surface_judged: Option<((String, String), f64)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
     /// The action that made the latest navigation, as "click 'Learn more'".
     pub navigated_by: Option<String>,
-    /// Jev's sign-in readings stay with the document they described, not with every later route.
-    pub login_readings: HashMap<(String, String), f64>,
     /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
     /// since is going round, not forward.
     pub reached: HashMap<String, usize>,
@@ -423,13 +369,8 @@ pub(crate) struct RunState {
     pub read_tries: HashMap<(String, String), u8>,
     /// Screenshots that a successful image read found held no answer for this run's task.
     pub unanswered_images: HashSet<String>,
-    /// The captures, by digest, a read kept for the steps: they hold a fact a step needs, such as a code to enter, and
-    /// nothing that answers the task.
-    pub step_pages: HashSet<String>,
     /// The page the last action changed, until the next observation shows it is still the page in view.
     pub changed_page: Option<(String, String)>,
-    /// Jev's latest word is that this page reports the site failed, so nothing on it is read as evidence.
-    pub page_failed: bool,
     /// Jev said a read's answer must be composed, so the run ends on the LLM's writing of the notes.
     pub compose: bool,
     /// A caller's schema is filled after DONE, so its result is not a selected prose answer yet.
@@ -454,9 +395,6 @@ pub(crate) struct RunState {
     /// Startup judgments are applied when first needed. Kept behind a pointer because growing the run state
     /// overflowed a debug worker stack during a fill.
     pub output_answers: Option<Box<IndexMap<String, Answer>>>,
-    /// What the task says about signing in, asked of the task alone at the first sign-in wall. None until then, and
-    /// when Jev gave no answer.
-    pub sign_in: Option<SignInNeeds>,
     /// The dates the task names, as the parts it states, read once before the first page. Code works out the date
     /// each means against the page's capture date.
     pub dates: Vec<crate::dates::DateReference>,
@@ -483,8 +421,6 @@ pub(crate) struct RunState {
     /// Commits this run has carried out, each counted once the page after it did not fail. A later commit is checked
     /// against the page and the run's own steps, so one the task asks for once is not sent again (#882).
     pub commits: usize,
-    /// Pages read, by content: a document can show several steps of one flow.
-    pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
     pub read_urls: HashSet<String>,
     /// The address of the link the last click followed, until the next observation shows where it landed.
@@ -500,22 +436,6 @@ pub(crate) struct RunState {
     pub first_url: Option<String>,
     /// A decision was dropped because the page redrew under it, so nothing is watched until an action is taken.
     pub redecided: bool,
-    /// Fields the task gives no value for, which recovery has been told about once, by page, label and context.
-    pub missing: HashSet<(String, String, Option<String>)>,
-    /// The fields among `missing` the task asks nothing of. One the page does not mark required is no input the run
-    /// needs: three runs that replaced a description and stalled ended `needs_input` naming blank links and a summary
-    /// the task never mentioned (#935).
-    pub untouched: HashSet<(String, String, Option<String>)>,
-    /// The step that first showed each control on the page it stayed on, by document and control id. A page can
-    /// attach what a step opens at the end of its body, such as a date popup, where nothing near it names the field
-    /// that opened it.
-    pub shown_by: HashMap<(String, String), String>,
-    /// Every control seen on the current document, by document and control id. One the page showed before and a step
-    /// brought back is not new: a wizard that returns to its first step after Submit shows the same fields it opened
-    /// with, and marked as shown by Submit they read as the next step to fill, so a run submitted the wizard again.
-    pub seen: HashSet<(String, String)>,
-    /// The step the next observation judges, as what showed the controls it finds.
-    pub showing: Option<String>,
 }
 
 /// A rejected draft's claims that held, under a notice naming what was withheld, the notes it was written from, and how
@@ -526,12 +446,6 @@ impl RunState {
     /// What the run has done, as a model judging that is shown it: the opening of its first page, then its steps.
     pub fn actions_taken(&self) -> impl Iterator<Item = &HistoryEntry> {
         self.opened.iter().chain(&self.history)
-    }
-
-    /// Jev's answer to whether the task needs an action inside a drawn surface, when it was asked in `page` and holds
-    /// there still; `None` when the next step must ask it. A failed page is asked again.
-    pub(super) fn surface_judgement(&self, page: &(String, String)) -> Option<f64> {
-        self.surface_judged.as_ref().filter(|(judged, _)| judged == page && !self.page_failed).map(|(_, odds)| *odds)
     }
 
     /// The address of the page at `url` when a site failure that can clear stands on it: opening it again reloads it.
@@ -556,6 +470,30 @@ impl RunState {
     /// The steps this run carried out that act on a page, as the models deciding steps are shown them.
     pub fn executed_steps(&self) -> Vec<serde_json::Value> {
         self.history.iter().filter(|entry| entry.changed_site()).map(HistoryEntry::shown).collect()
+    }
+
+    /// The steps this run sent that commit a change the site keeps, as the coverage check is told of them.
+    pub fn committed_steps(&self) -> Vec<serde_json::Value> {
+        self.history.iter().filter(|entry| entry.committed).map(HistoryEntry::kept).collect()
+    }
+
+    /// Marks the step just sent as one the run made, for the coverage check to be told of: an irreversible commit, or a
+    /// reversible change the site keeps, such as a saved setting. Only a commit opens the conditions later commits
+    /// are checked against.
+    /// Returns whether a commit was taken.
+    pub fn record_kept_step(&mut self, committed: bool, keeps: bool) -> bool {
+        if !(committed || keeps)
+            || self.history.last().is_none_or(|entry| entry.outcome != fastbrowse_core::models::StepOutcome::Executed)
+        {
+            return false;
+        }
+        if committed {
+            self.commits += 1;
+        }
+        if let Some(last) = self.history.last_mut() {
+            last.committed = true;
+        }
+        committed
     }
 
     pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {
@@ -647,7 +585,6 @@ impl RunState {
     /// after it, though the one stall rule renews the budget on new evidence.
     pub fn renew_stall(&mut self) {
         self.unchanged = 0;
-        self.hint = None;
         self.idle.clear();
     }
 
@@ -678,7 +615,6 @@ impl RunState {
             self.read_urls.insert(href.clone());
         }
         self.read_documents.insert(page, false);
-        self.read_pages.insert(observation.page_key.clone());
         self.read_urls.insert(observation.url.clone());
     }
 
@@ -784,51 +720,10 @@ impl RunState {
         }
     }
 
-    /// Record the step `by` as what showed the controls `shown` on `after` that this document never showed before,
-    /// and remember every control `before` and `after` hold as seen.
-    pub fn note_shown(&mut self, before: &Observation, after: &Observation, shown: &[String], by: Option<String>) {
-        let document = &after.document_key;
-        self.shown_by.retain(|(on, _), _| on == document);
-        self.seen.retain(|(on, _)| on == document);
-        if before.document_key == *document {
-            self.seen.extend(before.controls.iter().map(|c| (document.clone(), c.id.clone())));
-        }
-        if let Some(by) = by {
-            for id in shown {
-                let key = (document.clone(), id.clone());
-                if !self.seen.contains(&key) {
-                    self.shown_by.insert(key, by.clone());
-                }
-            }
-        }
-        self.seen.extend(after.controls.iter().map(|c| (document.clone(), c.id.clone())));
-    }
-
-    /// Mark each control with the step that showed it, so a later step can tell what it belongs to from what opened
-    /// it as well as from where it sits.
-    pub fn mark_shown(&self, observation: &mut Observation) {
-        for control in &mut observation.controls {
-            control.shown_by = self.shown_by.get(&(observation.document_key.clone(), control.id.clone())).cloned();
-        }
-    }
-
-    /// Records what the known pages request cost, for a run that ends without taking its answer. An ending run does not
-    /// wait for it, so a time limit still ends the run on time: one still out is aborted.
-    pub async fn known_pages_unused(&mut self) {
-        if let Some(asked) = self.known_asked.take()
-            && asked.0.is_finished()
-            && let Ok(answer) = asked.answer().await
-        {
-            let _ = self.ledger.for_answer().record([answer.cost]);
-        }
-    }
-
     pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
         RunState {
             ledger,
             fetched: self.read_urls.clone(),
-            picked: None,
-            built: None,
             landing: None,
             idle: Vec::new(),
             acted_from: None,
@@ -841,8 +736,6 @@ impl RunState {
             dialog_form: None,
             commits: 0,
             redecided: false,
-            last_page: None,
-            surface_judged: None,
             navigation_from: None,
             navigated_by: None,
             ..self
@@ -857,45 +750,31 @@ impl RunState {
         ledger: Arc<Ledger>,
     ) -> RunState {
         RunState {
-            task: with_inputs(&task, &inputs),
+            raw_task: with_inputs(&task, &inputs),
             given_task: task,
             replay: None,
             recipe_log: Vec::new(),
             text_source: None,
-            context: None,
+            raw_context: None,
             inputs,
             attachments,
             authorization,
             ledger,
             notes: Notes::default(),
-            challenge_reloads: HashSet::new(),
-            walled: Vec::new(),
-            routes: HashSet::new(),
-            known_pages: Vec::new(),
-            known_asked: None,
-            reached_known_pages: Vec::new(),
             steps: Vec::new(),
             choices: Vec::new(),
             history: Vec::new(),
             opened: None,
             site_failure: None,
             start_failure: None,
-            http_seen: HashSet::new(),
-            hint: None,
-            picked: None,
-            built: None,
+            chat: Default::default(),
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
             rewrites: 0,
-            blank_opening_checked: false,
-            blank_waited: HashSet::new(),
             hung_page_reopened: false,
-            last_page: None,
-            surface_judged: None,
             navigation_from: None,
             navigated_by: None,
-            login_readings: HashMap::new(),
             reached: HashMap::new(),
             shown: HashMap::new(),
             viewed: HashSet::new(),
@@ -916,9 +795,7 @@ impl RunState {
             read_documents: HashMap::new(),
             read_tries: HashMap::new(),
             unanswered_images: HashSet::new(),
-            step_pages: HashSet::new(),
             changed_page: None,
-            page_failed: false,
             compose: false,
             extraction_pending: false,
             composition_feedback: None,
@@ -931,7 +808,6 @@ impl RunState {
             undone: None,
             output_intent: OutputIntent::Unknown,
             output_answers: None,
-            sign_in: None,
             dates: Vec::new(),
             appearance: false,
             extent: Extent::Shown,
@@ -943,7 +819,6 @@ impl RunState {
             committing: false,
             dialog_form: None,
             commits: 0,
-            read_pages: HashSet::new(),
             read_urls: HashSet::new(),
             followed: None,
             arrived_by: None,
@@ -952,11 +827,6 @@ impl RunState {
             start_landing_url: None,
             first_url: None,
             redecided: false,
-            missing: HashSet::new(),
-            untouched: HashSet::new(),
-            shown_by: HashMap::new(),
-            seen: HashSet::new(),
-            showing: None,
         }
     }
 }
@@ -972,42 +842,17 @@ pub(crate) fn read_key(observation: &Observation) -> (String, String) {
     (observation.document_key.clone(), observation.url.clone())
 }
 
-/// The task with each input it names by `input <name>` followed by the input's value. Jev, offered an input as a
-/// separate source for a field, judged that nothing gave the field a value whatever the input was called; a value
-/// in the task is one it copies.
+/// The task, then every input by name and value. Matched only where the task wrote `input <name>`, a task naming its
+/// input "the TEXT input" left Jev unable to tie the comment box's value to the task, so it judged the Post click
+/// unrequested (0.25 to 0.39, 0.90 to 0.92 once stated) and the run stopped for confirmation (#1112). A value in the
+/// task is one Jev copies, where an input offered as a separate source for a field was judged to give it nothing.
 pub(crate) fn with_inputs(task: &str, inputs: &IndexMap<String, String>) -> String {
-    let word = |c: char| c.is_alphanumeric() || c == '_';
-    let mut shown = String::with_capacity(task.len());
-    let mut at = 0;
-    // One pass over the task as written, so a value is never read as naming another input, and the longest name
-    // wins where one name begins another.
-    while let Some(found) = task[at..].find("input ").map(|found| at + found) {
-        let name_at = found + "input ".len();
-        let named = (!task[..found].ends_with(word))
-            .then(|| {
-                inputs
-                    .iter()
-                    .filter(|(name, _)| {
-                        task[name_at..].starts_with(name.as_str()) && !task[name_at + name.len()..].starts_with(word)
-                    })
-                    .max_by_key(|(name, _)| name.len())
-            })
-            .flatten();
-        match named {
-            Some((name, value)) => {
-                let end = name_at + name.len();
-                shown.push_str(&task[at..end]);
-                shown.push_str(&format!(" ({value})"));
-                at = end;
-            }
-            None => {
-                shown.push_str(&task[at..name_at]);
-                at = name_at;
-            }
-        }
+    if inputs.is_empty() {
+        return task.to_string();
     }
-    shown.push_str(&task[at..]);
-    shown
+    let given: Vec<String> =
+        inputs.iter().map(|(name, value)| format!("{name} = {}", fastbrowse_core::py::text::repr(value))).collect();
+    format!("{task}\nInputs the user gave, by name: {}", given.join(", "))
 }
 
 #[cfg(test)]
@@ -1015,15 +860,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_task_shows_each_input_it_names_beside_the_name() {
-        let inputs = IndexMap::from([("term".to_string(), "asyncio".to_string())]);
+    fn a_task_states_every_input_by_name_and_value() {
+        let inputs = IndexMap::from([
+            ("TEXT".to_string(), "Version 2.4.1 is out.".to_string()),
+            ("term".to_string(), "asyncio".to_string()),
+        ]);
         assert_eq!(
-            with_inputs("Search for input term, not input terms or reinput term", &inputs),
-            "Search for input term (asyncio), not input terms or reinput term"
+            with_inputs("Post the TEXT input, then search input term", &inputs),
+            "Post the TEXT input, then search input term\nInputs the user gave, by name: TEXT = 'Version 2.4.1 is out.', term = 'asyncio'"
         );
-        let inputs =
-            IndexMap::from([("a".to_string(), "see input b".to_string()), ("b".to_string(), "two".to_string())]);
-        assert_eq!(with_inputs("Use input a", &inputs), "Use input a (see input b)");
+        assert_eq!(with_inputs("No inputs", &IndexMap::new()), "No inputs");
     }
 }
 
@@ -1035,16 +881,4 @@ pub enum Edits {
     RequestedOnly,
     /// The task rules out every change, authorized or not (#838).
     Forbidden,
-}
-
-/// Jev's reading of the task at a sign-in wall, each a question of its own, so code decides what the wall means.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SignInNeeds {
-    /// The task needs a signed-in account: its own orders, messages, settings or other private pages.
-    pub account: bool,
-    /// The task gives the credentials to sign in with, or says to sign in with saved or configured ones: asked only
-    /// whether it gives them, a task to sign in with the saved password and report a 2FA prompt read the wall instead.
-    pub credentials: bool,
-    /// The task asks about the access restriction itself, which the wall shows.
-    pub inspects: bool,
 }

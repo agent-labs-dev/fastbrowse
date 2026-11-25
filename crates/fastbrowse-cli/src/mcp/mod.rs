@@ -21,7 +21,7 @@ use fastbrowse_core::protocol::CancellationReceipt;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Floats, Style};
 use fastbrowse_core::py::text::{self, repr};
-use fastbrowse_core::safety::{ScopedSecrets, origin_of, secret_allowed};
+use fastbrowse_core::safety::{Redactor, ScopedSecrets, origin_of, secret_allowed};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::sync::Semaphore;
@@ -107,9 +107,10 @@ impl Default for ServerConfig {
     }
 }
 
-/// What a caller can do about a status other than `complete`.
-pub fn next_step(status: Status, allow_authorize: bool) -> Option<&'static str> {
-    Some(match status {
+/// What a caller can do about a status other than `complete`. A run that ended `unavailable` or `error` names its
+/// cause too, since the caller reads this field first and "see error" sent it to a second one.
+pub fn next_step(status: Status, allow_authorize: bool, error: Option<&str>) -> Option<String> {
+    let fixed = match status {
         Status::Complete => return None,
         Status::Unverified => "The run could not verify every requirement or answer claim. Treat it as unconfirmed.",
         Status::NeedsConfirmation if allow_authorize => {
@@ -138,8 +139,12 @@ pub fn next_step(status: Status, allow_authorize: bool) -> Option<&'static str> 
         }
         Status::BudgetExceeded => "A limit was reached. Call again with a higher explicit limit or split the task.",
         Status::Stuck | Status::ObservationLimit => "Try a start URL closer to the goal, or a narrower task.",
-        Status::Unavailable => "A model or browser provider was unavailable; see error. Call again later.",
-        Status::Error => "A model or browser failure; see error.",
+        Status::Unavailable => "A model or browser provider was unavailable. Call again later.",
+        Status::Error => "A model or browser failure.",
+    };
+    Some(match (status, error.filter(|error| !error.is_empty())) {
+        (Status::Unavailable | Status::Error, Some(error)) => format!("{fixed} Cause: {error}"),
+        _ => fixed.to_owned(),
     })
 }
 
@@ -253,6 +258,7 @@ pub fn bounded(
 fn start_origin(start: &str) -> Result<String, String> {
     let parts = SplitUrl::of(start);
     if !matches!(parts.scheme.as_str(), "http" | "https") || parts.hostname().is_empty() {
+        // The refusal goes back to the MCP client through the call's outbox, which masks what the call held.
         return Err(format!("start must be an http or https URL, got {}", repr(start)));
     }
     Ok(origin_of(start))
@@ -372,7 +378,7 @@ pub fn browse_result(
         "answer": result.answer,
         "data": result.data,
         "citations": citations,
-        "next_step": next_step(result.status, config.allow_authorize),
+        "next_step": next_step(result.status, config.allow_authorize, result.error.as_deref()),
         "error": result.error,
         "final_url": result.final_url,
         "live_url": live_url,
@@ -614,6 +620,8 @@ fn response(id: &Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
+/// An error reply. Its message may quote what the caller sent (a resource, a prompt's name), which the outbox of the
+/// request it answers masks (`McpServer::receive`).
 fn error_response(id: &Value, code: i64, message: &str, data: Option<&str>) -> Value {
     let mut error = json!({"code": code, "message": message});
     if let Some(data) = data {
@@ -631,11 +639,34 @@ pub struct McpServer {
     slots: Arc<Semaphore>,
 }
 
-/// One client's session: whether it has initialized, and its calls under way.
-#[derive(Default)]
+/// One client's session: whether it has initialized, its calls under way, and every string the client has sent in
+/// it, learnt as each message arrives (`McpServer::receive`) and counted among the process's live redactors so a log
+/// line is masked by it too.
 pub struct Session {
     initialized: Mutex<bool>,
     in_flight: Mutex<HashMap<String, crate::runner::Cancel>>,
+    learnt: Arc<Mutex<Redactor>>,
+}
+
+impl Default for Session {
+    fn default() -> Session {
+        let learnt = Arc::new(Mutex::new(Redactor::default()));
+        fastbrowse_core::safety::live(&learnt);
+        Session { initialized: Mutex::default(), in_flight: Mutex::default(), learnt }
+    }
+}
+
+impl Session {
+    fn learnt(&self) -> std::sync::MutexGuard<'_, Redactor> {
+        self.learnt.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Whether a request id is itself an address with a credential, which cannot be echoed to match a reply. Asked of the
+/// id alone: a short password learnt elsewhere in the session (`1`) is in many an ordinary id (`req-1`), which the
+/// envelope echoes unmasked.
+pub fn id_holds_credential(id: &Value) -> bool {
+    id.as_str().is_some_and(|id| fastbrowse_core::safety::learnt(&json!(id)).holds_credentials())
 }
 
 /// Why a `tools/call` returned `isError`, in the text it is shown with.
@@ -717,11 +748,36 @@ impl McpServer {
             crate::log::error("Received exception from stream: the line is not a JSON-RPC message");
             return outbox(internal());
         };
+        // Learnt before anything is said of the message, whatever it is (a request, a notification, a reply), and kept
+        // for the session's life: every reply and log line after it is masked by what the client has sent. Masked
+        // after the fact by structure alone, a password holding a quote was quoted whole (#1381).
+        session.learnt().register_tree(&Value::Object(message.clone()));
+        let learnt = Arc::new(session.learnt().clone());
+        if message.get("id").is_some_and(id_holds_credential) {
+            let message = "Invalid request: the id is an address with a credential; choose one that is not";
+            return outbox(error_response(&Value::Null, -32600, message, None));
+        }
+        let outbox: Outbox = {
+            let (outbox, session) = (outbox.clone(), session.clone());
+            Arc::new(move |mut message: Value| {
+                // What quotes the caller: a result, an error, a progress note's message and a log message's data.
+                let quoting: &[&[&str]] = &[
+                    &["result"],
+                    &["error", "message"],
+                    &["error", "data"],
+                    &["params", "message"],
+                    &["params", "data"],
+                ];
+                session.learnt().mask_members(&mut message, quoting);
+                outbox(message);
+            })
+        };
+        let outbox = &outbox;
         let method = message.get("method").and_then(Value::as_str);
         let id = message.get("id").filter(|id| id.is_string() || id.is_i64() || id.is_u64()).cloned();
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         match (id, method) {
-            (Some(id), Some(method)) => self.request(session, id, method, params, outbox),
+            (Some(id), Some(method)) => self.request(session, &learnt, id, method, params, outbox),
             (None, Some(method)) if !message.contains_key("id") => self.notified(session, method, &params),
             // A response to nothing the server asked, or a shape that is neither request nor notification.
             _ if message.contains_key("result") || message.contains_key("error") => {}
@@ -746,7 +802,15 @@ impl McpServer {
         }
     }
 
-    fn request(self: &Arc<Self>, session: &Arc<Session>, id: Value, method: &str, params: Value, outbox: &Outbox) {
+    fn request(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        learnt: &Arc<Redactor>,
+        id: Value,
+        method: &str,
+        params: Value,
+        outbox: &Outbox,
+    ) {
         let invalid = || error_response(&id, -32602, "Invalid request parameters", Some(""));
         let initialized = *session.initialized.lock().unwrap_or_else(|p| p.into_inner());
         if !initialized && !matches!(method, "initialize" | "ping") {
@@ -789,7 +853,7 @@ impl McpServer {
             },
             "prompts/get" => match params.get("name").and_then(Value::as_str) {
                 Some(name) => {
-                    crate::log::error(&format!("Error getting prompt {name}"));
+                    crate::log::error(&learnt.mask(&format!("Error getting prompt {name}")));
                     outbox(error_response(&id, 0, &format!("Unknown prompt: {name}"), None));
                 }
                 None => outbox(invalid()),
@@ -811,7 +875,7 @@ impl McpServer {
                 let run_cancel = crate::runner::Cancel::default();
                 let key = id.to_string();
                 session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), cancel.clone());
-                let (server, session, outbox) = (self.clone(), session.clone(), outbox.clone());
+                let (server, session, outbox, learnt) = (self.clone(), session.clone(), outbox.clone(), learnt.clone());
                 tokio::spawn(async move {
                     let run_stop = run_cancel.clone();
                     // Cleanup keeps running after cancellation, but an answered request cannot send more progress.
@@ -828,7 +892,7 @@ impl McpServer {
                     // Where the run keeps its trace, read here because a cancel answers before the run ends: the
                     // reply named nothing, though a cancelled run keeps its trace.
                     let trace_at = std::sync::Mutex::new(None);
-                    let call = server.call(&name, arguments, token, run_cancel, &events, &trace_at);
+                    let call = server.call(&learnt, &name, arguments, token, run_cancel, &events, &trace_at);
                     tokio::pin!(call);
                     let outcome = tokio::select! {
                         biased;
@@ -899,8 +963,10 @@ impl McpServer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn call(
         &self,
+        learnt: &Redactor,
         name: &str,
         arguments: Map<String, Value>,
         token: Option<Value>,
@@ -909,7 +975,8 @@ impl McpServer {
         trace_at: &std::sync::Mutex<Option<std::path::PathBuf>>,
     ) -> Result<Value, ToolFailure> {
         if name != "browse" {
-            crate::log::warning(&format!("Tool {} not listed, no validation will be performed", repr(name)));
+            let message = format!("Tool {} not listed, no validation will be performed", repr(name));
+            crate::log::warning(&learnt.mask(&message));
             return Err(ToolFailure::Unknown(name.to_string()));
         }
         let arguments = Browse::read(arguments).map_err(ToolFailure::Tool)?;

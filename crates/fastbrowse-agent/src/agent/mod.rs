@@ -1,17 +1,19 @@
-//! The run loop: Jev picks every operation and target, reads, and says DONE, and an unsure Jev still acts on its best
-//! pick. Code owns the safety gates (irreversible actions, sign-in walls, bot checks, authorization, secrets) and the
-//! stall rule. The answer is what Jev read, each fact with its citations.
+//! The run loop: the driver's conversation names each action, what to read and when the task is done. Code owns the
+//! safety gates (irreversible actions, sign-in walls, bot checks, authorization, secrets), the stall rule and the
+//! check that the answer is what was read, each fact with its citations.
 //!
 //! Every Jev request built here is a pure function of its inputs, since a run is replayed from recorded model traffic
 //! keyed on a hash of the request body.
 
 mod acting;
-mod batching;
+mod driver;
 mod driving;
 mod finishing;
 pub mod helpers;
+mod masking;
 mod reading;
 mod recovery;
+mod render;
 mod replay;
 mod search;
 mod seeing;
@@ -21,7 +23,7 @@ mod superseding;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -36,10 +38,8 @@ use fastbrowse_core::models::{
     Evidence, FailureKind, Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact,
     StepOutcome, UntilCheck, Wall, WallKind,
 };
-use fastbrowse_core::page::{BrowserError, Observation, Page, Unread};
-use fastbrowse_core::safety::{
-    CredentialField, Redactor, asks_for_credentials, credential_field, origin_of, secret_allowed, wall_kind,
-};
+use fastbrowse_core::page::{BrowserError, Control, Observation, Page};
+use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -50,7 +50,7 @@ use state::{Flow, RunState, Stop};
 
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
-use crate::policy::{HistoryEntry, StepContext};
+use crate::policy::HistoryEntry;
 use crate::retrieval::{
     ComposedAnswer, cited_quote, compose_reviewed, draft_answer, marked_partial, noticed, partial_answer,
 };
@@ -58,6 +58,10 @@ use crate::verification::RecordSchema;
 
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
 const ENDING_FRAME_SECONDS: f64 = 6.0;
+
+/// The page fact Jev is given once a run holds an address credential and takes no image of the page
+/// (`Agent::images_withheld`): a rule that overrides what Jev is shown is stated to it.
+pub(super) const IMAGES_WITHHELD: &str = "No screenshot of any page is shown for the rest of this run: the run was given an address with credentials, and a page can show its address in pixels that cannot be masked. Judge from the page's text.";
 /// Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one.
 const REDRAW_WATCH_SECONDS: f64 = 10.0;
 
@@ -125,6 +129,8 @@ pub struct Agent {
     page: Arc<dyn Page>,
     jev: Arc<dyn DecisionClient>,
     llm: Arc<dyn LLMClient>,
+    /// The clients as given, for `with_redactor` to wrap again around another redactor.
+    clients: (Arc<dyn DecisionClient>, Arc<dyn LLMClient>),
     config: Config,
     secrets: Option<Arc<dyn SecretResolver>>,
     on_event: Option<EventHandler>,
@@ -138,11 +144,12 @@ pub struct Agent {
 impl Agent {
     pub fn new(page: Arc<dyn Page>, jev: Arc<dyn DecisionClient>, llm: Arc<dyn LLMClient>) -> Agent {
         let config = jev.profile().fit(None);
-        let redactor = Arc::default();
+        let redactor: Arc<Mutex<Redactor>> = Arc::default();
         Agent {
             page,
-            jev: Arc::new(superseding::Decisions(jev)),
-            llm: Arc::new(superseding::Generations(llm)),
+            jev: superseding::decisions(&jev, &redactor),
+            llm: superseding::generations(&llm, &redactor),
+            clients: (jev, llm),
             config,
             secrets: None,
             on_event: None,
@@ -178,6 +185,8 @@ impl Agent {
     /// Keep the run's secrets in `redactor`, so a trace the run's clients write through is redacted too.
     pub fn with_redactor(mut self, redactor: Arc<Mutex<Redactor>>) -> Agent {
         self.trace = self.trace.redacting(Arc::clone(&redactor));
+        self.jev = superseding::decisions(&self.clients.0, &redactor);
+        self.llm = superseding::generations(&self.clients.1, &redactor);
         self.redactor = redactor;
         self
     }
@@ -230,12 +239,30 @@ impl Agent {
         self.redactor().mask(value)
     }
 
+    /// `text` the driver wrote, with each address the caller wrote in the task, an input or the context put back as
+    /// written where the driver copied it as shown, credentials masked. The model reads those addresses only masked, so
+    /// an input whose value was such an address was typed as its bullets, and a page the task named behind a password
+    /// could not be opened; a mask is code's own rewriting, so mapping it back names exactly what the caller wrote.
+    fn as_written(&self, state: &RunState, text: &str) -> String {
+        let mut text = text.to_string();
+        for written in std::iter::once(state.raw_task.as_str())
+            .chain(state.raw_context.as_deref())
+            .flat_map(fastbrowse_core::navigation::written_addresses)
+        {
+            let shown = self.mask(&written);
+            if shown != written {
+                text = text.replace(&shown, &written);
+            }
+        }
+        text
+    }
+
     // A task scoped to "the whole site" loses its referent after navigation unless its starting address stays
     // with it. It is stated as what happened, not as an instruction: worded "Start at <url>." it read as one more
     // step no action had taken, and Jev chose DONE over typing a sign-in code it had just read. Mask at the call
     // boundary: a secret may have been resolved since the run began.
     fn model_task(&self, state: &RunState) -> String {
-        let task = self.mask(&state.task);
+        let task = self.mask(&state.raw_task);
         match state.caller_start.as_deref() {
             Some(start) => format!("The browser opened {} for this task. {task}", self.mask(start)),
             None => task,
@@ -246,7 +273,43 @@ impl Agent {
     // start is not a step the caller authorized or one any action shows, and beside it a form posting to /list/delete
     // under "Tidy it up" scored 0.49 to 0.59 as irreversible, where the task alone scored 0.56 to 0.65.
     fn caller_task(&self, state: &RunState) -> String {
-        self.mask(&state.task)
+        self.mask(&state.raw_task)
+    }
+
+    /// Register the credentials of every address in `texts` (`Redactor::register_address`: a text that is one address
+    /// is parsed as the browser parses it, and every address in prose is found by scanning), and from the first,
+    /// hold every image of the page to the end of the run, screenshots, step frames, live frames and the recording
+    /// alike (`Agent::image`, `PageLike::hold_images`): Chrome drops the userinfo from `location.href` but
+    /// keeps it in `document.URL`, so a page can draw its own address, credentials and all, where no reading of its
+    /// text looks, and a page can echo it after the reading that last found it clean.
+    fn learn_credentials<'a>(&self, texts: impl IntoIterator<Item = &'a str>) {
+        let texts: Vec<Value> = texts.into_iter().map(Value::from).collect();
+        self.learn_credentials_in(&Value::Array(texts));
+    }
+
+    /// `learn_credentials` for every string in `given`, map keys included (`Redactor::register_tree`).
+    fn learn_credentials_in(&self, given: &Value) {
+        let mut redactor = self.redactor();
+        redactor.register_tree(given);
+        let held = redactor.holds_credentials();
+        drop(redactor);
+        if held {
+            self.page.hold_images();
+        }
+    }
+
+    /// Drop the cards of controls the run's history keeps, once the run holds an address credential: taken before it
+    /// was learnt, they are images of pages that may show it, and no image of a page leaves such a run.
+    pub(super) fn forget_looks(&self, state: &mut RunState) {
+        if self.images_withheld() {
+            state.look = None;
+            state.opened.iter_mut().chain(state.history.iter_mut()).for_each(|entry| entry.look = None);
+        }
+    }
+
+    /// The caller's background, masked as the task is.
+    fn model_context(&self, state: &RunState) -> Option<String> {
+        state.raw_context.as_deref().map(|context| self.mask(context))
     }
 
     fn reveals_text(&self, value: &str) -> bool {
@@ -292,7 +355,8 @@ impl Agent {
                 match body.await {
                     Ok(result) => (result, true, false),
                     Err(Flow::Browser(BrowserError::NeedsBrowser(message))) => {
-                        (blocked_without_browser(message), false, true)
+                        // The browser's message can name the address it could not open, credentials and all.
+                        (blocked_without_browser(self.redact(&message)), false, true)
                     }
                     Err(flow) => (
                         self.stopped(flow, slot.as_mut(), &ledger, options.output_schema.as_deref()).await,
@@ -323,13 +387,6 @@ impl Agent {
                     (result, false, false)
                 }
             };
-            // A run that ends before it acts still records what its known pages request cost. One handed on to a
-            // browser takes the request with it, and the browser run records it.
-            if !ended.2
-                && let Some(state) = slot.as_mut()
-            {
-                state.known_pages_unused().await;
-            }
             requested_frame = slot.as_ref().is_some_and(|state| state.output_intent.attaches_screenshot());
             if let (Some(sink), Some(state)) = (&options.recipe_sink, &slot) {
                 self.store_recipe(state, sink);
@@ -434,6 +491,37 @@ impl Agent {
         ledger: &Arc<Ledger>,
         slot: &mut Option<RunState>,
     ) -> Result<RunResult, Flow> {
+        // Registered before anything is asked or traced, from everything the caller handed the run: the runner does
+        // the same before it builds the browser, and an embedder calling the agent directly reaches only this. A run
+        // resumed in another agent is shown its first run's start, task and context.
+        // Names count as much as values: an input named with an address reached Jev as a question key (#1381).
+        let carried = resume.as_ref().map(|resume| &resume.state);
+        // A secret the resolver holds as it is is masked from here, before anything types it: only the runner
+        // declared one, and a token an embedder driving the agent directly put in the start reached Jev (#1381).
+        if let Some(secrets) = &self.secrets {
+            self.redactor().declare_held(secrets.as_ref());
+        }
+        let secrets: Vec<String> =
+            self.secrets.iter().flat_map(|secrets| secrets.available()).map(|secret| secret.name).collect();
+        self.learn_credentials_in(&json!({
+            "task": task,
+            "start": options.start,
+            "context": options.context,
+            "inputs": options.inputs,
+            "attachments": options.attachments.iter().map(|attachment| [&attachment.name, &attachment.mime_type]).collect::<Vec<_>>(),
+            // The whole schema the models are shown, descriptions and all: a field's description is written into
+            // the question that asks for it, and learnt by its key alone, one reached Jev unmasked (#1381).
+            "output_schema": options.output_schema.as_ref().map(|schema| schema.model.json_schema()),
+            "recipe": options.recipe,
+            "secrets": secrets,
+            "carried": carried.map(|state| [state.caller_start.as_deref(), Some(state.raw_task.as_str()), state.raw_context.as_deref()]),
+        }));
+        // The start page's first paint can draw a declared secret its address carries before any reading can say
+        // whether it shows, so frames are held from the open, as the runner holds them; an embedder driving the agent
+        // directly reaches only this (#1381).
+        if options.start.as_deref().is_some_and(|start| self.redactor().holds_images_from(Some(start))) {
+            self.page.withhold_frames(true);
+        }
         let prepared = match resume {
             Some(Resume { state, url: Some(url) }) => {
                 self.trace.phase("open", self.page.navigate(&url, None)).await?;
@@ -483,32 +571,10 @@ impl Agent {
             if let Some(state) = prepared {
                 return Ok::<_, Flow>(state);
             }
-            let given = state::with_inputs(task, &options.inputs);
-            // The known pages are asked beside the first page's open, observation and decision, and taken before the
-            // run first reads for, builds or acts on a decision, or proposes a route (`known_pages_arrived`). Awaited
-            // here, the text LLM's answer held every run's first step, for about a second and up to 3.4 s. A run with a
-            // dollar cap still waits: a call checks that cap against the receipts already recorded, and this one's comes
-            // later. Call caps need no wait, since reserving counts the call.
-            let asked =
-                ledger.limits.max_dollars.is_none().then(|| tokio::runtime::Handle::try_current().ok()).flatten().map(
-                    |runtime| {
-                        let (llm, given, start, ledger) =
-                            (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
-                        state::KnownAsked::new(runtime.spawn(async move {
-                            crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await
-                        }))
-                    },
-                );
-            let (judgments, known) = if asked.is_some() {
-                // Polled once, the request reserves its call and leaves now, as it did when it was awaited here: a
-                // current-thread runtime would otherwise first poll it when the run waits on I/O.
-                tokio::task::yield_now().await;
-                (self.task_judgments(&given, ledger).await, Ok(Vec::new()))
-            } else {
-                tokio::join!(self.task_judgments(&given, ledger), self.known_pages(&given, start, ledger))
-            };
-            // Dropped on an error, the request is aborted and records what it was billed so far.
-            let (judgments, known) = (judgments?, known?);
+            // Masked as the task every step is shown is: a task that writes the start address out carried its
+            // credentials to the task judgments.
+            let given = self.mask(&state::with_inputs(task, &options.inputs));
+            let judgments = self.task_judgments(&given, ledger).await?;
             let mut state = RunState::new(
                 task.to_string(),
                 options.inputs.clone(),
@@ -518,10 +584,8 @@ impl Agent {
             );
             state.dates = judgments.dates;
             state.output_answers = judgments.output;
-            state.known_pages = known;
-            state.known_asked = asked;
             state.replay = options.recipe.clone().map(replay::Replay::new);
-            state.context = options.context.clone();
+            state.raw_context = options.context.clone();
             state.caller_start = start.map(String::from);
             Ok(Box::new(state))
         };
@@ -537,8 +601,7 @@ impl Agent {
                 Ok(state) if matches!(&flow, Flow::Browser(BrowserError::NeedsBrowser(_))) => {
                     self.seen().resume = Some(Resume { state, url: None });
                 }
-                Ok(mut state) => state.known_pages_unused().await,
-                Err(_) => {}
+                Ok(_) | Err(_) => {}
             }
             return Err(flow);
         }
@@ -546,6 +609,7 @@ impl Agent {
         self.tell_page_ready().await;
         if let Some(opening) = state.started_url.clone() {
             let landed = self.page.address().await?;
+            self.learn_credentials([landed.as_str()]);
             state.opened = Some(HistoryEntry {
                 effect: Some(format!("went to {landed}")),
                 ..HistoryEntry::new(Some(Operation::Navigate), Some(&opening), StepOutcome::Executed, true)
@@ -632,6 +696,7 @@ impl Agent {
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
                 let reporting = ledger.for_answer();
                 let steps = state.executed_steps();
+                let kept = state.committed_steps();
                 // A draft rejected as the run stopped is a rewrite's to correct: written without the rejection, after a
                 // stall had spent the recovery that would have sent it back, this was the first request byte for byte,
                 // and it returned the rejected draft again (#1377).
@@ -647,6 +712,7 @@ impl Agent {
                         true,
                         self.screenshot(state.output_intent),
                         &steps,
+                        &kept,
                     )
                     .await
                     .map(|reviewed| reviewed.answer)
@@ -672,14 +738,17 @@ impl Agent {
                         && state.undone.is_none();
                     // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
                     // and a run stuck before any finish check judged its steps may have left one undone: that check's
-                    // own question decides, asked of the last page.
-                    if answers
-                        && stop.status == Status::Stuck
-                        && (state.history.iter().any(HistoryEntry::acts) || state.asks_steps)
-                    {
+                    // own question decides, asked of the last page. A task that only asks to be told is asked what done
+                    // asks it: whether the page reports the site failed. A refused done had noted an error panel's
+                    // quotes, and this draft completed the run on them.
+                    if answers && stop.status == Status::Stuck {
+                        let steps = state.history.iter().any(HistoryEntry::acts) || state.asks_steps;
                         answers = match self.observed() {
-                            Some(page) => matches!(self.actions_done(state, &page).await, Ok(Carried::Done)),
-                            None => false,
+                            Some(page) if steps => {
+                                matches!(self.actions_done(state, &page).await, Ok(Carried::Done))
+                            }
+                            Some(page) => matches!(self.site_failed(state, &page).await, Ok(false)),
+                            None => !steps,
                         };
                     }
                     // A schema run's data is drawn from this answer, as at done: the extraction kept from the draft it
@@ -804,11 +873,15 @@ impl Agent {
                 _ => None,
             };
         if requested && result.final_frame.is_none() && result.status == Status::Complete {
-            result.end_as(
-                Status::Unverified,
-                "FinalFrame/uncaptured".into(),
-                "The requested final screenshot could not be captured.".into(),
-            );
+            let (code, message) = if self.images_withheld() {
+                (
+                    "FinalFrame/withheld",
+                    "The requested final screenshot was not taken: the run was given an address with credentials, and no image of a page leaves such a run.",
+                )
+            } else {
+                ("FinalFrame/uncaptured", "The requested final screenshot could not be captured.")
+            };
+            result.end_as(Status::Unverified, code.into(), message.into());
         }
         result
     }
@@ -829,7 +902,7 @@ impl Agent {
                 return self.answered(partial, &notes, Some(state), ledger, status, error, budget);
             }
         }
-        // A run stuck on a desktop form after choosing Germany cited "United Kingdom", the combo box's value as its
+        // A run stuck on a form after choosing Germany cited "United Kingdom", the combo box's value as its
         // first read saw it, before the choice: a task that only carries something out answers, stopped or not, with
         // what it read after its last step that changes the site (#989).
         let outcome = state.filter(|state| state.output_intent == state::OutputIntent::CarriedOut).map(outcome_notes);
@@ -944,7 +1017,7 @@ impl Agent {
         // access check, and naming it `sign_in` sends a caller to a password that cannot pass it.
         let kind = match kind {
             Some(kind) => kind,
-            None if raw.as_ref().is_some_and(|raw| raw.controls.is_empty()) => WallKind::BotCheck,
+            None if raw.as_ref().is_some_and(|raw| !raw.controls.iter().any(Control::actionable)) => WallKind::BotCheck,
             None => wall_kind(&credentials),
         };
         Some(Wall { kind, origin, fields, seen_at_ms: now_ms() })
@@ -999,15 +1072,6 @@ impl Agent {
         (answer, citations)
     }
 
-    /// The output intent, once something read stands as an answer: whether it is one depends on it, and the intent is
-    /// otherwise judged only where the run needs it, which a read of the start page could skip.
-    async fn resolve_answer_intent(&self, state: &mut RunState) -> state::Step {
-        if state.notes.answered() {
-            self.output_intent(state).await?;
-        }
-        Ok(())
-    }
-
     /// The notes the run would answer with now. A task that only carries something out answers with what it read
     /// after its last step that changes the site: a map's start page read before its pin was pressed stood as the
     /// answer "Map", and the step after the right pin's click, told the task was answered, pressed the map again.
@@ -1033,88 +1097,6 @@ impl Agent {
         }))
     }
 
-    fn context(
-        &self,
-        state: &RunState,
-        observation: &Observation,
-        secrets: Vec<String>,
-        check_login: bool,
-        check_bot: bool,
-    ) -> Result<StepContext, Flow> {
-        let mut page_facts = Self::page_facts(state, observation, self.page.unread());
-        let page_origin = origin_of(&observation.url);
-        let credential_origins: BTreeSet<_> = observation
-            .controls
-            .iter()
-            .filter(|control| asks_for_credentials(control))
-            .map(|control| self.target_origin(control))
-            .collect();
-        for origin in credential_origins {
-            let available =
-                if origin == page_origin { !secrets.is_empty() } else { !self.secret_names(&origin).is_empty() };
-            if !available {
-                page_facts.push(if origin == page_origin {
-                    "No stored secrets are available for this page's origin.".into()
-                } else {
-                    format!("No stored secrets are available for credential fields at {}.", self.mask(&origin))
-                });
-            }
-        }
-        // Historical text is fitted from the end, before the current credential availability fact.
-        if let Some(source) = self.navigation_fact(state, observation, check_login) {
-            page_facts.push(source);
-        }
-        Ok(StepContext {
-            task: self.model_task(state),
-            literal_task: Some(state.task.clone()),
-            web_search: self.page.search_price().is_some(),
-            subgoal: state.hint.clone(),
-            dates: state.dates.clone(),
-            notes: self.decision_notes(state),
-            answered_in_notes: Self::answer_notes(state).answered(),
-            history: state.history.clone(),
-            check_login,
-            check_answer: check_bot && !state.read_pages.contains(&observation.page_key),
-            check_bot,
-            // Set by the step loop, which knows the document it last asked in.
-            check_surface: false,
-            has_attachments: !state.attachments.is_empty(),
-            secrets,
-            start_url: state.caller_start.clone(),
-            start_landing_url: state.start_landing_url.clone(),
-            known_pages: state
-                .known_pages
-                .iter()
-                .filter(|url| !state.reached_known_pages.contains(url))
-                .cloned()
-                .collect(),
-            background: state.context.clone(),
-            omitted_actions: 0,
-            problem: None,
-            withheld_targets: Vec::new(),
-            // A page read and unchanged since has nothing more to give a read.
-            withheld: if Self::page_read(state, observation) {
-                vec![fastbrowse_core::models::Operation::Read]
-            } else {
-                Vec::new()
-            },
-            no_value_fields: state
-                .missing
-                .iter()
-                .map(|(_, label, _)| label.clone())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
-            page_facts,
-            reload: state.reload_target(&observation.url),
-            screenshot: None,
-            looks: IndexMap::new(),
-            ahead: self.ahead(state, observation),
-            plan_ahead: self.config.plan_ahead,
-            list_read: crate::policy::ListRead::None,
-        })
-    }
-
     /// How the run reached the page `observation` shows, as the action and the page it was taken on; None for a page it
     /// did not navigate to.
     fn reached_by(&self, state: &RunState, observation: &Observation) -> Option<String> {
@@ -1123,142 +1105,16 @@ impl Agent {
         Some(self.mask(&format!("{action} on {}", source.url)))
     }
 
-    /// A wall on the route just opened does not describe the alternatives observed before it.
-    ///
-    /// The source page's text and controls are given only while a wall is suspected on the destination: the sign-in
-    /// question is asked on this step, the destination's sign-in reading is above even odds, or it answered with a
-    /// 4xx. The sign-in judgment is what uses them. Otherwise the fact names where the run came from.
-    fn navigation_fact(&self, state: &RunState, observation: &Observation, check_login: bool) -> Option<String> {
-        let (destination, source) = state.navigation_from.as_ref()?;
-        if *destination != state::read_key(observation) {
-            return None;
-        }
-        let wall = check_login
-            || state.login_readings.get(destination).is_some_and(|p| *p > fastbrowse_core::decision::EVEN_ODDS)
-            || observation.response_status.is_some_and(|status| (400..500).contains(&status));
-        if !wall {
-            let previous = json!({"page": {"url": self.mask(&source.url), "title": self.mask(&source.title)}});
-            return Some(format!(
-                "The latest navigation began on this observed page. This source is historical context, not content of the current page: {previous}"
-            ));
-        }
-        let controls: Vec<Value> = source
-            .controls
-            .iter()
-            .map(|control| {
-                json!({
-                    "label": self.mask(&control.label),
-                    "role": self.mask(&control.role),
-                    "context": control.context.as_deref().map(|value| self.mask(value)),
-                    "href": control.href.as_deref().map(|value| self.mask(value)),
-                    "operations": control.operations,
-                })
-            })
-            .collect();
-        let previous = json!({
-            "page": {
-                "url": self.mask(&source.url),
-                "title": self.mask(&source.title),
-                "text": self.mask(&source.viewport_text),
-                "offscreen_text": self.mask(&source.offscreen_text),
-                "response_status": source.response_status,
-            },
-            "login_required_probability": state.login_readings.get(&state::read_key(source)),
-            "controls": controls,
-        });
-        Some(format!(
-            "The latest navigation began on this observed page. These controls were available there before navigation; their current state is unknown. This source is historical context, not content of the current page: {previous}"
-        ))
-    }
-
     /// This page was read and no action has changed it since.
     pub(super) fn page_read(state: &RunState, observation: &Observation) -> bool {
         !observation.document_key.is_empty() && state.read_documents.get(&state::read_key(observation)) == Some(&false)
     }
 
-    /// Whether this step already judged that the page holds evidence for the task: Jev said it shows a fact the task
-    /// needs, or the run is composing from records and this page is unread. A read of such a page is not asked again
-    /// whether it holds any: the run that read ten pages of quotes for a count was told page 10 held none by its read,
-    /// at 0.58 against the step's 0.89, and its answer said page 10 was never read.
-    pub(super) fn page_shows(state: &RunState, observation: &Observation, decision: &crate::policy::Decision) -> bool {
-        decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
-            || (state.compose && !Self::page_read(state, observation))
-    }
-
-    /// Whether the page is read before the action Jev chose takes the run off it, and if so whether the read may take
-    /// it that the page holds evidence for the task.
-    ///
-    /// Jev's operation can leave a page, or end the run, before anything it shows has been read: an order total is
-    /// gone once the order is placed. Jev has said the page shows what the task needs, so the read is not asked again
-    /// whether it does: the page of a list judged absent was a third of the list lost. Once a read has said the answer
-    /// is written from several records, every new page is one more of them, however it came: a shop's fifth page
-    /// scored under even odds, and a list's More changes no address. The page the run began on is read whatever Jev
-    /// scored it: asked to count a site's Einstein quotes, Jev scored the quote list under even odds, left it for an
-    /// author page, and never came back to the list. Only that read may find nothing: on a bookshop's home page, a
-    /// read that could not say so picked the category link "Travel" as which Travel book costs most.
-    pub(super) fn reads_before_leaving(
-        state: &RunState,
-        observation: &Observation,
-        decision: &crate::policy::Decision,
-    ) -> Option<bool> {
-        let unread = !Self::page_read(state, observation);
-        let first = state.first_url.as_deref() == Some(observation.url.as_str());
-        let shows = Self::page_shows(state, observation, decision);
-        (decision.operation != fastbrowse_core::models::Operation::Read && (shows || (first && unread)))
-            .then_some(shows)
-    }
-
-    /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
-    /// `unread` is what a browser would show that the page did not take in, as a document fetched over HTTP leaves out.
-    fn page_facts(state: &RunState, observation: &Observation, unread: Option<Unread>) -> Vec<String> {
-        let mut facts = Vec::new();
-        if let Some(status) = observation.response_status.filter(|status| *status >= 400) {
-            facts.push(format!("This page answered HTTP {status}."));
-        }
-        if Self::page_read(state, observation) {
-            facts
-                .push("This page was read and has not changed since: the notes hold what a read takes from it.".into());
-        }
-        // A link a script adds, or one an unread frame holds, is missing from markup read without a browser, so a page
-        // whose markup has none is not known to lead nowhere: example.com's served page builds its one link with a
-        // script, and a run told the page led nowhere ended complete without following it (#1380). Told that the
-        // scripts did not run and that a step opens a browser, Jev picked a wait over done on the same request; told
-        // that no browser can open, done and read led again. The cost is a browser opened for a page whose scripts
-        // add nothing: on a task its markup answers, done stayed Jev's pick either way.
-        match unread {
-            _ if !observation.controls.is_empty() => {}
-            None => facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into()),
-            Some(unread) => facts.push(unread_fact(unread)),
-        }
-        if !crate::policy::drawn_surfaces(&observation.controls).is_empty() {
-            facts.push("An element marked `drawn` is a drawn surface, such as a streamed remote browser or a canvas: what it shows is pixels, with no elements inside it for this run to fill or press. A click on it lands on the surface as one element, not on a field or button drawn inside it.".into());
-        }
-        let document = &observation.document_key;
-        let read = state.read_documents.get(&state::read_key(observation)).copied();
-        if !document.is_empty() && read == Some(true) {
-            facts.push(
-                "This page changed after it was last read, so the notes taken from it predate the change.".into(),
-            );
-        }
-        facts.extend(helpers::unsent_fact(&state.history, observation));
-        if state.to_carry_out {
-            facts.extend(helpers::empty_fields_fact(&state.missing, observation));
-        }
-        if state.compose {
-            facts.extend(helpers::page_change_fact(&state.history, observation));
-        }
-        if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.transient()) {
-            let stood = state.steps.len().saturating_sub(failure.since);
-            let mut fact = format!(
-                "The site failed: {} It has stood for {stood} steps. A failure is not the task's answer, and neither is an empty result shown beside it.",
-                failure.message()
-            );
-            if failure.url == observation.url {
-                fact += " This page's own address is offered to navigate to, which reloads it; a retry control the page offers, or another route, may also get past the failure.";
-            }
-            facts.push(fact);
-        }
-        facts
+    /// Whether the page is known to hold evidence for the task: the run is composing from records and this page is
+    /// unread. A read of such a page is not asked again whether it holds any: the run that read ten pages of quotes for
+    /// a count was told page 10 held none by its read, and its answer said page 10 was never read.
+    pub(super) fn page_shows(state: &RunState, observation: &Observation) -> bool {
+        state.compose && !Self::page_read(state, observation)
     }
 
     /// Stored secrets this origin may receive. With any, a sign-in wall is a step to take, not a stop.
@@ -1283,34 +1139,6 @@ struct Outcome {
     error: Option<String>,
     budget: Option<BudgetStop>,
     wall: Option<Wall>,
-}
-
-/// The fact a page read without a browser states when its markup has no links or controls: what it left out, and
-/// whether a step on it opens a browser that shows the rest.
-fn unread_fact(unread: Unread) -> String {
-    let frames = match unread.frames {
-        0 => String::new(),
-        1 => "1 frame in it was not read".into(),
-        n => format!("{n} frames in it were not read"),
-    };
-    let missing = match (unread.scripts, frames.is_empty()) {
-        (true, true) => "its scripts did not run".to_string(),
-        (true, false) => format!("its scripts did not run and {frames}"),
-        (false, _) => frames,
-    };
-    let (shown, unshown) = match (unread.scripts, unread.frames > 0) {
-        (true, true) => ("runs its scripts and reads its frames", "runs its scripts or reads its frames"),
-        (true, false) => ("runs them", "runs them"),
-        _ => ("reads them", "reads them"),
-    };
-    let step = if unread.browser {
-        format!(
-            "A read takes in only this markup; a wait, scroll or other step on this page opens it in a browser, which {shown}."
-        )
-    } else {
-        format!("This run cannot open a browser, so no step on this page {unshown}: a read takes in only this markup.")
-    };
-    format!("This page was read over HTTP: its markup holds no links or controls, but {missing}. {step}")
 }
 
 /// The time a run that composes its answer keeps back from its limit to write it: composing waits on one LLM call.

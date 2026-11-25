@@ -7,10 +7,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public enum Operation {
     @JsonProperty("click")
     CLICK,
-    @JsonProperty("right_click")
-    RIGHT_CLICK,
-    @JsonProperty("double_click")
-    DOUBLE_CLICK,
     @JsonProperty("hover")
     HOVER,
     @JsonProperty("drag")

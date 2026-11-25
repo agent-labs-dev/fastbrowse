@@ -176,24 +176,6 @@ async fn test_fetch_starts_no_browser_and_asks_for_no_cloud_key() {
 }
 
 #[tokio::test]
-async fn desktop_does_not_select_the_default_extension() {
-    let ran = cli(&["task", "--desktop", "app"]).await;
-    assert_eq!(ran.code, 0, "{}", ran.err);
-    let call = ran.call.unwrap();
-    assert_eq!(call.task.desktop.as_deref(), Some("app"));
-    assert!(!call.task.extension && call.task.chrome.is_none());
-}
-
-#[tokio::test]
-async fn each_desktop_flag_starts_one_more_app() {
-    let ran = cli(&["task", "--desktop", "gnome-text-editor -s", "--desktop", "gnome-calculator"]).await;
-    assert_eq!(ran.code, 0, "{}", ran.err);
-    let call = ran.call.unwrap();
-    assert_eq!(call.task.desktop.as_deref(), Some("gnome-text-editor -s"));
-    assert_eq!(call.task.desktop_apps, ["gnome-calculator"]);
-}
-
-#[tokio::test]
 async fn test_fetch_refuses_flags_that_shape_a_browser() {
     for (flag, field) in [
         (&["--local"][..], "local"),
@@ -216,13 +198,6 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
         assert!(ran.call.is_none());
         assert_eq!(ran.err, format!("fastbrowse: fetch starts no browser, so it cannot be combined with {field}\n"));
     }
-}
-
-#[tokio::test]
-async fn cloud_refuses_a_desktop_run_that_starts_no_browser() {
-    let ran = cli(&["t", "--cloud", "--desktop", "app"]).await;
-    assert!(ran.call.is_none());
-    assert!(ran.err.contains("--cloud cannot be combined with") && ran.err.contains("--desktop"), "{}", ran.err);
 }
 
 #[tokio::test]
@@ -372,6 +347,27 @@ async fn test_attach_uses_the_default_extension() {
     assert_eq!(ran.code, 0, "{}", ran.err);
     let call = ran.call.unwrap();
     assert!(call.task.extension && call.task.attach);
+}
+
+/// Every entry the binary has learns its arguments before it quotes one. Only the CLI did, and `fastbrowse-mcp` and
+/// `fastbrowse serve` printed a password holding a quote whole in their usage errors, since the structural scan ends
+/// an address at the quote.
+#[cfg(unix)]
+#[test]
+fn test_every_entry_masks_the_arguments_it_quotes() {
+    use std::os::unix::process::CommandExt;
+    let address = "https://ops:pw\"x-entry@h.test/";
+    let mut mcp = isolated_binary();
+    mcp.arg0("fastbrowse-mcp").args(["--port", address]);
+    let mut serve = isolated_binary();
+    serve.args(["serve", "--stdio", address]);
+    for mut command in [mcp, serve] {
+        let output = command.stdin(std::process::Stdio::null()).output().unwrap();
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{err}");
+        assert!(err.contains("https://ops:") && err.contains("@h.test/"), "the address is quoted: {err}");
+        assert!(!err.contains("pw\"x-entry") && !err.contains("x-entry"), "{err}");
+    }
 }
 
 #[test]

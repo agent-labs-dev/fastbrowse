@@ -6,7 +6,7 @@ package fastbrowse
 import "encoding/json"
 
 // ProtocolVersion is the version of the wire format this client speaks.
-const ProtocolVersion = 3
+const ProtocolVersion = 4
 
 // What a client can ask of the server.
 const (
@@ -183,10 +183,11 @@ type CostLine struct {
 	Model *string `json:"model,omitempty"`
 }
 
-// Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
+// Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
 type Decider string
 
 const (
+	DeciderLLM    Decider = "llm"
 	DeciderJev    Decider = "jev"
 	DeciderCode   Decider = "code"
 	DeciderRecipe Decider = "recipe"
@@ -246,6 +247,7 @@ type FactReader string
 const (
 	FactReaderJevChoice FactReader = "jev_choice"
 	FactReaderLLMImage  FactReader = "llm_image"
+	FactReaderLLMQuote  FactReader = "llm_quote"
 )
 
 // The client's side of the handshake.
@@ -333,28 +335,26 @@ type Notification struct {
 type Operation string
 
 const (
-	OperationClick       Operation = "click"
-	OperationRightClick  Operation = "right_click"
-	OperationDoubleClick Operation = "double_click"
-	OperationHover       Operation = "hover"
-	OperationDrag        Operation = "drag"
-	OperationFill        Operation = "fill"
-	OperationPress       Operation = "press"
-	OperationBlur        Operation = "blur"
-	OperationSelect      Operation = "select"
-	OperationEnter       Operation = "enter"
-	OperationEscape      Operation = "escape"
-	OperationScroll      Operation = "scroll"
-	OperationScrollUp    Operation = "scroll_up"
-	OperationBack        Operation = "back"
-	OperationSwitchTab   Operation = "switch_tab"
-	OperationUpload      Operation = "upload"
-	OperationDialog      Operation = "dialog"
-	OperationWait        Operation = "wait"
-	OperationRead        Operation = "read"
-	OperationDone        Operation = "done"
-	OperationNavigate    Operation = "navigate"
-	OperationSearch      Operation = "search"
+	OperationClick     Operation = "click"
+	OperationHover     Operation = "hover"
+	OperationDrag      Operation = "drag"
+	OperationFill      Operation = "fill"
+	OperationPress     Operation = "press"
+	OperationBlur      Operation = "blur"
+	OperationSelect    Operation = "select"
+	OperationEnter     Operation = "enter"
+	OperationEscape    Operation = "escape"
+	OperationScroll    Operation = "scroll"
+	OperationScrollUp  Operation = "scroll_up"
+	OperationBack      Operation = "back"
+	OperationSwitchTab Operation = "switch_tab"
+	OperationUpload    Operation = "upload"
+	OperationDialog    Operation = "dialog"
+	OperationWait      Operation = "wait"
+	OperationRead      Operation = "read"
+	OperationDone      Operation = "done"
+	OperationNavigate  Operation = "navigate"
+	OperationSearch    Operation = "search"
 )
 
 // A method's params. An unknown field is refused, so a misspelled option is never dropped in silence.
@@ -442,8 +442,6 @@ type RunParams struct {
 	Browser             bool              `json:"browser,omitempty"`
 	Extension           bool              `json:"extension,omitempty"`
 	ExtensionBrowser    *string           `json:"extension_browser,omitempty"`
-	Desktop             *string           `json:"desktop,omitempty"`
-	DesktopApps         []string          `json:"desktop_apps,omitempty"`
 }
 
 type RunResult struct {
@@ -536,12 +534,12 @@ const (
 type StepChoice struct {
 	ID   string `json:"id"`
 	Role string `json:"role"`
-	// The label as Jev read it, with resolved secrets masked.
+	// The label as the driver read it, with resolved secrets masked.
 	Label string `json:"label"`
-	// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+	// The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.
 	Context    *string     `json:"context"`
 	Operations []Operation `json:"operations"`
-	// Whether Jev chose this control: the target, and for a drag the destination too.
+	// Whether the driver acted on this control: the target, and for a drag the destination too.
 	Chosen bool `json:"chosen"`
 }
 
@@ -549,7 +547,8 @@ type StepEvent struct {
 	Type string     `json:"type"`
 	Step StepResult `json:"step"`
 	// A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,
-	// and also when a resolved secret was showing as page text: pixels cannot be masked the way text is.
+	// and also when a resolved secret was showing as page text or the run knew an address credential: pixels
+	// cannot be masked the way text is, and a page can paint its address where no text check sees it.
 	Frame *string `json:"frame"`
 }
 
@@ -599,7 +598,7 @@ type StepResult struct {
 	// Whether the page's fingerprint changed; None for steps that do not act (read).
 	PageChanged *bool `json:"page_changed"`
 	DurationMs  int64 `json:"duration_ms"`
-	// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+	// The controls the driver was shown for this step's action, when `Config.step_choices` asked for them.
 	Choices []StepChoice `json:"choices,omitempty"`
 }
 

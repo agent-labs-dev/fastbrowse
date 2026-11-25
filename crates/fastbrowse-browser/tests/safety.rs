@@ -33,6 +33,10 @@ use safety_support::{Reply, observe_until, query_param, quote, serve_on};
 use serde_json::json;
 use tokio::time::sleep;
 
+/// Each test here checks what Chrome does with a secret, so one that passed without Chrome checked nothing: it fails
+/// by name instead. CI's rust job has Chrome.
+const NEEDS_CHROME: &str = "this safety test needs Chrome";
+
 fn secret_fill(target_id: &str, text: &str, origin: &str) -> Action {
     Action {
         target_id: Some(target_id.to_owned()),
@@ -67,7 +71,7 @@ fn session_of(session: &BrowserSession, frame_id: Option<&str>) -> String {
 async fn test_window_origin_cannot_spoof_secret_scope() {
     let _turn = turn().await;
     for label in ["Username", "Frame field"] {
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         h.page.navigate(&sites().main, None).await.expect("navigate");
         let observed = observe_until(&h.page, label).await;
         let target = find(&observed, label);
@@ -95,7 +99,7 @@ async fn test_window_origin_cannot_spoof_secret_scope() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_page_rechecks_secret_origin_before_insertion() {
     let _turn = turn().await;
-    let Some(h) = harness().await else { return };
+    let h = harness().await.expect(NEEDS_CHROME);
     h.page.navigate(&sites().main, None).await.expect("navigate");
     let obs = observe_until(&h.page, "Frame field").await;
     let target = find(&obs, "Frame field");
@@ -109,7 +113,7 @@ async fn test_page_rechecks_secret_origin_before_insertion() {
 async fn test_enter_uses_form_semantics_and_focuses_verified_target() {
     let _turn = turn().await;
     // Only the authorized case is the page's: unauthorized, the agent asks for confirmation before any input.
-    let Some(h) = harness().await else { return };
+    let h = harness().await.expect(NEEDS_CHROME);
     h.goto("/safety.html").await;
     let obs = h.observe().await;
     let field = find(&obs, "Account name");
@@ -124,7 +128,7 @@ async fn test_enter_uses_form_semantics_and_focuses_verified_target() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_task_that_asks_for_a_download_still_downloads() {
     let _turn = turn().await;
-    let Some(h) = harness().await else { return };
+    let h = harness().await.expect(NEEDS_CHROME);
     h.goto("/release.html").await;
     let obs = h.observe().await;
     let link = find(&obs, "Download 2.1.0");
@@ -140,7 +144,7 @@ async fn test_dialog_acceptance_has_its_own_gate() {
     let _turn = turn().await;
     // ("accept", unauthorized) is the agent's gate and is not ported; the other two cases reach the page.
     for choice in ["accept", "dismiss"] {
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         h.goto("/safety.html").await;
         let obs = h.observe().await;
         h.page.act(&targeted(Operation::Click, &find(&obs, "Continue").id), &obs).await.expect("act");
@@ -161,7 +165,7 @@ async fn test_dialog_acceptance_has_its_own_gate() {
 async fn test_covered_controls_are_not_modified() {
     let _turn = turn().await;
     for operation in [Operation::Select, Operation::Upload] {
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         h.goto("/safety.html").await;
         eval_active(&h.session, "document.getElementById('cover').style.display = 'block'").await;
         let obs = h.observe().await;
@@ -192,7 +196,7 @@ async fn test_covered_controls_are_not_modified() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_cover_inside_a_shadow_root_is_named() {
     let _turn = turn().await;
-    let Some(h) = harness().await else { return };
+    let h = harness().await.expect(NEEDS_CHROME);
     h.goto("/safety.html").await;
     eval_active(
         &h.session,
@@ -213,7 +217,7 @@ async fn test_a_cover_inside_a_shadow_root_is_named() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_iframe_focus_hit_testing_and_capture_scope() {
     let _turn = turn().await;
-    let Some(h) = harness().await else { return };
+    let h = harness().await.expect(NEEDS_CHROME);
     h.goto("/safety.html").await;
     wait_until(
         || async {
@@ -297,7 +301,7 @@ async fn test_framed_fill_and_capture_use_the_child_document() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fill_does_not_claim_execution_when_page_rejects_value() {
     let _turn = turn().await;
-    let Some(h) = harness().await else { return };
+    let h = harness().await.expect(NEEDS_CHROME);
     h.goto("/safety.html").await;
     eval_active(
         &h.session,
@@ -473,7 +477,7 @@ fn tab_text(session: &BrowserSession) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_navigation_and_redirects_never_reach_a_foreign_origin() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     for route in ["direct", "redirect", "refresh", "script"] {
         let sites = origin_sites();
         let foreign = format!("{}/page?{SECRET_QUERY}", sites.foreign("127.0.0.1"));
@@ -513,7 +517,7 @@ async fn test_navigation_and_redirects_never_reach_a_foreign_origin() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_frames_of_a_foreign_origin_never_load() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     // 127.0.0.1 shares the page's process; localhost is put in one of its own.
     for host in ["127.0.0.1", "localhost"] {
         let sites = origin_sites();
@@ -531,7 +535,7 @@ async fn test_frames_of_a_foreign_origin_never_load() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_popups_are_adopted_only_inside_the_grant() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     for opened in ["foreign", "redirect", "granted"] {
         let sites = origin_sites();
         let foreign = format!("{}/page?{SECRET_QUERY}", sites.foreign("127.0.0.1"));
@@ -565,7 +569,7 @@ async fn test_popups_are_adopted_only_inside_the_grant() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_refused_popup_opens_no_connection_to_its_address() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     let sites = origin_sites();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let foreign = format!("http://127.0.0.1:{}/page?{SECRET_QUERY}", listener.local_addr().expect("addr").port());
@@ -596,8 +600,8 @@ async fn test_a_refused_popup_opens_no_connection_to_its_address() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
-    let Some(h) = harness().await else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
+    let h = harness().await.expect(NEEDS_CHROME);
     let sites = origin_sites();
     // The window is the person's, already open with a foreign OOPIF in it before the run attaches.
     let owner = &h.page;
@@ -625,8 +629,8 @@ async fn test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out(
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_attached_browser_with_no_granted_window_gets_a_window_of_its_own() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
-    let Some(h) = harness().await else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
+    let h = harness().await.expect(NEEDS_CHROME);
     let sites = origin_sites();
     // A fresh cloud browser shows only about:blank, which no grant covers; the run must still start, in a window it
     // opens, without touching the person's foreign one.
@@ -650,8 +654,8 @@ async fn test_an_attached_browser_with_no_granted_window_gets_a_window_of_its_ow
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_attached_browser_with_only_an_empty_window_takes_it_over() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
-    let Some(h) = harness().await else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
+    let h = harness().await.expect(NEEDS_CHROME);
     let sites = origin_sites();
     // A fresh cloud browser shows one about:blank window; the run takes it over instead of opening a second beside
     // it, so the person watching sees one window.
@@ -686,8 +690,8 @@ async fn test_an_attached_browser_with_only_an_empty_window_takes_it_over() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_attached_browser_leaves_a_blank_window_that_was_written_into() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
-    let Some(h) = harness().await else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
+    let h = harness().await.expect(NEEDS_CHROME);
     let sites = origin_sites();
     // about:blank with no opener can still hold what a page or an app wrote into it; that is not the run's to take.
     h.page.navigate(&format!("{}/page", sites.foreign("127.0.0.1")), None).await.expect("navigate");
@@ -716,7 +720,7 @@ async fn test_an_attached_browser_leaves_a_blank_window_that_was_written_into() 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_document_the_network_never_saw_is_not_read_or_controlled() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     let sites = origin_sites();
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
     s.page.navigate(&format!("{}/", sites.granted), None).await.expect("navigate");
@@ -741,7 +745,7 @@ async fn test_a_document_the_network_never_saw_is_not_read_or_controlled() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_upload_script_checks_the_origin_it_runs_in() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     let sites = origin_sites();
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
     s.page.navigate(&format!("{}/", sites.granted), None).await.expect("navigate");
@@ -759,7 +763,7 @@ async fn test_an_upload_script_checks_the_origin_it_runs_in() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_service_worker_cannot_answer_a_navigation_past_the_gate() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     let sites = origin_sites();
     let foreign = format!("{}/page?{SECRET_QUERY}", sites.foreign("127.0.0.1"));
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
@@ -787,7 +791,7 @@ async fn test_a_service_worker_cannot_answer_a_navigation_past_the_gate() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_service_worker_cannot_answer_a_popups_first_navigation() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     let sites = origin_sites();
     let foreign = format!("{}/page?{SECRET_QUERY}", sites.foreign("127.0.0.1"));
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
@@ -823,7 +827,7 @@ async fn test_a_service_worker_cannot_answer_a_popups_first_navigation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_scoped_run_delivers_no_live_frames() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     let sites = origin_sites();
     let frames: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
     let received = frames.clone();
@@ -843,7 +847,7 @@ async fn test_a_scoped_run_delivers_no_live_frames() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_scoped_session_refuses_to_record() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     let sites = origin_sites();
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
     let refused =
@@ -856,7 +860,7 @@ async fn test_a_scoped_session_refuses_to_record() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_check_access_runs_before_every_browser_touch() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     for scope in [false, true] {
         let sites = origin_sites();
         let calls = Arc::new(AtomicUsize::new(0));
@@ -909,8 +913,8 @@ async fn test_check_access_runs_before_every_browser_touch() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_blank_popup_inherits_no_foreign_document_grant() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
-    let Some(h) = harness().await else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
+    let h = harness().await.expect(NEEDS_CHROME);
     let sites = origin_sites();
     h.page.navigate(&format!("{}/page", sites.foreign("127.0.0.1")), None).await.expect("navigate");
     eval_active(
@@ -931,9 +935,9 @@ async fn test_a_blank_popup_inherits_no_foreign_document_grant() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_opaque_child_documents_never_enter_a_scoped_read() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     for source in ["blank", "srcdoc", "blob"] {
-        let Some(h) = harness().await else { return };
+        let h = harness().await.expect(NEEDS_CHROME);
         let sites = origin_sites();
         h.page.navigate(&format!("{}/ok", sites.granted), None).await.expect("navigate");
         let script = format!(
@@ -974,7 +978,7 @@ async fn test_access_is_checked_before_connecting_to_a_browser() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_scoped_screenshots_are_refused_even_on_a_clean_page() {
     let _turn = turn().await;
-    let Some(connection) = chrome() else { return };
+    let connection = chrome().expect(NEEDS_CHROME);
     let sites = origin_sites();
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
     s.page.navigate(&format!("{}/ok", sites.granted), None).await.expect("navigate");
@@ -1039,9 +1043,7 @@ async fn test_one_run_types_a_secret_the_client_holds_and_leaves_no_chrome_behin
     // The served run's browser part: a Chrome of its own, the secret typed only into the origin it was given for,
     // and no Chrome process left once the session and the browser are closed. The JSON-RPC exchange, the scripted
     // run and the events it reports are `fastbrowse serve`'s.
-    if find_chrome(None).is_none() {
-        return;
-    }
+    assert!(find_chrome(None).is_some(), "{NEEDS_CHROME}");
     let posted: Arc<Mutex<Vec<String>>> = Arc::default();
     let origin = format!("http://127.0.0.1:{}", common::serve(sites_dir().join("main"), None, posted.clone()));
     let (mut process, connection) = LocalChromeProcess::launch(&LocalChrome::default()).await.expect("Chrome launches");

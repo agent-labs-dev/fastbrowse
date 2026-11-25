@@ -1,6 +1,6 @@
 //! The seam between the browser layer and the decision loop.
 //!
-//! The browser layer produces `Observation` (bounded, for Jev's action choice) and `Capture` (complete, for reading),
+//! The browser layer produces `Observation` (bounded, for the driver's action choice) and `Capture` (complete, for reading),
 //! and executes `Action`s. Nothing above this seam touches CDP.
 
 use std::collections::BTreeSet;
@@ -54,7 +54,7 @@ pub fn cut_with(text: &str, max_chars: usize, json_encoded: bool, marker: impl F
 }
 
 /// A set of operations, written sorted by value: Python writes a `frozenset` in hash order, which changes from one
-/// process to the next, and `sorted(control.operations)` is the order the policy shows Jev.
+/// process to the next, and `sorted(control.operations)` is the order the policy shows the driver.
 pub type Operations = BTreeSet<Operation>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,9 +115,20 @@ pub struct Control {
     pub sensitive: bool,
     #[serde(default, deserialize_with = "lax::boolean")]
     pub offscreen: bool,
+    /// A control the page has disabled (`disabled`, or inside `aria-disabled="true"`). It offers no operation until
+    /// the page enables it, and is shown so a Save that stays disabled after an edit is not read as no Save (#1415).
+    #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
     /// A field the page marks required (`required` or `aria-required`).
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub required: Option<bool>,
+    /// A field the page marks readonly (`readonly` or `aria-readonly`): it takes a click but not typing.
+    #[serde(default, deserialize_with = "lax::boolean", skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    /// The layer the control is drawn in, numbered from 1 per observation: an element out of flow, positioned against
+    /// the page and drawn over it, as a popup a page appends to `<body>` is. None for a control in the page itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<u32>,
     /// A field marked invalid by ARIA or a failed native constraint, without implying submission.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub invalid: Option<bool>,
@@ -159,14 +170,16 @@ pub struct Control {
     /// address, the page never does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub other_site: Option<bool>,
-    /// The step this run took that showed this control without leaving the page, such as "clicking Depart" for a
-    /// date popup the page attaches at the end of its body, far from the field that opened it: the agent marks it,
-    /// the page never does.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shown_by: Option<String>,
 }
 
 impl Control {
+    /// Whether the control offers any operation. A disabled control offers none: it is shown to Jev but never picked,
+    /// so whatever asks "is there anything to act on" or counts what can be offered asks this, not whether it is
+    /// listed (#1415).
+    pub fn actionable(&self) -> bool {
+        !self.operations.is_empty()
+    }
+
     /// A control with every optional field at its default.
     pub fn new(id: &str, role: &str, label: &str, operations: impl IntoIterator<Item = Operation>) -> Control {
         Control {
@@ -187,6 +200,8 @@ impl Control {
             input_type: None,
             input_name: None,
             max_length: None,
+            read_only: false,
+            layer: None,
             autocomplete: None,
             submit_semantics: None,
             checked: None,
@@ -194,6 +209,7 @@ impl Control {
             expanded: None,
             sensitive: false,
             offscreen: false,
+            disabled: None,
             required: None,
             invalid: None,
             validation_message: None,
@@ -207,7 +223,6 @@ impl Control {
             pictured: None,
             already_read: None,
             other_site: None,
-            shown_by: None,
         }
     }
 }
@@ -231,7 +246,7 @@ pub fn native_date_form(input_type: &str) -> Option<&'static str> {
 }
 
 /// Whether the page marks this control as the link to the next page of a list (`rel="next"`), in any language and
-/// behind any icon. Its label is never read for it: Jev picks a pager the page does not mark.
+/// behind any icon. Its label is never read for it: a pager the page does not mark is not recorded as a next page.
 pub fn pager_link(control: &Control) -> bool {
     control.role == "link"
         && control.next_page == Some(true)
@@ -880,6 +895,13 @@ pub trait Page: Send + Sync {
 
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.
     fn withhold_frames(&self, withheld: bool);
+
+    /// Take no image of the page from now to the end of the run, `screenshot` included, and hold every live and
+    /// recorded frame: the run holds an address credential, which a page can paint where no reading finds it. A page
+    /// that takes no images of its own has nothing to hold; the agent takes none for it either way.
+    fn hold_images(&self) {
+        self.withhold_frames(true);
+    }
 
     /// Leave the current tab open when the run ends, because an irreversible action was sent from it: what it
     /// committed may still be in flight, and the result page is the user's to see. A page with no tab to keep does

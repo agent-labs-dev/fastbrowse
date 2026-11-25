@@ -25,9 +25,10 @@ pub const BACKGROUND: &str =
 
 str_enum! {
     pub enum Status {
-        /// Jev judged the task done and the caller's `until` check (if any) passed.
+        /// The finish checks accepted the result, and the caller's `until` check (if any) passed. The result is the
+        /// driver's `done`, or, for a read-only run that stopped stuck, the answer composed from what it read.
         Complete = "complete",
-        /// Jev finished, but code could not confirm the result: for example, an answer failed its check against
+        /// The run produced a result code could not confirm: for example, an answer failed its check against
         /// the page, part of a list the task covers went unread, or the site refused a requested step.
         Unverified = "unverified",
         /// Stopped before an irreversible action the caller has not authorized, having committed nothing.
@@ -82,10 +83,6 @@ pub trait FailureKind {
 str_enum! {
     pub enum Operation {
         Click = "click",
-        /// A secondary click, which opens the context menu a desktop app keeps an item's commands in.
-        RightClick = "right_click",
-        /// Two clicks in quick succession, which open a file, folder or list item in a desktop app.
-        DoubleClick = "double_click",
         Hover = "hover",
         Drag = "drag",
         Fill = "fill",
@@ -113,10 +110,8 @@ pub const SCROLLING: [Operation; 2] = [Operation::Scroll, Operation::ScrollUp];
 
 /// Operations aimed at one observed control. All but a blur are hit-tested before input reaches it: a blur sends no
 /// input, so a band drawn over the field does not stop it.
-pub const TARGETED: [Operation; 11] = [
+pub const TARGETED: [Operation; 9] = [
     Operation::Click,
-    Operation::RightClick,
-    Operation::DoubleClick,
     Operation::Hover,
     Operation::Drag,
     Operation::Fill,
@@ -134,9 +129,11 @@ impl Operation {
 }
 
 str_enum! {
-    /// Who chose a step: Jev, or a rule in code.
-    doc: "Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.";
+    /// Who chose a step: the model driving the run, a rule in code, or a saved recipe action. A run never writes `jev`,
+    /// which stays in the protocol for traces and SDKs that name it.
+    doc: "Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.";
     pub enum Decider {
+        Llm = "llm",
         Jev = "jev",
         Code = "code",
         Recipe = "recipe",
@@ -387,6 +384,7 @@ str_enum! {
     pub enum FactReader {
         JevChoice = "jev_choice",
         LlmImage = "llm_image",
+        LlmQuote = "llm_quote",
     }
 }
 
@@ -422,20 +420,20 @@ impl Schema for StepFact {
     }
 }
 
-/// One control Jev was offered on a step, so a run that picked the wrong element, or fell back to the LLM, shows whether
-/// the right one was there to pick.
+/// One control the driver was shown on a step, so a run that picked the wrong element shows whether the right one was
+/// there to pick.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepChoice {
     pub id: String,
     pub role: String,
-    /// The label as Jev read it, with resolved secrets masked.
+    /// The label as the driver read it, with resolved secrets masked.
     pub label: String,
-    /// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+    /// The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.
     #[serde(default)]
     pub context: Option<String>,
     pub operations: Vec<Operation>,
-    /// Whether Jev chose this control: the target, and for a drag the destination too.
+    /// Whether the driver acted on this control: the target, and for a drag the destination too.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub chosen: bool,
 }
@@ -447,13 +445,13 @@ impl Schema for StepChoice {
             vec![
                 Field::required("id", Ty::Str),
                 Field::required("role", Ty::Str),
-                Field::required("label", Ty::Str).doc("The label as Jev read it, with resolved secrets masked."),
+                Field::required("label", Ty::Str).doc("The label as the driver read it, with resolved secrets masked."),
                 Field::default("context", Ty::optional(Ty::Str), Value::Null).doc(
-                    "The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.",
+                    "The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.",
                 ),
                 Field::required("operations", Ty::list(Operation::ty())),
                 Field::default("chosen", Ty::Bool, Value::Bool(false))
-                    .doc("Whether Jev chose this control: the target, and for a drag the destination too."),
+                    .doc("Whether the driver acted on this control: the target, and for a drag the destination too."),
             ],
         )
         .ty()
@@ -539,7 +537,7 @@ str_enum! {
         Search = "search",
         Unobtainable = "unobtainable",
         Groups = "groups",
-        /// The next browser action, picked by the LLM in place of Jev (FASTBROWSE_ACTION_PICKER=llm).
+        /// A turn of the conversation that drives the browser: what the last actions did, and the next ones.
         Action = "action",
     }
 }
@@ -728,7 +726,7 @@ pub struct StepResult {
     pub page_changed: Option<bool>,
     #[serde(deserialize_with = "lax::int_ge0")]
     pub duration_ms: i64,
-    /// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+    /// The controls the driver was shown for this step's action, when `Config.step_choices` asked for them.
     // Left out of the output when empty, so a run that did not ask reports what it always has.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<StepChoice>,
@@ -755,7 +753,7 @@ impl Schema for StepResult {
                     .doc("Whether the page's fingerprint changed; None for steps that do not act (read)."),
                 Field::required("duration_ms", Ty::Int.ge(0)),
                 Field::default("choices", Ty::list(StepChoice::ty()), Value::Array(vec![])).omitted_when_empty().doc(
-                    "The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.",
+                    "The controls the driver was shown for this step's action, when `Config.step_choices` asked for them.",
                 ),
             ],
         )
@@ -874,7 +872,8 @@ pub struct RunResult {
     /// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
     #[serde(default)]
     pub final_url: Option<String>,
-    /// A safe final PNG requested by the task or enabled with step frames; kept out of text results.
+    /// A safe final PNG requested by the task or enabled with step frames; kept out of text results. None once the run
+    /// knew an address credential, as every image of the page is.
     #[serde(skip)]
     pub final_frame: Option<Vec<u8>>,
     /// The videos this run finished writing, captioned then plain.
@@ -994,7 +993,7 @@ fn origins_field<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserConnection {
     /// Browser-level DevTools WebSocket URL (`ws://` or `wss://`).
@@ -1019,6 +1018,13 @@ pub struct BrowserConnection {
     /// Exact `http(s)://host[:port]` origins whose documents the run may inspect and control, else unscoped.
     #[serde(default, deserialize_with = "origins_field")]
     pub allowed_origins: Option<Vec<String>>,
+}
+
+/// A DevTools or live address can carry credentials, so it prints masked (`debug_masked`).
+impl std::fmt::Debug for BrowserConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::safety::debug_masked("BrowserConnection", self, f)
+    }
 }
 
 impl BrowserConnection {
@@ -1217,6 +1223,14 @@ pub trait SecretResolver: Send + Sync {
     fn available(&self) -> Vec<SecretRef>;
 
     fn resolve<'a>(&'a self, name: &'a str, origin: &'a str) -> BoxFuture<'a, Option<String>>;
+
+    /// `(name, value)` for each secret whose value this resolver already holds as it is, which the run masks from its
+    /// first request, before anything types it: a declared token in a start address's query reached every model and
+    /// exit, since a value was learnt only as it was typed (#1381). A value given only on request (a client's, a
+    /// callback's, a computed one) is not asked for early, and is masked from when it is typed.
+    fn held(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 pub trait ArtifactSink: Send + Sync {
@@ -1293,7 +1307,8 @@ pub struct StepEvent {
     pub kind: StepTag,
     pub step: StepResult,
     /// A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not, and also
-    /// when a resolved secret was showing as page text: pixels cannot be masked the way text is.
+    /// when a resolved secret was showing as page text or the run knew an address credential: pixels cannot be masked the
+    /// way text is, and a page can paint its address where no text check sees it.
     #[serde(default)]
     pub frame: Option<Image>,
 }
@@ -1306,7 +1321,7 @@ impl Schema for StepEvent {
                 Field::default("type", StepTag::ty(), "step"),
                 Field::required("step", StepResult::ty()),
                 Field::default("frame", Ty::optional(Ty::Image), Value::Null).doc(
-                    "A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\nand also when a resolved secret was showing as page text: pixels cannot be masked the way text is.",
+                    "A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\nand also when a resolved secret was showing as page text or the run knew an address credential: pixels\ncannot be masked the way text is, and a page can paint its address where no text check sees it.",
                 ),
             ],
         )

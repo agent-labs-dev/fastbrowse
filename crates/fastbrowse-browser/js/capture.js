@@ -1,5 +1,5 @@
 // Complete structured text capture of one frame, as ordered blocks with heading paths.
-// Unlike snapshot.js (the viewport, for Jev's action choice) this reads the whole rendered document, on screen or not,
+// Unlike snapshot.js (the viewport, for the driver's action choice) this reads the whole rendered document, on screen or not,
 // so the reading path and answer-evidence quotes see everything a user could scroll to.
 // Adjacent inline content (text, <strong>, <a>, <span>...) is one block, so a value inside markup stays with its label.
 // A dated element (a `time`, or a custom element such as `relative-time`) reads as its shown text followed by its

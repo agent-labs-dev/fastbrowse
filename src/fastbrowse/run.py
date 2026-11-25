@@ -133,8 +133,6 @@ async def run_task(
     browser: bool = False,
     extension: bool = False,
     extension_browser: str | None = None,
-    desktop: str | None = None,
-    desktop_apps: Sequence[str] = (),
     open_browser: Callable[[], Awaitable[str]] | None = None,
     page_ready: Callable[[], Awaitable[None]] | None = None,
     settings: Mapping[str, str] | None = None,
@@ -197,9 +195,8 @@ async def run_task(
     raises a `BrowserError`; either error names only the exception's type, and its text is not kept.
 
     Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
-    an MP4 of the tab, or of a `desktop` run's window, ending on the answer; it needs ffmpeg, and shows whatever the
-    pages showed.
-    `recipe` reuses saved values when Jev selects a matching action on the same page, through the same
+    an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
+    `recipe` runs each saved step first while its page and control match, through the same
     authorization and secret gates. The task must match the recorded task. `save_recipe`
     writes the run's steps as a recipe when it ends `complete`; it may name the `recipe` file, to repair it.
     A recipe write failure is logged without changing the task status; check that the file exists before replay.
@@ -243,18 +240,8 @@ async def run_task(
     then ends `cancelled`. It cannot be combined with `allowed_origins`: a popup's first request can leave before
     the extension reaches it, so it could not be refused first.
 
-    `desktop` drives a native desktop app instead of a browser, through deskpilot on Hyprland
-    (https://github.com/cjber/deskpilot): the command line that starts it, such as `"gnome-text-editor --new-window"`,
-    split as a POSIX shell splits words. The run starts the app on deskpilot's hidden workspace with `launch`, drives it
-    without moving the user's pointer or keyboard focus, and closes it when the run ends; a window that is already open
-    is not driven. It opens no browser, so it cannot be combined with a start address or any browser option, and it
-    records and replays no recipe. `record` films the window from deskpilot's shots, one when the app opens and one
-    after each action, with the cursor drawn where each action landed. `desktop_apps` starts more apps in the same
-    run, each a command line as `desktop` is. Every window the apps open, dialogs included, is one of the run's tabs,
-    and the run moves between them as it moves between a browser's tabs.
-
     `context` is background the run may use but never reads as the task: where the request came from, what the
-    caller already knows. Jev sees it as `background`.
+    caller already knows. The driver sees it as background from the user.
 
     `settings` configures the run by the environment variables' own names (`OPENROUTER_API_KEY`,
     `AI_GATEWAY_API_KEY`, `TYPESAFE_API_KEY`, `FASTBROWSE_DECISION_SOURCE`, `FASTBROWSE_LLM_PROVIDER`,

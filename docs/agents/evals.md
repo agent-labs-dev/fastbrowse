@@ -5,8 +5,9 @@ publication result. Do not run a paid campaign while iterating on code.
 
 ## Time limit
 
-Every run an eval harness starts sets `max_seconds`. Without it nothing bounds the run's length: a Wait on a page
-that never changes ends after one 60 s watch, but the run may wait again, and only the stall rule stops it. The fixture bench and runner derive the run's limit from their one
+Every run an eval harness starts sets `max_seconds`. Without it nothing bounds the run's length: a wait on a page
+that never changes lasts the seconds the driver asked for, but the run may wait again, and only the stall rule stops it.
+The fixture bench and runner derive the run's limit from their one
 client timeout (`TASK_SECONDS` in `src/fastbrowse/evals/runner.py`), less the agent's ending-frame allowance, so
 the agent stops itself as `budget_exceeded` with its evidence before the client's backstop fires.
 
@@ -92,7 +93,8 @@ The mapping preserves these public arm names:
 - other `browser-use-cloud` results to `browser-use`;
 - `browser-harness` to `browser-harness`;
 - `agent-browser` on its pinned model to `agent-browser`, a campaign arm that no publication group carries yet;
-- `browser-use-oss` to `browser-use-oss`.
+- `browser-use-oss` to `browser-use-oss`;
+- `browser-use-1-luna` on `openai/gpt-6-luna` to `browser-use-1-luna`, a campaign arm that no publication group carries.
 
 `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` remain diagnostic. Candidate schema 7,
 `GROUPS`, site groups, and all files under `docs/results` stay as recorded.

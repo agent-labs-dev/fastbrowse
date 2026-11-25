@@ -193,7 +193,16 @@ fn run_task(
     http: Option<Py<PyAny>>,
     trace: bool,
 ) -> PyResult<Run> {
-    let invalid = |error: serde_json::Error| refused("invalid", error.to_string());
+    // Learnt before anything is said of the arguments, each string read as one whole address: serde's refusal quotes
+    // the value it could not read, and masked after the fact by structure alone, a password holding a quote was
+    // raised whole (#1381). Arguments that are not JSON have no strings to learn from, so that refusal quotes nothing.
+    let given = [Some(task), secrets, config, settings].map(|text| text.map(serde_json::from_str::<serde_json::Value>));
+    if given.iter().flatten().any(Result::is_err) {
+        return Err(refused("invalid", "the run's arguments are not JSON".into()));
+    }
+    let learnt =
+        fastbrowse_core::safety::learnt(&serde_json::Value::Array(given.into_iter().flatten().flatten().collect()));
+    let invalid = |error: serde_json::Error| refused("invalid", learnt.mask(&error.to_string()));
     let task: RunTask = serde_json::from_str(task).map_err(invalid)?;
     let refs: Option<Vec<SecretRef>> = secrets.map(serde_json::from_str).transpose().map_err(invalid)?;
     let config: Option<Config> = config.map(serde_json::from_str).transpose().map_err(invalid)?;
@@ -204,7 +213,7 @@ fn run_task(
             Settings::from_sources(&pairs, None)
         })
         .transpose()
-        .map_err(|error| refused("configuration", error.0))?;
+        .map_err(|error| refused("configuration", learnt.mask(&error.0)))?;
     let mut run = Host { browser_api_key, config, settings, ..Host::default() };
     let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
     let result = event_loop.call_method0("create_future")?;
@@ -445,12 +454,6 @@ fn recipe_schema() -> String {
     fastbrowse_core::recipe::schema().to_string()
 }
 
-/// `fastbrowse.routing.openrouter_routing`: the OpenRouter provider routing a run sends for `model`, as JSON.
-#[pyfunction]
-fn openrouter_routing(model: &str) -> String {
-    fastbrowse_clients::openai_compatible::openrouter_routing_for(model).to_string()
-}
-
 /// `fastbrowse.origins.origin_of`: the origin the document grant compares, or None for no http(s) address.
 #[pyfunction]
 fn origin_of(url: &str) -> Option<String> {
@@ -536,7 +539,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(monotonic, m)?)?;
     m.add_function(wrap_pyfunction!(validate_recipe, m)?)?;
     m.add_function(wrap_pyfunction!(recipe_schema, m)?)?;
-    m.add_function(wrap_pyfunction!(openrouter_routing, m)?)?;
     m.add_function(wrap_pyfunction!(origin_of, m)?)?;
     m.add_function(wrap_pyfunction!(parse_origin, m)?)?;
     m.add_function(wrap_pyfunction!(secret_origin, m)?)?;

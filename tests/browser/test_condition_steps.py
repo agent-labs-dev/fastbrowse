@@ -81,7 +81,7 @@ async def delete_after(script: str, cdp_url: str, start: str) -> list[dict[str, 
         start=start,
         cdp_url=cdp_url,
         jev=StepReadingJev(script, questions),
-        llm=ScriptedLLM(),
+        llm=ScriptedLLM(script=steps(script)),
         authorization=Authorization(irreversible_actions=True),
     )
     return questions

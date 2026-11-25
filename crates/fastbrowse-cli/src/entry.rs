@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::argparse::{Exit, Opt, Parser};
-use crate::cli::{self, Build, Context, Streams};
+use crate::cli::{self, Build, Context, Invocation, Streams};
 use crate::runner::default_runner;
 use crate::serve::{self, Server, StdioTransport, Transport};
 use crate::{log, mcp, options};
@@ -13,28 +13,28 @@ fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime starts")
 }
 
-fn report(exit: Exit) -> i32 {
+fn report(invocation: &Invocation, exit: Exit) -> i32 {
     match exit {
         Exit::Print(text) => {
-            print!("{text}");
+            print!("{}", invocation.mask(&text));
             0
         }
         Exit::Usage(text) => {
-            eprint!("{text}");
+            eprint!("{}", invocation.mask(&text));
             2
         }
     }
 }
 
 /// `trace_to()`: the trace goes where `FASTBROWSE_TRACE` says, if anywhere.
-fn trace_from_environment(name: &str) -> Result<(), i32> {
+fn trace_from_environment(invocation: &Invocation, name: &str) -> Result<(), i32> {
     fastbrowse_core::telemetry::trace_to(None).map_err(|error| {
-        eprintln!("{name}: cannot write the trace: {error}");
+        eprintln!("{}", invocation.mask(&format!("{name}: cannot write the trace: {error}")));
         1
     })
 }
 
-fn serve_command(argv: &[String]) -> i32 {
+fn serve_command(invocation: &Invocation, argv: &[String]) -> i32 {
     let mut options = vec![Opt::flag("--stdio").required()];
     // Tests that start this command need a run with no model behind it. It is left out of the help because it is no
     // part of what the command offers.
@@ -60,7 +60,7 @@ fn serve_command(argv: &[String]) -> i32 {
     };
     let parsed = match parser.parse(argv, check) {
         Ok(parsed) => parsed,
-        Err(exit) => return report(exit),
+        Err(exit) => return report(invocation, exit),
     };
     let transport: Arc<dyn Transport> = Arc::new(StdioTransport::start());
     #[cfg(feature = "scripted")]
@@ -71,7 +71,7 @@ fn serve_command(argv: &[String]) -> i32 {
         (default_runner(), fastbrowse_core::protocol::PROTOCOL_VERSION)
     };
     log::init("fastbrowse");
-    if let Err(code) = trace_from_environment("fastbrowse") {
+    if let Err(code) = trace_from_environment(invocation, "fastbrowse") {
         return code;
     }
     runtime().block_on(async move {
@@ -82,22 +82,22 @@ fn serve_command(argv: &[String]) -> i32 {
     })
 }
 
-fn mcp_command(argv: &[String]) -> i32 {
+fn mcp_command(invocation: &Invocation, argv: &[String]) -> i32 {
     // stdout carries the protocol under stdio, so every log line goes to stderr.
     log::init("fastbrowse-mcp");
-    if let Err(code) = trace_from_environment("fastbrowse-mcp") {
+    if let Err(code) = trace_from_environment(invocation, "fastbrowse-mcp") {
         return code;
     }
     let args = match mcp::parse(argv) {
         Ok(args) => args,
-        Err(exit) => return report(exit),
+        Err(exit) => return report(invocation, exit),
     };
     let configured = fastbrowse_clients::environment::Settings::load()
         .and_then(|settings| mcp::configure(&args, &settings, &options::environ()));
     let config = match configured {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("fastbrowse-mcp: {}", error.0);
+            eprintln!("fastbrowse-mcp: {}", invocation.mask(&error.0));
             return 1;
         }
     };
@@ -118,7 +118,7 @@ fn mcp_command(argv: &[String]) -> i32 {
         match mcp::http::serve(server, &args.host, args.port).await {
             Ok(()) => 0,
             Err(error) => {
-                eprintln!("fastbrowse-mcp: {error}");
+                eprintln!("{}", invocation.mask(&format!("fastbrowse-mcp: {error}")));
                 1
             }
         }
@@ -135,9 +135,13 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
     let program_name = program;
     let identity =
         build.identity.as_ref().map_or_else(|| program_name.to_string(), |path| path.to_string_lossy().into_owned());
+    let invocation = Invocation::learn(
+        &std::iter::once(program.to_string()).chain(args.iter().cloned()).collect::<Vec<_>>(),
+        &options::environ(),
+    );
     let program = std::path::Path::new(program).file_stem();
     if program.is_some_and(|name| name == "fastbrowse-mcp") {
-        mcp_command(args)
+        mcp_command(&invocation, args)
     } else if args.first().is_some_and(|arg| arg == "native-host") {
         // Chrome starts this when the extension connects, with the extension's origin as the first argument.
         if let Some(code) = crate::extension::delegate(&args[1..]) {
@@ -147,12 +151,38 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
         match runtime().block_on(fastbrowse_browser::extension::host::run(origin)) {
             Ok(()) => 0,
             Err(error) => {
-                eprintln!("fastbrowse native-host: {error}");
+                eprintln!("{}", invocation.mask(&format!("fastbrowse native-host: {error}")));
                 1
             }
         }
     } else if args.first().is_some_and(|arg| arg == "extension") {
         let (text, code) = crate::extension::command(&identity, &args[1..]);
+        let text = invocation.mask(&text);
+        if code == 0 {
+            print!("{text}");
+        } else {
+            eprint!("{text}");
+        }
+        code
+    } else if args.first().is_some_and(|arg| arg == "doctor") {
+        let settings = match serve::load_settings()() {
+            Ok(settings) => settings,
+            Err(error) => {
+                eprintln!("{}", invocation.mask(&format!("fastbrowse doctor: {}", error.0)));
+                return 1;
+            }
+        };
+        let (text, code) = runtime().block_on(crate::doctor::command(&build, &settings, &identity));
+        let text = invocation.mask(&text);
+        if code == 0 {
+            print!("{text}");
+        } else {
+            eprint!("{text}");
+        }
+        code
+    } else if args.first().is_some_and(|arg| arg == "stats") {
+        let (text, code) = crate::stats::command(&args[1..], &options::environ());
+        let text = invocation.mask(&text);
         if code == 0 {
             print!("{text}");
         } else {
@@ -161,6 +191,7 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
         code
     } else if args.first().is_some_and(|arg| arg == "self-update") {
         let (text, code) = crate::update::command(&args[1..], &build);
+        let text = invocation.mask(&text);
         if code == 0 {
             print!("{text}");
         } else {
@@ -169,7 +200,7 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
         code
     } else if args.first().is_some_and(|arg| arg == "serve") {
         // Only as the first argument, so a task that mentions the word, or `--local serve`, is still a task.
-        serve_command(&args[1..])
+        serve_command(&invocation, &args[1..])
     } else {
         // Retries, failovers and a recording that could not be written are warnings; say whose they are.
         log::init("fastbrowse");
@@ -181,12 +212,12 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
             build,
             kept_at: crate::kept_trace::KeptAt::default(),
         };
-        runtime().block_on(until_interrupted(
-            cli::main(args, &context),
-            interrupted(),
-            INTERRUPT_SETTLE,
-            &context.kept_at,
-        ))
+        runtime().block_on(async {
+            // Installed before the run is polled: a signal that arrives once the run has started must not find the
+            // default handler, which ends the process without the exit code or the stats record.
+            let interrupt = interrupted();
+            until_interrupted(cli::main(args, &context), interrupt, INTERRUPT_SETTLE, &context.kept_at).await
+        })
     }
 }
 
@@ -228,32 +259,39 @@ fn interrupted_notice(kept_at: &crate::kept_trace::KeptAt) -> String {
     }
 }
 
-/// The exit code of the first Ctrl-C or SIGTERM: 130 or 143, as a shell reports a process those signals ended.
-async fn interrupted() -> i32 {
-    let ctrl_c = async {
-        // A handler that cannot be installed leaves the signal to end the process as it always did.
-        if tokio::signal::ctrl_c().await.is_err() {
-            std::future::pending::<()>().await;
-        }
-    };
+/// The exit code of the first Ctrl-C or SIGTERM: 130 or 143, as a shell reports a process those signals ended. The
+/// handlers are installed when this is called, not when the future is first polled, so a caller that calls it before
+/// starting the run knows the signals are caught from then on.
+fn interrupted() -> impl std::future::Future<Output = i32> {
+    // A handler that cannot be installed leaves the signal to end the process as it always did.
     #[cfg(unix)]
     {
-        let terminate = async {
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(mut terminate) => {
-                    terminate.recv().await;
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut interrupt = signal(SignalKind::interrupt()).ok();
+        let mut terminate = signal(SignalKind::terminate()).ok();
+        async move {
+            let wait = |stream: &mut Option<tokio::signal::unix::Signal>| {
+                let stream = stream.take();
+                async move {
+                    match stream {
+                        Some(mut stream) => {
+                            stream.recv().await;
+                        }
+                        None => std::future::pending::<()>().await,
+                    }
                 }
-                Err(_) => std::future::pending::<()>().await,
+            };
+            tokio::select! {
+                () = wait(&mut interrupt) => 130,
+                () = wait(&mut terminate) => 143,
             }
-        };
-        tokio::select! {
-            () = ctrl_c => 130,
-            () = terminate => 143,
         }
     }
     #[cfg(not(unix))]
-    {
-        ctrl_c.await;
+    async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
         130
     }
 }

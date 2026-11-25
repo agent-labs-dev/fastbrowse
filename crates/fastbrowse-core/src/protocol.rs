@@ -17,7 +17,7 @@ use crate::schema::{Field, Mode, ModelTy, Schema, Ty, definitions};
 
 /// Changes only when the wire format does, so it is not the package version: a release that leaves the messages alone
 /// leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
-pub const PROTOCOL_VERSION: i64 = 3;
+pub const PROTOCOL_VERSION: i64 = 4;
 
 /// `StrictInt | StrictStr`. Strict, because JSON-RPC echoes the id back and a `true` read as 1 would answer a request
 /// nobody sent.
@@ -139,7 +139,7 @@ pub enum Params {
 }
 
 /// A call in either direction. One without an id is a notification and gets no reply. Unknown members are ignored.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
     #[serde(default)]
     pub jsonrpc: JsonRpc,
@@ -148,6 +148,14 @@ pub struct Request {
     pub method: String,
     #[serde(default)]
     pub params: Option<Params>,
+}
+
+/// Learnt from and masked, as every door reads a message: its id, method and params are the caller's, and a derived
+/// `Debug` printed an address's credential in any of them whole (#1381).
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::safety::debug_masked("Request", self, f)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -266,7 +274,7 @@ fn run_id<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
 
 /// One run's arguments: what the CLI's flags, a `run` request, the MCP `browse` tool and the Python and Node `run_task`
 /// all describe. The caller's own objects (its callbacks, its model clients, a browser key) are not among them.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunTask {
     pub task: String,
@@ -348,15 +356,13 @@ pub struct RunTask {
     /// `extension`.
     #[serde(default)]
     pub extension_browser: Option<String>,
-    /// Drive a native desktop app instead of a browser, through deskpilot on Hyprland: the command line that starts
-    /// it, split as a POSIX shell splits words. The run starts the app on deskpilot's hidden workspace and closes it
-    /// when the run ends.
-    #[serde(default)]
-    pub desktop: Option<String>,
-    /// More desktop apps to start in the same run beside `desktop`, each a command line as `desktop` is. Every window
-    /// the run's apps open is one of its tabs, so the run moves between apps as a browser run moves between tabs.
-    #[serde(default)]
-    pub desktop_apps: Vec<String>,
+}
+
+/// A task's start and DevTools endpoint can carry credentials, so it prints masked (`debug_masked`).
+impl std::fmt::Debug for RunTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::safety::debug_masked("RunTask", self, f)
+    }
 }
 
 impl RunTask {
@@ -367,20 +373,15 @@ impl RunTask {
     }
 
     /// Whether `local` alone reaches the user's own browser. A signed-out Chrome cannot do a signed-in task, so a
-    /// separate one starts only when `launch`, a binary, a headed window or a kept profile asks for it, and a browserless,
-    /// desktop or attached run keeps its own meaning.
+    /// separate one starts only when `launch`, a binary, a headed window or a kept profile asks for it, and a browserless
+    /// or attached run keeps its own meaning.
     pub fn local_means_extension(&self) -> bool {
         let launched = self.launch
             || self
                 .chrome
                 .as_ref()
                 .is_some_and(|chrome| chrome.headed || chrome.profile.is_some() || chrome.binary.is_some());
-        self.local
-            && !launched
-            && !self.fetch
-            && self.desktop.is_none()
-            && self.cdp_url.is_none()
-            && self.cdp_port.is_none()
+        self.local && !launched && !self.fetch && self.cdp_url.is_none() && self.cdp_port.is_none()
     }
 }
 
@@ -663,7 +664,8 @@ impl Schema for RunAttachment {
 }
 
 /// `RunTask`'s fields, which `RunParams` carries beside its own.
-fn run_task_fields() -> Vec<Field> {
+/// `RunTask`'s fields as its schema describes them, for code that reads every one of them by its type.
+pub fn run_task_fields() -> Vec<Field> {
     let text = || Ty::optional(Ty::Str);
     let path = || Ty::optional(Ty::Path);
     let none = || Value::Null;
@@ -701,8 +703,6 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("browser", Ty::Bool, false),
         Field::default("extension", Ty::Bool, false),
         Field::default("extension_browser", text(), none()),
-        Field::default("desktop", text(), none()),
-        Field::default("desktop_apps", Ty::list(Ty::Str), empty()),
     ]
 }
 
@@ -885,8 +885,63 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A task printed for a log shows no credential its addresses carry: `Debug` was derived and printed them raw.
+    #[test]
+    fn test_a_task_and_a_browser_connection_print_their_addresses_masked() {
+        let task = RunTask {
+            task: "Read it".into(),
+            start: Some("https://ops:Pr1nt9w@shop.test/".into()),
+            cdp_url: Some("wss://ops:Cdp9w@browser.test/devtools".into()),
+            ..RunTask::default()
+        };
+        let printed = format!("{task:?}");
+        assert!(printed.contains("shop.test") && !printed.contains("9w"), "{printed}");
+        let connection: crate::models::BrowserConnection =
+            serde_json::from_value(serde_json::json!({"cdp_url": "wss://ops:Cdp9w@browser.test/", "remote": false}))
+                .unwrap();
+        assert!(!format!("{connection:?}").contains("9w"));
+    }
+
+    /// Masked after serializing, a password holding a quote, a tab or a newline was written escaped (`pa\"ss`), the
+    /// escape ended the address, and the password printed whole; an input's name is printed masked as its value is.
+    #[test]
+    fn test_a_task_and_a_connection_print_masked_whatever_their_password_holds() {
+        for password in ["Pa\"ss9w", "Pa\tss9w", "Pa\nss9w"] {
+            let address = format!("https://ops:{password}@shop.test/");
+            let task = RunTask {
+                task: "Read it".into(),
+                start: Some(address.clone()),
+                inputs: Some(IndexMap::from([(address.clone(), address.clone())])),
+                ..RunTask::default()
+            };
+            let printed = format!("{task:?}");
+            assert!(printed.contains("shop.test") && !printed.contains("ss9w"), "{password:?}: {printed}");
+            let connection =
+                crate::models::BrowserConnection::new(format!("wss://ops:{password}@browser.test/"), false);
+            let printed = format!("{connection:?}");
+            assert!(printed.contains("browser.test") && !printed.contains("ss9w"), "{password:?}: {printed}");
+        }
+    }
     use crate::py::dump::Dump;
     use serde_json::json;
+
+    /// A request printed for a log was derived `Debug`, so an address in its id, method or params printed whole, a
+    /// password holding a quote included (#1381).
+    #[test]
+    fn test_a_request_prints_every_address_it_holds_masked() {
+        let request: Request = serde_json::from_value(json!({
+            "id": "https://ops:1d-pw@h.test/",
+            "method": "https://admin:m3th\"t4il@h.test/",
+            "params": {"start": "https://ops:p4r-pw@h.test/"},
+        }))
+        .unwrap();
+        let printed = format!("{request:?}");
+        assert!(printed.contains("h.test"), "{printed}");
+        for password in ["1d-pw", "m3th", "t4il", "p4r-pw"] {
+            assert!(!printed.contains(password), "{password}: {printed}");
+        }
+    }
 
     #[test]
     fn a_request_id_is_an_int_or_a_string_and_nothing_else() {

@@ -511,7 +511,7 @@
    "value": ""
   }
  ],
- "fingerprint": "http://fixture/frames.html?n=6|Frames|165501305|0",
+ "fingerprint": "http://fixture/frames.html?n=6|Frames|3827613733|0",
  "guards": {
   "1": [
    1,
@@ -1071,6 +1071,6 @@
  "offscreen_text": "",
  "title": "Frames",
  "url": "http://fixture/frames.html?n=6",
- "viewport_text": "Inner 0\nRemove\nInner 1\nRemove\nInner 2\nRemove\nInner 3\nRemove\nInner 4\nRemove\nInner 5\nRemove",
+ "viewport_text": "Inner 0RemoveInner 1RemoveInner 2RemoveInner 3RemoveInner 4RemoveInner 5Remove",
  "visual_content": 0
 }

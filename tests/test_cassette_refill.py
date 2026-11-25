@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import math
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -89,13 +90,6 @@ def test_a_check_run_on_an_older_head_is_not_refilled() -> None:
     assert not decision.run and "now at" in decision.reason
 
 
-def test_the_refill_does_not_refill_its_own_commit() -> None:
-    verdict = refill.fill_verdict(None, ["mock-basket"], 1.0, 0)
-    message = refill.commit_message(["mock-basket"], "c" * 40, verdict)
-    assert refill.is_refill_commit(message)
-    assert not decide(pull(head_message=message)).run
-
-
 def test_a_head_commit_is_tried_once() -> None:
     assert not decide(pull(), attempted=[SHA]).run
     assert decide(pull(), attempted=["c" * 40]).run
@@ -104,7 +98,6 @@ def test_a_head_commit_is_tried_once() -> None:
 def test_a_maintainer_retry_lifts_only_the_attempted_guard() -> None:
     assert decide(pull(), attempted=[SHA], retry=True).run
     assert not decide(pull(head_repo="someone/fastbrowse"), attempted=[SHA], retry=True).run
-    assert not decide(pull(head_message=f"x\n\n{refill.TRAILER}: {SHA}\n"), retry=True).run
 
 
 def test_no_missed_task_means_no_spend() -> None:
@@ -406,6 +399,113 @@ def test_partial_retry_requires_the_replay_miss_records(
         refill.plan()
 
 
+@pytest.mark.parametrize(
+    ("rebased", "split", "comment_records_head", "retry", "run_head_matches", "runs"),
+    [
+        (False, False, False, False, True, False),
+        (False, True, False, False, True, False),
+        (True, False, False, False, True, True),
+        (True, True, False, False, True, True),
+        (True, False, True, True, True, False),
+        (True, True, False, True, False, False),
+    ],
+)
+def test_plan_uses_the_exact_refill_commit_and_ci_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    rebased: bool,
+    split: bool,
+    comment_records_head: bool,
+    retry: bool,
+    run_head_matches: bool,
+    runs: bool,
+) -> None:
+    source, head, middle, new_base = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+    base = new_base if rebased else source
+    terminal = f"{refill.REFILL_SUBJECT}mock-basket\n\n{refill.TRAILER}: {source}"
+    history = {
+        head: (middle if split else base, "mock-basket", terminal),
+        middle: (base, "mock-archive", f"{refill.REFILL_SUBJECT}mock-archive"),
+        new_base: ("e" * 40, "", "fix: update the base"),
+    }
+    comment_head = head if comment_records_head else "f" * 40
+    comment = (
+        f"{refill.MARKER}\n<!-- cassette-refill-attempted: {source} -->\n"
+        f"Committed the refilled cassettes as [{comment_head[:12]}]"
+        f"(https://github.com/{REPO}/commit/{comment_head}); CI runs again on it."
+    )
+    env = {
+        "REPO": REPO,
+        "PR": "7",
+        "SHA": head if run_head_matches else new_base,
+        "GH_TOKEN": "t",
+        "RETRY": str(retry).lower(),
+        "MISSES_DIR": str(tmp_path),
+        "COVERED_TASKS": "[]",
+        "RUN_URL": "test-run",
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    refill.record_misses(tmp_path, "mock-basket", [{"purpose": "done", "model": "jev"}])
+    facts = pull(head_sha=head, head_message=terminal)
+    monkeypatch.setattr(refill, "pull_facts", lambda *args: (facts, "branch"))
+    monkeypatch.setattr(refill, "find_comment", lambda *args: {"body": comment})
+    monkeypatch.setattr(refill, "summary", lambda *args: None)
+    outputs: dict[str, str] = {}
+    claims: list[str] = []
+    monkeypatch.setattr(refill, "output", lambda **values: outputs.update(values))
+    monkeypatch.setattr(refill, "upsert_comment", lambda repo, number, token, body: claims.append(body))
+
+    def read_commit(repo: str, sha: str, token: str) -> dict[str, Any]:
+        parent, task, message = history[sha]
+        return {
+            "commit": {"message": message, "verification": {"verified": True}},
+            "committer": {"login": "web-flow"},
+            "parents": [{"sha": parent}],
+            "files": [{"filename": f"bench/cassettes/{task}.jsonl", "status": "modified", "sha": "e" * 40}],
+        }
+
+    monkeypatch.setattr(refill, "read_commit", read_commit)
+    assert refill.plan() == 0
+    assert outputs["run"] == str(runs).lower()
+    assert bool(claims) == runs
+    if runs:
+        assert refill.attempted_shas(claims[0]) == [source, head]
+
+
+@pytest.mark.parametrize(
+    ("status", "stderr", "expected"),
+    [
+        ("HTTP/2.0 504 Gateway Timeout", "gh: HTTP 504", refill.GitHubGatewayTimeout),
+        ("HTTP/2.0 504 Gateway Timeout", "gh: Gateway Timeout (HTTP 504)", refill.GitHubGatewayTimeout),
+        ("HTTP/2.0 422 Unprocessable Entity", "gh: HTTP 422", RuntimeError),
+        ("HTTP/2.0 200 OK", "gh: An error message mentioned HTTP 504", RuntimeError),
+        ("", "gh: could not connect", RuntimeError),
+    ],
+)
+def test_gh_distinguishes_a_gateway_timeout_from_an_http_rejection(
+    monkeypatch: pytest.MonkeyPatch, status: str, stderr: str, expected: type[RuntimeError]
+) -> None:
+    stdout = f'{status}\nContent-Type: application/json\n\n{{"message":"failure"}}' if status else ""
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert command == ["gh", "api", "graphql", "--include"]
+        return subprocess.CompletedProcess(command, 1, stdout=stdout, stderr=stderr + "\n")
+
+    monkeypatch.setattr(refill.subprocess, "run", run)
+    with pytest.raises(expected) as raised:
+        refill.gh("graphql", token="test")
+    assert type(raised.value) is expected
+
+
+def test_gh_decodes_the_graphql_body_after_response_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = subprocess.CompletedProcess(
+        ["gh"], 0, stdout='HTTP/2.0 200 OK\nContent-Type: application/json\n\n{"data":{"commit":1}}', stderr=""
+    )
+    monkeypatch.setattr(refill.subprocess, "run", lambda *args, **kwargs: result)
+    assert refill.gh("graphql", token="test") == {"data": {"commit": 1}}
+
+
 def publish_split(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -414,8 +514,12 @@ def publish_split(
     wrong_blob: bool = False,
     lose_body: bool = False,
     unchanged: bool = False,
+    delayed_reads: int = 0,
+    sleeps: list[float] | None = None,
+    timeout_commit: int | None = None,
 ) -> tuple[int, list, str]:
-    """`publish` of three cassettes, one per commit, with GitHub refusing commit number `refuse_commit`."""
+    """`publish` of three cassettes, one per commit, with GitHub refusing commit number `refuse_commit` and the
+    gateway timing out on request number `timeout_commit` without applying it."""
     tasks = ["mock-basket", "mock-swatch", "mock-sign-in"]
     artifact, sha = tmp_path / "refill-result", "a" * 40
     artifact.mkdir()
@@ -434,22 +538,30 @@ def publish_split(
     posted: list[str] = []
     head = sha
     omitted: dict[str, str] = {}
+    if sleeps is not None:
+        monkeypatch.setattr("time.sleep", sleeps.append)
 
     def gh(*args: str, token: str, body: Any = None) -> Any:
-        nonlocal head
+        nonlocal head, delayed_reads
         if args[0] == "graphql":
             commits.append(body["variables"]["input"])
             if len(commits) == refuse_commit:
                 return {"errors": [{"message": "refused"}]}
+            if len(commits) == timeout_commit:
+                raise refill.GitHubGatewayTimeout("gh api graphql failed: gh: HTTP 504")
             head = str(len(commits)) * 40
             if len(commits) == lose_response:
                 if lose_body:
                     return {"data": {"createCommitOnBranch": None}}
-                raise RuntimeError("gh api graphql failed: gh: HTTP 504")
+                raise refill.GitHubGatewayTimeout("gh api graphql failed: gh: HTTP 504")
             return {"data": {"createCommitOnBranch": {"commit": {"oid": head, "url": f"c/{head}"}}}}
         if args[0].endswith("/pulls/7"):
             repo = {"full_name": REPO}
-            return {"state": "open", "head": {"sha": head, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
+            visible = head
+            if commits and len(commits) == lose_response and delayed_reads:
+                delayed_reads -= 1
+                visible = commits[-1]["expectedHeadOid"]
+            return {"state": "open", "head": {"sha": visible, "repo": repo, "ref": "b"}, "base": {"repo": repo}}
         if "/git/trees/" in args[0]:
             filename, oid = next(iter(omitted.items()))
             return cassette_tree(args[0], filename, "0" * 40 if wrong_blob else oid)
@@ -505,7 +617,7 @@ def test_a_refill_over_one_request_is_committed_as_a_chain_with_the_trailer_on_i
         ["bench/cassettes/mock-sign-in.jsonl"],
         ["bench/cassettes/mock-swatch.jsonl"],
     ]
-    trailers = [refill.is_refill_commit(c["message"]["body"]) for c in commits]
+    trailers = [refill.refill_source(c["message"]["body"]) is not None for c in commits]
     assert trailers == [False, False, True]
     assert f"{refill.TRAILER}: {'a' * 40}" in commits[-1]["message"]["body"]
     assert all(oid[:12] in comment for oid in ("1" * 40, "2" * 40, "3" * 40))
@@ -514,11 +626,32 @@ def test_a_refill_over_one_request_is_committed_as_a_chain_with_the_trailer_on_i
 def test_a_split_refill_stopped_partway_says_what_it_committed_and_leaves_the_rest_to_the_next_refill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    code, commits, comment = publish_split(tmp_path, monkeypatch, refuse_commit=2)
+    sleeps: list[float] = []
+    code, commits, comment = publish_split(tmp_path, monkeypatch, refuse_commit=2, sleeps=sleeps)
+    assert sleeps == []
     assert code == 1
-    assert not refill.is_refill_commit(commits[0]["message"]["body"])
+    assert refill.refill_source(commits[0]["message"]["body"]) is None
     assert "Committed [111111111111]" in comment and "refused" in comment
     assert "Nothing was committed" not in comment
+
+
+def test_a_batch_that_times_out_unapplied_is_split_with_the_trailer_on_the_final_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sleeps: list[float] = []
+    code, commits, comment = publish_split(tmp_path, monkeypatch, unchanged=True, timeout_commit=1, sleeps=sleeps)
+    assert code == 0
+    assert [c["expectedHeadOid"] for c in commits] == ["a" * 40, "a" * 40, "2" * 40, "3" * 40]
+    assert [len(c["fileChanges"]["additions"]) for c in commits] == [2, 1, 1, 1]
+    assert [refill.refill_source(c["message"]["body"]) is not None for c in commits] == [False, False, False, True]
+    assert all(oid[:12] in comment for oid in ("2" * 40, "3" * 40, "4" * 40))
+
+
+def test_a_single_file_that_times_out_unapplied_still_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    code, commits, comment = publish_split(tmp_path, monkeypatch, timeout_commit=1, sleeps=[])
+    assert code == 1
+    assert len(commits) == 1
+    assert "No batch was confirmed" in comment
 
 
 @pytest.mark.parametrize("lose_body", [False, True])
@@ -529,6 +662,25 @@ def test_a_committed_batch_whose_response_was_lost_is_reported_and_followed_by_t
     assert code == 0
     assert [c["expectedHeadOid"] for c in commits] == ["a" * 40, "1" * 40, "2" * 40]
     assert all(oid[:12] in comment for oid in ("1" * 40, "2" * 40, "3" * 40))
+
+
+@pytest.mark.parametrize(("delayed_reads", "success"), [(1, True), (2, True), (3, False)])
+def test_a_gateway_timeout_waits_for_the_commit_to_become_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delayed_reads: int, success: bool
+) -> None:
+    sleeps: list[float] = []
+    code, commits, comment = publish_split(
+        tmp_path, monkeypatch, lose_response=1, delayed_reads=delayed_reads, sleeps=sleeps
+    )
+    assert sleeps == [60] * min(delayed_reads, 2)
+    if success:
+        assert code == 0
+        assert [batch["expectedHeadOid"] for batch in commits] == ["a" * 40, "1" * 40, "2" * 40]
+        assert "[111111111111]" in comment
+    else:
+        assert code == 1
+        assert len(commits) == 1
+        assert "No batch was confirmed" in comment
 
 
 @pytest.mark.parametrize("wrong_blob", [False, True])
@@ -552,7 +704,9 @@ def test_a_lost_response_checks_an_unchanged_cassette_in_the_commit_tree(
 def test_a_moved_branch_with_another_blob_is_not_treated_as_the_expected_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    code, commits, comment = publish_split(tmp_path, monkeypatch, lose_response=1, wrong_blob=True)
+    sleeps: list[float] = []
+    code, commits, comment = publish_split(tmp_path, monkeypatch, lose_response=1, wrong_blob=True, sleeps=sleeps)
+    assert sleeps == []
     assert code == 1
     assert len(commits) == 1
     assert "GitHub's commit result could not be verified" in comment

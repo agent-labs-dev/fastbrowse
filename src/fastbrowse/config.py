@@ -6,17 +6,10 @@ from fastbrowse.models import Frozen
 
 
 class Thresholds(Frozen):
-    login_required_above: float = 0.70
-    bot_check_above: float = 0.70
-    """Jev's confidence that the page presents a bot check."""
     irreversible_above: float = 0.50
+    """Jev's agreement that an action cannot be undone, above which code holds it for authorization."""
     requested_above: float = 0.50
     """Jev's agreement that the task asks for a commit, above which an authorized run takes it."""
-
-
-class ObservationLimits(Frozen):
-    group_size: int = Field(default=30, gt=1)
-    """Thirty controls keep the second choice small when selection goes group -> element."""
 
 
 class TokenBudget(Frozen):
@@ -39,7 +32,6 @@ class StallRules(Frozen):
 
 class Config(Frozen):
     thresholds: Thresholds = Thresholds()
-    observation: ObservationLimits = ObservationLimits()
     tokens: TokenBudget = TokenBudget()
     stall: StallRules = StallRules()
     refuse_cookie_banners: bool = True
@@ -51,15 +43,10 @@ class Config(Frozen):
     would pay for nothing. A step whose page is showing a resolved secret sends no frame.
     """
     step_choices: bool = False
-    """Record on each step the controls Jev was offered and which it chose, to debug a run that picked wrong.
+    """Record on each step the controls the driver was shown and which it acted on, to debug a run that picked wrong.
 
     Off by default: a dense page offers 160 controls, and a caller that is not debugging a run would carry them
-    on every step for nothing. Labels are masked as everything Jev reads is.
-    """
-    plan_ahead: bool = True
-    """Ask which other fields in the chosen field's form need filling, and offer a list read when the task
-    covers its pages. Planned fills return to deciding on a redraw; list reads retain each page's wall
-    checks and let Jev return to ordinary actions before reading it.
+    on every step for nothing. Labels are masked as everything the driver reads is.
     """
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     """Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason."""

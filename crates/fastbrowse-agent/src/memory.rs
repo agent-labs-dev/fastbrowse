@@ -244,6 +244,32 @@ pub(crate) fn address(url: &str) -> String {
     out
 }
 
+/// For each block, the smallest whole-record block of the same source that holds it, if any. One sweep over blocks and
+/// records in document order with a stack of the records still open, so a capture of thousands of records costs a
+/// sort, not a scan of every record per block.
+fn record_holders(blocks: &[fastbrowse_core::page::Block]) -> Vec<Option<usize>> {
+    let mut order: Vec<usize> = (0..blocks.len()).collect();
+    order.sort_by_key(|&at| (blocks[at].source_url.as_deref(), blocks[at].start, std::cmp::Reverse(blocks[at].end)));
+    let mut holders = vec![None; blocks.len()];
+    let mut open: Vec<usize> = Vec::new();
+    let mut source = None;
+    for at in order {
+        let block = &blocks[at];
+        if source != Some(block.source_url.as_deref()) {
+            source = Some(block.source_url.as_deref());
+            open.clear();
+        }
+        while open.last().is_some_and(|&record| blocks[record].end < block.start) {
+            open.pop();
+        }
+        if block.whole_record {
+            open.push(at);
+        }
+        holders[at] = open.iter().rev().copied().find(|&record| block.end <= blocks[record].end);
+    }
+    holders
+}
+
 fn digest16(text: &str) -> String {
     sha256_hex(text.as_bytes())[..16].to_string()
 }
@@ -296,6 +322,25 @@ struct SourceBlock {
     /// The span of each link's text inside the block.
     links: Vec<(i64, i64)>,
     fields: Vec<SourceField>,
+    /// Digest of the text of the record this block belongs to: the smallest whole-record block holding it, else the
+    /// block itself. A page that repeats one quote across records tells them apart only by this text.
+    record: String,
+}
+
+/// One capture's blocks, indexed by source id so a read finds its block without scanning the capture.
+#[derive(Clone)]
+struct CaptureBlocks {
+    by_source: HashMap<String, Vec<SourceBlock>>,
+}
+
+impl From<Vec<SourceBlock>> for CaptureBlocks {
+    fn from(blocks: Vec<SourceBlock>) -> Self {
+        let mut by_source: HashMap<String, Vec<SourceBlock>> = HashMap::new();
+        for block in blocks {
+            by_source.entry(block.source_id.clone()).or_default().push(block);
+        }
+        Self { by_source }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -313,7 +358,7 @@ pub struct Notes {
     /// A table's structure belongs to its capture, even when another page renders identical text.
     tables: HashMap<CaptureIdentity, Arc<[TableBlock]>>,
     /// A fragment keeps its captured block type, so a heading is not mistaken for the record it names.
-    source_blocks: HashMap<CaptureIdentity, Arc<[SourceBlock]>>,
+    source_blocks: HashMap<CaptureIdentity, Arc<CaptureBlocks>>,
     /// Where code blanked a secret value in each capture's text.
     masked: HashMap<CaptureIdentity, Arc<[(i64, i64)]>>,
     /// Each step that typed into a control, in order.
@@ -403,7 +448,22 @@ impl Notes {
             .entry(key.clone())
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
         let mut sources: HashMap<CaptureIdentity, Vec<SourceBlock>> = HashMap::new();
-        for block in &capture.blocks {
+        // Block spans count characters; map only the positions a block starts or ends at to bytes, in one pass, so a
+        // large capture does not hold an offset for every character.
+        let wanted: std::collections::BTreeSet<usize> =
+            capture.blocks.iter().flat_map(|block| [block.start, block.end]).map(|at| at.max(0) as usize).collect();
+        let mut chars = capture.text.char_indices().map(|(at, _)| at).chain([capture.text.len()]).enumerate();
+        let offsets: HashMap<usize, usize> = wanted
+            .into_iter()
+            .filter_map(|at| chars.find(|(index, _)| *index == at).map(|(_, byte)| (at, byte)))
+            .collect();
+        let slice = |start: i64, end: i64| {
+            let byte = |at: i64| offsets.get(&(at.max(0) as usize)).copied().unwrap_or(capture.text.len());
+            &capture.text[byte(start)..byte(end).max(byte(start))]
+        };
+        let holders = record_holders(&capture.blocks);
+        for (index, block) in capture.blocks.iter().enumerate() {
+            let holder = holders[index].map_or(block, |record| &capture.blocks[record]);
             let url = block.source_url.as_ref().unwrap_or(&capture.url);
             let identity = (capture.sha256.clone(), url.clone(), capture.captured_at);
             sources.entry(identity).or_default().push(SourceBlock {
@@ -415,12 +475,13 @@ impl Notes {
                 item_place: block.item_place,
                 links: block.links.iter().map(|link| (link.start, link.end)).collect(),
                 fields: block.fields.clone(),
+                record: digest16(slice(holder.start, holder.end)),
             });
         }
         for (identity, blocks) in sources {
             self.tables.entry(identity.clone()).or_insert_with(|| table_blocks(capture).into());
             self.masked.entry(identity.clone()).or_insert_with(|| capture.masked.clone().into());
-            self.source_blocks.entry(identity).or_insert_with(|| blocks.into());
+            self.source_blocks.entry(identity).or_insert_with(|| Arc::new(blocks.into()));
         }
     }
 
@@ -493,12 +554,18 @@ impl Notes {
 
     fn source_block(&self, evidence: &Evidence) -> Option<&SourceBlock> {
         let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
-        let blocks = self.source_blocks.get(&key)?;
-        let mut matching = blocks.iter().filter(|block| {
-            block.source_id == evidence.source_id && block.start <= evidence.start && evidence.end <= block.end
-        });
+        let blocks = self.source_blocks.get(&key)?.by_source.get(&evidence.source_id)?;
+        let mut matching = blocks.iter().filter(|block| block.start <= evidence.start && evidence.end <= block.end);
         let block = matching.next()?;
         matching.next().is_none().then_some(block)
+    }
+
+    /// Which record of its page `evidence` quotes, as a digest of that record's text in the capture it was cut from; None
+    /// when the capture was not remembered. Two reads of one quote under one heading, path and destination are the same
+    /// record only when this agrees: a filtered or virtualized list shows one record per capture, so nothing else in
+    /// either capture says they differ (#1509).
+    pub fn record_of(&self, evidence: &Evidence) -> Option<&str> {
+        self.source_block(evidence).map(|block| block.record.as_str())
     }
 
     /// Only complete, unmasked fields of this exact capture can be selected without transcribing their text.
@@ -983,6 +1050,21 @@ mod tests {
         assert!(!rate.repeats_page_text("Annual interest rate 5\u{2030}", url));
         // A hyphen between words is still a break, as before.
         assert_eq!(words("well-known -5 a-1"), ["well", "known", "-5", "a", "1"]);
+    }
+
+    #[test]
+    fn each_block_is_held_by_the_smallest_whole_record_around_it() {
+        use crate::retrieval::testing::capture;
+        let mut page = capture(&[
+            (BlockKind::Paragraph, "outer card text here"),
+            (BlockKind::Paragraph, "inner"),
+            (BlockKind::Paragraph, "loose"),
+        ]);
+        // The blocks lie end to end; widen the first to hold the second as a nested record, and leave the third out.
+        page.blocks[0].end = page.blocks[1].end;
+        page.blocks[0].whole_record = true;
+        page.blocks[1].whole_record = true;
+        assert_eq!(record_holders(&page.blocks), vec![Some(0), Some(1), None]);
     }
 
     #[test]

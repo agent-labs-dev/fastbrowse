@@ -9,8 +9,7 @@
 //! PERPLEXITY_API_KEY; ollama and custom read FASTBROWSE_DECISION_API_KEY, which is optional.
 //! FASTBROWSE_DECISION_BASE_URL points any source at a proxy or another host serving the same API, and custom requires
 //! it. FASTBROWSE_DECISION_MODEL pins the model of any source but the gateway, and ollama and custom require it. A
-//! custom endpoint or model disables automatic failover. FASTBROWSE_ACTION_PICKER=llm has the LLM pick each browser
-//! action instead of Jev, an ablation; every other decision stays with Jev ([`crate::action_picker`]).
+//! custom endpoint or model disables automatic failover.
 //!
 //! LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
 //! Gateway's OpenAI-compatible chat completions, and when both are set the gateway takes over a run whose OpenRouter
@@ -23,7 +22,8 @@
 //!
 //! FASTBROWSE_LLM_PROVIDER names the LLM provider outright instead: openrouter, gateway, openai, anthropic, gemini,
 //! groq, together, mistral, deepseek, xai, fireworks, azure, ollama, lmstudio, vllm or custom. Each reads its own key
-//! variable and sends it to its own host only; [`crate::providers`] holds what each one takes.
+//! variable and sends it to its own host only; [`crate::providers`] holds what each one takes. openrouter with
+//! FASTBROWSE_LLM_BASE_URL speaks OpenRouter's API to a proxy at that address, with FASTBROWSE_LLM_API_KEY.
 //!
 //! Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_CHROME names the Chrome binary; FASTBROWSE_HEADED=1 shows its window
 //! and FASTBROWSE_PROFILE keeps its profile between runs. A real environment variable beats `.env`.
@@ -38,9 +38,9 @@ use fastbrowse_core::decision::{DecisionClient, JEV_MODEL, OpenRouterDecisionCat
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{LLMPurpose, LocalChrome};
 use fastbrowse_core::py::lax::bool_of;
+use fastbrowse_core::safety::{Redactor, mask_address};
 use serde_json::{Map, Value};
 
-use crate::action_picker::{ActionPicker, LlmDecisionClient};
 use crate::anthropic::AnthropicLLM;
 use crate::failover::{FailoverDecisionClient, FailoverLLMClient};
 use crate::http::Http;
@@ -152,25 +152,6 @@ impl std::fmt::Display for DecisionSource {
     }
 }
 
-/// Who picks each browser action. Every other decision stays with the decision model either way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActionPickerSource {
-    /// The decision model, as every other decision.
-    Jev,
-    /// The run's LLM, the ablation that measures what picking with Jev is worth.
-    Llm,
-}
-
-impl ActionPickerSource {
-    pub fn parse(value: &str) -> Option<ActionPickerSource> {
-        match value {
-            "jev" => Some(ActionPickerSource::Jev),
-            "llm" => Some(ActionPickerSource::Llm),
-            _ => None,
-        }
-    }
-}
-
 /// A missing key or an invalid setting in the environment, reported without a traceback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigurationError(pub String);
@@ -212,7 +193,7 @@ fn set(key: &Option<Secret>) -> bool {
     key.as_ref().is_some_and(Secret::is_set)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Settings {
     pub typesafe_api_key: Option<Secret>,
     pub ai_gateway_api_key: Option<Secret>,
@@ -226,8 +207,6 @@ pub struct Settings {
     pub decision_model: Option<String>,
     /// Bearer token for the `ollama` and `custom` sources. Optional: a local server usually takes none.
     pub decision_api_key: Option<Secret>,
-    /// FASTBROWSE_ACTION_PICKER: who picks each browser action.
-    pub action_picker: ActionPickerSource,
     pub telnyx_api_key: Option<Secret>,
     pub openai_api_key: Option<Secret>,
     pub aimlapi_api_key: Option<Secret>,
@@ -257,6 +236,71 @@ pub struct Settings {
     pub profile: Option<PathBuf>,
 }
 
+/// Every field as derived but these: a key prints as `Secret`; an endpoint's and the Chrome command's userinfo is
+/// masked, since a base address written `https://user:pass@host/v1` carries the provider's credentials; and the extra
+/// body prints its keys with every value withheld. Taken apart without `..`, so
+/// a field added later does not compile until it is printed here.
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Settings {
+            typesafe_api_key,
+            ai_gateway_api_key,
+            openrouter_api_key,
+            browser_use_api_key,
+            exa_api_key,
+            mcp_token,
+            decision_source,
+            decision_base_url,
+            decision_model,
+            decision_api_key,
+            telnyx_api_key,
+            openai_api_key,
+            aimlapi_api_key,
+            perplexity_api_key,
+            llm_provider,
+            llm_provider_api_key,
+            llm_model,
+            llm_base_url,
+            llm_api_key,
+            llm_strict,
+            llm_strict_set,
+            llm_extra_body,
+            llm_reasoning,
+            chrome,
+            headed,
+            profile,
+        } = self;
+        f.debug_struct("Settings")
+            .field("typesafe_api_key", typesafe_api_key)
+            .field("ai_gateway_api_key", ai_gateway_api_key)
+            .field("openrouter_api_key", openrouter_api_key)
+            .field("browser_use_api_key", browser_use_api_key)
+            .field("exa_api_key", exa_api_key)
+            .field("mcp_token", mcp_token)
+            .field("decision_source", decision_source)
+            .field("decision_base_url", &decision_base_url.as_deref().map(mask_address))
+            .field("decision_model", decision_model)
+            .field("decision_api_key", decision_api_key)
+            .field("telnyx_api_key", telnyx_api_key)
+            .field("openai_api_key", openai_api_key)
+            .field("aimlapi_api_key", aimlapi_api_key)
+            .field("perplexity_api_key", perplexity_api_key)
+            .field("llm_provider", llm_provider)
+            .field("llm_provider_api_key", llm_provider_api_key)
+            .field("llm_model", llm_model)
+            .field("llm_base_url", &llm_base_url.as_deref().map(mask_address))
+            .field("llm_api_key", llm_api_key)
+            .field("llm_strict", llm_strict)
+            .field("llm_strict_set", llm_strict_set)
+            .field("llm_extra_body", &llm_extra_body.as_deref().map(withheld_body))
+            .field("llm_reasoning", llm_reasoning)
+            .field("chrome", &chrome.as_deref().map(mask_address))
+            .field("headed", headed)
+            .field("profile", profile)
+            .finish()
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -270,7 +314,6 @@ impl Default for Settings {
             decision_base_url: None,
             decision_model: None,
             decision_api_key: None,
-            action_picker: ActionPickerSource::Jev,
             telnyx_api_key: None,
             openai_api_key: None,
             aimlapi_api_key: None,
@@ -292,7 +335,7 @@ impl Default for Settings {
 }
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 25] = [
+pub const FIELDS: [(&str, &str); 24] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -303,7 +346,6 @@ const FIELDS: [(&str, &str); 25] = [
     ("decision_base_url", "fastbrowse_decision_base_url"),
     ("decision_model", "fastbrowse_decision_model"),
     ("decision_api_key", "fastbrowse_decision_api_key"),
-    ("action_picker", "fastbrowse_action_picker"),
     ("TELNYX_API_KEY", "telnyx_api_key"),
     ("OPENAI_API_KEY", "openai_api_key"),
     ("AIMLAPI_API_KEY", "aimlapi_api_key"),
@@ -361,6 +403,9 @@ pub fn parse_dotenv(text: &str) -> Vec<(String, String)> {
     pairs
 }
 
+/// The settings an address's credentials may be written in: the endpoints a client connects to.
+const BASE_ADDRESSES: [&str; 2] = ["decision_base_url", "llm_base_url"];
+
 impl Settings {
     /// `load_settings()`: the process environment over `.env` in the working directory.
     pub fn load() -> Result<Settings, ConfigurationError> {
@@ -400,7 +445,75 @@ impl Settings {
             // Name the setting, never echo the input: the field may be a key.
             return Err(ConfigurationError(format!("invalid settings: {}", invalid.join(", "))));
         }
+        settings.validate_credentials(&mut Redactor::default())?;
         Ok(settings)
+    }
+
+    /// Every setting that is text rather than a key, by name, the extra body as the JSON it parses to: what a run
+    /// learns credentials from. Taken apart without `..`, so a field added later does not compile until it is sorted
+    /// here as text or not.
+    pub fn text(&self) -> Vec<(&'static str, Value)> {
+        let Settings {
+            typesafe_api_key: _,
+            ai_gateway_api_key: _,
+            openrouter_api_key: _,
+            browser_use_api_key: _,
+            exa_api_key: _,
+            mcp_token: _,
+            decision_source: _,
+            decision_base_url,
+            decision_model,
+            decision_api_key: _,
+            telnyx_api_key: _,
+            openai_api_key: _,
+            aimlapi_api_key: _,
+            perplexity_api_key: _,
+            llm_provider: _,
+            llm_provider_api_key: _,
+            llm_model,
+            llm_base_url,
+            llm_api_key: _,
+            llm_strict: _,
+            llm_strict_set: _,
+            llm_extra_body,
+            llm_reasoning: _,
+            chrome,
+            headed: _,
+            profile,
+        } = self;
+        let extra_body = llm_extra_body
+            .as_ref()
+            .map(|raw| serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::from(raw.as_str())));
+        [
+            ("decision_base_url", decision_base_url.clone().map(Value::from)),
+            ("decision_model", decision_model.clone().map(Value::from)),
+            ("llm_model", llm_model.clone().map(Value::from)),
+            ("llm_base_url", llm_base_url.clone().map(Value::from)),
+            ("llm_extra_body", extra_body),
+            ("chrome", chrome.clone().map(Value::from)),
+            ("profile", profile.as_ref().map(|path| Value::from(path.to_string_lossy().into_owned()))),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| Some((name, value?)))
+        .collect()
+    }
+
+    /// Learn every text setting before checking any of them. Models, request body fields and paths can repeat
+    /// a credential learned from another setting or from the caller's task.
+    pub fn validate_credentials(&self, redactor: &mut Redactor) -> Result<(), ConfigurationError> {
+        let text = self.text();
+        for (_, value) in &text {
+            redactor.register_tree(value);
+        }
+        let held: Vec<&str> = text
+            .into_iter()
+            .filter(|(name, value)| !BASE_ADDRESSES.contains(name) && redactor.reveals_value(value))
+            .map(|(name, _)| name)
+            .collect();
+        if held.is_empty() {
+            return Ok(());
+        }
+        Err(ConfigurationError(format!("settings hold credentials: {}", held.join(", "))))
     }
 
     fn assign(&mut self, name: &str, value: &str) -> Result<(), ()> {
@@ -417,7 +530,6 @@ impl Settings {
             "decision_base_url" => self.decision_base_url = text(),
             "decision_model" => self.decision_model = text(),
             "decision_api_key" => self.decision_api_key = secret(),
-            "action_picker" => self.action_picker = ActionPickerSource::parse(value).ok_or(())?,
             "TELNYX_API_KEY" => self.telnyx_api_key = secret(),
             "OPENAI_API_KEY" => self.openai_api_key = secret(),
             "AIMLAPI_API_KEY" => self.aimlapi_api_key = secret(),
@@ -517,12 +629,14 @@ impl Settings {
     }
 
     pub fn decision(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        self.validate_client_credentials(http)?;
         self.decision_from_catalog(http, None)
     }
 
     /// Resolve an explicit OpenRouter model pin before the caller fits a request. The pinned default and proxy
     /// endpoints use the checked-in profiles, as does configuration preflight.
     pub async fn resolve_decision(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        self.validate_client_credentials(http)?;
         let is_openrouter = self.decision_route().0 == DecisionSource::OpenRouter;
         let has_pin = self.decision_model.as_ref().is_some_and(|model| !model.is_empty());
         let public_route = self
@@ -547,14 +661,7 @@ impl Settings {
         http: &Http,
         catalog: Option<&OpenRouterDecisionCatalog>,
     ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
-        let jev = self.jev(http, catalog)?;
-        match self.action_picker {
-            ActionPickerSource::Jev => Ok(jev),
-            ActionPickerSource::Llm => {
-                let picker = LlmDecisionClient::new(self.llm(http)?, self.model());
-                Ok(Box::new(ActionPicker::new(jev, Box::new(picker))))
-            }
-        }
+        self.jev(http, catalog)
     }
 
     fn jev(
@@ -809,30 +916,47 @@ impl Settings {
             cache_breakpoints: false,
             extra_body: self.extra_body()?,
             provider: preset.provider,
+            wire: preset.wire,
+            responses_for_openai: false,
         };
         OpenAICompatibleLLM::new(key, http.clone(), &base_url, self.preset_models(&preset)?, options)
             .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
             .map_err(ConfigurationError)
     }
 
+    fn validate_client_credentials(&self, http: &Http) -> Result<(), ConfigurationError> {
+        match http.trace.redactor() {
+            Some(redactor) => {
+                self.validate_credentials(&mut redactor.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+            }
+            None => self.validate_credentials(&mut Redactor::default()),
+        }
+    }
+
     pub fn llm(&self, http: &Http) -> Result<Box<dyn LLMClient>, ConfigurationError> {
+        self.validate_client_credentials(http)?;
         let source = self.llm_source();
-        if matches!(source, LLMProvider::OpenRouter | LLMProvider::Gateway)
-            && self.llm_provider.is_some()
-            && self.llm_base_url().is_some()
-        {
-            return Err(ConfigurationError(format!(
-                "FASTBROWSE_LLM_BASE_URL cannot be used with FASTBROWSE_LLM_PROVIDER={source}, whose key goes to its own \
+        if source == LLMProvider::Gateway && self.llm_provider.is_some() && self.llm_base_url().is_some() {
+            return Err(ConfigurationError(
+                "FASTBROWSE_LLM_BASE_URL cannot be used with FASTBROWSE_LLM_PROVIDER=gateway, whose key goes to its own \
                  host only; use FASTBROWSE_LLM_PROVIDER=custom for another endpoint"
-            )));
+                    .into(),
+            ));
+        }
+        if let (LLMProvider::OpenRouter, Some(base_url)) = (source, self.llm_base_url()) {
+            // A proxy in front of OpenRouter is spoken to as OpenRouter is, routing and the Responses wire for OpenAI's
+            // models included, so a run through it makes the requests a direct run makes. It gets
+            // FASTBROWSE_LLM_API_KEY, never OPENROUTER_API_KEY, which goes to OpenRouter alone.
+            let key = self.llm_api_key.as_ref().map(|key| key.expose().trim()).unwrap_or_default();
+            return self.routed_llm(source, key, base_url, openrouter_provider_routing(), http);
         }
         let (key, base_url, routing) = match source {
             LLMProvider::OpenRouter => match &self.openrouter_api_key {
-                Some(key) if key.is_set() => (key, LLM_OPENROUTER_URL, openrouter_provider_routing()),
+                Some(key) if key.is_set() => (key.expose(), LLM_OPENROUTER_URL, openrouter_provider_routing()),
                 _ => return Err(ConfigurationError("set OPENROUTER_API_KEY or AI_GATEWAY_API_KEY for the LLM".into())),
             },
             LLMProvider::Gateway => match &self.ai_gateway_api_key {
-                Some(key) if key.is_set() => (key, LLM_GATEWAY_URL, gateway_provider_routing()),
+                Some(key) if key.is_set() => (key.expose(), LLM_GATEWAY_URL, gateway_provider_routing()),
                 _ => return Err(ConfigurationError("set AI_GATEWAY_API_KEY or OPENROUTER_API_KEY for the LLM".into())),
             },
             provider => return self.preset_llm(provider.preset(), http),
@@ -843,7 +967,13 @@ impl Settings {
         match (source, self.llm_provider, gateway) {
             (LLMProvider::OpenRouter, None, Some(gateway)) => Ok(Box::new(FailoverLLMClient::new(
                 primary,
-                self.routed_llm(LLMProvider::Gateway, gateway, LLM_GATEWAY_URL, gateway_provider_routing(), http)?,
+                self.routed_llm(
+                    LLMProvider::Gateway,
+                    gateway.expose(),
+                    LLM_GATEWAY_URL,
+                    gateway_provider_routing(),
+                    http,
+                )?,
                 http.clone(),
             ))),
             _ => Ok(primary),
@@ -853,7 +983,7 @@ impl Settings {
     fn routed_llm(
         &self,
         provider: LLMProvider,
-        key: &Secret,
+        key: &str,
         base_url: &str,
         routing: Value,
         http: &Http,
@@ -863,9 +993,11 @@ impl Settings {
             reasoning_default: default_reasoning(&self.model()),
             provider_routing: Some(routing),
             provider,
+            // The gateway's chat completions endpoint is the one it documents, so only OpenRouter's OpenAI models move.
+            responses_for_openai: provider == LLMProvider::OpenRouter,
             ..LLMOptions::default()
         };
-        OpenAICompatibleLLM::new(key.expose(), http.clone(), base_url, self.models(), options)
+        OpenAICompatibleLLM::new(key, http.clone(), base_url, self.models(), options)
             .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
             .map_err(ConfigurationError)
     }
@@ -875,5 +1007,64 @@ impl Settings {
             Some(key) if key.is_set() => Ok(key.expose()),
             _ => Err(ConfigurationError("set BROWSER_USE_API_KEY for a cloud browser".into())),
         }
+    }
+}
+
+/// The extra body as `Debug` prints it: its keys, each value withheld, since it may hold a provider's own token that
+/// nothing structural tells from any other value (#1381). A body that is not JSON prints as withheld whole.
+fn withheld_body(raw: &str) -> String {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(mut body) => {
+            crate::http::withhold(&mut body);
+            body.to_string()
+        }
+        Err(_) => "<withheld>".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every setting is read with an address's credentials in it, and each one either refuses it or holds it where
+    /// nothing prints it (a key, a masked base address). A model name or the extra body took it into every model
+    /// request, and a path into errors and results (#1381).
+    #[test]
+    fn test_no_setting_takes_an_address_credential_where_it_is_shown() {
+        for (name, variable) in FIELDS {
+            let loaded = Settings::from_sources(&[(variable, "https://ops:s3t-pw@h.test/")], None);
+            match loaded {
+                Ok(settings) => assert!(!format!("{settings:?}").contains("s3t-pw"), "{name}"),
+                Err(error) => assert!(!error.to_string().contains("s3t-pw"), "{name}: {error}"),
+            }
+        }
+        for extra in [
+            r#"{"metadata": "https://ops:s3t-pw@h.test/"}"#,
+            r#"{"https://ops:s3t-pw@h.test/": "x"}"#,
+            r#"{"metadata": "https:\/\/ops:s3t-pw@h.test\/"}"#,
+        ] {
+            let error = Settings::from_sources(&[("FASTBROWSE_LLM_EXTRA_BODY", extra)], None).unwrap_err();
+            assert!(error.to_string().contains("llm_extra_body") && !error.to_string().contains("s3t-pw"), "{error}");
+            // Settings built in code are checked where the body is read, before any request is written.
+            let settings = Settings { llm_extra_body: Some(extra.into()), ..Settings::default() };
+            let error = settings.llm(&Http::hyper()).err().expect("credential refused").to_string();
+            assert!(error.contains("credentials") && !error.contains("s3t-pw"), "{error}");
+        }
+        let based = Settings::from_sources(&[("FASTBROWSE_LLM_BASE_URL", "https://ops:s3t-pw@h.test/v1")], None);
+        assert!(based.is_ok(), "a base address may carry its provider's credentials");
+    }
+
+    /// The extra body may hold a provider's own token, which nothing structural tells from any other value, and a
+    /// Chrome command may name a proxy with its password; `Debug` printed both as given (#1381).
+    #[test]
+    fn test_settings_print_the_extra_body_withheld_and_chrome_masked() {
+        let settings = Settings {
+            llm_extra_body: Some(r#"{"routing": {"token": "xb-t0ken"}}"#.into()),
+            chrome: Some("chrome --proxy-server=http://ops:chr-pw@proxy.test:8080".into()),
+            ..Settings::default()
+        };
+        let printed = format!("{settings:?}");
+        assert!(!printed.contains("xb-t0ken") && !printed.contains("chr-pw"), "{printed}");
+        assert!(printed.contains("routing") && printed.contains("proxy.test"), "{printed}");
     }
 }

@@ -335,11 +335,13 @@ public sealed record CostLine
 }
 
 /// <summary>
-/// Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
+/// Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<Decider>))]
 public enum Decider
 {
+    [JsonStringEnumMemberName("llm")]
+    Llm,
     [JsonStringEnumMemberName("jev")]
     Jev,
     [JsonStringEnumMemberName("code")]
@@ -415,6 +417,8 @@ public enum FactReader
     JevChoice,
     [JsonStringEnumMemberName("llm_image")]
     LlmImage,
+    [JsonStringEnumMemberName("llm_quote")]
+    LlmQuote,
 }
 
 /// <summary>
@@ -558,10 +562,6 @@ public enum Operation
 {
     [JsonStringEnumMemberName("click")]
     Click,
-    [JsonStringEnumMemberName("right_click")]
-    RightClick,
-    [JsonStringEnumMemberName("double_click")]
-    DoubleClick,
     [JsonStringEnumMemberName("hover")]
     Hover,
     [JsonStringEnumMemberName("drag")]
@@ -765,12 +765,6 @@ public sealed record RunParams
 
     [JsonPropertyName("extension_browser")]
     public string? ExtensionBrowser { get; init; }
-
-    [JsonPropertyName("desktop")]
-    public string? Desktop { get; init; }
-
-    [JsonPropertyName("desktop_apps")]
-    public IReadOnlyList<string>? DesktopApps { get; init; }
 }
 
 public sealed record RunResult
@@ -926,13 +920,13 @@ public sealed record StepChoice
     public required string Role { get; init; }
 
     /// <summary>
-    /// The label as Jev read it, with resolved secrets masked.
+    /// The label as the driver read it, with resolved secrets masked.
     /// </summary>
     [JsonPropertyName("label")]
     public required string Label { get; init; }
 
     /// <summary>
-    /// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+    /// The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.
     /// </summary>
     [JsonPropertyName("context")]
     public string? Context { get; init; }
@@ -941,7 +935,7 @@ public sealed record StepChoice
     public required IReadOnlyList<Operation> Operations { get; init; }
 
     /// <summary>
-    /// Whether Jev chose this control: the target, and for a drag the destination too.
+    /// Whether the driver acted on this control: the target, and for a drag the destination too.
     /// </summary>
     [JsonPropertyName("chosen")]
     public required bool Chosen { get; init; }
@@ -957,7 +951,8 @@ public sealed record StepEvent
 
     /// <summary>
     /// A PNG of the page this step acted on, when <c>Config.step_frames</c> asked for one. None when it did not,
-    /// and also when a resolved secret was showing as page text: pixels cannot be masked the way text is.
+    /// and also when a resolved secret was showing as page text or the run knew an address credential: pixels
+    /// cannot be masked the way text is, and a page can paint its address where no text check sees it.
     /// </summary>
     [JsonPropertyName("frame")]
     public string? Frame { get; init; }
@@ -1065,7 +1060,7 @@ public sealed record StepResult
     public required long DurationMs { get; init; }
 
     /// <summary>
-    /// The controls Jev was offered for this step's decision, when <c>Config.step_choices</c> asked for them.
+    /// The controls the driver was shown for this step's action, when <c>Config.step_choices</c> asked for them.
     /// </summary>
     [JsonPropertyName("choices")]
     public IReadOnlyList<StepChoice>? Choices { get; init; }
@@ -1120,7 +1115,7 @@ public enum WallKind
 public static class ProtocolConstants
 {
     /// <summary>The version of the wire format this client speaks.</summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
     public const string MethodInitialize = "initialize";
     public const string MethodRun = "run";

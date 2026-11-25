@@ -3,9 +3,9 @@ title: When a browser agent should stop, not act
 description: fastbrowse stops before actions classified as irreversible, ending needs_confirmation with exit 3. What that default protects, and when to use --authorize.
 topic: How the agent acts
 published: 2026-11-14
-updated: 2026-11-23
+updated: 2026-11-25
 verifiedAgainst: v0.12.0
-verifiedOn: 2026-11-23
+verifiedOn: 2026-11-25
 ---
 
 A browser agent needs to distinguish a price lookup from a purchase. fastbrowse stops before actions classified as irreversible, such as submitting an order, paying, deleting data or sending a message, unless the run is authorized. It can still fill fields and make reversible changes. Classification can miss a change, so state read-only constraints in your task and check important actions yourself.
@@ -16,7 +16,7 @@ When the next action is classified as irreversible, an unauthorized run ends wit
 
 | Status | Exit | What it means |
 |:--|--:|:--|
-| `complete` | 0 | Jev judged the task done |
+| `complete` | 0 | every claim is backed by a quote and every requested change is confirmed on the page |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
 | `blocked` | 6 | a bot check that did not clear |

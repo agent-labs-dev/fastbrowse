@@ -1,18 +1,15 @@
-//! The stall rule's other half: Jev is asked again, told what went wrong, with the action that moved nothing left out
-//! of its options, until the rule's budget runs out and the run ends.
+//! The stall rule's other half: the driver is told what went wrong and not let take the action that moved nothing
+//! again, until the rule's budget runs out and the run ends.
 
-use fastbrowse_core::effects::leavable;
 use fastbrowse_core::models::{Operation, Status, StepOutcome};
 use fastbrowse_core::page::{Control, Observation};
 use fastbrowse_core::py::text;
-use fastbrowse_core::safety::{changes_a_value, origin_of, starts_download};
-use serde_json::{Map, json};
+use fastbrowse_core::safety::starts_download;
 
 use super::Agent;
 use super::helpers::{decision_label, describe};
-use super::state::{Edits, Picked, RunState, Step, Stop};
-use crate::policy::{Decision, Look, StepContext, decide, takes};
-use crate::start::{accept_start, propose_route, recovery_pages};
+use super::state::{RunState, Step, Stop};
+use crate::policy::{Decision, Given, takes};
 
 /// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
 pub(super) type Withheld = Option<(Operation, Option<String>)>;
@@ -34,26 +31,21 @@ pub(crate) struct Idle {
     /// The observed target of a covered action, distinct from any later control with the same label.
     pub covered_target_id: Option<String>,
     /// Why a failed action was not performed, in the words of the browser or app that refused it. Told only that a
-    /// click on a row out of view "did not move the task on", a desktop run pressed OK next and submitted the
-    /// dialog's default row; deskpilot had said to scroll the row into view (#1403).
+    /// click on a row out of view "did not move the task on", a run pressed OK next and submitted the
+    /// dialog's default row, though the page had said to scroll the row into view (#1403).
     pub refused: Option<String>,
+    /// The driver's exact action, from `tried`, which it is not let take again on the same page.
+    pub tried: Option<String>,
 }
 
 impl Idle {
     pub(super) fn performed(action: Withheld) -> Idle {
-        Idle { action, outcome: StepOutcome::Executed, covered_target_id: None, refused: None }
+        Idle { action, outcome: StepOutcome::Executed, covered_target_id: None, refused: None, tried: None }
     }
 
-    /// What is true of the action, stated after its name when an ask leaves it out.
-    fn why(&self) -> String {
-        match (self.outcome, &self.refused) {
-            (StepOutcome::Covered, _) => COVERED.into(),
-            (StepOutcome::Stale, _) => STALE.into(),
-            (StepOutcome::Failed, Some(refused)) => {
-                format!("was not performed, so it is not offered this time. It was refused with: {refused}")
-            }
-            _ => MOVED_NOTHING.into(),
-        }
+    /// The driver's `decision`, which moved nothing.
+    pub(super) fn tried(decision: &Decision) -> Idle {
+        Idle { tried: Some(tried(decision)), ..Idle::performed(withheld(decision)) }
     }
 }
 
@@ -62,122 +54,6 @@ impl From<Withheld> for Idle {
         Idle::performed(action)
     }
 }
-
-const MOVED_NOTHING: &str = "did not move the task on from this page, so it is not offered this time.";
-
-/// A covered action was never performed, so it is no evidence about what the action does, only that the cover stood.
-const COVERED: &str =
-    "was not performed: something covers its target, so it is not offered until an action changes the page.";
-
-/// A stale action never ran, but its outcome alone does not prove that the next observation will show a change.
-const STALE: &str = "was not performed by the browser, so it is not offered this time.";
-
-/// Ask Jev about `problem` on `offered`, with the action it is about left out of the options and what is true of it
-/// stated after its name.
-pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, problem: &str, withheld: &Idle) {
-    let mut problem = problem.to_string();
-    if let Some((operation, label)) = withheld.action.clone() {
-        let mut left_out = false;
-        match &label {
-            // An address is no control, so removing controls by label left a reload that moved nothing on offer: a
-            // blank start page judged a site failure was reloaded until the run ended `unavailable` with the task's
-            // own /login beside it (#1365).
-            Some(url) if operation == Operation::Navigate => {
-                context.withheld_targets.push((operation, url.clone()));
-                left_out = true;
-            }
-            Some(label) => {
-                for control in offered.controls.iter_mut().filter(|control| describe(control) == *label) {
-                    if operation == Operation::Blur && leavable(control) {
-                        context.withheld_targets.push((operation, control.id.clone()));
-                        left_out = true;
-                    }
-                    if operation == Operation::Press && takes(control, operation) {
-                        context.withheld_targets.push((operation, control.id.clone()));
-                        left_out = true;
-                    }
-                    left_out |= control.operations.remove(&operation);
-                }
-                offered.controls.retain(|control| !control.operations.is_empty());
-            }
-            None => {
-                context.withheld.push(operation);
-                left_out = true;
-            }
-        }
-        if left_out {
-            let what =
-                label.map_or_else(|| operation.to_string(), |label| format!("{operation} {}", text::repr(&label)));
-            if !problem.is_empty() {
-                problem.push('\n');
-            }
-            problem += &format!("{what} {}", withheld.why());
-        }
-    }
-    context.problem = (!problem.is_empty()).then_some(problem);
-}
-
-/// The labels of the fields standing on this page that the task gave no value for, in page order. A field the task asks
-/// nothing of is one only when the page marks it required.
-fn unfilled<'a>(observation: &'a Observation, state: &RunState) -> Vec<&'a str> {
-    let mut labels: Vec<&str> = Vec::new();
-    // A value is typed into a field or chosen in a select, and the task can leave either without one.
-    let holds_value =
-        |control: &&Control| [Operation::Fill, Operation::Select].iter().any(|op| control.operations.contains(op));
-    for control in observation.controls.iter().filter(holds_value) {
-        let here = |(url, label, field): &(String, String, Option<String>)| {
-            *url == observation.url && control.label == *label && control.context == *field
-        };
-        let needed = control.required == Some(true) || !state.untouched.iter().any(here);
-        if needed && state.missing.iter().any(here) && !labels.contains(&control.label.as_str()) {
-            labels.push(&control.label);
-        }
-    }
-    labels
-}
-
-/// Leave the actions that moved nothing out of an ask on `offered`. Each is named with what is true of it: the last
-/// action may well have changed the page, as a Close that returns to a state already seen does.
-pub(super) fn leave_out_idle(state: &RunState, offered: &mut Observation, context: &mut StepContext) {
-    // Waiting again is how a run waits longer than one Wait lasts, so a Wait that saw nothing change stays on offer and
-    // only the stall rule counts it: a page that changes after a minute is not a page the run must stop waiting on.
-    for idle in state.idle.iter().filter(|idle| idle.action != Some((Operation::Wait, None))) {
-        let problem = context.problem.take().unwrap_or_default();
-        withhold(offered, context, &problem, idle);
-    }
-    // Told once, Jev still reaches for a field it has no value for, by any operation it offers.
-    offered.controls.retain(|control| {
-        !state
-            .missing
-            .iter()
-            .any(|(url, label, field)| *url == offered.url && control.label == *label && control.context == *field)
-    });
-    // A refused edit spends a recovery, so a page of checkboxes offered one at a time would end the run stuck (#838).
-    if state.edits == Some(Edits::Forbidden) {
-        let mut left_out = false;
-        offered.controls.retain_mut(|control| {
-            let edits: Vec<Operation> =
-                control.operations.iter().copied().filter(|&operation| changes_a_value(operation, control)).collect();
-            for operation in &edits {
-                control.operations.remove(operation);
-            }
-            left_out |= !edits.is_empty();
-            edits.is_empty() || !control.operations.is_empty()
-        });
-        if left_out {
-            let mut problem = context.problem.take().unwrap_or_default();
-            if !problem.is_empty() {
-                problem.push('\n');
-            }
-            problem += EDITS_FORBIDDEN;
-            context.problem = Some(problem);
-        }
-    }
-}
-
-/// What an ask is told once the task rules edits out and their operations are no longer offered.
-const EDITS_FORBIDDEN: &str =
-    "The task rules out changing values on the page, so its fields and settings are not offered.";
 
 /// Offer covered actions again once a performed action changed the page, since it may have removed what covered them. A
 /// change the browser made while refusing one, as leaving the field a cover came from, removed no cover.
@@ -215,6 +91,25 @@ pub(super) fn withheld(decision: &Decision) -> Withheld {
     Some((decision.operation, decision_label(decision)))
 }
 
+/// The exact action the driver took: its operation, the control by id, what it was given (the key, text, option, file or
+/// secret name) and where a drag dropped. Keyed by label alone, Space on a widget where ArrowDown changed nothing was
+/// refused as already tried, and a no-op click on one "Next" link refused the other.
+pub(super) fn tried(decision: &Decision) -> String {
+    let given = match &decision.given {
+        Some(Given::Text(given)) => format!("text {}", text::repr(given)),
+        Some(Given::Secret(name)) => format!("secret {name}"),
+        Some(Given::Seconds(_)) | None => String::new(),
+    };
+    let id = |control: &Option<Control>| control.as_ref().map(|control| control.id.clone()).unwrap_or_default();
+    format!(
+        "{} {} {} {given} {}",
+        decision.operation,
+        id(&decision.target),
+        decision_label(decision).unwrap_or_default(),
+        id(&decision.destination)
+    )
+}
+
 impl Agent {
     /// Spend one recovery on `reason`. Past `stall.max_recoveries` the run ends: as the failure standing on this page or
     /// on the address the run started at, or as `gives_up_as`.
@@ -224,9 +119,7 @@ impl Agent {
         observation: &'a Observation,
         reason: &str,
         gives_up_as: Status,
-        withheld: impl Into<Idle>,
     ) -> fastbrowse_core::BoxFuture<'a, Step> {
-        let withheld = withheld.into();
         let reason = self.redact(reason);
         // Route proposals add model futures to recovery, which otherwise overflow the native worker stack.
         Box::pin(async move {
@@ -236,6 +129,7 @@ impl Agent {
             if observation.controls.iter().any(starts_download) {
                 self.downloads_forbidden(state).await?;
             }
+            // The driver is told why and plans again from what it knows; past the budget the run ends.
             if state.recoveries > self.config.stall.max_recoveries {
                 // A page that reports the site failed ends as that failure, whatever the run was last unsure about: a
                 // field the task gives no value for, on a page whose own data requests failed, is not the caller's to
@@ -251,64 +145,12 @@ impl Agent {
                 {
                     return Err(failure.stop().into());
                 }
-                // A run that ends needing a value names it: the stall's own reason names no field, so a caller told only
-                // "no_progress (3)" has nothing to supply before running the same task again.
-                let unfilled = unfilled(observation, state);
-                let status = if unfilled.is_empty() { gives_up_as } else { Status::NeedsInput };
+                let status = gives_up_as;
                 // A drawn page's answer may be only in its pixels. Read the screenshot before the run gives up, so the
                 // answer it composes cites what the screen showed instead of ending empty. The read is the same one
                 // `conclude` makes, moved onto the path a stalled run reaches without ever concluding.
                 if status == Status::Stuck {
                     self.read_drawn_page(state, observation).await?;
-                }
-                if status == Status::Stuck && state.recoveries == self.config.stall.max_recoveries + 1 {
-                    self.known_pages_arrived(state, &observation.url).await?;
-                    let mut routes: Vec<_> = state.routes.iter().collect();
-                    routes.sort();
-                    let mut visited: Vec<_> = state.visited_addresses.iter().collect();
-                    visited.sort();
-                    let mut context = json!({
-                        "task": self.model_task(state),
-                        "page": observation,
-                        "evidence": state.notes.render_for_navigation(),
-                        "history": state.history,
-                        "already_offered": state.known_pages,
-                        "routes_opened": routes,
-                        "visited_addresses": visited,
-                        "walled": state.walled,
-                        "reason": reason,
-                    });
-                    self.mask_strings(&mut context);
-                    let proposal = match recovery_pages(&*self.llm, &context, Some(&state.ledger)).await {
-                        Ok(proposal) => {
-                            state.ledger.record([proposal.cost])?;
-                            proposal.data.urls
-                        }
-                        Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
-                        Err(error) => {
-                            self.event("recovery_pages_failed", || {
-                                Map::from_iter([("error".into(), error.to_string().into())])
-                            });
-                            Vec::new()
-                        }
-                    };
-                    let mut fresh = false;
-                    for route in proposal.iter().filter_map(|url| accept_start(Some(url))) {
-                        let same = |url: &String| fastbrowse_core::navigation::same_address(&route, url);
-                        if !same(&observation.url)
-                            && !state.known_pages.iter().any(same)
-                            && !state.routes.iter().any(same)
-                            && !state.walled.iter().any(same)
-                            && !state.visited_addresses.iter().any(same)
-                            && !self.reveals_text(&route)
-                        {
-                            state.known_pages.push(route);
-                            fresh = true;
-                        }
-                    }
-                    if fresh {
-                        return self.ask_jev_again(state, observation, &reason, withheld).await;
-                    }
                 }
                 // A canvas or picture carries what its text layer does not, so a run that gave up on one is told apart
                 // from a stall on a page it could read: a caller otherwise retries the same task on a page it cannot read.
@@ -325,91 +167,12 @@ impl Agent {
                 } else {
                     reason
                 };
-                let rule = if unfilled.is_empty() { "Recovery/exhausted" } else { "Recovery/unfilled" };
-                let reason = match unfilled.as_slice() {
-                    [] => reason,
-                    [only] => format!("{} needs a value the task does not give: {reason}", text::repr(only)),
-                    many => format!(
-                        "{} need a value the task does not give: {reason}",
-                        many.iter().map(|label| text::repr(label)).collect::<Vec<_>>().join(", ")
-                    ),
-                };
-                return Err(Stop::new(status, rule, reason).into());
+                return Err(Stop::new(status, "Recovery/exhausted", reason).into());
             }
-            self.ask_jev_again(state, observation, &reason, withheld).await
+            // The caller tells the driver why: a refused done told "3 actions in a row changed nothing" sent it looking
+            // for a stall it never made.
+            state.chat.queue_clear();
+            Ok(())
         })
-    }
-
-    /// Open another route to what the task needs after a bot check at `walled` did not clear, as the first address
-    /// was proposed: a run whose search met PyPI's challenge stopped blocked, while hosted agents opened the project
-    /// page itself (#953). False when no route is left: none is proposed, the one proposed was opened before or is
-    /// walled, or the run's recoveries are spent.
-    pub(super) async fn route_around(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        walled: &str,
-    ) -> Step<bool> {
-        if !state.walled.iter().any(|known| known == walled) {
-            state.walled.push(walled.to_string());
-        }
-        if state.recoveries >= self.config.stall.max_recoveries {
-            return Ok(false);
-        }
-        let walled: Vec<String> = state.walled.iter().map(|url| self.redact(url)).collect();
-        let mut opened: Vec<String> = state.routes.iter().map(|url| self.redact(url)).collect();
-        opened.sort();
-        let proposal =
-            propose_route(&*self.llm, &self.model_task(state), &walled, &opened, Some(&state.ledger)).await?;
-        state.ledger.record([proposal.cost])?;
-        let Some(route) = accept_start(proposal.data.url.as_deref())
-            .filter(|route| !state.walled.contains(route) && state.routes.insert(route.clone()))
-        else {
-            return Ok(false);
-        };
-        state.recoveries += 1;
-        self.event("route_around", || Map::from_iter([("url".into(), self.redact(&route).into())]));
-        self.open_by_code(state, observation, route).await?;
-        Ok(true)
-    }
-
-    /// Jev asked again on this page, told what went wrong, its pick taken as the next decision there.
-    async fn ask_jev_again(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        reason: &str,
-        withheld: Idle,
-    ) -> Step {
-        let secrets = self.secret_names(&origin_of(&observation.url));
-        self.resolve_answer_intent(state).await?;
-        let mut context = self.context(state, observation, secrets, false, false)?;
-        let mut offered = observation.clone();
-        context.problem = Some(reason.to_string());
-        leave_out_idle(state, &mut offered, &mut context);
-        state.mark_links(&mut offered);
-        state.mark_shown(&mut offered);
-        let reason = context.problem.take().unwrap_or_default();
-        withhold(&mut offered, &mut context, &reason, &withheld);
-        // Asked again, Jev is shown the pictured controls' cards as the first ask was: without them Leaflet's red circle
-        // and blue triangle were two unnamed buttons beside a "Marker", and the run clicked the marker twice.
-        (context.screenshot, context.looks) = self.step_images(&offered, true).await?;
-        let decision = decide(&*self.jev, &offered, &context, &self.config, Some(&state.ledger), &self.trace).await?;
-        self.event("recover", || {
-            Map::from_iter([
-                ("reason".into(), reason.into()),
-                ("operation".into(), json!(decision.operation)),
-                ("target".into(), json!(decision_label(&decision).map(|label| self.redact(&label)))),
-            ])
-        });
-        let look = Look::of(&decision, &context.looks);
-        state.picked = Some(Picked {
-            url: observation.url.clone(),
-            page_key: observation.page_key.clone(),
-            document_key: observation.document_key.clone(),
-            decision,
-            look,
-        });
-        Ok(())
     }
 }

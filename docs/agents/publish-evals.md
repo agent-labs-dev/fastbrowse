@@ -49,6 +49,7 @@ Parallax supplies `browser-use-cloud`, `browser-use-oss`, `browser-harness`
 | `browser-harness` | `browser-harness` |
 | `agent-browser` on its pinned model | `agent-browser`, carried by no publication group yet |
 | `browser-use-oss` | `browser-use-oss` |
+| `browser-use-1-luna` on `openai/gpt-6-luna` | `browser-use-1-luna`, carried by no publication group |
 | `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` | diagnostic only |
 
 Every task record is world-less, uses `Area.BROWSER`, requires browser

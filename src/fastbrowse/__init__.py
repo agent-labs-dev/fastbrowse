@@ -1,4 +1,4 @@
-"""fastbrowse: Jev picks, an LLM reads, code verifies.
+"""fastbrowse: an LLM drives, Jev judges what code gates on, code verifies.
 
 `run_task` is the whole public surface for embedding: it assembles a browser, the model clients and
 the agent, and returns what the run could prove. `traced` collects the trace of the runs made inside it, as

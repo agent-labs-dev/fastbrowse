@@ -7,7 +7,7 @@ mod dispatch_support;
 
 use std::time::Duration;
 
-use common::{eval_value, find, harness, harness_with, js, observe_until, sites};
+use common::{eval_value, find, harness, harness_with, js, observe_until, sites, wait_until};
 use dispatch_support::{PROXY_ERROR, action, eval_active, failing_proxy, fill, unanswering_proxy};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::scripts::UNCOVER_JS;
@@ -495,6 +495,31 @@ async fn test_fill_follows_a_replacement_only_at_the_original_position() {
             h.close().await;
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fill_types_nothing_when_its_click_moves_focus_to_a_field_elsewhere() {
+    // A date field that opens a calendar dialog with its own field at the top of the page: the original stays on the
+    // page behind the dialog, and text typed into it, focused back, broke the search the page ran afterwards.
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let script = "document.body.innerHTML = '<div style=\"height:300px\"></div><input aria-label=\"Departure\">'; \
+         window.keys = 0; document.addEventListener('keydown', () => window.keys++, true); \
+         const field = document.querySelector('input'); \
+         field.addEventListener('click', () => { const d = document.createElement('div'); d.setAttribute('role', \
+         'dialog'); d.style.cssText = 'position:fixed;top:0;left:0;background:white'; \
+         d.innerHTML = '<input aria-label=\"Departure date\">'; document.body.append(d); \
+         d.querySelector('input').focus(); }, {once: true}); true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let obs = observe_until(&h.page, "Departure").await;
+    let result = h.page.act(&fill(find(&obs, "Departure"), "2026-12-22"), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Failed, "{:?}", result.detail);
+    assert!(result.detail.as_deref().unwrap_or_default().contains("moved focus"), "{:?}", result.detail);
+    assert_eq!(
+        eval_active(&h.page, "[window.keys, ...[...document.querySelectorAll('input')].map(e => e.value)]").await,
+        json!([0, "", ""])
+    );
+    h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -995,14 +1020,98 @@ async fn test_hydration_marking_a_control_enabled_does_not_make_it_stale() {
     h.goto("").await;
     eval_active(
         &h.page,
-        "document.body.innerHTML = '<button onclick=\"this.dataset.clicked = 1\">Round trip</button>'; true",
+        "document.body.innerHTML = '<button onclick=\"this.dataset.clicked = 1\">Round trip</button>\
+         <span role=button tabindex=0 onclick=\"1\">One way</span>'; true",
     )
     .await;
     let obs = h.observe().await;
-    eval_active(&h.page, "document.querySelector('button').setAttribute('aria-disabled', 'false'); true").await;
+    let before = h.page.fingerprint().await.expect("fingerprint");
+    eval_active(
+        &h.page,
+        "for (const e of document.querySelectorAll('button,span')) e.setAttribute('aria-disabled', 'false'); true",
+    )
+    .await;
+    // A Wait watches the fingerprint, and enabled is enabled whether the attribute is absent or "false".
+    assert_eq!(h.page.fingerprint().await.expect("fingerprint"), before);
     let target = obs.controls.iter().find(|c| c.label == "Round trip").expect("Round trip");
     let result = h.page.act(&action(Operation::Click, target), &obs).await.expect("act");
     assert_eq!(result.outcome, StepOutcome::Executed);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_disabled_control_offers_no_hover_and_enabling_it_keeps_it_the_same_control() {
+    // A disabled control offers nothing, even when the page listens for the pointer on it; and a redraw that enables
+    // it pairs it with the disabled one, so the change reads as Save enabled rather than one Save gone, another shown.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<button disabled>Save</button><button disabled>Preview</button>'; \
+         document.querySelectorAll('button')[1].addEventListener('mouseenter', () => {}); true",
+    )
+    .await;
+    let obs = h.observe().await;
+    let preview = find(&obs, "Preview");
+    assert!(preview.disabled == Some(true) && preview.operations.is_empty(), "{preview:?}");
+    let save = find(&obs, "Save");
+    eval_active(&h.page, "document.querySelector('button').disabled = false; true").await;
+    let enabled = h.observe().await;
+    let now = find(&enabled, "Save");
+    assert!(now.disabled != Some(true) && !now.operations.is_empty(), "{now:?}");
+    assert!(save.retarget_key.is_some());
+    assert_eq!(now.retarget_key, save.retarget_key);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_redrawn_submit_keeps_its_pairing_key_when_enabled() {
+    // Two forms' Saves share a label, so only the key pairs each with its redrawn self. A disabled submit sends nothing
+    // and an enabled one sends its form: that difference in the key left the enabled Save unpaired.
+    let cases = [
+        ("<button disabled>Save</button>", "<button>Save</button>"),
+        ("<input type=submit value=Save disabled>", "<input type=submit value=Save>"),
+        ("<fieldset disabled><button>Save</button></fieldset>", "<fieldset><button>Save</button></fieldset>"),
+    ];
+    for (disabled, enabled) in cases {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        eval_active(
+            &h.page,
+            &format!("document.body.innerHTML = '<form>{disabled}</form><form>{disabled}</form>'; true"),
+        )
+        .await;
+        let obs = h.observe().await;
+        let was = find(&obs, "Save");
+        assert!(was.disabled == Some(true) && was.operations.is_empty(), "{disabled}: {was:?}");
+        eval_active(
+            &h.page,
+            &format!("for (const form of document.querySelectorAll('form')) form.innerHTML = '{enabled}'; true"),
+        )
+        .await;
+        let after = h.observe().await;
+        let now = find(&after, "Save");
+        assert!(now.disabled != Some(true) && now.operations.contains(&Operation::Click), "{enabled}: {now:?}");
+        assert_ne!(now.id, was.id, "{enabled}: the redraw replaced the submit");
+        assert!(was.retarget_key.is_some(), "{disabled}");
+        assert_eq!(now.retarget_key, was.retarget_key, "{enabled}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_card_holding_only_a_disabled_control_is_still_offered_a_hover() {
+    // A picture card's controls can appear only under the pointer; a disabled one it already shows offers nothing.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<ul><li><div role=img aria-label=Cat style=\"width:40px;height:40px;\
+         background:red\"></div><button disabled>Delete</button></li></ul>'; true",
+    )
+    .await;
+    let obs = h.observe().await;
+    assert!(obs.controls.iter().any(|c| c.operations == [Operation::Hover].into()), "{:?}", obs.controls);
     h.close().await;
 }
 
@@ -1542,10 +1651,15 @@ async fn test_a_full_window_frame_over_the_control_is_reported_with_the_frames_o
     let script = format!(
         "{{ const shown = document.querySelector('ins'); shown.style.cssText += ';top:0;height:auto'; \
          shown.innerHTML = '<iframe aria-label=Advertisement src=\"{}/interstitial.html\" \
-         style=\"width:100%;height:100%;border:0\"></iframe>'; }} true",
+         style=\"width:100%;height:100%;border:0\"></iframe>'; \
+         window.adLoaded = false; \
+         shown.querySelector('iframe').addEventListener('load', () => {{ window.adLoaded = true; }}); }} true",
         sites().iframe
     );
     assert_eq!(eval_active(&h.page, &script).await, json!(true));
+    // The frame's document is reached only once it has loaded: a look before that meets an interim document whose page
+    // world is not registered yet. The frame's own load event says it is there.
+    wait_until(|| async { eval_active(&h.page, "window.adLoaded === true").await == json!(true) }, 10.0).await;
     let obs = observe_until(&h.page, "Close ad").await;
     let result = h.page.act(&action(Operation::Click, find(&obs, "Login")), &obs).await.expect("act");
     assert_eq!(result.outcome, StepOutcome::Covered);
@@ -1684,9 +1798,10 @@ async fn test_a_wait_ends_when_the_page_navigates_itself() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
     let script = "setTimeout(() => location.assign('/dispatch.html'), 5500); true";
+    // Start before scheduling, since the timer already runs during observe.
+    let started = std::time::Instant::now();
     assert_eq!(eval_active(&h.page, script).await, json!(true));
     let before = h.observe().await;
-    let started = std::time::Instant::now();
     let result = h.page.wait(&Action::new(Operation::Wait), &before, 60.0).await.expect("wait");
     let waited = started.elapsed();
     assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
@@ -1844,6 +1959,63 @@ async fn test_a_wait_over_a_cross_origin_frame_ends_with_its_budget_and_a_cancel
     h.close().await;
 }
 
+// Replacing a frame in another process detaches its session, and Chrome drops the reply the wait's hold there was
+// owed. The wait hung on it, or ended when the hold happened to be sent after the removal (#1475's CI run).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ends_when_a_watched_cross_origin_frame_is_replaced() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    frame_session(&h).await;
+    let before = h.observe().await;
+    let wait = Action::new(Operation::Wait);
+    let mut unbounded = Box::pin(h.page.wait(&wait, &before, f64::INFINITY));
+    assert!(tokio::time::timeout(Duration::from_millis(1000), &mut unbounded).await.is_err(), "a still page ended it");
+    assert_eq!(watches_everywhere(&h).await, vec![1, 1], "the wait watches the tab and its frame");
+    // Replaced by an empty frame, so the tab's own fingerprint stays as it was and only the frame's watch can tell.
+    eval_active(&h.page, "document.querySelector('#cross-frame').replaceWith(document.createElement('iframe')); true")
+        .await;
+    // Well inside the seconds a command waits before its session is probed, which would end the hold either way.
+    let result = tokio::time::timeout(Duration::from_secs(3), unbounded)
+        .await
+        .expect("the frame's replacement never ended the wait")
+        .expect("wait");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+// A frame removed while the wait installs its watch there refuses the install rather than a hold: the wait treated
+// that as a frame it could not watch and went on without one, so the removal never ended it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ends_when_a_cross_origin_frame_is_replaced_while_its_watch_installs() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let session = frame_session(&h).await;
+    let before = h.observe().await;
+    // The frame's thread is busy when the watch is sent, so the install is still owed when the frame goes.
+    eval_value(
+        &h.session,
+        &session,
+        "setTimeout(() => { const t = Date.now(); while (Date.now() - t < 6000); }, 200); true",
+    )
+    .await;
+    eval_active(
+        &h.page,
+        "setTimeout(() => document.querySelector('#cross-frame').replaceWith(document.createElement('iframe')), 1200); \
+         true",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let wait = Action::new(Operation::Wait);
+    let result = tokio::time::timeout(Duration::from_secs(3), h.page.wait(&wait, &before, f64::INFINITY))
+        .await
+        .expect("the frame's replacement never ended the wait")
+        .expect("wait");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
 // A player's paused, ended or muted state is in the observation but not in the fingerprint the settle compares, so a
 // wait it ends is progress that only the wait itself knows. Only a moving clock is not.
 #[tokio::test(flavor = "multi_thread")]
@@ -1867,14 +2039,15 @@ async fn test_a_wait_ended_by_a_player_state_change_is_progress() {
 }
 
 // A page that replaces its frames for as long as a wait lasts must not make the wait keep every document it saw.
+// Only the empty frames are replaced: the page's cross-origin frame has text, so removing it is a change.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_long_wait_over_replaced_frames_keeps_only_the_documents_in_the_page() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
     let script = "{ const make = () => { const f = document.createElement('iframe'); f.srcdoc = '<body></body>'; \
                   return f; }; document.body.append(make()); \
-                  window.replacing = setInterval(() => { document.querySelector('iframe').replaceWith(make()); }, 250); } \
-                  true";
+                  window.replacing = setInterval(() => { document.querySelector('iframe[srcdoc]').replaceWith(make()); }, \
+                  250); } true";
     assert_eq!(eval_active(&h.page, script).await, json!(true));
     let before = h.observe().await;
     let wait = Action::new(Operation::Wait);

@@ -228,6 +228,30 @@ def test_a_page_read_over_http_is_the_evidence_its_read_step_points_at() -> None
     assert evidence.steps[0].page == 0 and seen_at[1] == 0
 
 
+def test_a_page_whose_field_values_changed_is_a_new_page() -> None:
+    """Three fills on one checkout form left its text alone, and the judge was shown only the first. A read of the
+    filled form, which carries no controls, is the page it was read from."""
+    url, text = "https://www.saucedemo.com/checkout-step-one.html", "Checkout: Your Information"
+    fields = [("Ada", "", ""), ("Ada", "Lovelace", ""), ("Ada", "Lovelace", "EC1A 1BB")]
+    events: list[object] = [
+        {
+            "event": "page",
+            "step": step,
+            "url": url,
+            "title": "Swag Labs",
+            "text": text,
+            "controls": [
+                {"label": label, "value": value} for label, value in zip(("First", "Last", "Zip"), values, strict=True)
+            ],
+        }
+        for step, values in enumerate(fields)
+    ]
+    events.append({"event": "read", "step": 3, "url": url, "title": "Swag Labs", "capture": {"text": text}})
+    pages, seen_at = backend.read_pages(events)
+    assert [page["controls"][2]["value"] for page in pages] == ["", "", "EC1A 1BB"]
+    assert seen_at == {0: 0, 1: 1, 2: 2, 3: 2}
+
+
 def test_campaign_metadata_preserves_model_requests_outside_judge_evidence() -> None:
     harness = backend.FastbrowseHarness(observer="plain-cdp")
     event = {"event": "llm_request", "messages": [{"role": "user", "content": "Captured notes"}]}
@@ -235,6 +259,32 @@ def test_campaign_metadata_preserves_model_requests_outside_judge_evidence() -> 
     metadata = json.loads(json.dumps(harness.trial_metadata))
     assert metadata["events"] == [event]
     assert "events" not in metadata["browser"]
+
+
+def test_campaign_metadata_keeps_the_typed_capture_and_evidence_a_read_traced() -> None:
+    """The exported trajectory is what a composition replay rebuilds its notes from (#1273): the capture's blocks
+    with their source ids, kind and whole-record flag, its sha, and each fact's evidence binding, all unaltered."""
+    url = "https://example.test/files"
+    text = "Download files\nReleased: 2026-01-01"
+    block = {
+        "source_id": "s1",
+        "kind": "paragraph",
+        "start": 15,
+        "end": 35,
+        "heading_path": ["Download files"],
+        "whole_record": True,
+    }
+    read = {
+        "event": "read",
+        "step": 0,
+        "url": url,
+        "sha256": "abc",
+        "capture": {"url": url, "title": "Files", "sha256": "abc", "text": text, "blocks": [block]},
+        "facts": [{"text": "Released: 2026-01-01", "evidence": {"source_id": "s1", "capture_sha256": "abc"}}],
+    }
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._events.append(read)
+    assert json.loads(json.dumps(harness.trial_metadata))["events"] == [read]
 
 
 def test_campaign_traces_scrub_bound_task_secrets() -> None:
@@ -277,6 +327,34 @@ async def test_a_cloud_browser_lives_only_as_long_as_its_turn(monkeypatch: pytes
     async with harness.browser(None):  # ty: ignore[invalid-argument-type]
         pass
     assert asked == [10]
+
+
+async def test_the_local_arms_latency_stops_when_the_run_returns_not_after_retaining_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @asynccontextmanager
+    async def cloud_browser(http: object, *, screen: tuple[int, int], minutes: int):
+        yield Browser(cdp_url="ws://browser")
+
+    async def run_task(*args: object, **kwargs: object) -> RunResult:
+        return RunResult(
+            status=Status.COMPLETE, answer="a", data=None, evidence=(), steps=(), cost=CostBreakdown(), artifacts=()
+        )
+
+    def slow_retain(artifacts: object) -> None:
+        time.sleep(0.4)
+
+    monkeypatch.setattr(backend, "cloud_browser", cloud_browser)
+    monkeypatch.setattr(backend, "run_task", run_task)
+    monkeypatch.setattr(backend, "start_url", lambda task: "https://example.com/")
+    monkeypatch.setattr(backend, "answer_model", lambda task_id: None)
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    monkeypatch.setattr(harness, "retain", slow_retain)
+    harness._task = SimpleNamespace(id="t", secrets={}, meta=SimpleNamespace(authorizes=False))  # ty: ignore[invalid-assignment]
+    monkeypatch.setattr(backend, "secrets_origin", lambda task: "https://example.com")
+    harness._turn_ends_at = time.monotonic() + 600
+    result = await harness.execute(SimpleNamespace(text="t"))  # ty: ignore[invalid-argument-type]
+    assert result["latency_ms"] < 300  # ty: ignore[unsupported-operator]
 
 
 def _kept(directory: Path, kind: ArtifactKind, name: str, mime_type: str, content: bytes) -> Artifact:

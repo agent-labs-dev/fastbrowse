@@ -15,8 +15,7 @@ use std::sync::Mutex;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, ChoiceQuestion, ChoiceTag, DecisionClient, DecisionError, Evaluation, NoulAnswer, NoulTag,
-    Question,
+    Answer, ChoiceAnswer, ChoiceTag, DecisionClient, DecisionError, Evaluation, NoulAnswer, NoulTag, Question,
 };
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, LLMPurpose, Operation};
@@ -27,7 +26,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::error::{AgentError, Result};
-use crate::policy::keys;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,21 +59,14 @@ pub fn steps(task: &str) -> Result<Vec<Step>> {
     Ok(found)
 }
 
-/// Answers each choice as the script's current step says, and every yes/no with no but whether the answer covers the
-/// task.
+/// Answers every yes/no with no but whether the answer covers the task, and the step-kind choice by whether the script
+/// acts.
 ///
-/// A no keeps a wall, a sign-in or the irreversible check from stopping the scripted run, and the run ends when the
-/// script runs out and the operation choice falls back to DONE, with the answer it read judged to cover the task.
+/// A no keeps a wall, a sign-in or the irreversible check from stopping the scripted run.
 pub struct ScriptedJev {
-    state: Mutex<Script>,
     /// Whether the script takes a step besides opening and reading pages, which is how it answers what the task asks
     /// to be done on a page.
     acts: bool,
-}
-
-struct Script {
-    ahead: VecDeque<Step>,
-    step: Option<Step>,
 }
 
 impl ScriptedJev {
@@ -94,26 +85,7 @@ impl ScriptedJev {
                     | Operation::Wait
             )
         });
-        ScriptedJev { state: Mutex::new(Script { ahead: script.into(), step: None }), acts }
-    }
-
-    fn choice(step: Option<&Step>, key: &str, question: &ChoiceQuestion) -> Option<String> {
-        if key == keys::OPERATION {
-            return Some(step.map_or(Operation::Done, |step| step.operation).as_str().to_string());
-        }
-        let step = step?;
-        if key == "pick" {
-            return step.pick.clone();
-        }
-        if key == keys::target(step.operation) {
-            // A control's id is only known once the page is indexed, so the script names it by its label.
-            return question
-                .criteria
-                .iter()
-                .find(|(_, described)| described.get("label").and_then(Value::as_str) == Some(step.label.as_str()))
-                .map(|(option, _)| option.clone());
-        }
-        None
+        ScriptedJev { acts }
     }
 }
 
@@ -127,22 +99,13 @@ impl DecisionClient for ScriptedJev {
         _: &'a Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
-        let mut script = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if questions.contains_key(keys::OPERATION) {
-            // The page is asked about once per step, so this question is what moves the script on.
-            script.step = script.ahead.pop_front();
-        }
         let mut answers: IndexMap<String, Answer> = IndexMap::new();
         let mut failure = None;
         for (key, question) in questions {
             match question {
                 Question::Choice(question) => {
                     let options: Vec<&String> = question.criteria.keys().collect();
-                    let scripted = if key == "steps" {
-                        Some(if self.acts { "acts" } else { "reads" }.to_string())
-                    } else {
-                        ScriptedJev::choice(script.step.as_ref(), key, question)
-                    };
+                    let scripted = (key == "steps").then(|| if self.acts { "acts" } else { "reads" }.to_string());
                     let choice = scripted
                         .filter(|choice| options.contains(&choice))
                         .or_else(|| options.first().map(|option| option.to_string()))
@@ -157,14 +120,7 @@ impl DecisionClient for ScriptedJev {
                     );
                 }
                 Question::Noul(_) => {
-                    // The done check holds unless the step scripts what it finds instead.
-                    let pick = script.step.as_ref().and_then(|step| step.pick.as_deref());
-                    let holds = match key.as_str() {
-                        "coverage" | "exact" => true,
-                        "carried" => !matches!(pick, Some("undone" | "refused")),
-                        "refused" => pick == Some("refused"),
-                        _ => false,
-                    };
+                    let holds = matches!(key.as_str(), "coverage" | "exact" | "carried");
                     let probability = f64::from(u8::from(holds));
                     answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability }));
                 }
@@ -175,7 +131,6 @@ impl DecisionClient for ScriptedJev {
                 }
             }
         }
-        drop(script);
         Box::pin(async move {
             if let Some(failure) = failure {
                 return Err(failure);
@@ -207,8 +162,10 @@ impl ScriptedLLM {
             LLMPurpose::Unobtainable => Some(json!({"item": "", "reason": "", "quote": ""})),
             LLMPurpose::Groups => Some(json!({"records": []})),
             LLMPurpose::Search => Some(json!({"queries": []})),
-            // The scripted run's Jev picks every action.
-            LLMPurpose::Action => None,
+            // With no script the driver has nothing to do, and a run whose steps are spent is called done.
+            LLMPurpose::Action => {
+                Some(json!({"next": "", "actions": [{"tool": "done", "answer": [], "numbered": false}]}))
+            }
         }
     }
 }
@@ -238,6 +195,114 @@ impl LLMClient for ScriptedLLM {
     }
 }
 
+/// Drives the chat driver from a script: each turn takes the script's next step and names its control by the number
+/// the turn's page shows it under, found by its exact label, since a control's number is only known once the page is
+/// shown. Once the steps are spent the run is called done. Every other request is answered as [`ScriptedLLM`] answers it.
+pub struct ScriptedDriver {
+    ahead: Mutex<VecDeque<Step>>,
+}
+
+impl ScriptedDriver {
+    pub fn new(script: Vec<Step>) -> ScriptedDriver {
+        ScriptedDriver { ahead: Mutex::new(script.into()) }
+    }
+
+    /// The number of the control labelled `label` on the page `shown` lists, one control a line as
+    /// `[number] role "label" ...`, with a `*` before the number of one new since the last look. A label no control
+    /// has is sent as it is, as a model naming a control the page lacks would, and the driver is told it is not there.
+    fn number(shown: &str, label: &str) -> String {
+        shown
+            .lines()
+            .find_map(|line| {
+                let (number, rest) = line.trim_start_matches('*').strip_prefix('[')?.split_once("] ")?;
+                let (_, quoted) = rest.split_once(' ')?;
+                let found = serde_json::Deserializer::from_str(quoted).into_iter::<String>().next()?.ok()?;
+                (found == label).then(|| number.to_string())
+            })
+            .unwrap_or_else(|| label.to_string())
+    }
+
+    /// The turn that takes `step` on the page `shown`.
+    fn turn(step: Option<Step>, shown: &str) -> std::result::Result<Value, String> {
+        let Some(step) = step else {
+            return Ok(json!({"tool": "done", "answer": [], "numbered": false}));
+        };
+        let id = || ScriptedDriver::number(shown, &step.label);
+        let pick = || step.pick.clone().ok_or_else(|| format!("the step {} names no value", text::repr(&step.label)));
+        Ok(match step.operation {
+            Operation::Click => json!({"tool": "click", "id": id()}),
+            Operation::Fill => match pick()?.strip_prefix("secret:") {
+                Some(name) => json!({"tool": "type_secret", "id": id(), "name": name}),
+                None => json!({"tool": "type", "id": id(), "text": pick()?}),
+            },
+            Operation::Select => json!({"tool": "select", "id": id(), "option": pick()?}),
+            Operation::Enter => json!({"tool": "key", "id": id(), "key": "Enter"}),
+            Operation::Escape => json!({"tool": "key", "id": id(), "key": "Escape"}),
+            Operation::Press => json!({"tool": "key", "id": id(), "key": pick()?}),
+            Operation::Scroll | Operation::ScrollUp => json!({
+                "tool": "scroll",
+                "id": (!step.label.is_empty()).then(id),
+                "down": step.operation == Operation::Scroll,
+            }),
+            Operation::Navigate => json!({"tool": "goto", "url": step.label}),
+            // `drag Card A = Done` drops the control on the one labelled after `=`; a bare drag draws its path.
+            Operation::Drag => json!({
+                "tool": "drag",
+                "id": id(),
+                "to": step.pick.as_deref().map(|to| ScriptedDriver::number(shown, to)),
+            }),
+            Operation::Back => json!({"tool": "back"}),
+            // `wait=N` asks for N seconds; a bare `wait` asks for an hour, longer than any scripted run lasts.
+            Operation::Wait => {
+                json!({"tool": "wait", "seconds": step.pick.as_deref().map_or(Ok(3600.0), str::parse::<f64>)
+                .map_err(|error| format!("the wait seconds: {error}"))?})
+            }
+            Operation::Dialog => json!({"tool": "dialog"}),
+            // `done=[claims]` writes the answer as the driver does, quoting what the pages it was shown said.
+            Operation::Done => {
+                let answer: Value = match &step.pick {
+                    Some(claims) => {
+                        serde_json::from_str(claims).map_err(|error| format!("the done answer {claims}: {error}"))?
+                    }
+                    None => json!([]),
+                };
+                json!({"tool": "done", "answer": answer, "numbered": false})
+            }
+            other => return Err(format!("the chat driver has no tool for {other}")),
+        })
+    }
+}
+
+impl LLMClient for ScriptedDriver {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, std::result::Result<Generation<Value>, LLMError>> {
+        if purpose != LLMPurpose::Action {
+            return ScriptedLLM.generate_value(purpose, messages, schema, ledger);
+        }
+        let step = self.ahead.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).pop_front();
+        let shown = messages.last().map(|message| message.content.as_str()).unwrap_or_default();
+        let turn = ScriptedDriver::turn(step, shown);
+        Box::pin(async move {
+            if let Some(ledger) = ledger {
+                ledger.reserve(CostComponent::Llm, 0.0, 1)?;
+            }
+            let action = turn.map_err(|error| LLMError::failed(fastbrowse_core::llm::FaultClass::Client, error))?;
+            let reply = json!({"next": "", "actions": [action]});
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::schema)?;
+            let cost = CostLine {
+                purpose: Some(purpose),
+                ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
+            };
+            Ok(Generation { data, cost })
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! The scripted model clients the binary's smoke run uses, asked what a run would ask them.
@@ -248,29 +313,9 @@ mod tests {
     use crate::support::generate;
     use crate::support::testing::block_on;
 
-    fn operation() -> Question {
-        let criteria = [("read", "Read"), ("click", "Click"), ("fill", "Fill"), ("done", "Done")];
-        ChoiceQuestion::new("next", criteria.iter().map(|(k, v)| (k.to_string(), json!(v))).collect()).into()
-    }
-
-    fn targets() -> Question {
-        let criteria = [
-            ("c1".to_string(), json!({"label": "Remove", "role": "button"})),
-            ("c2".to_string(), json!({"label": "Add one", "role": "button"})),
-        ];
-        ChoiceQuestion::new("which", criteria.into_iter().collect()).into()
-    }
-
     fn ask(jev: &ScriptedJev, questions: &[(&str, Question)]) -> Evaluation {
         let questions: IndexMap<String, Question> = questions.iter().map(|(k, q)| (k.to_string(), q.clone())).collect();
         block_on(jev.evaluate(&json!({}), &questions)).unwrap()
-    }
-
-    fn chosen(evaluation: &Evaluation, key: &str) -> String {
-        match &evaluation.answers[key] {
-            Answer::Choice(answer) => answer.choice.clone(),
-            other => panic!("not a choice: {other:?}"),
-        }
     }
 
     #[test]
@@ -284,25 +329,6 @@ mod tests {
         );
         assert!(steps("fly away").is_err());
         assert!(steps(" ; ;").unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_each_look_at_the_page_takes_the_next_step_and_finds_its_control_by_label() {
-        let jev = ScriptedJev::new(steps("click Add one").unwrap());
-        let first = ask(&jev, &[("operation", operation()), ("click_target", targets())]);
-        let second = ask(&jev, &[("operation", operation()), ("click_target", targets())]);
-        assert_eq!((chosen(&first, "operation"), chosen(&first, "click_target")), ("click".into(), "c2".into()));
-        assert_eq!(chosen(&second, "operation"), "done");
-    }
-
-    #[test]
-    fn test_the_value_a_step_names_is_picked_after_the_page_was_looked_at() {
-        let jev = ScriptedJev::new(steps("fill Token = secret:token").unwrap());
-        ask(&jev, &[("operation", operation())]);
-        let criteria = [("none", "Nothing"), ("secret:token", "The token")];
-        let pick = ChoiceQuestion::new("value", criteria.iter().map(|(k, v)| (k.to_string(), json!(v))).collect());
-        let picked = ask(&jev, &[("pick", pick.into())]);
-        assert_eq!(chosen(&picked, "pick"), "secret:token");
     }
 
     #[test]

@@ -15,7 +15,7 @@ beside `status` and `cost_complete` false when a call reported no cost.
 
 | Flag | Effect |
 |:--|:--|
-| `--start URL` | the first page; worked out from the task when omitted |
+| `--start URL` | the first page; a missing scheme gets `https`, or `http` for `localhost` and a loopback address, and an explicit scheme is never rewritten; worked out from the task when omitted |
 | `--context TEXT` | background the run may use but never treats as the task |
 | `--extension` | run in your own Chrome, signed in as you are, through the fastbrowse extension; this is the default for a browser task, see [Your own Chrome](#your-own-chrome) |
 | `--local` | an alias for `--extension` |
@@ -23,7 +23,6 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--cloud` | run in a Browser Use Cloud browser instead, which needs `BROWSER_USE_API_KEY` |
 | `--cloud-profile ID` | with `--cloud`, run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads; without `--start`, a first page it cannot read, such as one scripts build, is replaced by another page proposed knowing why, and the run ends `blocked` only when no readable page is known |
-| `--desktop APP` | start a Linux desktop app that exposes an accessibility tree and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); repeat it for each app to start in one run; see [Desktop apps](#desktop-apps) |
 | `--browser` | start a cloud browser from the first step, rather than reading over HTTP until the task needs one; extension runs already start in Chrome |
 | `--viewport WIDTHxHEIGHT` | with `--cloud`, the screen size requested from the cloud Chrome; does not emulate mobile, touch, device scale or user agent. Refused without `--cloud` |
 | `--attach` | with the extension, drive the window you have open instead of a tab of its own |
@@ -37,9 +36,9 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
 | `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages. Without either, a run that ends short of `complete` keeps its trace anyway (see [Results](#results)) |
-| `--record FILE` | save a captioned MP4 of the run, and the same video without captions beside it with `.plain` before the extension (`run.mp4` and `run.plain.mp4`); needs `ffmpeg`. It shows what the pages showed, so watch it before sharing. A `--desktop` run is filmed from its window; `--fetch` starts no browser, so it cannot be combined with `--record` |
-| `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
-| `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
+| `--record FILE` | save a captioned MP4 of the run, and the same video without captions beside it with `.plain` before the extension (`run.mp4` and `run.plain.mp4`); needs `ffmpeg`. It shows what the pages showed, so watch it before sharing. `--fetch` starts no browser, so it cannot be combined with `--record` |
+| `--recipe FILE` | replay a [recipe](design.md#recipes): run each saved step first while its page and control match, and reuse saved values |
+| `--input NAME=VALUE` | a named value the task refers to ("the TEXT input"), stated to the models by name and value and typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`, and say on stderr when it was not saved; naming the `--recipe` file repairs it after steps the agent had to decide |
 | `--no-cursor` | don't draw the agent's cursor. By default fastbrowse draws its focus marker inside the page wherever the page can be seen: your own Chrome, a headed or attached browser, a cloud browser's live view, or a `--record` video. It glides to each action point, closes its brackets as it lands and pulses on each press, and is never in what the model reads |
@@ -51,15 +50,11 @@ can only follow links, so it refuses every browser flag (`--browser`, `--cloud`,
 `--target-match`, `--foreground`, `--proxy-country`, `--viewport`, `--record`, `--recipe`, `--save-recipe`,
 `--downloads`, `--cursor`) and every flag that types, attaches or submits (`--secret`, `--bitwarden`, `--input`,
 `--file`, `--authorize`). `--cloud` refuses `--headed`, `--profile`, `--cdp-url`, `--cdp-port`, `--extension`,
-`--extension-browser`, `--attach`, `--target-match` and `--desktop`. `--desktop` drives an app, not a browser, so it refuses `--start`, `--fetch`, `--browser`, `--local`, `--extension`,
-`--extension-browser`, `--headed`, `--profile`, `--cloud-profile`, `--cdp-url`, `--cdp-port`, `--attach`,
-`--target-match`, `--foreground`, `--proxy-country`, `--viewport`, `--recipe`, `--save-recipe`, `--downloads` and
-`--cursor`; `--record` is accepted and films its window. `fastbrowse --help` ends with the same list.
+`--extension-browser`, `--attach` and `--target-match`. `fastbrowse --help` ends with the same list.
 
-Trace events also record code state: `decision_context` and `list_continuation` describe read scope,
-known page ordinals and unread pages; `authorization_gate` records the authorization flag, thresholds and
-branch outcome; `run_finished` records the final status after spend and screenshot checks. Page ordinals
-start where the run entered a list. These events describe internal state, not which facts a model saw;
+Trace events also record code state: `authorization_gate` records the authorization flag, thresholds and
+branch outcome; `run_finished` records the final status after spend and screenshot checks. These events describe
+internal state, not which facts a model saw;
 use the recorded model request for that. They add no page text, URLs or secret values.
 
 ```sh
@@ -77,8 +72,8 @@ of its own, a headless Chrome or a DevTools endpoint is the Python, Node and Go 
 ### Your own Chrome
 
 A browser task runs in the Chrome you already use, where you are already signed in. `--extension` is the default
-and `--local` is an alias for it. Pass `--cloud` for a Browser Use Cloud browser, `--fetch` to read over HTTP, or
-`--desktop` for a desktop app. Start tasks from your terminal; the extension connects fastbrowse to Chrome and
+and `--local` is an alias for it. Pass `--cloud` for a Browser Use Cloud browser, or `--fetch` to read over HTTP.
+Start tasks from your terminal; the extension connects fastbrowse to Chrome and
 shows the runs you can stop.
 
 You need Chrome, [uv](https://docs.astral.sh/uv/) and an [OpenRouter](https://openrouter.ai/) API key.
@@ -97,7 +92,9 @@ Install extension **0.1.2 or later** for the full command set. Extension **0.1.1
    for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows. Every fastbrowse
    that runs `install`, such as an app's bundled copy and your own, stays registered: the extension starts the
    newest one still present, judged by the version each reports now, and `fastbrowse extension status` lists them in that
-   order.
+   order. `fastbrowse extension status --json` prints the same installs with the browsers whose extension is connected (by
+   the label `--extension-browser` takes) and the hosts it could not reach, and the TypeScript SDK's
+   `extensionStatus()` returns that without starting a run.
 3. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
    Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
 4. Run a task that reads a public page:
@@ -210,8 +207,8 @@ fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
 
 To change a password, add the replacement as an origin-scoped secret named `new_password`, refer to it in the
 task, and pass `--authorize`. fastbrowse never generates a password or reuses the old one. A single field marked
-`autocomplete=new-password` can also appear on a sign-in page. Jev uses the task and form context to choose its
-role; when the role is unclear, the run stops at `needs_input`.
+`autocomplete=new-password` can also appear on a sign-in page. The driver types a secret only by the name it gives,
+so the task decides which secret goes in which field; when it does not say, the driver ends the run `needs_input`.
 
 ## Open windows and Electron apps
 
@@ -224,74 +221,17 @@ with `cdp_url=` or `cdp_port=`, `attach=True` and `target_match=` (see [Embed it
 refuses `--cdp-url` and `--cdp-port`. A DevTools port gives any program on the machine full control of the app and
 its sessions: close the app, or restart it without the flag, when you are done.
 
-## Desktop apps
-
-`--desktop APP` starts a native Wayland app on a Hyprland desktop and runs the task in its window, through
-[deskpilot](https://github.com/cjber/deskpilot). `APP` is the command line that starts the app, split into words as a
-POSIX shell splits them, with no shell running it. The run starts it with deskpilot's `launch` as a deskpilot agent of
-its own, so the window opens on that agent's hidden workspace. When the run ends, however it ends, fastbrowse asks
-deskpilot to stop its agent, which closes every app the run launched. A window that is already open is not driven: deskpilot sends input in the background only to an app its agent launched. It needs a
-deskpilot with `launch` ([cjber/deskpilot#86](https://github.com/cjber/deskpilot/pull/86)); with an older one the run
-ends `unavailable`. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types in the
-background, so the pointer and keyboard focus stay where you left them. An app that exposes no accessibility tree,
-such as a terminal or an app that draws its own interface, cannot be driven: the run ends `error` before its first
-step, naming the app and quoting deskpilot, whose message says when a variable such as Chromium's makes the app
-expose one:
-
-```sh
-fastbrowse --desktop gnome-text-editor "Write 'hello' in a new document."
-```
-
-Repeat `--desktop` for each app to start in one run, in the order given. The run starts in the first app's window.
-Every window on the run's hidden workspace is a tab, as a browser run's tabs are: the apps' main windows, and the
-dialogs and windows they open later. The run moves between them as it moves between browser tabs, reading another
-window without focusing it or bringing it on screen. A window an action opens becomes the one the run reads, and when
-the window it reads closes, it goes back to the one it read before:
-
-```sh
-fastbrowse --desktop "gnome-text-editor -s" --desktop gnome-calculator \
-  "Work out 17 times 23 in the calculator and write the result in a new document."
-```
-
-The run cannot close a window itself: deskpilot has no action that closes one window, so the apps stay open until
-the run ends.
-
-An app that runs as one instance, such as one you already have open, may hand its new window to that copy, so
-`launch` sees no window of its own and the run ends with deskpilot's error. Pass the app's flag for a separate
-instance when it has one.
-
-A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window of
-that app class. `--authorize` and the step and spend ceilings work as for a browser. An open combo box's list and a
-popup menu's entries are controls like any other, and the run clicks the item it wants. The items of a list, tree,
-table, grid or icon view can also be double-clicked to open them, right-clicked for their context menu, such as a
-file's Rename or Compress, and dragged onto another control; a text field can be right-clicked for its edit menu.
-deskpilot refuses a drag and drop out of view, so dragging a file between folders needs
-`FASTBROWSE_DESKTOP_SHOWN=1`. Choosing a combo box's option
-by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. Recipes,
-`--start` and every browser option are refused, `--cursor` among them: a desktop run never brings its window to the
-front, so it draws its cursor in the recording, or on screen with `FASTBROWSE_DESKTOP_SHOWN=1`, described below. Two
-windows with the same title, such as an app an earlier run left open, can stop deskpilot from telling them apart;
-that read fails with deskpilot's message, and closing the other window fixes it. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`.
-
-`--record FILE` films the window from deskpilot's shots, which it takes of the hidden window without bringing it on
-screen: one when the app opens and one after each action settles, held until the next, so the video keeps the run's
-real timing. It captions each step, draws the cursor gliding to each click, fill, hover and choice, and ends on the
-run's answer. No frame is filmed while the window may show a resolved secret, and the video keeps its last clean
-frame. Set `FASTBROWSE_DESKTOP_SHOWN=1` to act on the window in view instead, where deskpilot draws its own agent
-cursor at each action on screen: for watching a run on a desktop of its own, such as deskpilot's nested Hyprland
-(`scripts/nested.py` there), since it takes the view and keyboard focus of whatever desktop it runs on.
-
 ## Models
 
-The LLM defaults to `openai/gpt-6-luna` at low reasoning, for proposing a first address when no
-`start` is given and for writing an answer that must be composed from more than one fact.
+The LLM defaults to `openai/gpt-6-luna` at low reasoning. It drives every turn of the run, proposes a first address
+when no `start` is given, and writes an answer that must be composed from more than one fact.
 
 | Setting | Effect |
 |:--|:--|
 | `FASTBROWSE_LLM_MODEL` | the model for every purpose |
 | `FASTBROWSE_LLM_REASONING` | `none`, `low`, `medium` or `high`; `none` turns reasoning off for a model such as DeepSeek V4.1 Flash that otherwise reasons at every effort |
-| `FASTBROWSE_LLM_PROVIDER` | `openrouter`, `gateway`, `openai`, `anthropic`, `gemini`, `groq`, `together`, `mistral`, `deepseek`, `xai`, `fireworks`, `azure`, `ollama`, `lmstudio`, `vllm` or `custom`; each reads its own key, such as `OPENAI_API_KEY`, and sends it to that provider alone |
-| `FASTBROWSE_LLM_BASE_URL`, `FASTBROWSE_LLM_API_KEY` | any OpenAI-compatible endpoint, such as a local vLLM at `http://127.0.0.1:8000/v1`; it needs `FASTBROWSE_LLM_MODEL`, and never receives the OpenRouter or gateway key |
+| `FASTBROWSE_LLM_PROVIDER` | `openrouter`, `gateway`, `openai`, `anthropic`, `gemini`, `groq`, `together`, `mistral`, `deepseek`, `xai`, `fireworks`, `azure`, `ollama`, `lmstudio`, `vllm` or `custom`; each reads its own key, such as `OPENAI_API_KEY`, and sends it to that provider alone (`openrouter` with a proxy address reads `FASTBROWSE_LLM_API_KEY` instead) |
+| `FASTBROWSE_LLM_BASE_URL`, `FASTBROWSE_LLM_API_KEY` | any OpenAI-compatible endpoint, such as a local vLLM at `http://127.0.0.1:8000/v1`; it needs `FASTBROWSE_LLM_MODEL` unless the provider is `openrouter`, and never receives the OpenRouter or gateway key. With `FASTBROWSE_LLM_PROVIDER=openrouter`, the address is a proxy in front of OpenRouter and gets OpenRouter's requests |
 | `FASTBROWSE_LLM_STRICT=0`, `FASTBROWSE_LLM_EXTRA_BODY` | for that endpoint: send schemas in non-strict form, and add a JSON object to every request |
 
 [LLM providers](llm-providers.md) lists what each preset sends and its default models. Jev still needs its
@@ -306,7 +246,6 @@ Jev, the decision model, has settings of its own:
 | `FASTBROWSE_DECISION_BASE_URL` | retargets the selected source, and turns off automatic failover |
 | `FASTBROWSE_DECISION_MODEL` | pins the decision model, and turns off automatic failover |
 | `FASTBROWSE_DECISION_API_KEY` | the key for a decision host that takes one |
-| `FASTBROWSE_ACTION_PICKER` | `llm` has the run's LLM pick each browser action instead of Jev, an ablation for measuring the picker; every other decision stays with Jev. `jev` is the default |
 
 [Jev routing](jev.md#provider-failover) gives the provider order and failover, and
 [other decision hosts](jev.md#other-decision-hosts) lists each host with its key and models.
@@ -317,16 +256,16 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 
 | Status | Exit | Meaning |
 |:--|--:|:--|
-| `complete` | 0 | Jev judged the task done |
-| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page, nothing read answers the task's question, or the site refused a requested step |
+| `complete` | 0 | the driver ended the run with an answer that the pages it read back |
+| `unverified` | 10 | the driver finished, but the requested data could not be filled from the page, nothing read answers the task's question, or the site refused a requested step |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
 | `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
 | `needs_input` | 5 | a required value or file is missing, or an upload exceeds the configured size limit |
 | `stuck` | 9 | the stall budget ran out without reaching a page state the run had not seen |
 | `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
-| `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
-| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry, or the page says an item the task requires cannot be bought; the same run later may pass |
+| `observation_limit` | 11 | the page or required evidence cannot fit a model's prompt budget |
+| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry, or the site is down or the page the task needs does not exist; the same run later may pass |
 | `cancelled` | 12 | you stopped an `--extension` run in your browser: from its popup, the debugging bar or by closing its tabs |
 | `error` | 1 | a model or browser failure |
 
@@ -341,7 +280,7 @@ The JSON result says why a run stopped where a caller can act on it:
   browser failure names the command and its reason (`Failed/Page.navigate/net::ERR_ABORTED`), a limit its resource
   (`Budget/seconds`), a callback that threw its method and the internal error code
   (`Callback/run/event/error/-32603`, the same from every SDK and transport), and a stop the rule that made it
-  (`SiteFailure/http-503`, `Wall/sign-in`, `Done/unanswered`, `Recovery/exhausted`). A `complete` run has none.
+  (`SiteFailure/http-503`, `Chat/give-up`, `Done/unanswered`, `Recovery/exhausted`). A `complete` run has none.
 - `trace` is the file holding the run's trace, when it ended short of `complete` and neither `--trace` nor
   `FASTBROWSE_TRACE` chose where traces go. The plain output names it on stderr as `trace:`. Every CLI and MCP run
   writes its trace to a file of its own under `$XDG_STATE_HOME/fastbrowse/traces` (`~/.local/state` without it;
@@ -386,6 +325,20 @@ It reads what the installer recorded and makes no network call, and it never rep
 | A checkout | `git pull && uv sync --all-extras` |
 
 Another installer, or one that left no record, gets the [PyPI page](https://pypi.org/project/fastbrowse/).
+
+## Diagnostics
+
+`fastbrowse doctor` checks what a run needs and prints one line per check, each prefixed `ok`, `FAIL` or `skip`, then
+exits 1 when any check failed: the model keys (named by variable, never by value), the Chrome binary and its version,
+the extension host registration, and whether the temporary directory is writable. Memory is reported where the kernel
+offers it. It is the first thing to run when a setup problem surfaces as a bare CDP error.
+
+`fastbrowse stats` summarises an opt-in local run log. Set `FASTBROWSE_STATS` to a JSON Lines file, in the environment
+or in `.env` in the working directory, and each run appends one object to it: a status, a step count, a duration, a cost
+and when it started, and nothing about the task, the page or a secret. A run you stop with Ctrl-C is logged as
+`cancelled` with its cost unknown. `fastbrowse stats` then reports how many runs there are, the p50 and p95 duration,
+the error rate and the mean priced cost; `--file PATH` reads a log other than the one the variable names, and `--json`
+prints the summary as JSON.
 
 ## Troubleshooting
 

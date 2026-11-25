@@ -228,12 +228,15 @@ def test_one_run_types_a_secret_the_client_holds_and_leaves_no_chrome_behind(
     assert {message["method"] for message in notifications} == {"run/event"}
     assert {message["params"]["run_id"] for message in notifications} == {"run-1"}
     events = [message["params"]["event"] for message in notifications]
-    assert [event["type"] for event in events] == ["browser", "step", "step"]
+    assert [event["type"] for event in events] == ["browser", "step", "step", "step"]
     steps = [event["step"] for event in events[1:]]
-    assert [(step["index"], step["operation"], step["target"], step["outcome"]) for step in steps] == [
-        (0, "fill", "Token", "executed"),
-        (1, "click", "Save", "executed"),
+    # The driver's done turn reads the page it was shown, as the run's last step.
+    assert [(step["index"], step["operation"], step["outcome"]) for step in steps] == [
+        (0, "fill", "executed"),
+        (1, "click", "executed"),
+        (2, "read", "executed"),
     ]
+    assert [step["target"] for step in steps[:2]] == ["Token", "Save"]
     assert steps == result["steps"]
     # The question goes out before the step that typed its answer is reported.
     assert [event["type"] for event in (message["params"]["event"] for message in before)] == ["browser"]

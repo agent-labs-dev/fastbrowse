@@ -8,5 +8,7 @@ public enum FactReader {
     @JsonProperty("jev_choice")
     JEV_CHOICE,
     @JsonProperty("llm_image")
-    LLM_IMAGE
+    LLM_IMAGE,
+    @JsonProperty("llm_quote")
+    LLM_QUOTE
 }

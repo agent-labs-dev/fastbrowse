@@ -273,7 +273,9 @@ pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
 /// editor; typing into the original, now hidden behind it, reaches no suggestion list. A person types where focus
 /// went, so the fill follows focus to an editable field in the same document that covers the spot saved before the
 /// click, even if the original was detached. The editor can take focus a frame or a timer after the click, so the
-/// check waits for that focus, and the bound only ends a wait for a field that was replaced by nothing.
+/// check waits for that focus, and the bound only ends a wait for a field that was replaced by nothing. Focus moved to a
+/// field somewhere else answers `'elsewhere'`: Google Flights' Departure opens a calendar dialog with its own field at
+/// the top of the page, and typing into the original, focused back behind the dialog, broke the search it then ran.
 pub static HANDED_FOCUS_JS: LazyLock<String> = LazyLock::new(|| {
     [
     "((id, secret) => new Promise(resolve => { const r = window.__fastbrowse, e = r?.nodes.get(id), was = r?.handoff; ",
@@ -292,8 +294,7 @@ pub static HANDED_FOCUS_JS: LazyLock<String> = LazyLock::new(|| {
     "a.closest('[aria-disabled=\"true\"],[aria-readonly=\"true\"],[inert]') || ",
     "!a.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) return e.isConnected ? id : null; ",
     "const now = a.getBoundingClientRect(); ",
-    "if (was.x < now.left || was.x > now.right || was.y < now.top || was.y > now.bottom) ",
-    "return e.isConnected ? id : null; ",
+    "if (was.x < now.left || was.x > now.right || was.y < now.top || was.y > now.bottom) return 'elsewhere'; ",
     "if (!r.ids.has(a)) r.ids.set(a, r.next++); const n = r.ids.get(a); r.nodes.set(n, a); return n; }; ",
     // A field that was replaced is waited for by the focus that names its successor.
     "const finish = () => resolve(decide()); ",

@@ -1100,7 +1100,15 @@ async fn test_transparent_choice_exception_does_not_admit_hidden_or_disabled_con
         eval_active(&h, &format!("const e = document.querySelectorAll('input')[1]; {change}")).await;
         let result = act(&h.page, click(target), &before).await;
         assert_eq!(result.outcome, StepOutcome::Stale, "{change}");
-        assert!(!h.observe().await.controls.iter().any(|c| c.id == target.id), "{change}");
+        // A disabled toggle stays on the page, marked and offering nothing (#1415); a hidden one is gone.
+        let after = h.observe().await;
+        let kept = after.controls.iter().find(|c| c.id == target.id);
+        if change.contains("disabled") {
+            let kept = kept.unwrap_or_else(|| panic!("{change}: the disabled toggle is still observed"));
+            assert!(kept.disabled == Some(true) && kept.operations.is_empty(), "{change}: {kept:?}");
+        } else {
+            assert!(kept.is_none(), "{change}");
+        }
         assert!(!truthy(&eval_active(&h, "e.checked").await), "{change}");
         h.close().await;
     }
@@ -1147,7 +1155,9 @@ async fn test_styled_choice_uses_visible_label_and_native_state() {
             assert_eq!(find(&h.observe().await, "Direct service").checked, Some(true), "{style}-{kind}");
 
             eval_active(&h, "document.querySelector('input').disabled = true").await;
-            assert!(!h.observe().await.controls.iter().any(|c| c.label == "Direct service"), "{style}-{kind}");
+            let disabled = h.observe().await;
+            let kept = find(&disabled, "Direct service");
+            assert!(kept.disabled == Some(true) && kept.operations.is_empty(), "{style}-{kind}: {kept:?}");
             h.close().await;
         }
     }
@@ -1513,6 +1523,77 @@ async fn test_a_label_beside_a_decorative_icon_is_not_a_hover_target() {
     let hovers: Vec<&Control> = obs.controls.iter().filter(|c| c.operations.contains(&Operation::Hover)).collect();
     assert!(hovers.is_empty(), "decorative icons offered hover targets: {hovers:?}");
     find(&obs, "httpx");
+    h.close().await;
+}
+
+/// A sortable card holds a picture whose alt is its title and a span showing the same title: the card was labelled
+/// with both, "Test image Test image". A picture that says something the words beside it do not still names it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_image_alt_that_repeats_the_visible_title_does_not_double_the_label() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        r##"document.body.innerHTML = '<ul>' +
+          '<li role="button" tabindex="0"><img alt="Test image" width="16" height="16"><span>Test image</span></li>' +
+          '<li role="button" tabindex="0"><img alt="Cover art" width="16" height="16"><span>Second image</span></li>' +
+          '<li role="button" tabindex="0"><img alt="Third image" width="16" height="16"></li>' +
+          '<li role="button" tabindex="0"><span><img alt="Wrapped image" width="16" height="16"></span><span>Wrapped image</span></li>' +
+          '<li role="button" tabindex="0"><img alt="Split image" width="16" height="16">Split <b>image</b></li>' +
+          '<li role="button" tabindex="0"><picture><source srcset="a.webp"><img alt="Responsive image" width="16" height="16"></picture><span>Responsive image</span></li>' +
+          '<li role="button" tabindex="0"><img alt="Badged image" width="16" height="16">Badged <b>image</b><span>New</span></li>' +
+          '<li role="button" tabindex="0"><img alt="Grouped title" width="16" height="16"><span><span>Grouped title</span><span>New</span></span></li>' +
+          '<li role="button" tabindex="0"><span><img alt="Grouped thumb" width="16" height="16"><span>New</span></span><span>Grouped thumb</span></li>' +
+          '<li role="button" tabindex="0"><span><img alt="Cover art" width="16" height="16"><span>New</span></span><span>Grouped thumb</span></li>' +
+          '<li role="button" tabindex="0"><span><img alt="Test image" width="16" height="16"><img alt="New" width="16" height="16"></span><span>Test image</span></li>' +
+          '<li role="button" tabindex="0"><span><img alt="Cover art" width="16" height="16"><img alt="Second image" width="16" height="16"></span><span>Second image</span></li></ul>';"##,
+    )
+    .await;
+    let obs = h.observe().await;
+    let labels: Vec<&str> = obs.controls.iter().filter(|c| c.role == "button").map(|c| c.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "Test image",
+            "Cover art Second image",
+            "Third image",
+            "Wrapped image",
+            "Split image",
+            "Responsive image",
+            "Badged image New",
+            "Grouped title New",
+            "New Grouped thumb",
+            "Cover art New Grouped thumb",
+            "New Test image",
+            "Cover art Second image"
+        ],
+        "{:?}",
+        obs.controls
+    );
+    h.close().await;
+}
+
+/// Matching an alt against every run of sibling texts built strings quadratic in the node count: a control named by
+/// 1,000 spans exhausted a 128 MB heap. The match now grows a run only while it is still the start of the alt.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_control_named_by_many_spans_beside_an_image_is_observed() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        r##"const spans = Array.from({length: 3000}, (_, i) => `<span>word${i} lorem ipsum dolor</span>`).join('');
+          document.body.innerHTML = '<div role="button" tabindex="0"><img alt="word7 lorem ipsum dolor" width="16" height="16">' + spans + '</div>';"##,
+    )
+    .await;
+    let obs = h.observe().await;
+    let button = obs.controls.iter().find(|c| c.role == "button").expect("the button is offered");
+    assert!(
+        button.label.starts_with("word0 lorem ipsum dolor word1"),
+        "{}",
+        &button.label[..80.min(button.label.len())]
+    );
     h.close().await;
 }
 
@@ -3112,5 +3193,170 @@ async fn step_failures_preserve_the_producer_cause() {
     .await;
     let interrupted = act(&h.page, fill(find(&obs, "Username"), "text"), &obs).await;
     assert_eq!((interrupted.outcome, interrupted.failure), (StepOutcome::Failed, Some(StepFailure::DialogInterrupted)));
+    h.close().await;
+}
+
+/// A commenter with two comments on the page has their name link twice. Dropped as one of the page's repeated labels,
+/// it left their Reply buttons, the reply box that opened and its Post named by the comment's age, so a task that
+/// named the commenter did not read as asking for that box (#1411).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_reply_box_is_named_by_its_commenter_whose_name_shows_twice() {
+    let _turn = turn().await;
+    // Reply opens the form under its comment, as the page's own script would.
+    let comment = |author: &str, age: &str, text: &str| {
+        format!(
+            "<li><a href=\"#{author}\">{author}</a><div>{age}</div><p>{text}</p>\
+             <button onclick=\"this.after(reply.content.cloneNode(true))\">Reply</button></li>"
+        )
+    };
+    let form = "<form><textarea aria-label=\"Comment text area\"></textarea><button>Post</button></form>";
+    let contexts = |obs: &Observation, label: &str| -> Vec<Option<String>> {
+        obs.controls.iter().filter(|c| c.label == label).map(|c| c.context.clone()).collect()
+    };
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        &format!(
+            "document.body.innerHTML = '<template id=\"reply\">{form}</template><div><p>Keep it civil.</p>{form}</div>\
+             <ul>{}{}{}</ul>'",
+            comment("Ada", "1 day ago", "Routes skip the cap."),
+            comment("Grace", "2 days ago", "Works for me."),
+            comment("Ada", "2 days ago", "Map pins are gone."),
+        ),
+    )
+    .await;
+    let obs = observe_until(&h.page, "Reply").await;
+    assert_eq!(
+        contexts(&obs, "Reply"),
+        vec![Some("Ada / 1 day ago".into()), Some("Grace".into()), Some("Ada / 2 days ago".into())]
+    );
+    let reply = obs.controls.iter().filter(|c| c.label == "Reply").nth(2).expect("Ada's second Reply").clone();
+    act(&h.page, click(&reply), &obs).await;
+    let opened = h.page.observe().await.expect("observe");
+    for label in ["Comment text area", "Post"] {
+        assert_eq!(
+            contexts(&opened, label),
+            vec![Some("Keep it civil.".into()), Some("Ada / 2 days ago".into())],
+            "{label}"
+        );
+    }
+    h.close().await;
+}
+
+/// A section's field beside a list whose items hold only a link each, such as a help list, is not outside a list of
+/// records: those items are not records, so the field keeps the section's heading alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_list_of_bare_links_is_not_a_list_of_records() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<section><h2>Account</h2><label>Name <input aria-label=\"Display name\"></label>\
+         <ul><li><a href=\"#faq\">FAQ</a></li><li><a href=\"#terms\">Terms</a></li></ul></section>'",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Display name").await;
+    let field = obs.controls.iter().find(|c| c.label == "Display name").expect("field");
+    assert_eq!(field.context.as_deref(), Some("Account"), "{field:?}");
+    h.close().await;
+}
+
+/// A section's new-comment box sits before the list of comments and inside none of them, yet got only the section's
+/// heading, the context every comment's own Reply has, so a task to reply to one comment filled the box (#1476).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_control_in_a_section_of_records_but_outside_each_is_named_as_outside_them() {
+    let _turn = turn().await;
+    let comment = |author: &str| format!("<li><p>{author} wrote this.</p><button>Reply</button></li>");
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        &format!(
+            "document.body.innerHTML = '<section><h2>Comments</h2><form><textarea aria-label=\"Comment text area\"></textarea>\
+             <button>Post</button></form><ul>{}{}{}</ul></section>'",
+            comment("Ada"),
+            comment("Grace"),
+            comment("Kal66"),
+        ),
+    )
+    .await;
+    let obs = observe_until(&h.page, "Post").await;
+    let context = |label: &str| {
+        obs.controls
+            .iter()
+            .filter(|c| c.label == label)
+            .map(|c| c.context.clone().unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+    let outside = "Comments, outside every item listed under Comments";
+    assert_eq!(context("Comment text area"), [outside]);
+    assert_eq!(context("Post"), [outside]);
+    for reply in context("Reply") {
+        assert!(!reply.contains("outside every item"), "a Reply is inside its comment: {reply}");
+    }
+    h.close().await;
+}
+
+/// An open reply editor beside the page's own box makes both textareas and both Post buttons twins, whose context
+/// told them apart by their own lines; the page's box and its Post kept no note that they sit outside the comments.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_twin_controls_outside_every_record_keep_the_note_that_they_are_outside() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<section><h2>Comments</h2><form><textarea aria-label=\"Comment text area\"></textarea>\
+         <p>Terms of service apply</p><button>Post</button></form><ul>\
+         <li><p>Ada wrote this.</p><button>Reply</button></li>\
+         <li><p>Grace wrote this.</p><form><textarea aria-label=\"Comment text area\"></textarea><button>Post</button></form></li>\
+         </ul></section>'",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Post").await;
+    for label in ["Comment text area", "Post"] {
+        let contexts: Vec<String> =
+            obs.controls.iter().filter(|c| c.label == label).map(|c| c.context.clone().unwrap_or_default()).collect();
+        assert_eq!(contexts.len(), 2, "{label}: {contexts:?}");
+        let outside = contexts.iter().filter(|c| c.contains("outside every item listed under Comments")).count();
+        assert_eq!(outside, 1, "only the page's own {label} is outside the comments: {contexts:?}");
+    }
+    h.close().await;
+}
+
+/// A label kept in a twin's card because some other cards lack it, as a commenter's name is, still does not name the
+/// card alone: an "Edit" link in one product card, and in the page's header, would have named that card's Add
+/// button "Edit" with nothing of the product it adds.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_card_whose_first_lines_are_shared_links_is_named_by_its_own_line_too() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<header><a href=\"#edit\">Edit</a></header><ul>\
+         <li><a href=\"#a\">Edit</a><div>Brass Kettle</div><button>Add</button></li>\
+         <li><div>Copper Pan</div><button>Add</button></li></ul>'",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Add").await;
+    let contexts: Vec<Option<String>> =
+        obs.controls.iter().filter(|c| c.label == "Add").map(|c| c.context.clone()).collect();
+    assert_eq!(contexts, vec![Some("Edit / Brass Kettle".into()), Some("Copper Pan".into())]);
+    // Two shared links ahead of the product's name, as Edit and Delete in the header and the card, named its Add
+    // "Edit / Delete" with nothing of the product.
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<header><a href=\"#edit\">Edit</a><a href=\"#delete\">Delete</a></header><ul>\
+         <li><div><a href=\"#a\">Edit</a></div><div><a href=\"#d\">Delete</a></div><div>Brass Kettle</div>\
+         <button>Add</button></li><li><div>Copper Pan</div><button>Add</button></li></ul>'",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Add").await;
+    let contexts: Vec<Option<String>> =
+        obs.controls.iter().filter(|c| c.label == "Add").map(|c| c.context.clone()).collect();
+    assert_eq!(contexts, vec![Some("Edit / Delete / Brass Kettle".into()), Some("Copper Pan".into())]);
     h.close().await;
 }

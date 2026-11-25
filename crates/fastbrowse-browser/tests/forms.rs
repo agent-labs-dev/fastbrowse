@@ -30,6 +30,42 @@ async fn test_validation_labels_preserve_field_semantics() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_readonly_field_says_so_and_keeps_its_click() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<input aria-label=\"Native\" value=\"2026-01-01\" readonly>\
+        <div role=textbox aria-readonly=true aria-label=\"Aria\">fixed</div><input aria-label=\"Open\">";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    for label in ["Native", "Aria"] {
+        let control = find(&observation, label);
+        assert!(control.read_only, "{label}: {control:?}");
+        assert!(control.operations.contains(&Operation::Click) && !control.operations.contains(&Operation::Fill));
+    }
+    let open = find(&observation, "Open");
+    assert!(!open.read_only);
+    assert!(!serde_json::to_value(open).unwrap().as_object().unwrap().contains_key("read_only"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_popup_drawn_over_the_page_is_a_layer_and_a_cards_badge_is_not() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<section><h2>Inline</h2><p style=\"height:300px\">calendar text</p></section>\
+        <div class=card style=\"position:relative\"><button style=\"position:absolute;top:0;left:0\">Badge</button>\
+        <p>card text under the badge</p></div>\
+        <div id=popup style=\"position:absolute;top:20px;left:20px;z-index:5;background:white\"><a href=\"#\">Next</a>\
+        <a href=\"#\">4</a></div>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    assert_eq!(find(&observation, "Next").layer, Some(1));
+    assert_eq!(find(&observation, "4").layer, Some(1));
+    assert_eq!(find(&observation, "Badge").layer, None);
+    h.close().await;
+}
+
 /// test_forms.py's `form`: a two-field form, then `script`.
 async fn form(h: &Harness, script: &str) {
     h.goto("/dispatch.html").await;
@@ -792,7 +828,7 @@ async fn test_a_posted_comment_is_named_in_the_effect_of_the_click_that_posted_i
     let posted = h.observe().await;
     let summary = fastbrowse_core::effects::effect_of_commit(&typed, &posted, None, false).summary;
     assert!(
-        summary.ends_with("added the text: \"cjber\", \"just now\", \"Version 2.4.1 is out.\", \"Reply\""),
+        summary.ends_with("added the text: \"cjber just now\", \"Version 2.4.1 is out.\", \"Reply\""),
         "the click's effect is {summary:?}"
     );
     h.close().await;

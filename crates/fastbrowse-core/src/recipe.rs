@@ -29,7 +29,7 @@ pub const REPLAYABLE: &[Operation] = &[
     Operation::Escape,
 ];
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Recipe {
     pub version: u32,
@@ -37,6 +37,14 @@ pub struct Recipe {
     #[serde(default)]
     pub start: Option<String>,
     pub steps: Vec<RecipeStep>,
+}
+
+/// Printed with every address's credentials masked (`debug_masked`): a recipe holds the caller's task and the links,
+/// labels and text a run met, and derived, a panic or a log printed them as written.
+impl std::fmt::Debug for Recipe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::safety::debug_masked("Recipe", self, f)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,9 +290,10 @@ impl RecipeTarget {
 }
 
 /// The one control on the page the target names, or None when none or several do: a guess between twins is the
-/// choice a model is for.
+/// choice a model is for. A disabled control is no twin: a step cannot be replayed on it, and counting it sent an
+/// enabled "Add to cart" beside a sold-out one back to the model (#1415).
 pub fn find<'a>(target: &RecipeTarget, controls: &'a [Control], page_url: &str) -> Option<&'a Control> {
-    let mut matching = controls.iter().filter(|control| target.matches(control, page_url));
+    let mut matching = controls.iter().filter(|control| control.actionable() && target.matches(control, page_url));
     let first = matching.next()?;
     matching.next().is_none().then_some(first)
 }
@@ -301,7 +310,20 @@ mod tests {
     use super::*;
 
     fn control(id: &str, role: &str, label: &str) -> Control {
-        Control::new(id, role, label, [])
+        Control::new(id, role, label, [Operation::Click])
+    }
+
+    /// A derived `Debug` printed a recipe's start and steps whole, an address's credentials included (#1381).
+    #[test]
+    fn test_a_recipe_prints_with_its_credentials_masked() {
+        let recipe = Recipe {
+            version: RECIPE_VERSION,
+            task: "Read https://ops:t4sk-pw@h.test/".into(),
+            start: Some("https://ops:st4rt-pw@h.test/".into()),
+            steps: Vec::new(),
+        };
+        let printed = format!("{recipe:?}");
+        assert!(printed.starts_with("Recipe") && !printed.contains("t4sk-pw") && !printed.contains("st4rt-pw"));
     }
 
     #[test]
@@ -316,6 +338,14 @@ mod tests {
         let target = RecipeTarget::of(&control("a:1", "button", "Add to cart"), "https://shop.test/");
         let page = [control("b:1", "button", "Add to cart"), control("b:2", "button", "Add to cart")];
         assert!(find(&target, &page, "https://shop.test/").is_none());
+    }
+
+    #[test]
+    fn a_disabled_twin_leaves_the_enabled_control_to_replay() {
+        let target = RecipeTarget::of(&control("a:1", "button", "Add to cart"), "https://shop.test/");
+        let sold_out = Control { disabled: Some(true), ..Control::new("b:1", "button", "Add to cart", []) };
+        let page = [sold_out, control("b:2", "button", "Add to cart")];
+        assert_eq!(find(&target, &page, "https://shop.test/").map(|c| c.id.as_str()), Some("b:2"));
     }
 
     #[test]

@@ -103,7 +103,6 @@ _PLAIN = (
     "browser",
     "extension",
     "extension_browser",
-    "desktop",
 )
 """`run_task` arguments that are JSON already and belong to the run itself."""
 
@@ -125,7 +124,6 @@ def run_task_json(task: str, arguments: dict[str, Any]) -> str:
             "inputs": None if inputs is None else dict(inputs),
             "chrome": _dumped(arguments["chrome"]),
             "cloud_extensions": list(arguments["cloud_extensions"]),
-            "desktop_apps": list(arguments["desktop_apps"]),
             "output_schema": None if output_schema is None else output_schema.model_json_schema(),
             "attachments": [
                 {"name": a.name, "mime_type": a.mime_type, "content": base64.b64encode(a.content).decode("ascii")}

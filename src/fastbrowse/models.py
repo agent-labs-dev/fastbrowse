@@ -23,10 +23,10 @@ class Frozen(BaseModel):
 
 class Status(StrEnum):
     COMPLETE = "complete"
-    """Jev judged the task done and the caller's `until` check (if any) passed."""
+    """The driver called done, the finish checks accepted it and the caller's `until` check (if any) passed."""
     UNVERIFIED = "unverified"
-    """Jev finished, but code could not confirm the result: for example, an answer failed its check against the page,
-    part of a list the task covers went unread, or the site refused a requested step."""
+    """The driver finished, but code could not confirm the result: for example, an answer failed its check against the
+    page, part of a list the task covers went unread, or the site refused a requested step."""
     NEEDS_CONFIRMATION = "needs_confirmation"
     """Stopped before an irreversible action the caller has not authorized, having committed nothing."""
     NEEDS_LOGIN = "needs_login"
@@ -83,8 +83,6 @@ class RunCancelled(asyncio.CancelledError):
 
 class Operation(StrEnum):
     CLICK = "click"
-    RIGHT_CLICK = "right_click"
-    DOUBLE_CLICK = "double_click"
     HOVER = "hover"
     DRAG = "drag"
     FILL = "fill"
@@ -107,8 +105,9 @@ class Operation(StrEnum):
 
 
 class Decider(StrEnum):
-    """Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev."""
+    """Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev."""
 
+    LLM = "llm"
     JEV = "jev"
     CODE = "code"
     RECIPE = "recipe"
@@ -183,6 +182,7 @@ class Citation(Frozen):
 class FactReader(StrEnum):
     JEV_CHOICE = "jev_choice"
     LLM_IMAGE = "llm_image"
+    LLM_QUOTE = "llm_quote"
 
 
 class StepFact(Frozen):
@@ -198,12 +198,12 @@ class StepChoice(Frozen):
     id: str
     role: str
     label: str
-    """The label as Jev read it, with resolved secrets masked."""
+    """The label as the driver read it, with resolved secrets masked."""
     context: str | None = None
-    """The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked."""
+    """The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked."""
     operations: tuple[Operation, ...]
     chosen: bool = False
-    """Whether Jev chose this control: the target, and for a drag the destination too."""
+    """Whether the driver acted on this control: the target, and for a drag the destination too."""
 
 
 class ArtifactKind(StrEnum):
@@ -346,7 +346,7 @@ class StepResult(Frozen):
     """Whether the page's fingerprint changed; None for steps that do not act (read)."""
     duration_ms: int = Field(ge=0)
     choices: tuple[StepChoice, ...] = Field(default=(), exclude_if=lambda choices: not choices)
-    """The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them."""
+    """The controls the driver was shown for this step's action, when `Config.step_choices` asked for them."""
 
 
 class BudgetStop(Frozen):
@@ -539,7 +539,8 @@ class StepEvent(Frozen):
     step: StepResult
     frame: Image | None = None
     """A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,
-    and also when a resolved secret was showing as page text: pixels cannot be masked the way text is."""
+    and also when a resolved secret was showing as page text or the run knew an address credential: pixels
+    cannot be masked the way text is, and a page can paint its address where no text check sees it."""
 
 
 class BrowserEvent(Frozen):
