@@ -641,7 +641,7 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     }
     Question::Choice(ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the text is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this text is all text rendered for one repeated item; without that proof the text may still describe a whole record. Absence from a fragment does not prove absence from its record.{} Note: {}",
+            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the text is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this text is all text rendered for one repeated item; without that proof the text may still describe a whole record. Absence from a fragment does not prove absence from its record. A number inside a name or label, such as the 2 in \"Cafe 2 Go\", is part of that name and is not a value of the record.{} Note: {}",
             typed_rule(note),
             dumps(note)
         ),
@@ -1419,7 +1419,10 @@ pub(super) async fn work_selected_with_slots(
             let reason =
                 "The claim's tally sets a rank, which counts places from a minimum or maximum, from 2 for the \
                           second, or a group's place by its count, from 1 for the most: a total or a count of one \
-                          kind has no rank, and the extreme itself has none."
+                          kind has no rank, and the extreme itself has none. To state a group's place by its count, \
+                          such as the author with the most quotes, set op count, by to the field that groups the \
+                          records, group to the group this claim counts, scope to null, and keep the rank, one claim \
+                          per group."
                     .to_string();
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
@@ -1646,8 +1649,17 @@ pub(super) async fn work_selected_with_slots(
             || !amounts.iter().all(|(_, amount)| amount.unit.as_deref() == unit)
         {
             let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+            // The first record's unit is the baseline; naming the values that differ from it states what code saw,
+            // so the driver can tell a number that is part of a name from a record in another currency.
+            let odd: Vec<String> = amounts
+                .iter()
+                .filter(|(_, amount)| amount.malformed_unit || amount.unit.as_deref() != unit)
+                .map(|(_, amount)| text::repr(&amount.written))
+                .collect();
+            let base = amounts.first().map_or(String::new(), |(_, amount)| text::repr(&amount.written));
             worked.insert(index, Err(Unworked::Draft(format!(
-                "The notes give incompatible units for {field}; code cannot compare or add them without an explicit conversion."
+                "The notes give incompatible units for {field}; code cannot compare or add them without an explicit conversion. The first record's value is {base}; these values carry another unit or none: {}.",
+                odd.join(", ")
             ))));
             continue;
         }
@@ -2004,6 +2016,7 @@ mod tests {
             panic!("numeric fields use a choice");
         };
         assert!(question.instructions.contains("Absence from a fragment does not prove absence from its record"));
+        assert!(question.instructions.contains("A number inside a name or label"));
         assert!(question.criteria[NO_VALUE].as_str().unwrap().contains("does not state its"));
         assert!(question.criteria[NO_RECORD].as_str().unwrap().contains("source_kind is heading or link"));
     }
@@ -3224,6 +3237,46 @@ mod tests {
             matches!(&worked[&0], Err(Unworked::Notes { notes, .. }) if notes == &vec![ids[1].clone()]),
             "{:?}",
             worked[&0]
+        );
+    }
+
+    /// A link "Galaxy Tab 4" was offered its '4' as the tablet's price and Jev took it at 0.55, so the cheapest-tablet
+    /// minimum mixed it with '$69.99' and was refused as incompatible units, twice in three trials. The refusal names
+    /// the values that differ so the driver learns which note is the odd one.
+    #[tokio::test]
+    async fn a_unit_refusal_names_the_values_that_differ() {
+        let result = amount_tally(&["$69.99", "4", "$88.99"], Op::Min, "$69.99").await;
+        let Err(Unworked::Draft(reason)) = result else { panic!("{result:?}") };
+        assert!(reason.contains("incompatible units"), "{reason}");
+        assert!(reason.contains("these values carry another unit or none: '4'"), "{reason}");
+        assert!(!reason.contains("'$88.99'"), "{reason}");
+    }
+
+    /// A ranking of authors by their quotes was written as counts scoped to each author with a rank, refused three
+    /// times in a row for "a count of one kind has no rank" without being told the form that has one.
+    #[tokio::test]
+    async fn a_rank_on_a_plain_count_is_refused_with_the_form_that_has_one() {
+        let notes = amount_notes(&["1", "2"]);
+        let tally = Tally {
+            op: Op::Count,
+            of: "quote".into(),
+            scope: Some("by Albert Einstein".into()),
+            field: None,
+            rank: Some(1),
+            by: None,
+            group: None,
+            written: "10".into(),
+        };
+        let claim = "Albert Einstein has 10 quotes.";
+        let tokens = FirstField.profile().fit(None).tokens;
+        let worked =
+            work(&FirstField, &ReadsGroups(&[]), "Top authors", &[(0, &tally, claim, &[])], &notes, &tokens, None)
+                .await
+                .unwrap();
+        let Err(Unworked::Draft(reason)) = &worked[&0] else { panic!("{:?}", worked[&0]) };
+        assert!(
+            reason.contains("set op count, by to the field that groups the records, group to the group"),
+            "{reason}"
         );
     }
 

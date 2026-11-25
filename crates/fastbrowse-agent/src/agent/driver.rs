@@ -280,9 +280,10 @@ book, is worked out by code from every record on the pages the claim names, whic
 pages to the address of every page shown to you that its records are on, and quote no record: its quotes hold only \
 what else the claim states, or are empty. Any other claim has pages empty. Set tally to {op (count, sum, min or max), of (the kind of record, such as \"quote\"), scope (which \
 of them the task lets count, such as \"by Albert Einstein\", or null for all; never a selection by value), field (the \
-value added or compared, such as \"price\"; null for a count), rank (2 for the second cheapest, else null), by and \
-group (for a count per group, such as quotes per author: the field that groups them and the group this claim \
-counts; else null), written (the value as you work it out, written exactly once in text, which code replaces with \
+value added or compared, such as \"price\"; null for a count), rank (the place counted from the extreme, 2 for the second cheapest; for a count per group, the group's place by \
+its count, 1 for the most; else null), by and group (for a count per group, such as quotes per author: the field \
+that groups them and the group this claim counts; else null; a ranking of groups by their counts, such as the three \
+authors with the most quotes, is one such claim per group with its rank, never a count scoped to each), written (the value as you work it out, written exactly once in text, which code replaces with \
 the value it computes; for a minimum or maximum that names the record, the record's name)}. When the records a \
 minimum or maximum compares are each group's own lowest or highest, such as each shop's latest offer, set within to \
 {by (the field that groups them), op (min or max), field (the value compared inside each group)}; else null. A claim \
@@ -969,8 +970,11 @@ impl Agent {
                             }
                             if !unshown.is_empty() {
                                 why.push(format!(
-                                    "no page shown to you in this run has the address {}. Name only pages you were shown",
-                                    listed(&unshown)
+                                    "no page shown to you in this run has the address {}. Name only pages you were shown: {}",
+                                    listed(&unshown),
+                                    listed(&crate::memory::unique(
+                                        state.chat.shown.iter().map(|page| page.url.clone()).chain([observation.url.clone()])
+                                    ))
                                 ));
                             }
                             state.chat.notices.push(format!("done was refused: {}.", why.join("; ")));

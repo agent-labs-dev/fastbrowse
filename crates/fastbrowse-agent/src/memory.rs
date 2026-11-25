@@ -174,6 +174,15 @@ fn words(text: &str) -> Vec<String> {
     words
 }
 
+/// Whether two addresses name the same page: equal, or equal but for the scheme being http in one and https in the
+/// other, which a site's redirect makes one document. A driver that named the page under the other scheme than the
+/// run reached it under had done was refused for a page it was shown.
+pub(crate) fn same_page(a: &str, b: &str) -> bool {
+    let (a, b) = (address(a), address(b));
+    let bare = |url: &str| url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).map(str::to_string);
+    a == b || bare(&a).is_some_and(|a| bare(&b) == Some(a))
+}
+
 /// `urlsplit(url)._replace(fragment="").geturl()`, as CPython 3.13 splits and joins.
 ///
 /// An evidence id hashes this address, and ids reach every prompt that shows notes, so it is CPython's reading of

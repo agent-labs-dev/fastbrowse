@@ -9838,6 +9838,41 @@ fn test_a_tallied_claim_keeps_every_page_it_names_and_refuses_one_never_shown() 
     assert_eq!(refused, Err((Vec::new(), vec![unshown])));
 }
 
+/// A ranking of groups written as scoped counts with a rank was refused three times in a row (stretch-quotes-top-authors),
+/// because the tool text gave a rank only for the second cheapest: the form that has one is stated to the driver.
+#[test]
+fn test_the_done_tool_states_where_a_rank_goes() {
+    let tool = super::driver::SYSTEM;
+    assert!(tool.contains("for a count per group, the group's place by its count, 1 for the most"), "{tool}");
+    assert!(tool.contains("never a count scoped to each"), "{tool}");
+}
+
+/// A page named by the scheme the run reached it under, or the other one, is the page shown: the driver wrote
+/// "http://quotes.toscrape.com/" for a page the run read as "https://quotes.toscrape.com/", and done was refused.
+#[test]
+fn test_a_cited_page_matches_the_shown_one_across_http_and_https() {
+    let agent = agent();
+    let mut state = run_state();
+    let shown =
+        Capture { url: "https://example.test/q/".into(), ..capture(&[(BlockKind::Paragraph, "Quote A by Einstein")]) };
+    let current = Capture {
+        url: "https://example.test/q/2/".into(),
+        ..capture(&[(BlockKind::Paragraph, "Quote C by Einstein")])
+    };
+    let pages = vec!["http://example.test/q/".to_string(), "http://example.test/q/2/".to_string()];
+    agent
+        .read_quoted(
+            &mut state,
+            current,
+            &[shown],
+            &at("https://example.test/q/2/", &[]),
+            super::reading::Cited { quotes: &[], ranging: &[], pages: &pages, pictured: None },
+        )
+        .unwrap();
+    let texts: std::collections::BTreeSet<_> = state.notes.facts().iter().map(|fact| fact.text.clone()).collect();
+    assert_eq!(texts.len(), 2, "{texts:?}");
+}
+
 /// Every Jev request a run sends, its state and questions written out, answered as `DoneCheckJev` answers.
 struct SentToJev(DoneCheckJev, Mutex<Vec<String>>);
 

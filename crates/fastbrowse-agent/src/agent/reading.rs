@@ -10,7 +10,7 @@ use super::helpers::read_sources;
 use super::state::{FailureCause, RunState, Step, tab_key};
 use fastbrowse_core::models::{Evidence, FactReader};
 
-use crate::memory::{Fact, address};
+use crate::memory::{Fact, address, same_page};
 use crate::retrieval::{PageRead, read_page};
 
 /// What a done's claims cite: their `quotes`, the quotes of a count, total or extreme (`ranging`), and the `pages` such
@@ -89,9 +89,9 @@ impl Agent {
         let (mut whole_current, mut whole_before) = (false, std::collections::BTreeSet::new());
         let mut unshown = Vec::new();
         for page in pages {
-            if address(page) == address(&capture.url) {
+            if same_page(page, &capture.url) {
                 whole_current = true;
-            } else if let Some(at) = earlier.iter().rposition(|shown| address(&shown.url) == address(page)) {
+            } else if let Some(at) = earlier.iter().rposition(|shown| same_page(&shown.url, page)) {
                 whole_before.insert(at);
             } else {
                 unshown.push(page.clone());
