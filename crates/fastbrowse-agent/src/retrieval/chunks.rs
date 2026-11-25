@@ -150,24 +150,29 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
         })
         .collect();
     // A capture keeps the newlines a text node had in the page's source, where the observation reads the node as one
-    // piece, so the lines of one block that read as exactly one piece together are one more candidate beside each line.
-    // Only one piece: lines that read as several are separate text nodes, and the quote stays on the line that holds the
-    // reply.
+    // piece, so the lines of one block that hold a piece across their breaks are one more candidate beside each line,
+    // from the line the piece starts on to the line it ends on, whatever the capture appends around it (a tooltip). A
+    // piece within one line is that line's: several lines that read as several pieces are separate text nodes, and the
+    // quote stays on the line that holds the reply.
     let longest = pieces.iter().map(|(text, _)| text.chars().count()).max().unwrap_or(0);
     let mut spans = Vec::new();
     for first in 0..lines.len() {
         let mut joined = lines[first].2.clone();
+        let mut inside = 0;
         for last in first + 1..lines.len() {
-            if !std::ptr::eq(lines[first].3, lines[last].3) {
+            if !std::ptr::eq(lines[first].3, lines[last].3) || inside > longest {
                 break;
             }
+            let before = joined.len();
             joined.push_str(&lines[last].2);
-            if joined.chars().count() > longest {
+            let crossing = pieces.iter().any(|(text, _)| {
+                joined.match_indices(text.as_str()).any(|(at, _)| at < lines[first].2.len() && at + text.len() > before)
+            });
+            if crossing {
+                spans.push((lines[first].0, lines[last].1, joined.clone(), lines[first].3));
                 break;
             }
-            if pieces.iter().any(|(text, _)| *text == joined) {
-                spans.push((lines[first].0, lines[last].1, joined.clone(), lines[first].3));
-            }
+            inside += lines[last].2.chars().count();
         }
     }
     let mut lines = lines;
