@@ -3299,6 +3299,37 @@ async fn test_a_control_in_a_section_of_records_but_outside_each_is_named_as_out
     h.close().await;
 }
 
+/// An open reply editor beside the page's own box makes both textareas and both Post buttons twins, whose context
+/// told them apart by their own lines; the page's box and its Post kept no note that they sit outside the comments.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_twin_controls_outside_every_record_keep_the_note_that_they_are_outside() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<section><h2>Comments</h2><form><textarea aria-label=\"Comment text area\"></textarea>\
+         <p>Terms of service apply</p><button>Post</button></form><ul>\
+         <li><p>Ada wrote this.</p><button>Reply</button></li>\
+         <li><p>Grace wrote this.</p><form><textarea aria-label=\"Comment text area\"></textarea><button>Post</button></form></li>\
+         </ul></section>'",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Post").await;
+    for label in ["Comment text area", "Post"] {
+        let contexts: Vec<String> = obs
+            .controls
+            .iter()
+            .filter(|c| c.label == label)
+            .map(|c| c.context.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(contexts.len(), 2, "{label}: {contexts:?}");
+        let outside = contexts.iter().filter(|c| c.contains("outside every item listed under Comments")).count();
+        assert_eq!(outside, 1, "only the page's own {label} is outside the comments: {contexts:?}");
+    }
+    h.close().await;
+}
+
 /// A label kept in a twin's card because some other cards lack it, as a commenter's name is, still does not name the
 /// card alone: an "Edit" link in one product card, and in the page's header, would have named that card's Add
 /// button "Edit" with nothing of the product it adds.

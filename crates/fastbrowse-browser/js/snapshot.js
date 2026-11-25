@@ -2226,6 +2226,7 @@
     for (let e = element; e && e !== section; e = e.parentElement) if (e.matches(RECORD)) return false;
     return true;
   };
+  // The section's name, and whether the control sits outside every record the section lists.
   const nearestHeading = (element, label) => {
     for (let inner = element, e = element.parentElement; e && e !== e.ownerDocument.body; inner = e, e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
@@ -2240,15 +2241,18 @@
         if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
       }
       const name = before || first;
-      if (name) return listsRecordsOutside(e, element) ? `${name}, outside every item listed under ${name}` : name;
+      if (name) return { name, outside: listsRecordsOutside(e, element) };
     }
-    return '';
+    return { name: '' };
   };
+  // A twin already has a context that tells it from its twins, but a reply editor opening beside the page's own box
+  // made both labels twins and the box lost the note that it sits outside the comments, so it keeps that note too.
   for (const c of controls) {
-    if (!c.context) {
-      const context = nearestHeading(registry.nodes.get(c.id), c.label);
-      if (context) c.context = context;
-    }
+    const { name, outside } = nearestHeading(registry.nodes.get(c.id), c.label);
+    if (!name) continue;
+    const note = outside ? `${name}, outside every item listed under ${name}` : name;
+    if (!c.context) c.context = note;
+    else if (outside) c.context = `${note} / ${c.context}`;
   }
 
   // Flattened text loses empty cells: a calendar day then has no weekday, and the chooser picked a Tuesday
