@@ -10681,5 +10681,5 @@ fn test_an_answered_dialog_keeps_the_message_unescaped_for_redaction() {
 #[path = "tests/sent_notice_offscreen_decoy.rs"]
 mod sent_notice_offscreen_decoy;
 
-#[path = "tests/sent_notice_source_newlines.rs"]
-mod sent_notice_source_newlines;
+#[path = "tests/sent_notice_multiline_source.rs"]
+mod sent_notice_multiline_source;

@@ -191,22 +191,28 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
         }
     }
     // A capture keeps the newlines a text node had in the page's source, where the observation reads the node as one
-    // piece, so a reply can span two lines of one block that neither holds whole: the two are one candidate.
+    // piece, so a reply can span any number of lines of one block that none holds whole: the shortest run of
+    // consecutive lines that reads as it is one candidate.
     for whole in [true, false] {
-        for at in 1..lines.len() {
-            let (first, second) = (&lines[at - 1], &lines[at]);
-            if matched[at - 1] || matched[at] || !std::ptr::eq(first.3, second.3) {
-                continue;
-            }
-            let joined = format!("{}{}", first.2, second.2);
-            let Some(run) = (0..pieces.len()).find_map(|from| run_in(&pieces, &used, from, &joined, whole)) else {
-                continue;
-            };
-            matched[at - 1] = true;
-            matched[at] = true;
-            used[run.clone()].fill(true);
-            if pieces[run].iter().any(|(_, added)| *added) {
-                quotes.push(evidence(&page, first.3, first.0, second.1));
+        for first in 0..lines.len() {
+            let mut joined = String::new();
+            for last in first..lines.len() {
+                if matched[last] || !std::ptr::eq(lines[first].3, lines[last].3) {
+                    break;
+                }
+                joined.push_str(&lines[last].2);
+                if last == first {
+                    continue;
+                }
+                let Some(run) = (0..pieces.len()).find_map(|from| run_in(&pieces, &used, from, &joined, whole)) else {
+                    continue;
+                };
+                matched[first..=last].fill(true);
+                used[run.clone()].fill(true);
+                if pieces[run].iter().any(|(_, added)| *added) {
+                    quotes.push(evidence(&page, lines[first].3, lines[first].0, lines[last].1));
+                }
+                break;
             }
         }
     }
