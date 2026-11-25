@@ -2748,10 +2748,9 @@ async fn test_a_done_after_a_step_that_was_not_carried_out_checks_the_task_steps
     );
 }
 
-/// #1174: on the page a click opened, the done check is told the run's own action opened it, so "open the first link"
-/// is not judged an undone step.
-#[tokio::test]
-async fn test_the_done_check_is_told_which_action_opened_the_page() {
+/// The page facts a done check is given on the page a step landed on, the step having been recorded as the history
+/// holds it and its effect noted as a run notes it.
+async fn page_facts_after(operation: Operation, target: Option<&str>) -> String {
     let page = capture(&[(BlockKind::Paragraph, "Example Domains")]);
     let fact = Fact::read("Example Domains", block_evidence(&page, "s0"), FactReader::JevChoice);
     let mut state = run_state();
@@ -2760,24 +2759,30 @@ async fn test_the_done_check_is_told_which_action_opened_the_page() {
     state.notes = Notes::new([fact.answering()]);
     let landed = observation(&[]);
     let source = Observation { url: "https://example.com/".into(), ..observation(&[]) };
-    state.navigation_from = Some((super::state::read_key(&landed), source));
-    state.navigated_by = Some("click \"Learn more\"".into());
-    state.history.push(crate::policy::HistoryEntry::new(
-        Some(Operation::Click),
-        Some("Learn more"),
-        StepOutcome::Executed,
-        true,
-    ));
+    state.acted_from = Some(source);
+    state.history.push(crate::policy::HistoryEntry::new(Some(operation), target, StepOutcome::Executed, true));
     let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
     let agent = Agent::new(Arc::new(FinishPage(landed.clone())), jev.clone(), Arc::new(ScriptedLLM));
     state.recoveries = agent.config.stall.max_recoveries;
-
+    agent.note_effect(&mut state, &landed);
     let _ = agent.finish(&mut state, &landed, None, None).await;
-    let facts = jev.3.lock().unwrap()[0]["page_facts"].to_string();
-    assert!(
-        facts.contains("opened by the run's own action: click \\\"Learn more\\\" on https://example.com/"),
-        "{facts}"
-    );
+    jev.3.lock().unwrap()[0]["page_facts"].to_string()
+}
+
+/// #1174: on the page a click opened, the done check is told the run's own action opened it, so "open the first link"
+/// is not judged an undone step.
+#[tokio::test]
+async fn test_the_done_check_is_told_which_action_opened_the_page() {
+    let facts = page_facts_after(Operation::Click, Some("Learn more")).await;
+    assert!(facts.contains("opened by the run's own action: click 'Learn more' on https://example.com/"), "{facts}");
+}
+
+/// A wait that ends on another address did not open it: the page changed by itself, and the done check is not told
+/// the run's action did.
+#[tokio::test]
+async fn test_the_done_check_is_not_told_a_wait_opened_the_page() {
+    let facts = page_facts_after(Operation::Wait, None).await;
+    assert!(!facts.contains("opened by the run's own action"), "{facts}");
 }
 
 /// The opening of the first page is recorded before any secret is typed, so a value typed as a secret later, such as a
