@@ -586,7 +586,7 @@ the tab or newline removed.
 
 Masking covers these forms and no others, and these are its limits: a tab or newline inside an address in free prose
 (a task, a context) ends the address there, as it separates words; an address written with no scheme
-(`user:pass@host/path`) is not an address, and no entry point adds a scheme to one; `,` and `)` are characters a
+(`user:pass@host/path`) is not an address, and the runner adds no scheme to one (the CLI's `--start` does before the run begins, so `//user:pass@host/path` there becomes `https://user:pass@host/path` and is learnt as that address); `,` and `)` are characters a
 userinfo may hold (RFC 3986 sub-delims), so in free prose `https://a.test,b@c.test` and `[x](https://a.test)b@c.test`
 read as one address whose userinfo is `a.test,b` or `a.test)b`, which is masked and learnt; a literal escape in free prose
 (`\u0040`, `&#64;` typed as characters) is not decoded. A caller's JSON is decoded before the run reads it, and a page's
