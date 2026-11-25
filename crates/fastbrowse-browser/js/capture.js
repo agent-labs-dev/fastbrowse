@@ -783,13 +783,16 @@
       }
       return;
     }
-    if (el.tagName === 'TABLE') {
+    // A table or code block holding items is read through: read whole, each item in it would share the place of the
+    // item around the block, and a nested list's items would lose their own.
+    const atomic = (el.tagName === 'TABLE' || el.tagName === 'PRE') && !holdsPlaced(el);
+    if (el.tagName === 'TABLE' && atomic) {
       for (const { text, links, hosts } of renderTable(el)) push('table', text, { links, hosts }, [el]);
       // A form laid out in a table: its cells render as text, which holds none of the controls' values.
       pushFields(el);
       return;
     }
-    if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
+    if (el.tagName === 'PRE' && atomic) return push('code', textOf(el), {}, [el]);
     const record = recordText(el);
     if (wholeItem(el) || record !== null) {
       // A card's heading still ends an earlier sibling's heading, even when the card is read without walking it.

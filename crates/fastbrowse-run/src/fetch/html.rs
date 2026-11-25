@@ -534,6 +534,8 @@ struct Holds {
     block: bool,
     /// A record, or a list item read as one block.
     item: bool,
+    /// An item or an element with a declared place, each of which is cited by its own place.
+    placed: bool,
     links: usize,
     first_link: Option<usize>,
     leaf_of_its_own: bool,
@@ -545,6 +547,7 @@ impl Holds {
         self.framed |= other.framed;
         self.block |= other.block;
         self.item |= other.item;
+        self.placed |= other.placed;
         self.links += other.links;
         self.first_link = self.first_link.or(other.first_link);
         self.leaf_of_its_own |= other.leaf_of_its_own;
@@ -598,6 +601,18 @@ impl Tree {
 
     fn link(&self, i: usize) -> bool {
         self.elements[i].tag == "a" && self.elements[i].href.is_some()
+    }
+
+    /// Whether an element has a place of its own: an item, or the page's declared `aria-posinset`.
+    fn placed(element: &Element) -> bool {
+        !element.hidden && (element.item || element.posinset.is_some())
+    }
+
+    /// A table or code block that holds placed items. `capture.js` reads one whole, but then every item in it shares the
+    /// place of the item around the block, so it is read through: each item is a block with its own place.
+    fn read_through(&self, i: usize) -> bool {
+        matches!(self.elements[i].tag.as_str(), "table" | "pre")
+            && self.elements[i + 1..=self.elements[i].last].iter().any(Self::placed)
     }
 
     /// A list item with no block of its own inside, which `capture.js` reads as one block.
@@ -687,13 +702,15 @@ impl Tree {
             let inside = holds[i];
             let own_heading = usize::from(heading_level(tag).is_some());
             // A table or frame is read in its own way, so neither one nor anything holding one is a card.
-            let framed = matches!(tag, "table" | "iframe" | "frame");
+            let framed = matches!(tag, "table" | "iframe" | "frame") && !self.read_through(i);
             let record = self.repeated(i, &groups[runs[i]], &headings)
                 && !framed
                 && !inside.framed
                 && headings[i] - own_heading <= 1
                 && inside.block
-                && !inside.item;
+                && !inside.item
+                // A card holding items is a group: read whole, none of them would have its own place.
+                && !inside.placed;
             let facts = if record { self.drawn_facts(i, &holds) } else { String::new() };
             if record && (element.text || !facts.is_empty()) {
                 let link = if self.link(i) { Some(i) } else { inside.first_link.filter(|_| inside.links == 1) };
@@ -707,6 +724,7 @@ impl Tree {
                 block: !element.hidden && displays_block(tag),
                 // A repeated wrapper around another list is a group, so its inner records stay separately citable.
                 item: candidates[i].is_some() || (tag == "li" && self.leaf(i)),
+                placed: Self::placed(element),
                 links: usize::from(self.link(i)),
                 first_link: self.link(i).then_some(i),
                 leaf_of_its_own: LEAVES_OF_THEIR_OWN.contains(&tag),
@@ -727,7 +745,7 @@ impl Tree {
                 && (element.hidden
                     || found.contains_key(&element.start)
                     || heading_level(tag).is_some()
-                    || matches!(tag, "table" | "pre")
+                    || (matches!(tag, "table" | "pre") && !self.read_through(parent))
                     || (tag == "li" && self.leaf(parent)));
             reached[i] = reached[parent] && !whole;
             let element = &elements[i];
@@ -856,6 +874,9 @@ struct Reader<'a> {
     records: HashMap<usize, Record>,
     /// The list items the first read found, by the tag token that opens each.
     item_places: HashMap<usize, OpenItem>,
+    /// The tables and code blocks read through, by the tag tokens that open and close each, and how many are open now:
+    /// the parts of a table inside one are read as blocks, so the items in a cell are not one row's text.
+    through: (HashSet<usize>, HashSet<usize>, usize),
     /// The list items open now, innermost last: every block read inside one is a part of that item.
     places: Vec<OpenItem>,
     /// The open card, whose whole text is one block.
@@ -889,9 +910,10 @@ impl Tags for Reader<'_> {
             self.flush(None, None, false);
             self.places.push(open);
         }
+        let name = self.read_through_name(&tag.name, at, true);
         // `<svg/>` is foreign content, where a self-closing tag ends the element: it opens nothing to skip.
         if !(tag.self_closing && &*tag.name == "svg") {
-            self.open(&tag.name, &tag.attrs, at);
+            self.open(name, &tag.attrs, at);
             if self.skip == 0
                 && self.empty.contains(&at)
                 && let Some(label) = tag.attrs.iter().find(|attr| &*attr.name.local == "aria-label")
@@ -905,6 +927,7 @@ impl Tags for Reader<'_> {
 
     fn end(&mut self, name: &str, at: usize) {
         self.emit_titles(at);
+        let name = self.read_through_name(name, at, false);
         self.close(name);
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
@@ -940,6 +963,20 @@ impl Tags for Reader<'_> {
 }
 
 impl<'a> Reader<'a> {
+    /// The name a tag is read as: a table or code block holding placed items, and the parts of a table inside one, are
+    /// plain blocks, which leaves each item its own place.
+    fn read_through_name<'t>(&mut self, name: &'t str, at: usize, start: bool) -> &'t str {
+        let (starts, closes, open) = &mut self.through;
+        let own = if start { starts.contains(&at) } else { closes.contains(&at) };
+        if own {
+            *open = if start { *open + 1 } else { open.saturating_sub(1) };
+            // The block's own end is read before the count drops, as its start was read after it rose.
+            return "div";
+        }
+        let part = matches!(name, "table" | "caption" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th" | "colgroup");
+        if *open > 0 && part { "div" } else { name }
+    }
+
     /// Ends the items the tag token at `at` closes. An item can end with no block break after it (an inline item, or one
     /// a start tag implies the end of), so what was read in it is flushed while its place still holds.
     fn end_places(&mut self, at: usize) {
@@ -991,6 +1028,7 @@ impl<'a> Reader<'a> {
             empty,
             records,
             item_places,
+            through: Default::default(),
             places: Vec::new(),
             record: None,
             notes,
@@ -1581,10 +1619,16 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
         })
         .map(|element| element.start)
         .collect();
+    let through: Vec<_> = (1..tree.elements.len()).filter(|&i| tree.read_through(i)).collect();
+    let through_tokens = (
+        through.iter().map(|&i| tree.elements[i].start).collect(),
+        through.iter().map(|&i| tree.elements[i].close).collect(),
+        0,
+    );
     let held = |is: fn(&Element) -> bool| tree.elements.iter().skip(1).filter(|e| is(e)).map(|e| e.start).collect();
     let (disabled, inert) = (held(|e| e.disabled), held(|e| e.inert));
     let mut reader = Reader::new(url, tree.records(), item_places, notes, ends, empty);
-    (reader.disabled, reader.inert) = (disabled, inert);
+    (reader.disabled, reader.inert, reader.through) = (disabled, inert, through_tokens);
     let mut reader = tokenize(html, Sink::new(reader)).into_inner();
     reader.emit_titles(usize::MAX);
     reader.close_record();
