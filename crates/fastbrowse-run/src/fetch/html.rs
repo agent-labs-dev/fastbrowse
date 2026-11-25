@@ -233,6 +233,8 @@ struct Element {
     /// The page's own `aria-posinset` and `aria-setsize`, when positive: a size of -1 says the page does not know it.
     posinset: Option<i64>,
     setsize: Option<i64>,
+    /// The page says it does not know the list's size (`aria-setsize="-1"`), so no count is stated for the item.
+    size_unknown: bool,
     /// The tag tokens that opened and closed it.
     start: usize,
     close: usize,
@@ -276,6 +278,7 @@ impl Tree {
             item: false,
             posinset: None,
             setsize: None,
+            size_unknown: false,
             start: usize::MAX,
             close: usize::MAX,
             last: 0,
@@ -465,6 +468,7 @@ impl Tags for Tree {
             item: name == "li" || get("role").as_deref() == Some("listitem"),
             posinset: positive(get("aria-posinset")),
             setsize: positive(get("aria-setsize")),
+            size_unknown: get("aria-setsize").is_some_and(|size| size.trim() == "-1"),
             start: at,
             close: usize::MAX,
             last: i,
@@ -573,6 +577,7 @@ impl Tree {
             }
             let (position, count) = match element.posinset {
                 Some(position) => (position, element.setsize.unwrap_or(0)),
+                None if element.size_unknown => (0, 0),
                 None => {
                     let mut up = element.parent;
                     while !self.elements[up].list && up != 0 {
@@ -2475,6 +2480,10 @@ mod tests {
                        <div><div role='listitem'><p>Second</p></div></div></div>";
         assert_eq!(place(wrapped, "First"), Some((1, 2)));
         assert_eq!(place(wrapped, "Second"), Some((2, 2)));
+        let unsized_list = "<div role='list'><div role='listitem' aria-setsize='-1'>One</div><div role='listitem' aria-setsize='-1'>Two</div></div>";
+        assert_eq!(place(unsized_list, "Two"), None);
+        let native = "<ul><li style='display:inline'>One</li><li style='display:inline'>Two</li></ul>";
+        assert_eq!(place(native, "Two"), Some((2, 2)));
         let inline = "<div role='list'><span role='listitem'>First</span> <span role='listitem'>Second</span></div>";
         assert_eq!(place(inline, "First"), Some((1, 2)));
         assert_eq!(place(inline, "Second"), Some((2, 2)));

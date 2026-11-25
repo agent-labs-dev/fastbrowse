@@ -602,6 +602,9 @@ async fn test_a_wrapped_item_and_a_field_value_carry_their_place() {
          <li><label>Other <input value='beta'></label></li></ul>\
          <div role='list'><span role='listitem'>Inline first</span> <span role='listitem'>Inline second</span></div>\
          <div role='list'><span><a href='/w1' role='listitem'>Wrapped first</a> <a href='/w2' role='listitem'>Wrapped second</a></span></div>\
+         <ul><div style='display:none'><li style='display:contents'>Hidden</li></div><li>Visible one</li><li>Visible two</li></ul>\
+         <ul><li style='display:inline'><a href='/n1'>Native first</a></li><li style='display:inline'><a href='/n2'>Native second</a></li></ul>\
+         <div role='list'><div role='listitem' aria-setsize='-1'>Unsized one</div><div role='listitem' aria-setsize='-1'>Unsized two</div></div>\
          <ul><li>Row one</li><li><img src='data:image/gif;base64,R0lGODlhAQABAAAAACw=' width='20' height='20' alt='Second pic'></li></ul>",
     )
     .await;
@@ -617,6 +620,12 @@ async fn test_a_wrapped_item_and_a_field_value_carry_their_place() {
     assert_eq!(place("Inline second"), Some((2, 2)));
     assert_eq!(place("Wrapped first"), Some((1, 2)));
     assert_eq!(place("Wrapped second"), Some((2, 2)));
+    assert_eq!(place("Visible one"), Some((1, 2)));
+    assert_eq!(place("Visible two"), Some((2, 2)));
+    assert_eq!(place("Unsized one"), None);
+    assert_eq!(place("Unsized two"), None);
+    assert_eq!(place("Native first"), Some((1, 2)));
+    assert_eq!(place("Native second"), Some((2, 2)));
     let full = h.page.capture().await.expect("capture");
     let image = full.blocks.iter().find(|b| text_of(&full, b).starts_with("Image element DOM metadata")).unwrap();
     assert_eq!(image.item_place.map(|place| (place.position, place.count)), Some((2, 2)));

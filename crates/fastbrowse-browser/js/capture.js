@@ -325,7 +325,7 @@
   const hasBlockFlow = e => {
     if (blockFlows.has(e)) return blockFlows.get(e);
     // An inline wrapper around ARIA list items is walked, so each item stays a block of its own place.
-    const block = isBlock(e) || e.querySelector('[role="listitem"]') !== null || [...e.children].some(
+    const block = isBlock(e) || e.querySelector('li,[role="listitem"]') !== null || [...e.children].some(
       child => child.tagName !== 'BR' && !SKIP.has(child.tagName) && !hidden(child) && hasBlockFlow(child),
     );
     blockFlows.set(e, block);
@@ -672,7 +672,7 @@
       }
       if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
         // An inline ARIA item has no line break around it, yet it is one place of its list: its text is its own block.
-        const inlineItem = node.matches('[role="listitem"]');
+        const inlineItem = node.matches('li,[role="listitem"]');
         if (inlineItem) flushRun(false);
         run.push(node);
         if (inlineItem) flushRun(false);
@@ -702,6 +702,8 @@
     const el = (node?.nodeType === 1 ? node : node?.parentElement)?.closest(`${ITEM},[aria-posinset]`);
     if (!el) return {};
     const declared = Number.parseInt(el.getAttribute('aria-posinset'), 10);
+    // The page says it does not know its list's size, so no count is stated for the item.
+    if (el.getAttribute('aria-setsize')?.trim() === '-1') return {};
     let position;
     let count;
     if (declared > 0) {
@@ -715,7 +717,10 @@
         if (visible(c)) return true;
         // The capture also reads display:contents items, which have children on screen but no box of their own.
         const style = getComputedStyle(c);
-        return style.display === 'contents' && style.visibility === 'visible';
+        if (!(style.display === 'contents' && style.visibility === 'visible')) return false;
+        // A box-less item still renders only when no ancestor between it and its list is removed from the page.
+        for (let a = c.parentElement; a && a !== list; a = a.parentElement) if (hidden(a)) return false;
+        return true;
       }) : [];
       position = siblings.indexOf(el) + 1;
       count = siblings.length;
