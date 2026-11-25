@@ -1065,6 +1065,41 @@ async fn test_a_disabled_control_offers_no_hover_and_enabling_it_keeps_it_the_sa
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_redrawn_submit_keeps_its_pairing_key_when_enabled() {
+    // Two forms' Saves share a label, so only the key pairs each with its redrawn self. A disabled submit sends nothing
+    // and an enabled one sends its form: that difference in the key left the enabled Save unpaired.
+    let cases = [
+        ("<button disabled>Save</button>", "<button>Save</button>"),
+        ("<input type=submit value=Save disabled>", "<input type=submit value=Save>"),
+        ("<fieldset disabled><button>Save</button></fieldset>", "<fieldset><button>Save</button></fieldset>"),
+    ];
+    for (disabled, enabled) in cases {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        eval_active(
+            &h.page,
+            &format!("document.body.innerHTML = '<form>{disabled}</form><form>{disabled}</form>'; true"),
+        )
+        .await;
+        let obs = h.observe().await;
+        let was = find(&obs, "Save");
+        assert!(was.disabled == Some(true) && was.operations.is_empty(), "{disabled}: {was:?}");
+        eval_active(
+            &h.page,
+            &format!("for (const form of document.querySelectorAll('form')) form.innerHTML = '{enabled}'; true"),
+        )
+        .await;
+        let after = h.observe().await;
+        let now = find(&after, "Save");
+        assert!(now.disabled != Some(true) && now.operations.contains(&Operation::Click), "{enabled}: {now:?}");
+        assert_ne!(now.id, was.id, "{enabled}: the redraw replaced the submit");
+        assert!(was.retarget_key.is_some(), "{disabled}");
+        assert_eq!(now.retarget_key, was.retarget_key, "{enabled}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_card_holding_only_a_disabled_control_is_still_offered_a_hover() {
     // A picture card's controls can appear only under the pointer; a disabled one it already shows offers nothing.
     let Some(h) = harness().await else { return };

@@ -1307,7 +1307,9 @@
     return pressable(e) ? 'button' : null;
   };
 
-  const submitSemantics = memo(e => {
+  // What submitting from a control sends, and whether its submit control is disabled now. A disabled submit sends
+  // nothing, but it is the same submit once enabled: the pairing key reads the semantics apart from that state.
+  const submitFacts = memo(e => {
     const form = e.form;
     const explicit = ['BUTTON', 'INPUT'].includes(e.tagName) && ['submit', 'image'].includes(nativeProperty(e, 'type'));
     const implicit = [
@@ -1328,20 +1330,25 @@
     const submit = explicit ? e : [...form.getRootNode().querySelectorAll('button,input')].find(
       c => c.form === form && (nativeProperty(c, 'type') === 'submit' || nativeProperty(c, 'type') === 'image'),
     );
-    if (submit?.matches(':disabled')) return null;
+    const disabled = !!submit?.matches(':disabled');
     if (!submit && [...form.elements].filter(c => c.tagName === 'INPUT' && implicit.includes(nativeProperty(c, 'type'))).length > 1)
       return null;
     // A page can make any of these properties return something other than text. Coursera's React app left an
     // HTMLInputElement where a method string belongs and `JSON.stringify` threw on React's circular fiber, which ended
     // the run as a browser error; a value that is not text is no more use to a caller than none.
     const shown = v => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
-    return JSON.stringify({
+    const semantics = JSON.stringify({
       label: shown(submit ? labelOf(submit) : labelOf(form)),
       method: shown(submit?.getAttribute('formmethod') || form.method),
       action: shown(submit?.getAttribute('formaction') || form.action),
       text: shown(innerTextOf(form)),
     });
+    return { disabled, semantics };
   });
+  const submitSemantics = e => {
+    const facts = submitFacts(e);
+    return facts && !facts.disabled ? facts.semantics : null;
+  };
 
   const framePath = doc => {
     if (doc === document) return null;
@@ -1430,7 +1437,8 @@
       scope ? scopeDigest(scope) : '',
       e.ownerDocument.location.origin,
       e.ownerDocument.defaultView.performance.timeOrigin,
-      submitSemantics(e),
+      // A redraw that replaced and enabled Save changed what it submits from nothing to the form, and left it unpaired.
+      stable ? (submitFacts(e)?.semantics ?? null) : submitSemantics(e),
       source.getAttribute('name'),
       source.getAttribute('autocomplete'),
       identity(source),
