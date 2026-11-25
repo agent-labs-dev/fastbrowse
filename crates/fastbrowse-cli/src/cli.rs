@@ -21,6 +21,7 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Style};
 use fastbrowse_core::safety::{ScopedSecrets, origin_of};
 use fastbrowse_core::telemetry::{TRACE_ENV, Trace, trace_to};
+use fastbrowse_run::Field;
 use indexmap::IndexMap;
 
 use crate::argparse::{Exit, Opt, Parsed, Parser, py_float, py_int};
@@ -516,7 +517,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         ..RunTask::default()
     };
     let secrets_given = !args.secret.is_empty() || args.bitwarden.is_some();
-    fastbrowse_run::check(&task, secrets_given).map_err(|error| ConfigurationError(error.to_string()))?;
+    fastbrowse_run::check_named(&task, secrets_given, &|field| flag_name(field, args))
+        .map_err(|error| ConfigurationError(error.to_string()))?;
     read_attachments(&mut task.attachments, &args.file)?;
     // Check secrets before browser setup so a missing credential names what the operator needs to supply.
     let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
@@ -725,4 +727,50 @@ fn json_result(
     }
     fields.insert("build".into(), build.fields().into());
     fields.into()
+}
+
+/// The flags the user typed for a run option a refusal names. `--extension` and `--extension-browser`, and `--secret`
+/// and `--bitwarden`, set the same option, so the ones passed are the ones named; an option with no flag keeps its SDK name.
+fn flag_name(field: Field, args: &Args) -> String {
+    let flags: Vec<&str> = match field {
+        Field::Fetch => vec!["--fetch"],
+        Field::Browser => vec!["--browser"],
+        Field::Local => vec!["--local"],
+        Field::Chrome => [(args.headed, "--headed"), (args.profile.is_some(), "--profile")]
+            .into_iter()
+            .filter_map(|(given, flag)| given.then_some(flag))
+            .collect(),
+        Field::ChromeHeaded => vec!["--headed"],
+        Field::ChromeProfile => vec!["--profile"],
+        Field::CloudProfile => vec!["--cloud-profile"],
+        Field::CdpUrl => vec!["--cdp-url"],
+        Field::CdpPort => vec!["--cdp-port"],
+        Field::Attach => vec!["--attach"],
+        Field::TargetMatch => vec!["--target-match"],
+        Field::Foreground => vec!["--foreground"],
+        Field::ProxyCountry => vec!["--proxy-country"],
+        Field::Viewport => vec!["--viewport"],
+        Field::Record => vec!["--record"],
+        Field::Recipe => vec!["--recipe"],
+        Field::SaveRecipe => vec!["--save-recipe"],
+        Field::Cursor => vec!["--cursor"],
+        Field::Downloads => vec!["--downloads"],
+        Field::Extension if args.extension_browser.is_some() && !args.extension => vec!["--extension-browser"],
+        Field::Extension => vec!["--extension"],
+        Field::Inputs => vec!["--input"],
+        Field::Attachments => vec!["--file"],
+        Field::Authorization => vec!["--authorize"],
+        Field::Secrets => [(!args.secret.is_empty(), "--secret"), (args.bitwarden.is_some(), "--bitwarden")]
+            .into_iter()
+            .filter_map(|(given, flag)| given.then_some(flag))
+            .collect(),
+        Field::Launch
+        | Field::ChromeBinary
+        | Field::CloudExtensions
+        | Field::CloudTimeoutMinutes
+        | Field::AllowedOrigins => {
+            vec![]
+        }
+    };
+    if flags.is_empty() { field.sdk_name().to_string() } else { flags.join(", ") }
 }

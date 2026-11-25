@@ -233,6 +233,81 @@ pub fn country_code(value: &str) -> Result<String, String> {
     Ok(code)
 }
 
+/// A run option a refusal names. `check` writes each as its SDK field; an entry point whose callers know the options by
+/// another name passes `check_named` a renderer, so no finished message is ever searched for names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    Fetch,
+    Browser,
+    Local,
+    Launch,
+    Chrome,
+    ChromeHeaded,
+    ChromeProfile,
+    ChromeBinary,
+    CloudProfile,
+    CdpUrl,
+    CdpPort,
+    Attach,
+    TargetMatch,
+    Foreground,
+    ProxyCountry,
+    CloudExtensions,
+    Viewport,
+    CloudTimeoutMinutes,
+    Record,
+    Recipe,
+    SaveRecipe,
+    Cursor,
+    Downloads,
+    Extension,
+    Inputs,
+    Attachments,
+    Authorization,
+    Secrets,
+    AllowedOrigins,
+}
+
+impl Field {
+    /// The name the SDKs, `serve` and MCP know the option by.
+    pub const fn sdk_name(self) -> &'static str {
+        match self {
+            Self::Fetch => "fetch",
+            Self::Browser => "browser",
+            Self::Local => "local",
+            Self::Launch => "launch",
+            Self::Chrome => "chrome",
+            Self::ChromeHeaded => "chrome.headed",
+            Self::ChromeProfile => "chrome.profile",
+            Self::ChromeBinary => "chrome.binary",
+            Self::CloudProfile => "cloud_profile",
+            Self::CdpUrl => "cdp_url",
+            Self::CdpPort => "cdp_port",
+            Self::Attach => "attach",
+            Self::TargetMatch => "target_match",
+            Self::Foreground => "foreground",
+            Self::ProxyCountry => "proxy_country",
+            Self::CloudExtensions => "cloud_extensions",
+            Self::Viewport => "viewport",
+            Self::CloudTimeoutMinutes => "cloud_timeout_minutes",
+            Self::Record => "record",
+            Self::Recipe => "recipe",
+            Self::SaveRecipe => "save_recipe",
+            Self::Cursor => "cursor",
+            Self::Downloads => "downloads",
+            Self::Extension => "extension",
+            Self::Inputs => "inputs",
+            Self::Attachments => "attachments",
+            Self::Authorization => "authorization",
+            Self::Secrets => "secrets",
+            Self::AllowedOrigins => "allowed_origins",
+        }
+    }
+}
+
+/// How a refusal writes each [`Field`] it names.
+pub type Names<'a> = &'a dyn Fn(Field) -> String;
+
 /// What `check` makes of the arguments that need reading.
 struct Checked {
     schema: Option<Arc<RecordSchema>>,
@@ -245,22 +320,28 @@ struct Checked {
 /// wording wherever the run was asked for. `secrets` says whether the run was given any, which an entry point knows
 /// before it resolves one: refusing them after resolving named a missing variable or vault item instead (#1337).
 pub fn check(task: &RunTask, secrets: bool) -> Result<(), RunError> {
+    check_named(task, secrets, &|field| field.sdk_name().to_string())
+}
+
+/// [`check`], with each option a refusal names written as `names` gives it: an entry point whose callers know the options
+/// by another name (the CLI's flags) renders them here, where each is a value, never by rewriting the finished message.
+pub fn check_named(task: &RunTask, secrets: bool, names: Names<'_>) -> Result<(), RunError> {
     // Called before `run_task`, so outside the run's redactor, and a refusal quotes the value it refused (a proxy
     // country, a DevTools endpoint) to an embedder that may log it: masked by what the task holds, each string learnt
     // as one whole address, as every door learns a message before it says anything of it (#1381).
-    checked(task, secrets).map(drop).map_err(|error| {
+    checked(task, secrets, names).map(drop).map_err(|error| {
         let learnt = serde_json::to_value(task).map(|given| fastbrowse_core::safety::learnt(&given));
         redacted_error(error, &learnt.unwrap_or_default())
     })
 }
 
-fn checked(task: &RunTask, secrets: bool) -> Result<Checked, RunError> {
+fn checked(task: &RunTask, secrets: bool, names: Names<'_>) -> Result<Checked, RunError> {
     let refuse = |message: String| Err(RunError::Invalid(message));
     if task.task.trim().is_empty() {
         return refuse("task must not be empty".into());
     }
-    let given = |pairs: &[(&'static str, bool)]| -> Vec<&'static str> {
-        pairs.iter().filter(|(_, on)| *on).map(|(name, _)| *name).collect()
+    let given = |pairs: &[(Field, bool)]| -> Vec<String> {
+        pairs.iter().filter(|(_, on)| *on).map(|(field, _)| names(*field)).collect()
     };
     let chrome = task.chrome.clone().unwrap_or_default();
     if task.viewport.is_some_and(|(width, height)| width == 0 || height == 0) {
@@ -269,120 +350,151 @@ fn checked(task: &RunTask, secrets: bool) -> Result<Checked, RunError> {
     let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
     let extension = task.wants_extension();
     if task.fetch && task.browser {
-        return refuse("fetch never starts a browser and browser always does, so pass one of them".into());
+        return refuse(format!(
+            "{} never starts a browser and {} always does, so pass one of them",
+            names(Field::Fetch),
+            names(Field::Browser)
+        ));
     }
     if task.fetch {
         // None of these names anything a browserless run has, and accepting one would report a browser that was never
         // started, a file that was never written or a cursor nobody saw.
         let browser = given(&[
-            ("local", task.local),
-            ("launch", task.launch),
-            ("chrome", task.chrome.is_some()),
-            ("cloud_profile", task.cloud_profile.is_some()),
-            ("cdp_url", task.cdp_url.is_some()),
-            ("cdp_port", task.cdp_port.is_some()),
-            ("attach", task.attach),
-            ("target_match", task.target_match.is_some()),
-            ("foreground", task.foreground),
-            ("proxy_country", task.proxy_country.is_some()),
-            ("cloud_extensions", !task.cloud_extensions.is_empty()),
-            ("viewport", task.viewport.is_some()),
-            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
-            ("record", task.record.is_some()),
-            ("recipe", task.recipe.is_some()),
-            ("save_recipe", task.save_recipe.is_some()),
-            ("cursor", task.cursor == Some(true)),
-            ("downloads", task.downloads.is_some()),
-            ("extension", extension),
+            (Field::Local, task.local),
+            (Field::Launch, task.launch),
+            (Field::Chrome, task.chrome.is_some()),
+            (Field::CloudProfile, task.cloud_profile.is_some()),
+            (Field::CdpUrl, task.cdp_url.is_some()),
+            (Field::CdpPort, task.cdp_port.is_some()),
+            (Field::Attach, task.attach),
+            (Field::TargetMatch, task.target_match.is_some()),
+            (Field::Foreground, task.foreground),
+            (Field::ProxyCountry, task.proxy_country.is_some()),
+            (Field::CloudExtensions, !task.cloud_extensions.is_empty()),
+            (Field::Viewport, task.viewport.is_some()),
+            (Field::CloudTimeoutMinutes, task.cloud_timeout_minutes.is_some()),
+            (Field::Record, task.record.is_some()),
+            (Field::Recipe, task.recipe.is_some()),
+            (Field::SaveRecipe, task.save_recipe.is_some()),
+            (Field::Cursor, task.cursor == Some(true)),
+            (Field::Downloads, task.downloads.is_some()),
+            (Field::Extension, extension),
             // A fetched page can only follow links (`FetchedPage::act`), so nothing is typed, attached or submitted:
             // accepting these reported a run that could use them when none could (#1337).
-            ("inputs", task.inputs.as_ref().is_some_and(|inputs| !inputs.is_empty())),
-            ("attachments", !task.attachments.is_empty()),
-            ("authorization", task.authorization.as_ref().is_some_and(|given| given.irreversible_actions)),
+            (Field::Inputs, task.inputs.as_ref().is_some_and(|inputs| !inputs.is_empty())),
+            (Field::Attachments, !task.attachments.is_empty()),
+            (Field::Authorization, task.authorization.as_ref().is_some_and(|given| given.irreversible_actions)),
             // Secrets are typed into fields, and a fetched page has none to type into.
-            ("secrets", secrets),
+            (Field::Secrets, secrets),
         ]);
         if !browser.is_empty() {
-            return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
+            return refuse(format!(
+                "{} starts no browser, so it cannot be combined with {}",
+                names(Field::Fetch),
+                browser.join(", ")
+            ));
         }
     }
     if task.cdp_url.is_some() && task.cdp_port.is_some() {
-        return refuse("cdp_url and cdp_port both name a browser to attach to; pass one".into());
+        return refuse(format!(
+            "{} and {} both name a browser to attach to; pass one",
+            names(Field::CdpUrl),
+            names(Field::CdpPort)
+        ));
     }
     // A cloud profile or a country asked of a browser on this machine would run signed out, or browse from this
     // machine's address, and report neither.
     let cloud = given(&[
-        ("cloud_profile", task.cloud_profile.is_some()),
-        ("proxy_country", task.proxy_country.is_some()),
-        ("cloud_extensions", !task.cloud_extensions.is_empty()),
-        ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
+        (Field::CloudProfile, task.cloud_profile.is_some()),
+        (Field::ProxyCountry, task.proxy_country.is_some()),
+        (Field::CloudExtensions, !task.cloud_extensions.is_empty()),
+        (Field::CloudTimeoutMinutes, task.cloud_timeout_minutes.is_some()),
     ]);
     if !handed && !cloud.is_empty() && (task.local || task.launch || chrome.headed || chrome.profile.is_some()) {
         return refuse(format!(
-            "{} needs the cloud browser: drop it, or drop local, launch, chrome.headed and chrome.profile \
+            "{} needs the cloud browser: drop it, or drop {}, {}, {} and {} \
              (and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)",
-            cloud.join(", ")
+            cloud.join(", "),
+            names(Field::Local),
+            names(Field::Launch),
+            names(Field::ChromeHeaded),
+            names(Field::ChromeProfile)
         ));
     }
     if extension {
         // The user's own browser is already running, signed in as they are: nothing here can start or shape it.
         let other = given(&[
-            ("launch", task.launch),
-            ("chrome.headed", chrome.headed),
-            ("chrome.profile", chrome.profile.is_some()),
-            ("chrome.binary", task.chrome.as_ref().is_some_and(|chrome| chrome.binary.is_some())),
-            ("cdp_url", task.cdp_url.is_some()),
-            ("cdp_port", task.cdp_port.is_some()),
-            ("cloud_profile", task.cloud_profile.is_some()),
-            ("proxy_country", task.proxy_country.is_some()),
-            ("cloud_extensions", !task.cloud_extensions.is_empty()),
-            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
-            ("viewport", task.viewport.is_some()),
+            (Field::Launch, task.launch),
+            (Field::ChromeHeaded, chrome.headed),
+            (Field::ChromeProfile, chrome.profile.is_some()),
+            (Field::ChromeBinary, task.chrome.as_ref().is_some_and(|chrome| chrome.binary.is_some())),
+            (Field::CdpUrl, task.cdp_url.is_some()),
+            (Field::CdpPort, task.cdp_port.is_some()),
+            (Field::CloudProfile, task.cloud_profile.is_some()),
+            (Field::ProxyCountry, task.proxy_country.is_some()),
+            (Field::CloudExtensions, !task.cloud_extensions.is_empty()),
+            (Field::CloudTimeoutMinutes, task.cloud_timeout_minutes.is_some()),
+            (Field::Viewport, task.viewport.is_some()),
         ]);
         if !other.is_empty() {
             if task.local_means_extension() {
                 return refuse(format!(
-                    "local drives your own Chrome through the fastbrowse extension; pass launch to start a separate \
+                    "{} drives your own Chrome through the fastbrowse extension; pass {} to start a separate \
                      Chrome, or drop {}",
+                    names(Field::Local),
+                    names(Field::Launch),
                     other.join(", ")
                 ));
             }
-            return refuse(format!("extension drives the browser it is connected in; drop {}", other.join(", ")));
+            return refuse(format!(
+                "{} drives the browser it is connected in; drop {}",
+                names(Field::Extension),
+                other.join(", ")
+            ));
         }
     } else if handed {
         // Attaching replaces every option that shapes a started browser.
         let shaping = given(&[
-            ("local", task.local),
-            ("launch", task.launch),
-            ("chrome.headed", chrome.headed),
-            ("chrome.profile", chrome.profile.is_some()),
-            ("cloud_profile", task.cloud_profile.is_some()),
-            ("proxy_country", task.proxy_country.is_some()),
-            ("cloud_extensions", !task.cloud_extensions.is_empty()),
-            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
-            ("viewport", task.viewport.is_some()),
+            (Field::Local, task.local),
+            (Field::Launch, task.launch),
+            (Field::ChromeHeaded, chrome.headed),
+            (Field::ChromeProfile, chrome.profile.is_some()),
+            (Field::CloudProfile, task.cloud_profile.is_some()),
+            (Field::ProxyCountry, task.proxy_country.is_some()),
+            (Field::CloudExtensions, !task.cloud_extensions.is_empty()),
+            (Field::CloudTimeoutMinutes, task.cloud_timeout_minutes.is_some()),
+            (Field::Viewport, task.viewport.is_some()),
         ]);
         if !shaping.is_empty() {
             return refuse(format!(
-                "cdp_url and cdp_port attach to a browser already running; drop {}",
+                "{} and {} attach to a browser already running; drop {}",
+                names(Field::CdpUrl),
+                names(Field::CdpPort),
                 shaping.join(", ")
             ));
         }
         if let Some(url) = &task.cdp_url
             && !(url.starts_with("ws://") || url.starts_with("wss://"))
         {
-            return refuse(format!("cdp_url expects a ws:// or wss:// URL, got {}", repr(url)));
+            return refuse(format!("{} expects a ws:// or wss:// URL, got {}", names(Field::CdpUrl), repr(url)));
         }
         if task.cdp_port == Some(0) {
-            return refuse("cdp_port expects a port from 1 to 65535, got 0".into());
+            return refuse(format!("{} expects a port from 1 to 65535, got 0", names(Field::CdpPort)));
         }
     } else {
         if task.attach || task.target_match.is_some() {
-            return refuse("attach and target_match need cdp_url, cdp_port or extension".into());
+            return refuse(format!(
+                "{} and {} need {}, {} or {}",
+                names(Field::Attach),
+                names(Field::TargetMatch),
+                names(Field::CdpUrl),
+                names(Field::CdpPort),
+                names(Field::Extension)
+            ));
         }
     }
     if let Some(country) = &task.proxy_country {
-        country_code(country).map_err(|error| RunError::Invalid(format!("proxy_country: {error}")))?;
+        country_code(country).map_err(|error| RunError::Invalid(format!("{}: {error}", names(Field::ProxyCountry))))?;
     }
     let origins = match &task.allowed_origins {
         None => None,
@@ -391,14 +503,19 @@ fn checked(task: &RunTask, secrets: bool) -> Result<Checked, RunError> {
     if origins.is_some() && extension {
         // A popup's first request can leave before the extension attaches to it, so the grant could not refuse it
         // before it was sent, as a scoped run promises.
-        return refuse(
-            "allowed_origins cannot be combined with extension: a popup's first request can leave before the \
-             extension reaches it, so it could not be refused first"
-                .into(),
-        );
+        return refuse(format!(
+            "{} cannot be combined with {}: a popup's first request can leave before the \
+             extension reaches it, so it could not be refused first",
+            names(Field::AllowedOrigins),
+            names(Field::Extension)
+        ));
     }
     if origins.is_some() && task.record.is_some() {
-        return refuse("record shows whatever the tab shows, so it cannot be combined with allowed_origins".into());
+        return refuse(format!(
+            "{} shows whatever the tab shows, so it cannot be combined with {}",
+            names(Field::Record),
+            names(Field::AllowedOrigins)
+        ));
     }
     let schema = match &task.output_schema {
         None => None,
@@ -1077,7 +1194,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host, redactor: Arc<Mutex<Reda
     // A resolver that declares no secret gives the run none to type, as an empty list to `serve` does; counting the
     // resolver itself refused a fetch run for an empty `ScopedSecrets` that serve and the CLI accept.
     let secrets = host.secrets.as_ref().is_some_and(|secrets| !secrets.available().is_empty());
-    let Checked { schema, origins } = checked(&task, secrets)?;
+    let Checked { schema, origins } = checked(&task, secrets, &|field| field.sdk_name().to_string())?;
     if host.open_browser.is_some() && task.viewport.is_some() {
         return Err(RunError::Invalid("viewport cannot be applied to a browser handed through open_browser".into()));
     }
@@ -1593,6 +1710,20 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    #[test]
+    fn test_a_refusal_names_each_option_as_its_caller_does_and_leaves_what_it_quotes() {
+        let task = RunTask {
+            task: "Read it".into(),
+            cdp_url: Some("http://site.test/record/fetch/local?start=1".into()),
+            ..RunTask::default()
+        };
+        let sdk = check(&task, false).unwrap_err().to_string();
+        assert_eq!(sdk, "cdp_url expects a ws:// or wss:// URL, got 'http://site.test/record/fetch/local?start=1'");
+        let flags = |field: Field| format!("--{}", field.sdk_name().replace(['_', '.'], "-"));
+        let named = check_named(&task, false, &flags).unwrap_err().to_string();
+        assert_eq!(named, "--cdp-url expects a ws:// or wss:// URL, got 'http://site.test/record/fetch/local?start=1'");
+    }
 
     #[tokio::test]
     async fn test_run_refuses_start_credentials_repeated_in_settings() {
