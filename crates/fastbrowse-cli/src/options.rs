@@ -142,16 +142,15 @@ pub fn start_url(value: &str) -> String {
     }
     // A leading `//` is protocol-relative; the host begins after it.
     let rest = trimmed.strip_prefix("//").unwrap_or(trimmed);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    // The userinfo a host may carry, then the host without its port or IPv6 brackets.
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
-    let host = match host_port.strip_prefix('[') {
-        Some(bracketed) => bracketed.split(']').next().unwrap_or(""),
-        None => host_port.split(':').next().unwrap_or(""),
-    };
-    let loopback =
-        host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
-    format!("{}://{rest}", if loopback { "http" } else { "https" })
+    let secure = format!("https://{rest}");
+    // Use the host Chrome will load, which includes loopback spellings such as 127.1.
+    let loopback = url::Url::parse(&secure).ok().is_some_and(|parsed| match parsed.host() {
+        Some(url::Host::Domain(host)) => host == "localhost",
+        Some(url::Host::Ipv4(host)) => host.is_loopback(),
+        Some(url::Host::Ipv6(host)) => host.is_loopback(),
+        None => false,
+    });
+    if loopback { format!("http://{rest}") } else { secure }
 }
 
 /// Whether an address states its own scheme, so it must not be rewritten. A scheme is `name:` followed by `//`, or by
@@ -319,6 +318,7 @@ mod tests {
         assert_eq!(start_url("example.com:8080/x"), "https://example.com:8080/x");
         assert_eq!(start_url("localhost:3000"), "http://localhost:3000");
         assert_eq!(start_url("127.0.0.1:8080"), "http://127.0.0.1:8080");
+        assert_eq!(start_url("127.1:8080"), "http://127.1:8080");
         assert_eq!(start_url("127.example.com:8080"), "https://127.example.com:8080");
         assert_eq!(start_url("[::1]:8000"), "http://[::1]:8000");
         assert_eq!(start_url("//example.com/x"), "https://example.com/x");
