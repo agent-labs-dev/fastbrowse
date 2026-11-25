@@ -1159,7 +1159,9 @@
         if (n.nodeType === 3) return [{ image: false, text: n.textContent }];
         if (n.nodeType !== 1 || CODE.has(n.tagName) || n.getAttribute('aria-hidden') === 'true') return [];
         if (!shown(n) && shown(parent)) return [];
-        if (isPicture(n)) return [{ image: true, text: labelFrom(n, seen) }];
+        // A wrapper of several images is read through, so each image stays its own part and drops its own repeated title.
+        if (isPicture(n) && (n.tagName === 'IMG' || n.querySelectorAll('img').length <= 1))
+          return [{ image: true, text: labelFrom(n, seen) }];
         if (!seen.has(n) && namedByOwnContent(n)) {
           seen.add(n);
           nameReads?.nodes.add(n);

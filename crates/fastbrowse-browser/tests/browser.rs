@@ -1545,7 +1545,9 @@ async fn test_an_image_alt_that_repeats_the_visible_title_does_not_double_the_la
           '<li role="button" tabindex="0"><img alt="Badged image" width="16" height="16">Badged <b>image</b><span>New</span></li>' +
           '<li role="button" tabindex="0"><img alt="Grouped title" width="16" height="16"><span><span>Grouped title</span><span>New</span></span></li>' +
           '<li role="button" tabindex="0"><span><img alt="Grouped thumb" width="16" height="16"><span>New</span></span><span>Grouped thumb</span></li>' +
-          '<li role="button" tabindex="0"><span><img alt="Cover art" width="16" height="16"><span>New</span></span><span>Grouped thumb</span></li></ul>';"##,
+          '<li role="button" tabindex="0"><span><img alt="Cover art" width="16" height="16"><span>New</span></span><span>Grouped thumb</span></li>' +
+          '<li role="button" tabindex="0"><span><img alt="Test image" width="16" height="16"><img alt="New" width="16" height="16"></span><span>Test image</span></li>' +
+          '<li role="button" tabindex="0"><span><img alt="Cover art" width="16" height="16"><img alt="Second image" width="16" height="16"></span><span>Second image</span></li></ul>';"##,
     )
     .await;
     let obs = h.observe().await;
@@ -1562,7 +1564,9 @@ async fn test_an_image_alt_that_repeats_the_visible_title_does_not_double_the_la
             "Badged image New",
             "Grouped title New",
             "New Grouped thumb",
-            "Cover art New Grouped thumb"
+            "Cover art New Grouped thumb",
+            "New Test image",
+            "Cover art Second image"
         ],
         "{:?}",
         obs.controls
