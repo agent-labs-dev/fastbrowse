@@ -666,23 +666,45 @@ async fn test_a_block_never_spans_two_items() {
     h.close().await;
 }
 
-/// Text a card renders in its shadow tree is still inside the list item around the card.
+/// A shadow tree is part of the item around its host, and its items are items of the list around it: text a card
+/// renders in its shadow tree, in an element or directly under the root, keeps the item's place; tabs an inline host
+/// renders keep their own places; and items each host renders count among their list's items.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_shadow_text_keeps_the_enclosing_items_place() {
+async fn test_shadow_content_keeps_item_places() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
-    set_body(&h.session, "<ul><li><div id='first'></div></li><li><div id='second'></div></li></ul>").await;
+    set_body(
+        &h.session,
+        "<ul><li><div id='first'></div></li><li><div id='second'></div></li></ul>\
+         <ul><li><div id='third'></div></li><li><div id='fourth'></div></li></ul>\
+         <ul><li>First outer</li><li><p>Choices: <span id='tabs'></span></p></li></ul>\
+         <div role='list'><div class='host'></div><div class='host'></div></div>",
+    )
+    .await;
     eval_active(
         &h.session,
-        "document.querySelector('#first').attachShadow({mode:'open'}).innerHTML='<p>First card</p>'; \
-         document.querySelector('#second').attachShadow({mode:'open'}).innerHTML='<p>Second card</p>'",
+        "const attach = (selector, html) => (document.querySelector(selector).attachShadow({mode:'open'}).innerHTML = html); \
+         attach('#first', '<p>First card</p>'); attach('#second', '<p>Second card</p>'); \
+         attach('#third', 'Third card<p>Third details</p>'); attach('#fourth', 'Fourth card<p>Fourth details</p>'); \
+         attach('#tabs', '<span role=tab aria-posinset=1 aria-setsize=3>First tab</span> \
+         <span role=tab aria-posinset=2 aria-setsize=3>Second tab</span>'); \
+         document.querySelectorAll('.host').forEach((host, i) => \
+           host.attachShadow({mode:'open'}).innerHTML = `<div role=listitem><p>Hosted ${i + 1}</p></div>`)",
     )
     .await;
     let capture = content_capture(&h.page).await;
-    for (text, position) in [("First card", 1), ("Second card", 2)] {
-        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).expect("shadow text");
-        assert_eq!(block.item_place.map(|place| (place.position, place.count)), Some((position, 2)), "{text}");
-    }
+    let place = |text: &str| {
+        let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text).unwrap_or_else(|| panic!("{text}"));
+        block.item_place.map(|place| (place.position, place.count))
+    };
+    assert_eq!(place("First card"), Some((1, 2)));
+    assert_eq!(place("Second card"), Some((2, 2)));
+    assert_eq!(place("Third card"), Some((1, 2)), "text directly under a shadow root");
+    assert_eq!(place("Fourth card"), Some((2, 2)), "text directly under a shadow root");
+    assert_eq!(place("First tab"), Some((1, 3)));
+    assert_eq!(place("Second tab"), Some((2, 3)));
+    assert_eq!(place("Hosted 1"), Some((1, 2)));
+    assert_eq!(place("Hosted 2"), Some((2, 2)));
     h.close().await;
 }
 

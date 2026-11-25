@@ -324,8 +324,7 @@
   const blockFlows = new WeakMap();
   const hasBlockFlow = e => {
     if (blockFlows.has(e)) return blockFlows.get(e);
-    // An inline wrapper around ARIA list items is walked, so each item stays a block of its own place.
-    const block = isBlock(e) || e.querySelector('li,[role="listitem"]') !== null || [...e.children].some(
+    const block = isBlock(e) || [...e.children].some(
       child => child.tagName !== 'BR' && !SKIP.has(child.tagName) && !hidden(child) && hasBlockFlow(child),
     );
     blockFlows.set(e, block);
@@ -579,7 +578,7 @@
     return ![...el.children].some(c => !SKIP.has(c.tagName) && !hidden(c) && isBlock(c));
   }
   // A list item read as one block: a leaf holding no other item, whose text would otherwise take the outer item's place.
-  const wholeItem = el => el.tagName === 'LI' && leaf(el) && !el.querySelector(PLACED);
+  const wholeItem = el => el.tagName === 'LI' && leaf(el) && !holdsPlaced(el);
 
   // A classless div repeated three times is usually page layout; a record is a styled unit or a semantic item.
   function repeated(el) {
@@ -675,10 +674,15 @@
       }
       if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
         // An inline element holding items is read through, so no block joins two items' text: read in one run, an inner
-        // list's first item took its outer item's place.
-        if (node.querySelector(PLACED)) {
+        // list's first item took its outer item's place. A host holding them in its shadow tree is read there, in place.
+        if (holdsPlaced(node)) {
           flushRun(false);
-          walk(node);
+          if (node.shadowRoot) {
+            enteredShadows.add(node);
+            scope(node.shadowRoot, framePath, `${sourcePath}/shadow:${identity(node)}`, path);
+          } else {
+            walk(node);
+          }
           continue;
         }
         // An inline item has no line break around it, yet it is one place of its list: its text is its own block.
@@ -710,17 +714,25 @@
   const ITEM = 'li,[role="listitem"]';
   // What has a place of its own, which no block may share with another.
   const PLACED = `${ITEM},[aria-posinset]`;
-  // `closest` stops at a shadow root, so the search goes on from its host: a card's shadow paragraph is in the item
-  // around the card.
-  const closestPlaced = e => {
+  // The DOM's tree walks stop at a shadow root: `closest` and `parentElement` end at it, and `querySelectorAll` does not
+  // enter one. A shadow tree is rendered as part of its host, so where an item sits is read through each: a card's
+  // shadow paragraph is in the item around the card, and the items hosts render are items of the list around them.
+  const composedParent = n => n.parentElement ?? n.parentNode?.host ?? null;
+  const composedClosest = (e, selector) => {
     for (let at = e; at; at = at.getRootNode().host) {
-      const found = at.closest(PLACED);
+      const found = at.closest(selector);
       if (found) return found;
     }
     return null;
   };
+  const composedAll = (root, selector) =>
+    [...root.querySelectorAll('*')].flatMap(e => [
+      ...(e.matches(selector) ? [e] : []),
+      ...(e.shadowRoot ? composedAll(e.shadowRoot, selector) : []),
+    ]);
+  const holdsPlaced = e => [e, e.shadowRoot].some(root => root && composedAll(root, PLACED).length > 0);
   function itemPlace(node) {
-    const el = closestPlaced(node?.nodeType === 1 ? node : node?.parentElement);
+    const el = node && composedClosest(node.nodeType === 1 ? node : composedParent(node), PLACED);
     if (!el) return {};
     const declared = Number.parseInt(el.getAttribute('aria-posinset'), 10);
     // The page says it does not know its list's size, so no count is stated for the item.
@@ -732,15 +744,15 @@
       count = Number.parseInt(el.getAttribute('aria-setsize'), 10);
     } else {
       // The items its nearest list owns, through any layout wrappers between them, but not those of a list nested in it.
-      const list = el.parentElement?.closest(LIST);
-      const siblings = list ? [...list.querySelectorAll(ITEM)].filter(c => {
-        if (c.parentElement.closest(LIST) !== list || hidden(c)) return false;
+      const list = composedClosest(composedParent(el), LIST);
+      const siblings = list ? composedAll(list, ITEM).filter(c => {
+        if (composedClosest(composedParent(c), LIST) !== list || hidden(c)) return false;
         if (visible(c)) return true;
         // The capture also reads display:contents items, which have children on screen but no box of their own.
         const style = getComputedStyle(c);
         if (!(style.display === 'contents' && style.visibility === 'visible')) return false;
         // A box-less item still renders only when no ancestor between it and its list is removed from the page.
-        for (let a = c.parentElement; a && a !== list; a = a.parentElement) if (hidden(a)) return false;
+        for (let a = composedParent(c); a && a !== list; a = composedParent(a)) if (hidden(a)) return false;
         return true;
       }) : [];
       position = siblings.indexOf(el) + 1;
