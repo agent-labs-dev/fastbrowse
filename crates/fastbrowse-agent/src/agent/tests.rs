@@ -29,7 +29,7 @@ use super::state::Written;
 use super::state::{Edits, Extent, FailureCause, Flow, RunState, SiteFailure};
 use super::{Agent, Outcome};
 use crate::memory::{Fact, Notes};
-use crate::policy::{Decision, HistoryEntry};
+use crate::policy::{Commit, Decision, HistoryEntry};
 use crate::retrieval::testing::capture;
 use crate::scripted::{ScriptedJev, ScriptedLLM};
 
@@ -579,6 +579,51 @@ fn test_an_action_after_the_typing_may_have_sent_it() {
     assert_eq!(unsent_fact(&[typed_into("Reference"), pressed.clone()], &page), None);
     let failed = HistoryEntry { outcome: StepOutcome::Failed, ..pressed };
     assert!(unsent_fact(&[typed_into("Reference"), failed], &page).is_some());
+}
+
+/// Two threads to reply in: the first reply's "Your reply was posted." still showed beside the second thread's open
+/// reply box, and Jev judged both replies posted. The page now says which step put that text there, while it shows.
+#[test]
+fn test_text_an_earlier_commit_put_on_the_page_is_named_with_that_step() {
+    let url = "https://example.test/";
+    let posted = HistoryEntry {
+        put: Some((url.into(), vec!["Thanks.".into(), "Your reply was posted.".into()])),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post (Ada)"), StepOutcome::Executed, true)
+    };
+    let reply = HistoryEntry::new(Some(Operation::Click), Some("Reply (Grace)"), StepOutcome::Executed, true);
+    let page = Observation {
+        viewport_text: "Ada\nThanks.".into(),
+        offscreen_text: "Your reply was posted.".into(),
+        ..observation(&[])
+    };
+    let fact = super::helpers::earlier_text_fact(&[posted.clone(), reply.clone()], &page).expect("a fact");
+    assert_eq!(
+        fact,
+        "The text \"Thanks.\", \"Your reply was posted.\" appeared when the run clicked 'Post (Ada)'; it tells of that step, not of any later one."
+    );
+    // The step that just put it there says so in its own effect, text the page no longer shows is not named, and text
+    // put on another page is not this page's.
+    assert_eq!(super::helpers::earlier_text_fact(std::slice::from_ref(&posted), &page), None);
+    let cleared = Observation { viewport_text: "Ada".into(), ..observation(&[]) };
+    assert_eq!(super::helpers::earlier_text_fact(&[posted.clone(), reply.clone()], &cleared), None);
+    // A notice raised again by a later post is that post's, not the first's.
+    let again = HistoryEntry {
+        put: Some((url.into(), vec!["Your reply was posted.".into()])),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post (Grace)"), StepOutcome::Executed, true)
+    };
+    let fact =
+        super::helpers::earlier_text_fact(&[posted.clone(), again.clone(), reply.clone()], &page).expect("a fact");
+    assert!(fact.contains("\"Your reply was posted.\" appeared when the run clicked 'Post (Grace)'"), "{fact}");
+    assert!(fact.contains("\"Thanks.\" appeared when the run clicked 'Post (Ada)'"), "{fact}");
+    assert!(!fact.contains("\"Your reply was posted.\" appeared when the run clicked 'Post (Ada)'"), "{fact}");
+    // The latest post's own notice is its, though its fact is left to its effect: only Ada's other text is named.
+    let fact = super::helpers::earlier_text_fact(&[posted.clone(), again], &page).expect("a fact");
+    assert_eq!(
+        fact,
+        "The text \"Thanks.\" appeared when the run clicked 'Post (Ada)'; it tells of that step, not of any later one."
+    );
+    let elsewhere = Observation { url: "https://example.test/other".into(), ..page };
+    assert_eq!(super::helpers::earlier_text_fact(&[posted, reply], &elsewhere), None);
 }
 
 fn buttons_at(url: &str, labels: &[&str]) -> Observation {
@@ -1391,9 +1436,14 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         assert_eq!(gates[0]["step"], 0);
         assert!(gates[0].get("target").is_none());
         assert!(gates[0].get("task").is_none());
-        // A refusal stops the run for confirmation rather than going round recovery.
+        // A refusal stops the run for confirmation rather than going round recovery, and says which step waits and how
+        // to let the run take it: told only that it "needs confirmation", a caller asked a person to post (#1413).
         if let Err(flow) = gated {
-            assert!(matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation), "{case}");
+            let Flow::Stop(stop) = flow else { panic!("{case}: not stopped") };
+            assert_eq!(stop.status, Status::NeedsConfirmation, "{case}");
+            let said = if authorized { super::acting::NOT_ASKED } else { super::acting::NOT_AUTHORIZED };
+            assert_eq!(stop.error.as_deref(), Some(format!("click 'Finish' {said}").as_str()), "{case}");
+            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused), "{case}");
         }
     }
 }
@@ -1673,7 +1723,7 @@ async fn test_a_commit_the_task_makes_conditional_proceeds_only_when_the_page_sh
         if let Err(flow) = gated {
             let Flow::Unsure(unsure) = flow else { panic!("{case}: refused for another step, not stopped") };
             assert!(unsure.reason.contains("depends on a condition the task sets"), "{case}: {}", unsure.reason);
-            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Failed), "{case}");
+            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused), "{case}");
         }
     }
 }
@@ -1698,6 +1748,18 @@ async fn test_a_commit_after_the_runs_first_is_checked_against_the_steps_already
             assert!(unsure.reason.contains("already been done by this run"), "{case}: {}", unsure.reason);
         }
     }
+}
+
+/// A step held for confirmation says which step waits and how to let the run take it, and is recorded as refused, not
+/// failed with no failure named: a caller told only that a Post "needs confirmation" asked a person to post (#1413).
+#[tokio::test]
+async fn test_a_step_held_for_confirmation_says_why_and_is_recorded_as_refused() {
+    let held = [("requested", 0.1), ("conditional", 0.1), ("carried", 0.9), ("refused", 0.0)];
+    let (gated, _, state) = gate_post_after_commits(0, &held, &[]).await;
+    let Err(Flow::Stop(stop)) = gated else { panic!("a held step before any commit did not stop: {gated:?}") };
+    assert_eq!(stop.status, Status::NeedsConfirmation);
+    assert!(stop.error.as_deref().is_some_and(|error| error.contains(super::acting::NOT_ASKED)), "{stop:?}");
+    assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused));
 }
 
 /// A task can give values to use at first and others only once the site does something ("if the site rejects
@@ -1776,6 +1838,20 @@ async fn test_a_conditional_gate_describes_press_chords_and_navigation_addresses
         assert!(values.contains(expected), "{operation}: {values}");
         assert!(!values.contains(absent), "{operation}: {values}");
     }
+}
+
+/// `confirm-dialog` ended stuck one run in three: the step that confirmed "Delete Holiday post permanently?" was shown
+/// to Jev as a bare "dialog" and a reloaded page, and `carried` scored 0.39 on the very page the passing runs scored
+/// 0.57 and 0.67. The record now says which question the dialog asked and how it was answered.
+#[test]
+fn test_an_answered_dialog_is_recorded_with_its_question_and_answer() {
+    let dialog = fastbrowse_core::page::Dialog {
+        kind: "confirm".into(),
+        message: "Delete Holiday post permanently?".into(),
+        default_prompt: None,
+    };
+    assert_eq!(dialog.answered(true), r#"accepted the confirm dialog "Delete Holiday post permanently?""#);
+    assert_eq!(dialog.answered(false), r#"dismissed the confirm dialog "Delete Holiday post permanently?""#);
 }
 
 /// A task that orders a delete after opening a dialog and cancelling it ("then delete") was refused because the
@@ -2528,6 +2604,41 @@ async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opene
     let opened = &sent[0]["recent_actions"][0];
     assert_eq!(opened["operation"], "navigate");
     assert!(opened["target"].as_str().is_some_and(|target| target.starts_with("https://example.test/reset?token=")));
+}
+
+/// A reply posted on a signed-in page was missing after a reload, because the site served the copy from before the
+/// post for a minute, and the carried-out check scored the step 0.22. It is told each commit the run sent and the text
+/// the page showed in answer to it, which moved its score where a claim about the site did not; with no commit, nothing.
+#[tokio::test]
+async fn test_the_done_check_is_told_each_commit_the_run_sent_and_what_the_page_then_showed() {
+    let post = |put: &[&str]| HistoryEntry {
+        put: Some(("https://example.test/".into(), put.iter().map(|piece| piece.to_string()).collect())),
+        commit: Some(Commit::Taken),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post (cjber / Author)"), StepOutcome::Executed, true)
+    };
+    for (history, expected) in [
+        (
+            vec![post(&["Your reply was posted."])],
+            vec![
+                "The run's click 'Post (cjber / Author)' was sent, and the page then showed the text 'Your reply was posted.'.",
+            ],
+        ),
+        (vec![post(&[])], vec!["The run's click 'Post (cjber / Author)' was sent."]),
+        (vec![HistoryEntry { commit: None, ..post(&["Your reply was posted."]) }], Vec::new()),
+    ] {
+        let mut state = run_state();
+        state.raw_task = "Reply to the comment with: Glad it helps!".into();
+        state.history = history;
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+        agent.actions_done(&mut state, &observation(&[])).await.expect("the done check answers");
+        let sent = jev.3.lock().unwrap();
+        let told: Vec<&str> = sent[0]["page_facts"]
+            .as_array()
+            .map(|facts| facts.iter().filter_map(|fact| fact.as_str()).filter(|f| f.contains("was sent")).collect())
+            .unwrap_or_default();
+        assert_eq!(told, expected, "{}", sent[0]);
+    }
 }
 
 /// Asked to add a variant the page showed out of stock, the done check rightly found the step undone, and every DONE
@@ -10464,4 +10575,16 @@ async fn test_a_click_inside_a_drawn_surface_is_authorized_for_the_thing_it_land
         asked.push(questions);
     }
     assert_ne!(asked[0], asked[1]);
+}
+
+/// A dialog message that holds a password with a quote in it is recorded as the page wrote it, so the redactor that
+/// registered the password finds it: an escaped copy matched none of its forms.
+#[test]
+fn test_an_answered_dialog_keeps_the_message_unescaped_for_redaction() {
+    let dialog = fastbrowse_core::page::Dialog {
+        kind: "alert".into(),
+        message: "Saved with vault'42 \"now\"".into(),
+        default_prompt: None,
+    };
+    assert!(dialog.answered(true).contains("vault'42"), "{}", dialog.answered(true));
 }

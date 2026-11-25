@@ -1539,13 +1539,15 @@ impl BrowserSession {
         screencast_command(&self.0, method, params, session_id).await;
     }
 
-    pub async fn handle_dialog(&self, accept: bool, prompt_text: Option<&str>) -> Result<(), BrowserError> {
-        let session_id = {
+    /// Answer the pending dialog and return it: the one answered at dispatch, which a page can have replaced since the
+    /// run last observed it.
+    pub async fn handle_dialog(&self, accept: bool, prompt_text: Option<&str>) -> Result<Dialog, BrowserError> {
+        let pending = {
             let state = self.0.state.lock().unwrap();
-            state.pending_dialog().map(|(sid, _)| sid)
+            state.pending_dialog()
         };
         // Python's `next(...)` raises when nothing is pending; a dispatch for a dialog that is gone fails the same way.
-        let Some(session_id) = session_id else {
+        let Some((session_id, dialog)) = pending else {
             return Err(BrowserError::failed(
                 "Page.handleJavaScriptDialog/StopIteration",
                 "Page.handleJavaScriptDialog failed (StopIteration)",
@@ -1557,7 +1559,7 @@ impl BrowserSession {
         }
         self.send("Page.handleJavaScriptDialog", params, Some(&session_id)).await?;
         self.0.state.lock().unwrap().dialogs.remove(&session_id);
-        Ok(())
+        Ok(dialog)
     }
 }
 

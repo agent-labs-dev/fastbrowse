@@ -20,7 +20,10 @@ use serde_json::{Map, Value as JsonValue, json};
 
 use super::Agent;
 use super::driving::require;
-use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
+use super::helpers::{
+    caller_link, describe, dialog_question, earlier_text_fact, empty_fields_fact, navigation_question, sent_facts,
+    unsent_fact,
+};
 use super::seeing::cards;
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, Step, Stop, Unsure};
 use crate::memory::Notes;
@@ -188,6 +191,12 @@ pub(super) fn gate_questions(
     }
     (irreversible, action, lasting)
 }
+
+/// What a step held for confirmation in an unauthorized run says: which step, and how a caller lets the run take it.
+/// Told only that a Post "needs confirmation", a caller could not tell how to go on and asked a person to post (#1413).
+pub(super) const NOT_AUTHORIZED: &str = "needs confirmation: this run is not authorized to take actions that cannot be undone, so it stopped before taking it. Run the task again with authorization to let it.";
+/// What a step held for confirmation in an authorized run says: authorization covers only what the task asks for.
+pub(super) const NOT_ASKED: &str = "needs confirmation: it cannot be undone and the task, as judged, does not ask for it, so the run stopped before taking it.";
 
 /// The finish check's answer about the steps the task asks to be carried out.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -908,19 +917,9 @@ impl Agent {
             return self.refuse_once(state, observation, decision, label, why).await;
         }
         self.trace_authorization(state, decision, GateReason::ConfirmationRequired);
-        let reason = format!("{} {} needs confirmation", decision.operation, text::repr(label));
-        let confidence = Some(decision.confidence());
-        self.record_failure(
-            state,
-            observation,
-            decision.operation,
-            &self.redact(&reason),
-            Some(self.redact(label)),
-            confidence,
-            Some(false),
-            decision.decider(),
-        )
-        .await?;
+        let held = format!("{} {}", decision.operation, text::repr(label));
+        let reason = format!("{held} {}", if authorized { NOT_ASKED } else { NOT_AUTHORIZED });
+        self.record_refusal(state, observation, decision, &self.redact(&reason), label).await?;
         Err(Stop::new(Status::NeedsConfirmation, "Confirm/irreversible", reason).into())
     }
 
@@ -1046,6 +1045,9 @@ impl Agent {
             "notes": self.decision_notes(state),
             "recent_actions": recent_actions,
         });
+        if let Some(fact) = earlier_text_fact(&state.history, observation) {
+            page["page_facts"] = vec![fact].into();
+        }
         self.mask_strings(&mut page);
         page["task"] = self.caller_task(state).into();
         page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
@@ -1073,17 +1075,7 @@ impl Agent {
     ) -> Step {
         let reason = format!("{} {} {why}", decision.operation, text::repr(label));
         let redacted = self.redact(&reason);
-        self.record_failure(
-            state,
-            observation,
-            decision.operation,
-            &redacted,
-            Some(self.redact(label)),
-            Some(decision.confidence()),
-            Some(false),
-            decision.decider(),
-        )
-        .await?;
+        self.record_refusal(state, observation, decision, &redacted, label).await?;
         Err(Unsure::new(redacted).into())
     }
 
@@ -1450,7 +1442,9 @@ impl Agent {
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
             .chain(opened)
+            .chain(earlier_text_fact(&state.history, observation))
             .chain(state.to_carry_out.then(|| empty_fields_fact(observation)).flatten())
+            .chain(sent_facts(&state.history))
             .chain(untouched)
             .collect();
         if !facts.is_empty() {

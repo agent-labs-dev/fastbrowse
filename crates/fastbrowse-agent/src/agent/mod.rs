@@ -422,9 +422,16 @@ impl Agent {
         Ok(self.with_changes(result, changed))
     }
 
-    /// `result` with the fields its run changed named first in its answer when the run ended without finishing (#939).
-    /// Every result leaves the run here, once its status is final, so no path that builds one can drop them.
+    /// `result` with what its run sent and the fields it changed named first in its answer when the run ended without
+    /// finishing (#939, #1317), and the step held for confirmation after them: a caller shown only the changed fields
+    /// could not tell which step was waiting or how to let the run take it (#1413). Every result leaves the run here,
+    /// once its status is final, so no path that builds one can drop them.
     fn with_changes(&self, mut result: RunResult, changed: Option<String>) -> RunResult {
+        let held = result.error.clone().filter(|_| result.status == Status::NeedsConfirmation);
+        let changed = match (changed, held) {
+            (Some(changed), Some(held)) => Some(format!("{changed}\n{held}")),
+            (changed, held) => changed.or(held),
+        };
         if result.status != Status::Complete
             && let Some(changed) = changed
         {

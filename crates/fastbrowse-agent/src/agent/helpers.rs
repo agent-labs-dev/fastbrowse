@@ -137,6 +137,90 @@ pub(crate) fn unsent_fact(history: &[HistoryEntry], observation: &Observation) -
     })
 }
 
+/// A commit's step as its result names it: the operation, then the quoted target ("click 'Post'").
+pub(crate) fn commit_step(entry: &HistoryEntry) -> String {
+    let operation = entry.operation.map_or_else(String::new, |operation| operation.to_string());
+    let target = entry.target.as_deref().map(text::repr).unwrap_or_default();
+    [operation, target].join(" ").trim().to_string()
+}
+
+/// One fact per commit the run has sent, with the text the page then showed, as the step's own record has it.
+///
+/// A site can serve the copy from before a send for a while: a reply posted on a signed-in page was missing after a
+/// reload, the carried-out question scored its step 0.22, and the run ended stuck over a reply that was live. Replayed
+/// on the real request with its screenshot, five times each, the question scored 0.29 to 0.48 as sent, 0.32 to 0.54
+/// told only that the click was sent, and 0.48 to 0.63 told also that the page then showed "Your reply was posted."
+/// The site's own answer to the send moves it; a claim that the site keeps what it sent did not, and code does not
+/// know that.
+pub(crate) fn sent_facts(history: &[HistoryEntry]) -> Vec<String> {
+    history
+        .iter()
+        .filter(|entry| entry.commit == Some(crate::policy::Commit::Taken))
+        .map(|entry| {
+            let step = commit_step(entry);
+            match &entry.put {
+                Some((_, put)) if !put.is_empty() => {
+                    let shown: Vec<String> = put.iter().map(|piece| text::repr(piece)).collect();
+                    format!("The run's {step} was sent, and the page then showed the text {}.", shown.join(", "))
+                }
+                _ => format!("The run's {step} was sent."),
+            }
+        })
+        .collect()
+}
+
+/// The fact, when there is one, naming text on this page that an earlier step of the run put there.
+///
+/// A notice stays on the page after the step that raised it: two threads to reply in, the first reply's "Your reply
+/// was posted." still showed beside the second thread's open, unsent reply box, and Jev judged both replies posted and
+/// let the run finish with one. Told which step put the text there, in these words, it judged the second reply still to
+/// do; told it as a list of steps and their text, or with "after the run's step", it did not. The same names the run's
+/// own posts, so a check whether a thread already holds a reply can tell them from the thread's.
+pub(crate) fn earlier_text_fact(history: &[HistoryEntry], observation: &Observation) -> Option<String> {
+    // Each line the page shows is one step's: a notice an earlier post raised, gone and raised again by a later post,
+    // is the later post's, so the latest step to have put a line takes one of its occurrences first. The latest step
+    // takes its share too, though its own effect tells of it: left out, its fresh notice was named as an earlier post's.
+    let mut shown: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for line in [&observation.viewport_text, &observation.offscreen_text].into_iter().flat_map(|text| text.lines()) {
+        *shown.entry(text::strip(line)).or_default() += 1;
+    }
+    let mut owned: Vec<Vec<&String>> = vec![Vec::new(); history.len()];
+    for (at, entry) in history.iter().enumerate().rev().filter(|(_, entry)| entry.outcome == StepOutcome::Executed) {
+        let Some((_, put)) = entry.put.as_ref().filter(|(url, _)| *url == observation.url) else { continue };
+        for piece in put.iter().rev() {
+            if let Some(left) = shown.get_mut(piece.as_str()).filter(|left| **left > 0) {
+                *left -= 1;
+                owned[at].push(piece);
+            }
+        }
+        owned[at].reverse();
+    }
+    owned.pop()?;
+    let told: Vec<String> = history
+        .iter()
+        .zip(owned)
+        .filter(|(_, pieces)| !pieces.is_empty())
+        .map(|(entry, pieces)| {
+            let target = entry.target.as_deref().map(text::repr).unwrap_or_default();
+            let did = match entry.operation {
+                Some(Operation::Click) => format!("clicked {target}"),
+                Some(Operation::Enter) => format!("pressed Enter in {target}"),
+                Some(Operation::Press) => format!("pressed a key in {target}"),
+                Some(Operation::Drag) => format!("dragged {target}"),
+                Some(Operation::Dialog) => "answered the dialog".to_string(),
+                Some(operation) => format!("took the step {operation} {target}"),
+                None => "opened the page".to_string(),
+            };
+            let shown: Vec<String> = pieces.iter().map(|piece| format!("{piece:?}")).collect();
+            format!(
+                "The text {} appeared when the run {did}; it tells of that step, not of any later one.",
+                shown.join(", ")
+            )
+        })
+        .collect();
+    (!told.is_empty()).then(|| told.join(" "))
+}
+
 /// The fields still empty here on a task to carry out: Jev confirmed a form with its one field empty when nothing
 /// said so.
 pub(crate) fn empty_fields_fact(observation: &Observation) -> Option<String> {

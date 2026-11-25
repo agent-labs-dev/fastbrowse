@@ -376,6 +376,7 @@ impl Agent {
         let mut typed: Option<String> = None;
         let mut destination = None;
         let mut effect_now: Option<String> = None;
+        let mut put_now: Option<(String, Vec<String>)> = None;
         let mut setting = false;
         let mut set: Vec<FieldChange> = Vec::new();
         let frames = self.on_event.is_some() && self.config.step_frames;
@@ -654,6 +655,7 @@ impl Agent {
                         was_target: false,
                     });
                 }
+                put_now = (!done.put.is_empty()).then(|| (landed.url.clone(), done.put));
                 effect_now = Some(done.summary);
             }
             progressed = judged;
@@ -683,6 +685,7 @@ impl Agent {
             text: typed,
             before,
             effect: effect_now,
+            put: put_now,
             look: state.look.take(),
             setting: setting.then_some(true),
             set,
@@ -1013,6 +1016,7 @@ impl Agent {
                 added: false,
                 changed: false,
                 shown: Vec::new(),
+                put: Vec::new(),
             }
         } else if (state.committing || keeping || sighted.is_some() || last.look.is_some())
             && last.outcome == StepOutcome::Executed
@@ -1073,6 +1077,16 @@ impl Agent {
                 *read = true;
             }
             state.read_tries.remove(&page);
+        }
+        // What the effect says the step put on this page, which a commit that stayed on its document names (a step that
+        // went to another page added that page's text, not its own).
+        if !done.put.is_empty() {
+            let (_, put) = last.put.get_or_insert_with(|| (observation.url.clone(), Vec::new()));
+            for piece in &done.put {
+                if !put.contains(piece) {
+                    put.push(piece.clone());
+                }
+            }
         }
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),
@@ -1220,11 +1234,51 @@ impl Agent {
         page_changed: Option<bool>,
         decided_by: Decider,
     ) -> Step {
+        let step = (operation, reason, target, confidence, page_changed, decided_by);
+        self.record_undone(state, observation, StepOutcome::Failed, step).await
+    }
+
+    /// Record a step the authorization gate did not take. Recorded as failed with no failure named, a Post held for
+    /// confirmation read as a failure the caller could not get past, and it asked a person to post by hand (#1413).
+    pub(super) async fn record_refusal(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        reason: &str,
+        label: &str,
+    ) -> Step {
+        let decided_by = decision.decider();
+        let step = (
+            decision.operation,
+            reason,
+            Some(self.redact(label)),
+            Some(decision.confidence()),
+            Some(false),
+            decided_by,
+        );
+        self.record_undone(state, observation, StepOutcome::Refused, step).await
+    }
+
+    async fn record_undone(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        outcome: StepOutcome,
+        (operation, reason, target, confidence, page_changed, decided_by): (
+            Operation,
+            &str,
+            Option<String>,
+            Option<f64>,
+            Option<bool>,
+            Decider,
+        ),
+    ) -> Step {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation,
             decided_by,
-            outcome: StepOutcome::Failed,
+            outcome,
             failure: None,
             url: observation.url.clone(),
             target,

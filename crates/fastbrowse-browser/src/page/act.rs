@@ -780,8 +780,8 @@ impl CdpPage {
                         Some(StepFailure::BrowserError),
                     ));
                 };
-                self.session.handle_dialog(accept, action.text.as_deref()).await?;
-                Ok((StepOutcome::Executed, None, None))
+                let answered = self.session.handle_dialog(accept, action.text.as_deref()).await?;
+                Ok((StepOutcome::Executed, Some(answered.answered(accept)), None))
             }
             Operation::Read | Operation::Done => Err(BrowserError::failed(
                 "act/not-dispatched",

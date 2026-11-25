@@ -36,6 +36,8 @@ pub struct Effect {
     /// The ids of the controls the step showed on the page it stayed on. A step that loaded another document or
     /// address showed none: every control there is new, and the step's link to them is the address it went to.
     pub shown: Vec<String>,
+    /// The text the step added to the page, piece by piece, as `summary` quotes it.
+    pub put: Vec<String>,
 }
 
 /// Whether a field can be left: an editable control the browser reports holds keyboard focus. Focus a browser never
@@ -379,10 +381,11 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
     let changed = !parts.is_empty() || before.viewport_text != after.viewport_text;
     // Named after `changed` is settled, so text that moved outside the viewport still counts as no visible change.
     // Another document or address is all new, and the page text shows it.
+    let mut put = Vec::new();
     if text_too && !navigated && !replaced {
-        let added = added_text(before, after);
-        if !added.is_empty() {
-            let quoted: Vec<String> = added.iter().map(|piece| format!("{piece:?}")).collect();
+        put = added_text(before, after);
+        if !put.is_empty() {
+            let quoted: Vec<String> = put.iter().map(|piece| format!("{piece:?}")).collect();
             parts.push(format!("added the text: {}", quoted.join(", ")));
         }
     }
@@ -400,6 +403,7 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
         added: stayed_whole && (content_changed || !shown.is_empty()),
         changed,
         shown: if navigated || replaced { Vec::new() } else { shown.iter().map(|c| c.id.clone()).collect() },
+        put,
     }
 }
 
