@@ -1545,7 +1545,12 @@ async fn test_an_image_alt_that_repeats_the_visible_title_does_not_double_the_la
     .await;
     let obs = h.observe().await;
     let labels: Vec<&str> = obs.controls.iter().filter(|c| c.role == "button").map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, ["Test image", "Cover art Second image", "Third image", "Wrapped image", "Split image"], "{:?}", obs.controls);
+    assert_eq!(
+        labels,
+        ["Test image", "Cover art Second image", "Third image", "Wrapped image", "Split image"],
+        "{:?}",
+        obs.controls
+    );
     h.close().await;
 }
 
