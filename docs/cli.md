@@ -37,8 +37,8 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--json` | print the full result |
 | `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages. Without either, a run that ends short of `complete` keeps its trace anyway (see [Results](#results)) |
 | `--record FILE` | save a captioned MP4 of the run, and the same video without captions beside it with `.plain` before the extension (`run.mp4` and `run.plain.mp4`); needs `ffmpeg`. It shows what the pages showed, so watch it before sharing. `--fetch` starts no browser, so it cannot be combined with `--record` |
-| `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
-| `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
+| `--recipe FILE` | replay a [recipe](design.md#recipes): run each saved step first while its page and control match, and reuse saved values |
+| `--input NAME=VALUE` | a named value the task refers to ("the TEXT input"), stated to the models by name and value and typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`, and say on stderr when it was not saved; naming the `--recipe` file repairs it after steps the agent had to decide |
 | `--no-cursor` | don't draw the agent's cursor. By default fastbrowse draws its focus marker inside the page wherever the page can be seen: your own Chrome, a headed or attached browser, a cloud browser's live view, or a `--record` video. It glides to each action point, closes its brackets as it lands and pulses on each press, and is never in what the model reads |
@@ -206,8 +206,8 @@ fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
 
 To change a password, add the replacement as an origin-scoped secret named `new_password`, refer to it in the
 task, and pass `--authorize`. fastbrowse never generates a password or reuses the old one. A single field marked
-`autocomplete=new-password` can also appear on a sign-in page. Jev uses the task and form context to choose its
-role; when the role is unclear, the run stops at `needs_input`.
+`autocomplete=new-password` can also appear on a sign-in page. The driver types a secret only by the name it gives,
+so the task decides which secret goes in which field; when it does not say, the driver ends the run `needs_input`.
 
 ## Open windows and Electron apps
 
@@ -245,7 +245,6 @@ Jev, the decision model, has settings of its own:
 | `FASTBROWSE_DECISION_BASE_URL` | retargets the selected source, and turns off automatic failover |
 | `FASTBROWSE_DECISION_MODEL` | pins the decision model, and turns off automatic failover |
 | `FASTBROWSE_DECISION_API_KEY` | the key for a decision host that takes one |
-| `FASTBROWSE_ACTION_PICKER` | `llm` has the run's LLM pick each browser action instead of Jev, an ablation for measuring the picker; every other decision stays with Jev. `jev` is the default |
 
 [Jev routing](jev.md#provider-failover) gives the provider order and failover, and
 [other decision hosts](jev.md#other-decision-hosts) lists each host with its key and models.
@@ -256,16 +255,16 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 
 | Status | Exit | Meaning |
 |:--|--:|:--|
-| `complete` | 0 | Jev judged the task done |
-| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page, nothing read answers the task's question, or the site refused a requested step |
+| `complete` | 0 | the driver ended the run with an answer that the pages it read back |
+| `unverified` | 10 | the driver finished, but the requested data could not be filled from the page, nothing read answers the task's question, or the site refused a requested step |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
 | `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
 | `needs_input` | 5 | a required value or file is missing, or an upload exceeds the configured size limit |
 | `stuck` | 9 | the stall budget ran out without reaching a page state the run had not seen |
 | `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
-| `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
-| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry, or the page says an item the task requires cannot be bought; the same run later may pass |
+| `observation_limit` | 11 | the page or required evidence cannot fit a model's prompt budget |
+| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry, or the site is down or the page the task needs does not exist; the same run later may pass |
 | `cancelled` | 12 | you stopped an `--extension` run in your browser: from its popup, the debugging bar or by closing its tabs |
 | `error` | 1 | a model or browser failure |
 
@@ -280,7 +279,7 @@ The JSON result says why a run stopped where a caller can act on it:
   browser failure names the command and its reason (`Failed/Page.navigate/net::ERR_ABORTED`), a limit its resource
   (`Budget/seconds`), a callback that threw its method and the internal error code
   (`Callback/run/event/error/-32603`, the same from every SDK and transport), and a stop the rule that made it
-  (`SiteFailure/http-503`, `Wall/sign-in`, `Done/unanswered`, `Recovery/exhausted`). A `complete` run has none.
+  (`SiteFailure/http-503`, `Chat/give-up`, `Done/unanswered`, `Recovery/exhausted`). A `complete` run has none.
 - `trace` is the file holding the run's trace, when it ended short of `complete` and neither `--trace` nor
   `FASTBROWSE_TRACE` chose where traces go. The plain output names it on stderr as `trace:`. Every CLI and MCP run
   writes its trace to a file of its own under `$XDG_STATE_HOME/fastbrowse/traces` (`~/.local/state` without it;

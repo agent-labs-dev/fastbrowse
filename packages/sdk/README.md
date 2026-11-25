@@ -1,7 +1,7 @@
 # fastbrowse
 
-A browser agent for Node.js. It picks one of the controls a page has instead of generating an action, and each
-fact in its answer cites a quote from a page it read. This package is the TypeScript SDK. It runs the agent as
+A browser agent for Node.js. An LLM acts on the numbered controls each page has, and each fact in its answer cites
+a quote from a page it read. This package is the TypeScript SDK. It runs the agent as
 a native binary, so the machine needs no Python.
 
 ## Install

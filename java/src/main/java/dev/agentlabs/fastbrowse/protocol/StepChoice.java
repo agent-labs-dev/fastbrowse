@@ -6,9 +6,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 /**
- * @param label The label as Jev read it, with resolved secrets masked.
- * @param context The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
- * @param chosen Whether Jev chose this control: the target, and for a drag the destination too.
+ * @param label The label as the driver read it, with resolved secrets masked.
+ * @param context The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.
+ * @param chosen Whether the driver acted on this control: the target, and for a drag the destination too.
  */
 public record StepChoice(
     @JsonProperty("id") String id,

@@ -22,7 +22,6 @@ fastbrowse-evals = "fastbrowse_evals.cli:main"
 
 [project.entry-points."parallax.harnesses"]
 fastbrowse = "fastbrowse_evals.backend:FastbrowseHarness"
-fastbrowse-llm-picker = "fastbrowse_evals.backend:FastbrowseLlmPickerHarness"
 fastbrowse-pool = "fastbrowse_evals.live:FastbrowsePoolHarness"
 fastbrowse-hosted = "fastbrowse_evals.hosted_api:FastbrowseHostedHarness"
 

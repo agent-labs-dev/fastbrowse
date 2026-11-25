@@ -7,11 +7,7 @@ use crate::py::{lax, text};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Thresholds {
-    #[serde(deserialize_with = "lax::float")]
-    pub login_required_above: f64,
-    /// Jev's agreement that the page is a bot check, above which the run waits for it to clear or stops on it.
-    #[serde(deserialize_with = "lax::float")]
-    pub bot_check_above: f64,
+    /// Jev's agreement that an action cannot be undone, above which code holds it for authorization.
     #[serde(deserialize_with = "lax::float")]
     pub irreversible_above: f64,
     /// Jev's agreement that the task asks for a commit, above which an authorized run takes it.
@@ -21,26 +17,7 @@ pub struct Thresholds {
 
 impl Default for Thresholds {
     fn default() -> Self {
-        Thresholds {
-            login_required_above: 0.70,
-            bot_check_above: 0.70,
-            irreversible_above: 0.50,
-            requested_above: 0.50,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ObservationLimits {
-    /// Thirty controls keep the second choice small when selection goes group -> element.
-    #[serde(deserialize_with = "lax::int_gt1")]
-    pub group_size: i64,
-}
-
-impl Default for ObservationLimits {
-    fn default() -> Self {
-        ObservationLimits { group_size: 30 }
+        Thresholds { irreversible_above: 0.50, requested_above: 0.50 }
     }
 }
 
@@ -142,7 +119,6 @@ impl Default for StallRules {
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub thresholds: Thresholds,
-    pub observation: ObservationLimits,
     pub tokens: TokenBudget,
     pub stall: StallRules,
     /// Refuse cookie consent on the platforms DuckDuckGo's autoconsent knows, before the banner paints.
@@ -152,15 +128,10 @@ pub struct Config {
     /// which a caller with nowhere to put the image would pay for nothing.
     #[serde(deserialize_with = "lax::boolean")]
     pub step_frames: bool,
-    /// Record on each step the controls Jev was offered and which it chose. Off by default: a dense page offers
+    /// Record on each step the controls the driver was shown and which it acted on. Off by default: a dense page offers
     /// 160 controls, and a caller that is not debugging a run would carry them on every step for nothing.
     #[serde(deserialize_with = "lax::boolean")]
     pub step_choices: bool,
-    /// Ask which other fields in the chosen field's form need filling, and offer a list read when the task
-    /// covers its pages. Planned fills return to deciding on a redraw; list reads retain each page's wall
-    /// checks and let Jev return to ordinary actions before reading it.
-    #[serde(deserialize_with = "lax::boolean")]
-    pub plan_ahead: bool,
     /// Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason.
     #[serde(deserialize_with = "lax::int_gt0")]
     pub max_upload_bytes: i64,
@@ -174,13 +145,11 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             thresholds: Thresholds::default(),
-            observation: ObservationLimits::default(),
             tokens: TokenBudget::default(),
             stall: StallRules::default(),
             refuse_cookie_banners: true,
             step_frames: false,
             step_choices: false,
-            plan_ahead: true,
             max_upload_bytes: 25 * 1024 * 1024,
             max_download_bytes: 512 * 1024 * 1024,
         }
@@ -203,6 +172,6 @@ mod tests {
         let config: Config = serde_json::from_str(r#"{"stall": {"max_recoveries": 4}}"#).unwrap();
         assert_eq!(config.stall.max_recoveries, 4);
         assert_eq!(config.stall.unchanged_actions, 3);
-        assert!(serde_json::from_str::<Config>(r#"{"observation": {"group_size": 1}}"#).is_err());
+        assert!(serde_json::from_str::<Config>(r#"{"stall": {"unchanged_actions": 0}}"#).is_err());
     }
 }

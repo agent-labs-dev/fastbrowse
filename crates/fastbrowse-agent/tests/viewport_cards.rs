@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::agent::{Agent, RunOptions};
-use fastbrowse_agent::scripted::{ScriptedJev, ScriptedLLM};
+use fastbrowse_agent::scripted::{ScriptedDriver, ScriptedJev, steps};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images, Question};
 use fastbrowse_core::models::Artifact;
@@ -55,7 +55,7 @@ impl Page for PicturedPage {
     }
 
     fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
-        unreachable!("the test stops at the action question")
+        unreachable!("the test stops at the gate question")
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -91,7 +91,7 @@ impl Page for PicturedPage {
 
 struct Inspect {
     inner: ScriptedJev,
-    action: Mutex<Option<(IndexMap<String, Question>, Images)>>,
+    gate: Mutex<Option<(Value, Images)>>,
 }
 
 impl DecisionClient for Inspect {
@@ -113,9 +113,8 @@ impl DecisionClient for Inspect {
         questions: &'a IndexMap<String, Question>,
         images: &'a Images,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        if questions.contains_key("operation") {
-            assert!(state.get("viewport_screenshot").is_some());
-            *self.action.lock().unwrap() = Some((questions.clone(), images.clone()));
+        if questions.contains_key("irreversible") {
+            *self.gate.lock().unwrap() = Some((state.clone(), images.clone()));
             return Box::pin(async { Err(DecisionError::failed("inspection finished")) });
         }
         self.inner.evaluate(state, questions)
@@ -125,19 +124,17 @@ impl DecisionClient for Inspect {
 #[tokio::test]
 async fn test_a_viewport_sized_crop_keeps_the_outline_that_identifies_its_control() {
     // Jev accepts a 280-pixel viewport. The minimum card size expands a small icon to that whole viewport, while its
-    // outline still identifies the icon.
+    // outline still identifies the icon to the question whether clicking it commits anything.
     let mut png = Vec::new();
     image::RgbaImage::new(280, 280).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let page = Arc::new(PicturedPage { png, edges: Edges { left: 0.1, right: 0.2, top: 0.1, bottom: 0.2 } });
-    let jev = Arc::new(Inspect { inner: ScriptedJev::new(Vec::new()), action: Mutex::new(None) });
-    let agent = Agent::new(page, jev.clone(), Arc::new(ScriptedLLM));
+    let script = || steps("click button (1 of 2)").unwrap();
+    let jev = Arc::new(Inspect { inner: ScriptedJev::new(script()), gate: Mutex::new(None) });
+    let agent = Agent::new(page, jev.clone(), Arc::new(ScriptedDriver::new(script())));
     let _ = agent.run("click the pictured control", RunOptions::default()).await;
-    let action = jev.action.lock().unwrap();
-    let (questions, images) = action.as_ref().expect("the action question was inspected");
-    let Question::Choice(target) = &questions["click_target"] else { panic!("a target choice") };
-    let reference = target.criteria["surface"]["looks_like"]
-        .as_str()
-        .expect("a card with a visible outline must remain beside the screenshot");
+    let gate = jev.gate.lock().unwrap();
+    let (state, images) = gate.as_ref().expect("the click's gate question was inspected");
+    let reference = state["looks_like"].as_str().expect("a card with a visible outline must go with the question");
     let card = image::load_from_memory(&images[reference]).unwrap().to_rgba8();
     assert_eq!((card.width(), card.height()), (280, 280));
     assert_eq!(*card.get_pixel(35, 27), image::Rgba([255, 0, 255, 255]));

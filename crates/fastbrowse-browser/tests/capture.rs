@@ -496,6 +496,19 @@ async fn test_a_json_document_reads_each_value_under_its_keys() {
     h.close().await;
 }
 
+/// A JSON document is shown as it is read, so a value quoted off the page is in the capture a done check reads.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_json_document_shows_the_text_its_capture_reads() {
+    let Some(h) = harness().await else { return };
+    h.goto("/package.json").await;
+    let observation = h.observe().await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(observation.viewport_text, capture.text.trim_end());
+    assert!(observation.offscreen_text.is_empty());
+    assert!(!observation.viewport_text.contains(r#""name""#), "{}", observation.viewport_text);
+    h.close().await;
+}
+
 /// Text served as JSON that does not all parse is read as Chrome renders it, so none of it is lost.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_json_typed_document_that_does_not_parse_is_read_as_rendered() {

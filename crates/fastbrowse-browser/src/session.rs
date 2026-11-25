@@ -422,6 +422,9 @@ pub(crate) struct Shared {
     /// Bumped each time a popup is begun or a target is destroyed, so a wait for one to be announced, or to be gone,
     /// wakes as Chrome reports it.
     pub(crate) popup_signal: watch::Sender<u64>,
+    /// Bumped each time a page world is reported or goes away, so a look that met a frame mid-change can wait for
+    /// Chrome to finish reporting it rather than fail on the state it saw.
+    pub(crate) worlds_changed: watch::Sender<u64>,
     pub(crate) screencast_lock: tokio::sync::Mutex<()>,
 }
 
@@ -483,6 +486,7 @@ impl BrowserSession {
             lifecycle: watch::channel(0).0,
             snapshot,
             popup_signal: watch::channel(0).0,
+            worlds_changed: watch::channel(0).0,
             screencast_lock: tokio::sync::Mutex::new(()),
         }))
     }
@@ -548,12 +552,13 @@ impl BrowserSession {
             } else {
                 // Discovery has to be on only before the tab can open a popup, which it cannot do while it is still
                 // being created, so the two are sent at once rather than paying a cloud round trip for each.
+                // Both run to the end: a failed discovery that dropped the tab's creation mid-flight left Chrome
+                // opening a tab the session never recorded as owned, so the rollback could not close it.
                 let discover = self.send("Target.setDiscoverTargets", json!({"discover": true}), None);
-                together(vec![
-                    Box::pin(async { discover.await.map(drop) }),
-                    Box::pin(self.open_owned_tab("about:blank")),
-                ])
-                .await?;
+                let (discovered, opened) =
+                    futures_util::future::join(discover, self.open_owned_tab("about:blank")).await;
+                discovered?;
+                opened?;
             }
             // A popup's first response can arrive before targetCreated adoption enables Fetch, losing inline PDFs
             // and downloads. New pages pause until their session can capture; unrelated pages resume and detach.
@@ -1087,6 +1092,11 @@ impl BrowserSession {
     /// The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it.
     pub fn status_context(&self, session_id: &str, context_id: i64) -> Option<String> {
         self.0.state.lock().unwrap().status_contexts.remove(&(session_id.to_owned(), context_id))
+    }
+
+    /// Wakes each time a page world is reported or goes away.
+    pub fn worlds_changed(&self) -> watch::Receiver<u64> {
+        self.0.worlds_changed.subscribe()
     }
 
     /// The unique ids of the page worlds Chrome reported on `session_id` and has not destroyed since.
@@ -1683,6 +1693,7 @@ impl Shared {
                     let id = context["id"].as_i64().unwrap_or_default();
                     let unique = str_of(&context["uniqueId"]);
                     self.state.lock().unwrap().main_worlds.entry(session.to_owned()).or_default().insert(id, unique);
+                    self.worlds_changed.send_modify(|n| *n += 1);
                 }
             }
             "Runtime.executionContextDestroyed" => {
@@ -1690,11 +1701,13 @@ impl Shared {
                     && let Some(worlds) = self.state.lock().unwrap().main_worlds.get_mut(session)
                 {
                     worlds.remove(&params["executionContextId"].as_i64().unwrap_or_default());
+                    self.worlds_changed.send_modify(|n| *n += 1);
                 }
             }
             "Runtime.executionContextsCleared" => {
                 if let Some(session) = session {
                     self.state.lock().unwrap().main_worlds.remove(session);
+                    self.worlds_changed.send_modify(|n| *n += 1);
                 }
             }
             "Page.windowOpen" => self.state.lock().unwrap().window_opens += 1,

@@ -7,7 +7,7 @@
 
 **Give your agent a browser.**
 
-A browser agent that picks from the controls a page actually has, cites the page for every claim, and keeps
+A browser agent that picks from the controls a page has, cites the page for every claim, and keeps
 credentials, irreversible actions and spending under the control of code.
 
 [![pypi](https://img.shields.io/pypi/v/fastbrowse?style=flat-square&color=6366F1)](https://pypi.org/project/fastbrowse/)
@@ -21,9 +21,10 @@ credentials, irreversible actions and spending under the control of code.
 
 ## Why fastbrowse
 
-- **It picks, it does not invent.** Each page is indexed into the controls it has, and
-  [Jev](https://typesafe.ai), a choice model, picks one. It cannot click something that is not on the page, and
-  there are no selectors to maintain. Widget keyboard actions are chosen from the keys their ARIA roles define plus the standard navigation and editing keys.
+- **It acts on what the page has.** Each page is indexed into the controls it has, and an LLM is shown them by number,
+  with what its last actions did, and names the actions to take. It cannot click something that is not on the page,
+  and there are no selectors to maintain. [Jev](https://typesafe.ai), a choice model, answers the questions code gates
+  on, such as whether a click is irreversible and whether the task asked for it.
 - **Answers you can check.** Every claim in a complete answer cites a verbatim quote from the page, with a link
   that scrolls to it. Pass a schema and get validated data back.
   Tasks over a whole list can follow its next-page links, checking each page and preserving its citations; a total
@@ -60,7 +61,7 @@ You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer it
 Chrome. Run `uvx fastbrowse extension install` once to register it:
 
 ```sh
-export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM for start pages, written field values and composed answers
+export OPENROUTER_API_KEY=...   # the LLM that drives the run, and Jev, which judges what code gates on
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
@@ -73,7 +74,7 @@ Jev can also run through the gateway as a last resort, or another decision host 
 OpenRouter decision model pins use the catalog's context, price and image support, including for aliases.
 [Jev routing](docs/jev.md#provider-failover) covers the order and [other hosts](docs/jev.md#other-decision-hosts).
 
-Set `EXA_API_KEY` to let Jev choose web search without opening a browser. The LLM proposes queries,
+Set `EXA_API_KEY` to let a run with no start page begin with a web search, without opening a browser. The LLM proposes queries,
 and Exa returns result links and metadata that the run can cite or open. Each request has a `search` cost receipt;
 the run checks its dollar budget before sending it. A browser already in use stays open behind the results.
 
@@ -145,7 +146,7 @@ permissions and stopping a run.
 
 | | Browser Use agent (hosted) and BU Ultrafast | fastbrowse |
 |:--|:--|:--|
-| Choosing an action | hosted model and tools | Jev picks from indexed controls |
+| Choosing an action | hosted model and tools | an LLM picks from indexed controls, and Jev judges what code gates on |
 | Returns | an answer | an answer with quotes, or why it stopped |
 | Cited answers | not graded for citations here | answers backed by captured quotes |
 | Signing in | yes | `--secret` or a Bitwarden vault item; models see names only |
@@ -181,10 +182,10 @@ limitations, and [eval results and workflow](docs/evals.md) covers the diagnosti
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture.svg" alt="The run opens its start page; each step indexes the page, Jev picks an operation and target, code gates it and acts; reads keep verbatim quotes, Jev decides when it is done, and the answer cites every claim.">
+  <img src="assets/architecture.svg" alt="The run opens its start page; each turn indexes the page, the LLM names the actions to take, code gates them and acts; done quotes the page word for word, Jev judges whether the task was carried out, and the answer cites every claim.">
 </picture>
 
-Jev picks each action, reads each page and decides when the run is done. An LLM proposes the first address when none is given and writes an answer that has to be composed. Code owns the gates: irreversible actions stop without
+One LLM conversation drives every run: each turn it is told what its last actions did, shown the page, and names the actions to take. Its `done` quotes the page word for word. Jev judges what code gates on: whether an action is irreversible, whether the task's steps were carried out, and whether an answer holds against its quotes. The LLM also proposes the first address when none is given and writes an answer that has to be composed. Code owns the gates: irreversible actions stop without
 `--authorize`, secrets reach models by name only, and supported cookie banners are refused through autoconsent.
 More in [docs/design.md](docs/design.md).
 
@@ -234,8 +235,8 @@ the rest, though cookies the task sets can persist. `attach=True`, `target_match
 the matching flags do. Passing a cloud key and a CDP address together is an error.
 
 **Recipes and recordings.** `save_recipe=Path("recipe.json")` stores the actions of a completed run. A write failure is logged without changing the task status; check the file before replay.
-Pass `recipe=Path("recipe.json")` with the same task to reuse values when Jev selects a matching live action.
-A changed page or control falls back to the agent. Reading and completion are always checked live.
+Pass `recipe=Path("recipe.json")` with the same task to reuse its steps while each is certain: the same page and exactly one live control it names.
+A changed page or control hands the run to the agent from that step. Reading and completion are always checked live.
 Naming the same file for both arguments saves the healed sequence after another completed run.
 Recipes can contain personal information from ordinary fields; stored secrets are kept only by name.
 `fastbrowse.recipes.validate_recipe()` checks recipe JSON with the same Rust parser as the file loader;
@@ -314,10 +315,10 @@ pages with screenshot storage, not HTTP-only or other pages whose artifact sink 
 - A task requesting a final screenshot receives a safe PNG in `result.final_frame` without enabling step frames.
   JSON clients receive a `screenshot` artifact with a base64 data URI. A missing requested image leaves a
   completed task `unverified`.
-- `Config(step_choices=True)` adds `choices` to each step Jev decided: the controls it was offered, each with its
-  `id`, `role`, masked `label` and `context` (the card or row that tells twins apart) and `operations`, and the one
-  it picked marked `chosen` (a drag marks its destination too). It shows whether the element
-  a run should have used was there to pick. Off, a step has no `choices` key.
+- `Config(step_choices=True)` adds `choices` to each step the driver took: the controls it was shown, each with its
+  `id`, `role`, masked `label` and `context` (the card or row that tells twins apart) and `operations`, and the ones
+  it acted on marked `chosen` (a drag marks its destination too). It shows whether the element a run should have
+  used was there to pick. Off, a step has no `choices` key.
 - `on_frame=` gets JPEG frames of the active tab as they render. The handler runs on your event loop, so it
   must honour cancellation: one that swallows `CancelledError` keeps `asyncio.run` waiting at shutdown.
 

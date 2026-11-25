@@ -1,5 +1,5 @@
-//! A browser agent that picks instead of generating. Every page is indexed into the controls it has, a choice model
-//! picks one of them and decides when the run is done, and code owns authorization, secrets and cost limits.
+//! A browser agent that picks from the controls a page has. Every page is indexed into the controls it has,
+//! one LLM conversation names the actions to take, and code owns authorization, secrets and cost limits.
 //!
 //! [`run_task`] runs one task end to end and returns a [`RunResult`]: a status, an answer with citations, the
 //! structured data asked for, the steps and what they cost. Model keys are read from the environment, as the

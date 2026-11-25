@@ -3,9 +3,9 @@ title: Why an AI agent clicks the wrong button
 description: An agent that clicks screen coordinates can hit a control that is not there. How an indexed control set bounds what fastbrowse can click.
 topic: How the agent acts
 published: 2026-10-31
-updated: 2026-11-24
+updated: 2026-11-25
 verifiedAgainst: v0.11.2
-verifiedOn: 2026-11-24
+verifiedOn: 2026-11-25
 ---
 
 An agent that clicks screen coordinates can hit a control that is not there. The click lands on something real, just not the button the task meant, and the run reports a wrong answer.
@@ -14,14 +14,11 @@ fastbrowse takes the coordinate out of the loop. The agent can only name a contr
 
 ## What the agent chooses from
 
-At each step Jev chooses an operation and a target from the page's indexed buttons, links and fields. For a large set of targets, Jev picks a group first, then a control within it. The browser checks that the chosen control is still there before it acts.
+One model conversation drives the run. Each turn it is shown the page's indexed buttons, links and fields by number, with the ones new since its last look marked, and it acts by naming a number. A number the page did not show is told back to it and nothing is clicked.
 
-A fill decision can also name other offered fields in the same form that the task needs filled. Those are filled in page order without a request each, and only while the page still shows each one as it was offered; anything else goes back to a full decision.
-
-A read decision can cover a whole list through its observed next-page links. Each page is checked before it is read; a different list or a page that needs an action returns to an ordinary decision. Each read and navigation still spends its own step.
+The driver can plan more than one action in a turn, such as filling each field of a form. They run in order and stop at the first one that changes the page, so the next turn sees the new controls before anything else is clicked.
 
 - Hit-testing runs before every input. A control that moved or was covered between the read and the click is caught at the click.
-- The text and pictures for each choice share Jev's input limit. On a dense page, a relevance check drops controls the task cannot use. A page that is still too dense offers the controls that fit and scrolls for the rest.
 
 ## The authorization gate
 
@@ -31,7 +28,7 @@ Code permits an action when Jev judges it not irreversible, or when the run is a
 
 ## See what the agent was offered
 
-`Config(step_choices=True)` adds `StepResult.choices` to each step: the controls the agent was offered for that decision, with its pick marked. When recovery overrides a decision, the step still records what the first chooser saw.
+`Config(step_choices=True)` adds `StepResult.choices` to each step: the controls the driver was shown that turn, with the one it acted on marked.
 
 For a run that clicked something unexpected, check whether the right control was in that list:
 

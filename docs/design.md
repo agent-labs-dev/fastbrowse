@@ -1,39 +1,24 @@
 # Design
 
-fastbrowse splits a browser agent into three owners:
+fastbrowse splits a browser agent into four owners:
 
-- **Jev decides, reads and finishes.** A batched request chooses an operation and its possible targets from indexed controls. Its shared state retains each control's context and available operations, so the operation choice can tell which open widget the task needs. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. Large target sets use a second choice within the selected group. Jev also checks sign-in and bot walls on fresh pages, picks what a page says from its quoted spans, and ends the run by choosing DONE.
-- **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. When Jev says a field takes a value the task asks for without stating it word for word, such as a search query, it writes that value from the task and the field's label, never from the page. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose values and answers Jev can quote calls no LLM.
-- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, an answer its composer says leaves a requested value unestablished, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`). It judges from the current page and the run's actions, the first of which is the run's own opening of its start page, so a task that says to open a page and go on from it is not held undone for the opening.
-
-When a field value or key chord is copied, Jev selects its source and first word. If its end needs a separate choice,
-each choice shows a candidate span from that first word to the candidate end, with one more
-answer: the value does not begin at that word. Jev then picks the first word again without it. The beginning is checked
-the same way against copies that end where the value ends, and an end Jev rejects there is picked again.
-Code copies the selected span unchanged. A task-provided key chord is copied only from the task, never from page text. Controls with standard ARIA keyboard interactions also offer their role's keys for Jev to choose.
-Earlier typing is shown as history, without assuming
-rejection or requiring a different value when the page changed the field.
+- **The driver acts.** One LLM conversation, with the LLM purpose `action`, drives every run. Each turn it is told what its last actions did, then shown the page as `[id] role "name" = value` lines with states, headings and visible text in page order, with the ids new since its last look marked `*`. It returns a chain of tool actions: click, type, type_secret (a secret by name), select, key, scroll, drag, goto, back, wait, dialog, screenshot, done and give_up. A screenshot comes back as an image on the next turn, and the last two stay in the conversation; on a control marked drawn, a click names the thing to click inside it as the screenshot shows it, and Jev places the click there. They run in order while the page keeps the same controls; once one opens, closes or loads something, the rest are dropped and the model is told. A page too long for the model's context loses its earlier pages first, then the text outside the viewport.
+- **Jev judges what code gates on.** It answers the closed questions the gates need: whether an action is irreversible and whether the task asked for it, whether every step the task asks for was carried out, which quoted span answers a read, and whether a written answer holds against its quotes (claim support, tallies and coverage). It never picks the next step.
+- **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. It writes an answer that has to be composed from the notes.
+- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. A `done` quotes page text word for word: a quote no page shown to the model holds is refused back to it, and so is an answer whose claims are not supported or leave out what the task asks, up to three times, without spending the stall recovery. A requested record that cannot be filled, a composed claim still unsupported after recovery, an answer its composer says leaves a requested value unestablished, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the driver is told and the run recovers), or `refused` (the run reads, answers and ends `unverified`). It judges from the current page and the run's actions, the first of which is the run's own opening of its start page, so a task that says to open a page and go on from it is not held undone for the opening.
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
 `fastbrowse._native` into the wheel ([ADR 0004](adr/0004-rust-core-by-default.md)).
 
-With `plan_ahead` enabled, Jev can choose to read a list across its observed same-origin next-page links when
-the task covers every page or a resolved page range. Each new page still asks Jev whether to read it as part
-of that list or return to ordinary actions, alongside the usual sign-in, bot-check and site-failure questions.
-These requests omit unrelated action and target choices. Every read and navigation remains a separate step
-with its own citations and budget admission. The list read stops on a changed list, dialog, modal, tabs or
-origin, a failed page, a read adding no evidence, or the task's last page. Only the ordinary finish path can
-declare the task complete. `plan_ahead=false` disables list reads and planned field fills.
-
 ## Authorization
 
-Jev judges every model-selected click, drag, key chord or file attached to an input (a page can upload a file the
+Jev judges every click, drag, key chord or file attached to an input (a page can upload a file the
 moment it is chosen), including links, navigation to a caller-supplied address, every Enter press and acceptance of
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
 for it; otherwise the run stops at `needs_confirmation`, unless it has already carried out a commit the task asked
-for: then the action is refused as a failed step and the run picks again, so a run that posted what it was asked to
+for: then the action is refused as a failed step and the driver is told why, so a run that posted what it was asked to
 is not reported as waiting for confirmation. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
 
 A submission of a form that holds more than one password field changes an account's credentials whatever
@@ -55,14 +40,13 @@ values the action also needs a yes that the run has done what the task asks firs
 effect shows the site responded the way the task gives those values for, so a step that skips ahead to a
 correction is refused. That request gets the masked page text, controls, media, dialog and tabs, with the notes and
 recent actions, and can only refuse: the action proceeds only on a yes, and any other answer refuses it once
-so the run can read the page or finish.
+so the driver can read the page or finish.
 Repeated refusals spend recoveries and end the run `stuck`, never by committing.
 
 Rules also come from the task itself, judged once per run by Jev from the task text and kept for the run.
 When the task rules out downloading, a control the page says downloads a file is refused. When the task
 rules out changing anything, a fill, a select or a click on a setting control (a checkbox, radio, switch,
-option, or any control that reports a checked state) is refused, and from then on those operations are no
-longer offered. Typing into a search box is exempt, since searching is how a read-only task finds things.
+option, or any control that reports a checked state) is refused. Typing into a search box is exempt, since searching is how a read-only task finds things.
 When the task tells the agent not to take some action ("do not click Upload"), every action the gate asks about
 is also asked about in the same request, against the task and the action alone: one the task says not to take,
 whatever the page shows, is refused once, and so is one the question goes unanswered for. When the task forbids it
@@ -72,30 +56,21 @@ it does not. Whether the task forbids anything is judged first, so a task that f
 its gates. Authorization does not lift any of these rules: it lets a run commit what
 the task asks for, never what the task forbids.
 
-Unmarked password fields leave the current-or-replacement role to Jev using the task and page context.
-Field count and order do not establish that role. An explicit `current-password` marker identifies an
-existing credential. A `new-password` marker identifies a replacement within a multi-password form;
-a lone marker remains contextual because sign-in pages also use it to prevent autofill. Replacement
-values come only from the scoped `new_password` secret.
+The driver types a secret by the name it gives, so the task decides which secret goes in which password field;
+code never infers from field count, order or a `new-password` marker which credential a field takes (a sign-in
+page also marks its one field `new-password` to prevent autofill).
 
 ## Navigation
 
-The operation choice can open another literal HTTP(S) address from the caller's task. The address is a
-closed choice, revalidated before dispatch, and uses the browser's origin grant and live access checks.
-Page instructions cannot add addresses to that choice.
-When a site failure that can clear stands on the current page (an HTTP 408, 419, 429 or 5xx status, an address
-the browser could not open, or a page Jev judges to report that the site failed), the page's own address joins
-that choice, so Jev can reload it. Code states the failure and how many steps it has stood in the step state's
-`page_facts`, with the reminder that a failure is not the task's answer; Jev picks the reload, a retry control, or
+The driver opens an address with `goto`. Code accepts a plain HTTP(S) address with no resolved secret in it, revalidates
+it before dispatch, runs it through the navigation gate, and uses the browser's origin grant and live access checks.
+When a site failure that can clear stands on the current page (an HTTP 408, 419, 429 or 5xx status, or an address the
+browser could not open), the driver reads the failed page like any other and can reload it, use a retry control or take
 another route. A run whose stall budget runs out on such a failure ends `unavailable` with its address.
-On each page state it has not judged yet, Jev is also asked whether the page says an item the task requires
-cannot be bought, such as one marked sold out, with no way on the site to get it. A yes ends the run
-`unavailable` before the step: the run's LLM names the item and the reason from the task and the page text, and
-the page's block holding the words it quotes is the stop's evidence.
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 
-Screenshot facts use the `llm_image` reader label; Jev-selected facts use `jev_choice`.
+Screenshot facts use the `llm_image` reader label; Jev-selected facts use `jev_choice`; quotes the chat driver cites when it calls `done`, found verbatim in the capture by code, use `llm_quote`.
 The LLM screenshot reader records `image_read` calls separately from answer composition. Jev image limits apply
 to Jev questions; the LLM reader uses its own client, which must refuse unsupported image input explicitly.
 Screenshot readings pass the same support and requested-coverage checks as composed text before completion.
@@ -162,29 +137,11 @@ hover, scroll and guard passes read the same facts again when the walk no longer
 snapshots, without allocating new comparison arrays. Repeated heading and scope text reuses its normalized
 lines only when a fresh native read returns the exact same text.
 
-A control also carries `role_description` (`aria-roledescription`) and `description` (the text its `aria-describedby` points at), each as the page states it and only when present, which Jev reads beside the control; a widget that is operated by keys, such as a dnd-kit card, states them there. The key question for a press repeats both. A control in a list also carries `item_position` and `item_count` (`aria-posinset` and `aria-setsize`, or its place among the items of its nearest list), which the drag and press questions state, because "first" is a place the labels do not give. A browser observation reports each control's `focused` state. A custom page may leave it unknown.
+A control also carries `role_description` (`aria-roledescription`) and `description` (the text its `aria-describedby` points at), each as the page states it and only when present. The driver reads `description` beside the control (`described "..."`); `role_description` stays on the control and is not shown to the driver. A control in a list also carries `item_position` and `item_count` (`aria-posinset` and `aria-setsize`, or its place among the items of its nearest list), which the driver reads as `item 2 of 5`, because "first" is a place the labels do not give. A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
 in form validation. It describes the current field, without claiming that a submission occurred. A field
 that fails a native constraint also carries `validation_message`, the browser's own words for why, which
-Jev sees with the field: a refused submit shows that reason only in a browser bubble, not in page text.
-Jev can choose `blur` for an editable field observed as focused, leaving that field without pressing
-another control or submitting its form. The field must still be the same node and hold focus when the
-action runs. A replacement field is not retried. Page change and blur handlers run as they do when the
-field is left; their observed effects reach the next decision. A focus change counts as a changed page
-state, but does not by itself prove a value was set or accepted.
-
-## Dragging
-
-Drag has two forms. A draggable control can be dragged onto a destination chosen by Jev. A drawn surface, such
-as a canvas, offers Drag as a same-control gesture.
-Jev chooses the operation and target first. A non-drawn target then gets the destination choice. For a drawn target,
-the screenshot-seeing model receives the task, current screenshot and target box and returns a `DragPath`: press,
-every supplied movement point, release and optional Shift, all normalized to the target box.
-
-The browser resolves those points against the live visible target, rejects non-finite or out-of-bounds coordinates,
-rechecks freshness before press and during movement, and sends real `mousePressed`, every supplied `mouseMoved` with
-the button held, and `mouseReleased` events. It does not interpolate, simplify, cap or repair the path. Stale geometry
-cancels before release. Direct CDP and extension routes use the same dispatch.
+the driver reads beside the field as `refused: "..."`: a refused submit shows that reason only in a browser bubble, not in page text.
 
 ## Reading and citations
 
@@ -197,14 +154,8 @@ Browser and HTTP captures keep a text label's `title` advice beside it as `(titl
 same record or table cell. The advice supplements the label rather than replacing it, so a shortened listing
 name can retain its full native tooltip text as citable evidence.
 
-READ is one of Jev's operations. On a page that has changed, Jev is also asked whether it shows something the task
-asks to be told that the notes do not hold yet; when it does, and Jev picked another operation, the run reads first,
-because an order total is gone once the order is placed. The step state's `page_facts` tell Jev when a page was read
-and has not changed since, and when it changed after it was last read. Every READ Jev picks goes to the reader. A read
-that adds no new source quote counts toward the stall rule like any other step that moved nothing.
-
-With `EXA_API_KEY`, Jev can choose a web search at the start or during a run. The LLM proposes queries from the
-task, current page and evidence; Jev picks a query. Exa auto search returns up to ten results. Every returned result
+With `EXA_API_KEY` and no start page, the LLM proposes an entry address and web search queries from the task, and
+Jev picks one. Exa auto search returns up to ten results. Every returned result
 field is kept in a citable record, and result addresses become links that use the existing navigation and origin
 checks. The results view retains the current browser session. Repeating identical results counts as no progress.
 A quote from result metadata cites the API response address; open the result to obtain a citation from its page.
@@ -217,20 +168,20 @@ offered, as a browser capture leaves it out, so a disabled next link is no next 
 take starts one on the same page, and the run carries on with
 what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
 build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a
-browser does it. A served page with no links or controls is stated to Jev as leading nowhere only when nothing a
+browser does it. A served page with no links or controls is stated to the driver as leading nowhere only when nothing a
 browser would add is missing from the read: no `<script>` the HTML standard runs (a classic script with a
 JavaScript type and no `nomodule`, or a module, with a `src` or text, outside `<template>` and `<noscript>`), no
 non-empty event handler attribute, such as `onload` or `onanimationstart` (every one the web's specs add to
 elements, and those Chrome adds), in the page or a frame read into it,
-and no frame left unread. Otherwise Jev is told what was left out and whether a step can open a browser: by
-default a wait or other step it picks there opens one on the page, and with `fetch` none opens.
+and no frame left unread. Otherwise the driver is told what was left out and whether a step can open a browser: by
+default a wait or other step it takes there opens one on the page, and with `fetch` none opens.
 `fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
 A JSON response, including `application/*+json`, is read by its structure: each object key is a heading, and each
 string, number, `true`, `false` and `null` is its own block under the path of keys and array indices that leads to it.
 A string reads as its decoded text, a number as written, and repeated keys keep every value. A response that is not
 entirely valid JSON, and other `text/*` responses, are read as one quoted text block. Neither is parsed as HTML, and
-delimited data keeps its whitespace. Browser captures of a JSON document are still read as one code block.
+delimited data keeps its whitespace. A browser capture of a JSON document is read the same way, by structure, when all of its served text parses.
 
 Browser captures follow block structure inside inline containers, including custom elements and elements with
 `display: contents`, so nested headings and repeated records keep their own source spans. Adjacent inline prose
@@ -261,7 +212,7 @@ Pandoc footnotes do. A table of contents entry or a "back to top" link has no su
 themselves stay where the page lists them. A citation quoting across a removed marker can miss its text-fragment
 highlight, since the page still shows the marker there.
 
-Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
+The driver moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
 so choosing the next page is an ordinary step. A page number drawn as text rather than a link or a button is offered
 when it is focusable and has visible text, including a label wrapped in child elements. Hidden menu links do not
 exclude the trigger that reveals them. An element already inside a control, or holding visible controls, leaves
@@ -274,36 +225,36 @@ shows never names that section. A control whose own clip or clip-path leaves it 
 picker keeps the select it replaces on the page that way, and a hidden checkbox, radio or file input is reached through
 its label.
 
-Select on a select that allows more than one choice toggles the one option Jev picks, as a Ctrl-click does, and leaves the
-others as they were. Jev is asked which option to toggle and told which are selected now. A change handler that puts the
+Select on a select that allows more than one choice toggles the one option the driver names, as a Ctrl-click does, and leaves the
+others as they were. The driver is shown which options are selected now. A change handler that puts the
 selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
 option, so choosing or removing any one of them is a change.
 
-Press sends a key Jev selects from the keys the target control's ARIA role defines followed by the standard navigation and editing keys (arrows, Home, End, Space, Enter, Escape, Backspace, Delete, Ctrl+Home, Ctrl+End), or a key chord copied from the task. A `button`, `link`, `checkbox` or `switch` is offered a press only when it declares an `aria-roledescription`, so a sortable card can be picked up with Space, moved with the arrows and dropped with Space. Such a control is also offered a drag onto any labelled control, which a sortable's pointer sensor takes.
-Sliders, spin buttons, tabs, lists, trees, menus and grids offer their standard WAI-ARIA keyboard interactions
-when focus can reach them. An explicit `aria-orientation` on a widget or its owning composite is included in its context, so the key chooser knows its direction. Widget value changes count as progress. A composite container is indexed for keyboard use when it has a `tabindex`.
+Press sends the key or chord the driver names with `key`, checked against the page's key grammar; a key it does not know is refused back to the driver. The driver can name any key or chord the grammar accepts, such as the arrows, Home, End, Space, Enter, Escape, Backspace, Delete or Ctrl+Home. A `button`, `link`, `checkbox` or `switch` is offered a press only when it declares an `aria-roledescription`, so a sortable card can be picked up with Space, moved with the arrows and dropped with Space.
+Sliders, spin buttons, tabs, lists, trees, menus and grids are offered a press when focus can reach them. An explicit `aria-orientation` on a widget or its owning composite is included in its context, so the driver knows its direction. Widget value changes count as progress. A composite container is indexed for keyboard use when it has a `tabindex`.
 An active descendant keeps DOM focus on its owner while receiving the chosen key. Native selects keep their
-Select operation. The selected chord is stated to the irreversible-action classifier before dispatch.
+Select operation. The chord is stated to the irreversible-action classifier before dispatch.
 When the task forbids edits, Jev also judges whether that chord changes a value or only moves through the page.
 Its modifiers and DOM key are sent as one browser input, and a chord that can submit or save goes through the
 same irreversibility and authorization gates as Enter.
 
 Scrollable containers are indexed separately for each overflowing axis, including open shadow roots and accessible
-frames. Jev chooses a scroll area and an available direction. Code moves that container by its visible width or
+frames. The driver scrolls an area, or the page when it names none, up or down. Code moves that container by its visible width or
 height; horizontal right-to-left areas retain physical left and right directions. Container offsets contribute to
 the page fingerprint, so a scroll that exposes content counts as progress even when its text is unchanged. A scroll
 without a target retains viewport scrolling.
 
-A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
-answer, or the answer must be composed from more than one fact. On a page the step judged to show what the task needs,
-the first is replaced by a third: the page holds a fact the steps need, such as a link to follow or a code to enter, and
-nothing that answers. Its blocks are kept as notes the steps see, none of them an answer, and DONE on notes that answer
+The passages a `done` quotes are the answer's evidence: code finds each word for word in the capture of the page the
+driver was shown, the page `done` was called on first and then the latest earlier page that holds it, and cuts the span
+as a fact. A quote no page holds is refused back to the driver. When the driver quoted nothing and the notes hold nothing
+that answers, a finishing read offers Jev one bounded choice over the page's quoted spans, with two more answers: the
+page does not hold the answer, or the answer must be composed from more than one fact. A `done` on notes that answer
 nothing is a step short of the answer. On a page with more spans than one choice can offer, a
 relevance pass narrows them first. If no value choice fits, a page that fits Jev's input limit can still supply
 facts for synthesis. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
 writes page text. A span Jev picks becomes a fact, and identical values from the same page and frame share one choice
 with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
-answer is composed when the run tries to finish, with recovery for a rejected draft. The recovery decision is told
+answer is composed when the run tries to finish, with recovery for a rejected draft. The recovery is told
 which claim failed which check, and a draft rejected for leaving out something the task asks for is shown to it whole,
 since no one claim is to blame and only the draft says what it lacks. A run that stops with a rejected draft, its
 recoveries spent, returns the claims that passed while the notes behind them are unchanged; otherwise it writes its
@@ -317,10 +268,9 @@ They judge the state the task asks about, retaining earlier quotes for historica
 An answer that must be composed is always composed and checked. The composer is not skipped by asking Jev of each
 note on its own whether it is the answer as written: such a question cannot tell which of two similar notes, such as the
 headings of an opener and the window it opened, is the one the task asks about.
-Before choosing DONE, Jev sees the selected answer with its citation links separately from retained evidence.
-The selected answer must give every requested fact and value; a value kept only as context does not answer it.
-When composition or the caller's schema extraction is pending, the same decision judges whether the retained
-sources cover the request; the generated result is checked before delivery.
+The answer must give every requested fact and value; a value kept only as context does not answer it. When
+composition or the caller's schema extraction is pending, the retained sources are checked against the request, and
+the generated result is checked before delivery.
 
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
@@ -407,7 +357,7 @@ answer worked out which was newer. When a string value occupies part of a source
 choice and the word-boundary questions retain the record's other field names and the selected source's
 context. A whole table row carries its header rather than an unknown column label. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
-The composer only writes the answer; it never judges whether the answer is complete. Jev's coverage question judges whether the answer gives every requested fact, and code ends a run over a whole list, or the pages a task names, `unverified` while a page of it is unread, unless Jev's read found one passage that alone answers the task, such as a total the list states. A draft with no claims fails coverage and goes to recovery, so Jev can choose what evidence to gather next. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
+The composer only writes the answer; it never judges whether the answer is complete. Jev's coverage question judges whether the answer gives every requested fact, and code ends a run over a whole list, or the pages a task names, `unverified` while a page of it is unread, unless Jev's read found one passage that alone answers the task, such as a total the list states. A draft with no claims fails coverage and goes to recovery, so the driver can gather more evidence. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while
 their source evidence remains unchanged and the run has taken no further step. A later nonempty checked repair replaces the retained draft; an empty
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
@@ -430,10 +380,13 @@ identifier or another record, not the task's own words or a sentence that states
 
 ## Prompt limits and progress
 
-`Config.observation` names the group size for group-then-element choices. `Config.tokens` names the input budgets. A
-step request shows Jev the whole viewport, working notes and history; one that does not fit Jev's limit loses its
+`Config.tokens` names the input budgets for Jev's questions. A question that does not fit Jev's limit loses its
 oldest actions first and then has its long texts cut, each cut saying what it left out. Cut page text carries a marker
 when there is room for one; an excerpt too small to carry the marker is empty.
+
+The driver's conversation is kept within the context window its provider lists for the model. Earlier pages go first,
+each left as its title and address, since the model acts on the page in front of it; then the controls and text outside
+the viewport, which a scroll reaches, with a note saying they were left out.
 
 A money, time or step limit keeps collected facts and their citations in a partial answer. The status stays
 `budget_exceeded`. A run whose answer must be composed can make reporting calls after its last browser step;
@@ -472,8 +425,6 @@ cleanup before the grace expires is abandoned without a receipt.
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. Control changes are compared within one document;
 a new document reports its controls instead of treating reused IDs as edits to the page left behind.
-A navigation retains its observed source page for decisions on the destination, including recovery and decisions after a redraw. The source's text, controls and Jev's sign-in reading are given only while a wall is suspected on the destination: the sign-in question is asked on that step, the destination's sign-in reading is above even odds, or it answered with a 4xx status. Otherwise the decision gets only the source's URL and title. The source is reported as a past observation whose current state is unknown. Credential availability uses each field's frame origin, as secret resolution does. When that origin has no stored secrets, the decision receives that fact before the historical source. The sign-in question distinguishes a restricted route from a task that requires an account; Jev still decides whether the wall blocks the task. Retained context is masked again before a model reads it. If the request exceeds Jev's documented input limit, retained page facts are shortened with an omission marker before the current page's text is shortened.
-
 A navigation or a step settles once no frame of the tab, embedded frames included, is still loading its document
 up to DOMContentLoaded, within the same settle deadline. A frame that loads after its page is ready is part of what
 the navigation opened, so its controls are in the first observation and the next step's effect does not claim them.
@@ -495,16 +446,12 @@ The same blank state is waited out once until a readable page appears, so a late
 Reloading remains restricted to an untouched opening page, since retrying a later page could repeat a submission.
 `StallRules` has one stall rule: a step that
 changes nothing, a read that adds nothing, a return to a page state already seen with nothing read since, or a
-further return after one return has already counted for the same evidence is no progress, since one read buys one return. `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
-evidence resets the count and renews the `max_recoveries` budget. The new ask names what failed and leaves the stalled
-action out of its options, and Jev's pick is the next decision on that page. Before a run would end
-`stuck` past `max_recoveries`, the LLM proposes fresh known addresses using the current observation, evidence
-and history. Code excludes the current page and addresses already observed, offered, opened or walled. Jev chooses whether
-to take a proposed route; authorization and spending limits still apply. Without a fresh route the run ends
-`stuck`, or `unverified` for a rejected composition, unless an unfilled field requires `needs_input` or a site
-failure establishes another status. An HTTP error page goes to Jev like any other, with its status among the
-step's page facts, so Jev reloads it when the status can clear, goes back or picks another link; code only waits out a
-403, 429 or 503 once per document.
+further return after one return has already counted for the same evidence is no progress, since one read buys one return. `unchanged_actions` such steps in a row tell the driver ("N actions in a row changed nothing") so it plans another way. A page state not seen before or a read that adds
+evidence resets the count and renews the `max_recoveries` budget. A stalled action is not taken again until the page changes or the run
+learns something: the driver is told it was already tried. Past `max_recoveries` the run ends
+`stuck`, or `unverified` for a rejected composition, unless a site failure establishes another status or the
+driver gives up with its own (`needs_input`, `needs_login`, `blocked`, `unavailable`). An HTTP error page goes to the driver like any other, which reloads it when the status can clear, goes back or takes
+another link. Code does not wait out a status for it.
 
 ## Run events and images
 
@@ -530,9 +477,9 @@ check are told that code attaches one screenshot, of the page the run ends on: a
 that page is the one the task asks to have pictured, and the answer need not say whether one is attached. A fresh secret check or a known address credential can withhold the image, and the
 three checks are then told no screenshot is attached and why; a completed task without its requested image becomes
 `unverified`. Python and Rust expose the PNG as `RunResult.final_frame`.
+`Config(step_choices=True)` adds `StepResult.choices`, the controls the driver was shown for the action the step
+carried out, with the ones it acted on marked `chosen` (for a drag, the destination too).
 JSON clients receive a `screenshot` artifact with an `image/png` MIME type, SHA-256 digest and a base64 data URI.
-`Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried
-out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, the destination too).
 
 `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after the async handler returns;
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from
@@ -657,29 +604,26 @@ another completed run, including actions the agent chose when a saved step no lo
 
 A step identifies its full page address and a control's role, label, context, link and input attributes. Node ids
 and selectors are not stored. Query strings, fragments and generated path segments must match too: two orders can
-have identical controls without being the same order. A missing or ambiguous control is left to Jev.
+have identical controls without being the same order. A missing or ambiguous control is left to the driver.
 
-Jev judges every page for answers, errors and sign-in walls, and chooses every action. When the next saved step is
-on the page it was saved on, the original run read nothing before it, exactly one live control is the one it names,
-and a fill has a saved value the field may take, that control is the only one Jev is offered. Jev can take it, read,
-or stop, and it is not sent a screenshot or asked to shortlist the page's controls. A step Jev declines, or one that
-fails, is decided with the whole page in view from then on. Any other step is decided as in a fresh run, and when
-Jev's action agrees with a matching remaining recipe step, even if an earlier action is still offered, the fill can
-reuse the saved value. A step carried out from the recipe reports `decided_by: "recipe"`. Freshness checks, hit testing, authorization and secret handling still apply. Password
+Saved steps run first, ahead of the driver's turns, through the same gates as the driver's own actions. A step runs only
+while it is certain: the same page, exactly one live control it names, no password field, and its text written down as a
+task literal, a caller input or a secret by name. At the first step that is not certain, or that is refused or does not take
+effect on the page (the browser reports it was not carried out), the rest are dropped and the driver is told which step stopped and why, so it carries on from the page in front
+of it. A step carried out from the recipe reports `decided_by: "recipe"`, and one the driver took `"llm"`. Freshness checks, hit testing, authorization and secret handling still apply. Password
 fields always use the live credential checks. A stored secret is kept only by name, caller inputs by name, and
 text copied word for word from the task as a literal. Values taken from page evidence, values the LLM composed and select options are decided live on every run. Recipes can
 contain personal information from ordinary fields, so keep them private like the task that produced them. A step whose page address or control metadata reveals a resolved secret is omitted and decided live on replay.
 A recipe serves any run of the same task, so a value that changes between runs belongs in a named input rather than
 in the task: `fastbrowse "Search Wikipedia for the person named in input person" --input person="Ada Lovelace"
---save-recipe r.json`, then the same task with `--input person="Grace Hopper" --recipe r.json`. Jev reads the task
-with each value it names shown beside the name ("input person (Ada Lovelace)"), and a fill that types an input's
+--save-recipe r.json`, then the same task with `--input person="Grace Hopper" --recipe r.json`. A fill that types an input's
 value is saved as the input's name, so the replay types the new value. The recipe keeps the task as written. Pages after it, such as the article, have a different address
 and are decided live.
 If the task or start URL contains a resolved secret, or writes an address with a user name or password, no recipe is saved: a redacted task would fail the exact task match required for replay, and a redacted start URL would not open the original page.
 
-Reading, answering and the check for `complete` always run live. Replay searches the remaining saved steps without
-an arbitrary lookahead or miss cutoff, so a non-replayable step does not discard later reusable actions. A recipe is not evidence that the present task
-has succeeded. After a mismatch, actions decided live can advance the saved sequence. A recipe save failure is written to server stderr without losing the completed run's result. SDK responses do not carry that warning; callers that require the file should check it exists on the server.
+Reading, answering and the check for `complete` always run live. Saved steps stop at the first one that is not certain, so a later step is never taken on a page the run has not
+confirmed. A recipe is not evidence that the present task
+has succeeded. A recipe save failure is written to server stderr without losing the completed run's result. SDK responses do not carry that warning; callers that require the file should check it exists on the server.
 
 The public Python `fastbrowse.recipes.validate_recipe()` accepts a JSON string, UTF-8 bytes or a dictionary
 and returns the normalized recipe, including defaults. Unsupported versions and invalid fields raise
@@ -825,8 +769,8 @@ replacement control must match the original semantics and receiving document; am
 refused. A target covered by a band fixed to the window (an anchored ad, a sticky footer) is scrolled clear of
 it, and one the band still covers is focused and pressed or typed into from the keyboard, so the band is never
 clicked. Any other cover, such as a dialog, an open menu or popover, or a full-window backdrop, is reported as
-`covered`. The screenshot fallback clicks only while a fresh viewport still matches the pixels Jev used to choose
+`covered`. The screenshot fallback clicks only while a fresh viewport still matches the pixels the model used to choose
 its coordinates. When focus is in a suggesting field, it leaves that field first, which presses nothing, and the control
 is checked again, so a list the field left open does not hold up the next one. Focus and the receiving field are checked before typing. Settling waits for an interactive
 document and a quiet DOM. It does not guess at loading indicators by class name: a page still loading is read as
-it stands, and the reader and Jev judge from its text whether to look again.
+it stands, and the driver judges from its text whether to look again.

@@ -157,10 +157,10 @@ jobs:
 
           source, smoke = os.environ["SOURCE"], os.environ["SMOKE"] == "true"
           defaults = {
-              "fastbrowse": "fastbrowse fastbrowse-llm-picker browser-use-cloud:bu-4.0 browser-use-cloud:bu-fast "
+              "fastbrowse": "fastbrowse browser-use-cloud:bu-4.0 browser-use-cloud:bu-fast "
               "browser-use-oss:bu-4.0 browser-harness:openai/gpt-6-luna "
               "browser-harness-claude-code:anthropic/claude-haiku-5.5",
-              "online-mind2web": "fastbrowse fastbrowse-llm-picker browser-use-cloud:bu-4.0 browser-use-cloud:bu-fast",
+              "online-mind2web": "fastbrowse browser-use-cloud:bu-4.0 browser-use-cloud:bu-fast",
           }
           arms = os.environ["ARMS"].split() or defaults[source].split()
           for arm in arms:

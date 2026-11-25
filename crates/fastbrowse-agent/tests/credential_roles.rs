@@ -6,8 +6,10 @@ use fastbrowse_agent::agent::{Agent, RunOptions};
 use fastbrowse_agent::scripted::{ScriptedJev, ScriptedLLM};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question};
-use fastbrowse_core::models::{Artifact, Operation};
+use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
+use fastbrowse_core::models::{Artifact, LLMPurpose, Operation};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Observation, Page, PageResult};
+use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
@@ -40,7 +42,14 @@ impl Page for HoverPage {
         Box::pin(async { Ok(()) })
     }
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
-        Box::pin(async { Err(BrowserError::failed("test", "no capture needed")) })
+        // The driver reads the page's captured text with its controls.
+        Box::pin(async {
+            Ok(serde_json::from_value(json!({
+                "url": ADDRESS, "title": "Orders", "captured_at": "2026-01-01T00:00:00Z", "sha256": "", "text": "Orders",
+                "blocks": [{"source_id": "s0", "kind": "paragraph", "frame_id": null, "start": 0, "end": 6}]
+            }))
+            .unwrap())
+        })
     }
     fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async { Err(BrowserError::failed("test", "no action needed")) })
@@ -81,10 +90,23 @@ impl DecisionClient for RecordingJev {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         self.sent.lock().unwrap().push(format!("{state}{}", serde_json::to_string(questions).unwrap()));
-        if state.get("page").is_some() {
-            return Box::pin(async { Err(DecisionError::failed("stop after observing provider request")) });
-        }
         self.scripted.evaluate(state, questions)
+    }
+}
+
+/// The driver's requests, recorded, answered as `ScriptedLLM` answers.
+struct RecordingLLM(Arc<Mutex<Vec<String>>>);
+
+impl LLMClient for RecordingLLM {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        self.0.lock().unwrap().push(format!("{purpose:?} {messages:?}"));
+        ScriptedLLM.generate_value(purpose, messages, schema, ledger)
     }
 }
 
@@ -92,7 +114,8 @@ impl DecisionClient for RecordingJev {
 async fn test_a_page_chosen_hover_role_cannot_exempt_a_password_from_the_model_boundary() {
     let sent = Arc::new(Mutex::new(Vec::new()));
     let jev = Arc::new(RecordingJev { sent: sent.clone(), scripted: ScriptedJev::new(Vec::new()) });
-    let agent = Agent::new(Arc::new(HoverPage), jev, Arc::new(ScriptedLLM));
+    // The driver is shown the page, and Jev the checks on it: neither receives the password.
+    let agent = Agent::new(Arc::new(HoverPage), jev, Arc::new(RecordingLLM(sent.clone())));
     let options = RunOptions { start: Some(format!("https://ops:{PASSWORD}@shop.test/")), ..Default::default() };
     let _ = agent.run("Inspect the order details", options).await;
     let sent = sent.lock().unwrap();

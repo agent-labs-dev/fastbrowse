@@ -1,24 +1,19 @@
 //! Turning a decision into an action: the gates code owns and the text a field gets.
 
-use std::collections::{BTreeMap, HashMap};
-use std::ops::Range;
-
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, Images, NoulQuestion, Question};
-use fastbrowse_core::keys::press_keys;
-use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    ALLOWED, CredentialField, DONE, EDITS_ALLOWED, EDITS_NONE, EDITS_REQUESTED_ONLY, HAPPENED, LATER_VALUES, MET,
-    allowed_question, asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action,
-    credential_field, downloads_question, edits_question, forbidden_question, happened_question, irreversible_question,
-    is_password, item_place, lasting_question, may_be_irreversible, met_question, offers_passkey, origin_of,
-    page_description, prohibits_question, requested_question, resolve_secret, sets_new_password, starts_download,
-    values_question,
+    ALLOWED, DONE, EDITS_ALLOWED, EDITS_NONE, EDITS_REQUESTED_ONLY, HAPPENED, LATER_VALUES, MET, allowed_question,
+    asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action,
+    downloads_question, edits_question, forbidden_question, happened_question, irreversible_question, lasting_question,
+    may_be_irreversible, met_question, origin_of, page_description, prohibits_question, requested_question,
+    resolve_secret, starts_download, values_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -27,22 +22,14 @@ use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
 use super::seeing::cards;
-use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
-use crate::error::AgentError;
+use super::state::{Edits, Extent, Flow, OutputIntent, RunState, Step, Stop, Unsure};
 use crate::memory::Notes;
-use crate::policy::{Ahead, Decision, HistoryEntry, screenshot_reference};
-use crate::retrieval::text::{Page, SpanKind, Word, edge_options, spans, words};
+use crate::policy::{Decision, Given, HistoryEntry, screenshot_reference};
+use crate::retrieval::text::{SpanKind, spans};
 use crate::verification::{page_state, page_verdict_state};
-use crate::writing::write_value;
 
 /// Why a conditional commit is refused when the page does not show its condition met.
 const UNSHOWN_CONDITION: &str = "depends on a condition the task sets, and the page does not show it allows this: read the page to check it, or finish";
-
-/// Which of several values a task gives a field is typed. Both ends of a value are picked apart and can land on
-/// different values, and the question that settles where it ends was asked without this: on a checkout given
-/// "NOTAPOSTCODE. If the site rejects anything, ... SW1A 1AA", it picked the second postcode's end 9 times in 10 before
-/// any rejection, and the first postcode 10 times in 10 with it.
-const FIRST_VALUE: &str = "the first comes first, unless the task says when to use another and that has happened.";
 
 #[derive(Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,266 +41,19 @@ enum GateReason {
     ConditionUnmet,
     ConfirmationRequired,
 }
-/// Which value a field in one of several alike records takes, said after where the field sits. CurseForge opens a reply
-/// box labelled "Comment text area" under the comment replied to, and given only that label, Jev copied all three
-/// replies a task gave into the first box, since nothing said which reply was its own (#879). With the comment in the
-/// field's name instead, Jev began a one-reply task's value at the commenter's name, which the task gives to say which
-/// reply is meant, 2 times in 8. Said here, after where the field sits, a recorded three-reply fill ended the first box's
-/// value at its own reply 10 times in 10 (4 in 10 before), and the one-reply fill began at its reply 10 times in 10.
-pub(super) const IN_RECORD: &str = "When the task gives values for several things the page shows, this field takes only the one the task gives for what the field is in; that thing's name says which value is meant and is not part of it.";
-
-/// The field's value is words of the task, which Jev marks.
-const IN_TASK: &str = "task";
-/// The field's value is words of what was read, which Jev marks. Offered with the task's words, a word read from the
-/// page was typed into every field of a form whose values the task gave.
-pub(super) const IN_READ: &str = "read";
-/// Joins a word's index to the punctuation characters kept past it, in a choice of where a value ends or begins.
-const KEPT: &str = "+";
-/// The task asks for the value without stating it word for word, as a search box's query, so the LLM writes it.
-const WRITTEN: &str = "write";
-/// The task asks for the field's value, and nothing given states it.
-const NO_VALUE: &str = "none";
-/// A press whose key the task states, which is copied from the task rather than picked from the role's keys.
-const TASK_KEY: &str = "task";
-const TASK_KEY_SAID: &str = "The task gives the key or key chord to press, and it is none of these.";
-/// The task asks nothing of the field: it is left as it is, and is no input the run lacks. Asked as one with NO_VALUE,
-/// a blank optional field Jev reached for read as a value the caller had to give (#935).
-const LEAVE: &str = "leave";
-const NO_VALUE_SAID: &str = "The task asks for this field's value, and nothing given states it.";
-const LEAVE_SAID: &str = "The task asks nothing of this field, so it is left as it is.";
 
 /// Said to the question of whether the task's steps were carried out, when no step of the run has acted on a page.
 pub(super) const NOTHING_ACTED: &str =
     "This run has taken no step on any page, only looked at and read them, so what they show was there before it.";
-
-/// The answer to a choice among copies of a value that says the value does not run from the end they share.
-const ELSEWHERE: &str = "elsewhere";
 
 /// What a choice among a field's options settled on: one of them, or the key of an answer offered instead.
 enum Chosen {
     Option(String),
     Instead(&'static str),
 }
-/// Words shown either side of one Jev may pick, so a word the task repeats reads as a different place.
-const WORD_CONTEXT: usize = 3;
-/// A long source is cut into a few broad parts: as hundreds of overlapping fragments, a 330-word request lost the one
-/// city it named (#636).
-const VALUE_SOURCE_PARTS: usize = 4;
-
-/// Words a long value shows at each end when copies of it are too long to offer whole in one request. Copies offered
-/// to choose between differ at their ends: where the value begins or ends, and the punctuation there. A 10 KB
-/// description offered in full as each of its possible ends is far past what one request may hold (#939).
-const VALUE_ENDS_SHOWN: usize = 12;
-/// Said of a choice among copies shown by their ends.
-const ELIDED: &str = " A long value is shown by its first and last words, with the number of words between them.";
-
-/// `value` shown by its first and last [`VALUE_ENDS_SHOWN`] words around the count of words between them, or whole when
-/// it has no more words than that.
-fn value_ends(value: &str) -> String {
-    let all = words(value, None);
-    if all.len() <= 2 * VALUE_ENDS_SHOWN + 1 {
-        return value.to_string();
-    }
-    let chars: Vec<char> = value.chars().collect();
-    let head: String = chars[..all[VALUE_ENDS_SHOWN - 1].outer_end].iter().collect();
-    let tail: String = chars[all[all.len() - VALUE_ENDS_SHOWN].outer_start..].iter().collect();
-    format!("{head} [... {} words ...] {tail}", all.len() - 2 * VALUE_ENDS_SHOWN)
-}
-
-const READ_SOURCE: &str = "The task does not state it, and what was read does: ";
-
-/// A source question that crowds out the page state can show the read by its ends.
-fn shorten_read(question: &mut String, options: &mut IndexMap<String, JsonValue>) -> bool {
-    if question.contains(ELIDED) {
-        return false;
-    }
-    let Some(value) = options.get_mut(IN_READ) else {
-        return false;
-    };
-    let Some(read) = value.as_str().and_then(|shown| shown.strip_prefix(READ_SOURCE)) else {
-        return false;
-    };
-    let ends = value_ends(read);
-    if ends == read {
-        return false;
-    }
-    *value = JsonValue::from(format!("{READ_SOURCE}{ends}"));
-    question.push_str(ELIDED);
-    true
-}
-
-/// The words Jev may pick from, each with where it stands in the task.
-fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, JsonValue> {
-    let chars: Vec<char> = task.chars().collect();
-    shown
-        .iter()
-        .map(|word| {
-            let around: String = chars[word.before(WORD_CONTEXT)..word.after(WORD_CONTEXT)].iter().collect();
-            let picked: String = chars[word.start..word.end].iter().collect();
-            let piece = word.piece.map_or(String::new(), |(n, of)| format!(" (piece {n} of {of})"));
-            (word.index.to_string(), JsonValue::from(format!("{}{piece} in: {around}", text::repr(&picked))))
-        })
-        .collect()
-}
-
-fn picked_word(picks: &IndexMap<String, String>, key: &str, group: &[Word]) -> Option<Word> {
-    let index = picks.get(key)?.parse::<usize>().ok()?;
-    group.iter().find(|word| word.index == index).cloned()
-}
-
-/// Which of several values `target` takes: the first, or for a field in one of several records, its record's own.
-fn several_values(target: &Control) -> String {
-    match target.context.as_deref() {
-        Some(context) if !context.is_empty() => {
-            format!("{FIRST_VALUE} The field sits in {} on the page. {IN_RECORD}", text::repr(context))
-        }
-        _ => FIRST_VALUE.to_string(),
-    }
-}
-
-/// What a field's value is picked from.
-pub(super) struct Value {
-    /// The task as Jev reads it, credentials in its addresses masked.
-    task: String,
-    /// The text a value is typed from: `task` unmasked, character for character, so a span Jev picks on `task` is cut
-    /// from here (#1381).
-    typed: String,
-    /// What was read that answers the task.
-    read: Vec<ReadSource>,
-    label: String,
-    pub(super) group: Vec<Word>,
-    source_question: String,
-    pub(super) sources: IndexMap<String, JsonValue>,
-    /// The stored secrets offered as sources, in the order their handles number them.
-    secrets: Vec<String>,
-}
-
-/// A contiguous piece of one document in one read, with its offset in that capture.
-struct ReadSource {
-    text: String,
-    start: i64,
-}
-
-/// Keep adjacent eligible blocks of a step read together, using its original separators.
-fn read_sources(state: &RunState, facts: &[&crate::memory::Fact]) -> Vec<ReadSource> {
-    let mut sources = Vec::new();
-    let mut remaining = facts.to_vec();
-    for capture in state.read_whole.iter().filter(|capture| state.step_pages.contains(&capture.sha256)) {
-        let page = Page::new(capture);
-        let mut spans = Vec::new();
-        remaining.retain(|fact| {
-            let Some(e) = fact.evidence.as_ref().filter(|e| {
-                e.capture_sha256 == capture.sha256
-                    && e.captured_at == capture.captured_at
-                    && e.rendered_text
-                    && page.slice(e.start, e.end) == e.quote
-            }) else {
-                return true;
-            };
-            spans.push(e);
-            false
-        });
-        spans.sort_by_key(|e| (e.start, e.end));
-        let mut spans = spans.into_iter().peekable();
-        while let Some(first) = spans.next() {
-            let mut end = first.end;
-            while let Some(next) = spans.next_if(|next| {
-                next.url == first.url
-                    && next.frame_id == first.frame_id
-                    && page.slice(end, next.start).chars().all(char::is_whitespace)
-            }) {
-                end = end.max(next.end);
-            }
-            sources.push(ReadSource { text: page.slice(first.start, end).into(), start: first.start });
-        }
-    }
-    sources.extend(remaining.into_iter().map(|fact| match &fact.evidence {
-        Some(e) if e.rendered_text => ReadSource { text: e.quote.clone(), start: e.start },
-        _ => ReadSource { text: fact.text.clone(), start: 0 },
-    }));
-    sources
-}
 
 /// One question about the page, with the options it offers.
 type Asked<'a> = (&'a str, String, IndexMap<String, JsonValue>);
-
-/// What Jev is asked about a field: where its value comes from, where among `begins` it begins and where among `ends`
-/// it ends.
-fn value_questions<'a>(
-    state: &RunState,
-    target: &Control,
-    (text, holder): (&str, &str),
-    label: &str,
-    (begins, ends): (&[Word], &[Word]),
-    source_question: String,
-    mut sources: IndexMap<String, JsonValue>,
-) -> Vec<Asked<'a>> {
-    // With no words left to copy, saying the task states the value leaves the field empty; it can still be written.
-    if begins.is_empty() || ends.is_empty() {
-        sources.shift_remove(IN_TASK);
-    }
-    let holds = holding(target)
-        .map(|now| format!(" The field holds {now} now, and typing replaces all of it."))
-        .unwrap_or_default();
-    let source_question =
-        if source_question.is_empty() { source_question } else { format!("{source_question}{holds}") };
-    let tried = field_history(state, target);
-    let mut asked = vec![("source", source_question, sources)];
-    if !begins.is_empty() && !ends.is_empty() {
-        let several = several_values(target);
-        asked.push(("first", word_question((holder, label), "begins", &several, &tried), word_options(text, begins)));
-        asked.push(("last", word_question((holder, label), "ends", &several, &tried), word_options(text, ends)));
-    }
-    asked
-}
-
-/// Which of `holder`'s words `end` the value for `label`, with which of several values it takes, as `several_values`
-/// says, and what `tried` says the field already had.
-///
-/// Asked only where a value begins, Jev began a document's text at the answer to the task's own question: told to type
-/// a quoted list and then say which item it lists second, it began at the second item 3 times in 3 (#1187). Told that
-/// the value is text given to be entered, it began at the quote's first word 5 times in 5.
-fn word_question((holder, label): (&str, &str), end: &str, several: &str, tried: &str) -> String {
-    format!(
-        "If {holder} states the value for {label}, which of its words {end} the value? The value is text {holder} gives to be entered, not the answer to a question the task asks. When it gives this field several values, {several} A search takes what is looked for, not the request around it.{tried}"
-    )
-}
-
-/// What a field already had, as the question of where its value begins or ends says it.
-fn field_history(state: &RunState, target: &Control) -> String {
-    let tried = typed_into(state, target);
-    let tried = if tried.is_empty() {
-        String::new()
-    } else {
-        format!(
-            " Already typed here: {}. Earlier typing does not prove the page rejected the value. Choose what the task requires; the page may have changed it.",
-            tried.join(", ")
-        )
-    };
-    // A fill replaces what the field holds, so a value chosen without it dropped the @mention a reply box opened with
-    // when the task said to type after it (#857).
-    let holds = holding(target)
-        .map(|now| format!(" The field holds {now} now, and typing replaces all of it."))
-        .unwrap_or_default();
-    format!("{tried}{holds}")
-}
-
-/// What `target` holds now, quoted, unless it is empty or sensitive: a sensitive field's value is masked and never goes
-/// into a request.
-fn holding(target: &Control) -> Option<String> {
-    target.value.as_deref().filter(|value| !target.sensitive && !value.trim().is_empty()).map(text::repr)
-}
-
-/// What was already typed into `target` this run, quoted.
-fn typed_into(state: &RunState, target: &Control) -> Vec<String> {
-    let described = describe(target);
-    state
-        .history
-        .iter()
-        .filter(|entry| entry.operation == Some(Operation::Fill) && entry.target.as_deref() == Some(&described))
-        .filter_map(|entry| entry.text.as_deref().map(text::repr))
-        .collect()
-}
 
 /// What a control that submits a form saves, from the run's own steps: each field of that form the run filled, with
 /// the value it held before and the value typed, and the control the run clicked to open the form. The form's text
@@ -404,19 +144,6 @@ fn page_question(task: &str, question: &str, criteria: IndexMap<String, JsonValu
     Question::Choice(ChoiceQuestion::new(content, criteria))
 }
 
-/// Jev's picks from the decision's own request, when it answered all of `asked` there.
-fn ahead_picks(decision: &Decision, asked: &[Asked<'_>]) -> Option<IndexMap<String, String>> {
-    asked
-        .iter()
-        .map(|(key, _, options)| match decision.ahead.get(*key) {
-            Some(Answer::Choice(answer)) if options.contains_key(&answer.choice) => {
-                Some((key.to_string(), answer.choice.clone()))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// What is asked before a control is pressed: whether that commits anything, and when the run is authorized, whether
 /// the task asked for it. A credential change is irreversible on the page's own structure, so Jev is not asked whether
 /// it is.
@@ -469,6 +196,21 @@ pub(super) enum Carried {
     Undone(String),
     /// Not carried out, and the page or the recent actions show the site does not allow it.
     Refused,
+    /// The page reports that the site failed to deliver what the last actions asked of it.
+    SiteFailed,
+}
+
+/// Whether the page reports that the site failed. The chat driver named Google Flights' "Oops, something went wrong.
+/// Reload" panel an error and still ended the run complete on it, and the steps question judged the search carried
+/// out, so a finish asks this of the page itself.
+fn site_failure_question() -> NoulQuestion {
+    NoulQuestion::new(
+        format!(
+            "{UNTRUSTED}\n\nDoes this page report that the site failed to deliver what was asked, instead of showing it? An error message in place of results, a request the site says went wrong, a temporary outage, rate limit or maintenance notice, a browser error page, or a load that has not finished across steps are failures, even when the page also shows an empty result such as no matches. A placeholder served in place of the site, with none of the content the task is about and nothing to follow, is a failure too. An ordinary empty result the site reports as an answer, a form, a form rejecting a value entered in it, or a page showing the content the task is about, even beside a leftover loading or error line, is not."
+        ),
+        Some("The page reports that the site failed or has not finished delivering the content."),
+        Some("The page shows the site's content or its ordinary answer, empty or not."),
+    )
 }
 
 fn choice_picks(
@@ -504,36 +246,6 @@ impl Agent {
         });
     }
 
-    /// The follow-ups each action on this page would need, to ask beside the decision. A password is never picked
-    /// from words, and a task too long for one choice is narrowed first, so those stay follow-ups.
-    pub(super) fn ahead(&self, state: &RunState, observation: &Observation) -> Vec<Ahead> {
-        let max = self.jev.profile().max_choice_options;
-        let mut ahead = Vec::new();
-        for control in &observation.controls {
-            let mut add = |operation: Operation, name: &str, question: Question| {
-                let (control, name) = (control.id.clone(), name.to_string());
-                ahead.push(Ahead { operation, control, name, question });
-            };
-            if control.operations.contains(&Operation::Fill) && !is_password(control) {
-                let Value { task, label, group, sources, source_question, .. } = self.value(state, control);
-                if group.len() <= max {
-                    for (name, question, criteria) in value_questions(
-                        state,
-                        control,
-                        (&task, "the task"),
-                        &label,
-                        (&group, &group),
-                        source_question,
-                        sources,
-                    ) {
-                        add(Operation::Fill, name, page_question(&self.model_task(state), &question, criteria));
-                    }
-                }
-            }
-        }
-        ahead
-    }
-
     pub(super) async fn action(
         &self,
         state: &mut RunState,
@@ -542,24 +254,19 @@ impl Agent {
     ) -> Step<Action> {
         let target = decision.target.as_ref();
         match decision.operation {
-            Operation::Search => Ok(Action {
-                text: Some(self.search_query(state, observation).await?),
-                ..Action::new(Operation::Search)
-            }),
             Operation::Navigate => {
+                // The chat driver writes the address itself, as the old chooser's known pages were written by a model
+                // too: held to that list, it was refused every address it built (pypi-newer, ruff-release). What keeps a
+                // made-up address safe is checked below for every address: no secret in it, and the navigation gate.
                 let Some(url) = decision.url.clone().filter(|url| {
-                    task_urls(&state.raw_task, state.caller_start.as_deref(), true).contains(url)
+                    crate::start::accept_start(Some(url)).is_some()
+                        || task_urls(&state.raw_task, state.caller_start.as_deref(), true).contains(url)
                         || state.reload_target(&observation.url).as_ref() == Some(url)
                         || state.pager_followed.contains(url)
-                        || state.routes.contains(url)
-                        || state.known_pages.contains(url)
                 }) else {
-                    return Err(Stop::new(
-                        Status::Stuck,
-                        "Navigate/unsupplied-address",
-                        "navigation address was not supplied by the caller",
-                    )
-                    .into());
+                    // An address the driver model wrote wrong is its to correct; ended as stuck, one mistyped goto
+                    // ended the run.
+                    return Err(Unsure::new("goto opens only an http or https address").into());
                 };
                 // Credentials the caller wrote into the address are theirs to send; only a resolved secret stops it.
                 if self.redactor().reveals_secret(&url) {
@@ -582,7 +289,17 @@ impl Agent {
                 if let Some(target) = target {
                     self.gate_edit(state, observation, decision, target).await?;
                 }
-                self.gate_irreversible(state, observation, decision).await?;
+                // Every thing drawn on a canvas or map shares its one control, so a question naming only the surface
+                // was asked the same for a harmless pin and a destructive one, and the named thing was clicked after.
+                let inside = match (&decision.given, target) {
+                    (Some(Given::Text(on)), Some(target))
+                        if decision.operation == Operation::Click && target.drawn == Some(true) =>
+                    {
+                        Some(format!("\nThe click lands on {} drawn inside this element.\n", text::repr(on)))
+                    }
+                    _ => None,
+                };
+                self.gate_irreversible_with_fact(state, observation, decision, inside.as_deref()).await?;
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
             }
             Operation::Press => {
@@ -591,7 +308,17 @@ impl Agent {
                     let reason = format!("{} can only receive a key press in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
-                let chord = self.key(state, observation, decision, target).await?;
+                let chord = match &decision.given {
+                    // The chat driver names its key; the page's key grammar checks it, and a key it does not know is
+                    // refused back to the driver rather than pressed.
+                    Some(Given::Text(key)) => match self.page.key_error(key) {
+                        None => key.clone(),
+                        Some(error) => {
+                            return Err(Unsure::new(format!("{} is not a key: {error}", text::repr(key))).into());
+                        }
+                    },
+                    _ => return Err(Stop::new(Status::Error, "Press/no-key", "a press named no key").into()),
+                };
                 self.gate_key_edit(state, observation, decision, target, &chord).await?;
                 let fact = format!("\nThe exact key chord to press is {}.\n", text::repr(&chord));
                 self.gate_irreversible_with_fact(state, observation, decision, Some(&fact)).await?;
@@ -603,15 +330,25 @@ impl Agent {
                 let drawn = target.drawn == Some(true);
                 let destination = match (&decision.destination, drawn) {
                     (Some(destination), false) => Some(destination),
+                    // The driver left out the drop target, which it can still name: ended as needs_input, a run that
+                    // took a slider handle for a drawn surface stopped asking a person for a target on the page.
                     (None, false) => {
-                        return Err(Stop::new(
-                            Status::NeedsInput,
-                            "Drag/no-target",
-                            "the page offers no drop target for the drag",
-                        )
-                        .into());
+                        let reason = format!(
+                            "{} is not drawn on, so a drag needs to: the id of the control to drop it on",
+                            text::repr(&describe(target))
+                        );
+                        return Err(Unsure::new(reason).into());
                     }
                     (_, true) => None,
+                };
+                // A drawn surface is drawn along a path and drops on nothing, so the drag Jev is asked about names no
+                // drop target: asked about one, it judged a drag onto a control the path never reaches.
+                let drawn_decision;
+                let decision = if drawn && decision.destination.is_some() {
+                    drawn_decision = Decision { destination: None, ..decision.clone() };
+                    &drawn_decision
+                } else {
+                    decision
                 };
                 self.gate_irreversible(state, observation, decision).await?;
                 if let Some(destination) = destination {
@@ -637,7 +374,31 @@ impl Agent {
                     let reason = format!("{} can only be filled in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
-                let text = self.text(state, observation, decision, target).await?;
+                let text = match &decision.given {
+                    // Text the task states word for word is the task's, so a recipe types it again; any other text
+                    // the driver wrote may come from the page, so a replay leaves it to the driver.
+                    Some(Given::Text(text)) => {
+                        let text = &self.as_written(state, text);
+                        state.text_source = Some(if state.given_task.contains(text.as_str()) {
+                            RecipeText::Literal(text.clone())
+                        } else {
+                            RecipeText::Live
+                        });
+                        text.clone()
+                    }
+                    // A secret the chat driver names is resolved here, for this field's origin only: the driver never
+                    // sees its value.
+                    Some(Given::Secret(name)) => {
+                        state.text_source = Some(RecipeText::Secret(name.clone()));
+                        let origin = self.target_origin(target);
+                        self.secret(name, &origin, target.sensitive || asks_for_credentials(&self.raw_target(target)))
+                            .await?
+                    }
+                    // The driver states the text of every field it fills.
+                    None | Some(Given::Seconds(_)) => {
+                        return Err(Stop::new(Status::Error, "Fill/no-text", "a fill named no text to type").into());
+                    }
+                };
                 // The task shows each input's value beside its name, so Jev copies or writes it like any value the
                 // task gives; typed as it was given, it is the input, and a recipe types the next run's value.
                 // Text the caller's own task also states, or that two inputs share, may not be the input's, and stays as
@@ -669,27 +430,19 @@ impl Agent {
                     }
                     return Err(Unsure { reason, gives_up_as: Status::Stuck }.into());
                 }
-                let named = text::repr(&describe(target));
-                // A list that allows several choices toggles the option picked, so Jev is told which are chosen.
-                let question = match (target.input_type.as_deref(), target.value.as_deref()) {
-                    (Some("select-multiple"), chosen) => {
-                        let chosen = chosen.filter(|chosen| !chosen.is_empty()).map_or("none".into(), text::repr);
-                        format!("Which option of {named} should be toggled? Selected now: {chosen}.")
-                    }
-                    _ => format!("Which option should {named} be set to?"),
+                // The chat driver names its option, which must be one the select offers.
+                let Some(Given::Text(option)) = &decision.given else {
+                    return Err(Stop::new(Status::Error, "Select/no-option", "a select named no option").into());
                 };
-                // Like a typed value, an option is one the task gives: a required select the task names no option
-                // for, asked only which option it should hold, was set to one Jev had to pick anyway.
-                let instead = [(NO_VALUE, NO_VALUE_SAID), (LEAVE, LEAVE_SAID)];
-                match self.choose_among(state, observation, &question, &raw.options, &instead).await? {
-                    Chosen::Option(option) => Ok(Action {
-                        target_id: Some(raw.id.clone()),
-                        text: Some(option),
-                        ..Action::new(Operation::Select)
-                    }),
-                    Chosen::Instead(LEAVE) => Err(self.untouched(state, observation, target)),
-                    Chosen::Instead(_) => Err(self.unsupplied(state, observation, target)),
+                if !raw.options.contains(option) {
+                    let reason = format!("{} offers no option {}", text::repr(&describe(target)), text::repr(option));
+                    return Err(Unsure::new(reason).into());
                 }
+                Ok(Action {
+                    target_id: Some(raw.id.clone()),
+                    text: Some(option.clone()),
+                    ..Action::new(Operation::Select)
+                })
             }
             Operation::Upload => {
                 if state.attachments.is_empty() {
@@ -701,7 +454,11 @@ impl Agent {
                     .into());
                 }
                 let names: Vec<String> = state.attachments.iter().map(|a| a.name.clone()).collect();
-                let name = self.choose(state, observation, "Which file belongs in this input?", &names).await?;
+                // The driver names the file it attaches; a name that is not one of the files given is asked of Jev.
+                let name = match &decision.given {
+                    Some(Given::Text(name)) if names.contains(name) => name.clone(),
+                    _ => self.choose(state, observation, "Which file belongs in this input?", &names).await?,
+                };
                 let files: Vec<_> = state.attachments.iter().filter(|a| a.name == name).cloned().collect();
                 if files.iter().map(|f| f.content.0.len() as i64).sum::<i64>() > self.config.max_upload_bytes {
                     return Err(Stop::new(
@@ -742,11 +499,21 @@ impl Agent {
             Operation::Scroll | Operation::ScrollUp => {
                 Ok(Action { target_id: target.map(|target| target.id.clone()), ..Action::new(decision.operation) })
             }
-            Operation::Escape | Operation::Back | Operation::Wait => Ok(Action::new(decision.operation)),
-            Operation::Read | Operation::Done => Err(Flow::Agent(crate::AgentError::Invalid(format!(
-                "{} is handled by the loop, not dispatched",
-                decision.operation
-            )))),
+            // Escape goes to the focused element; a close names the modal it is pressed in, and is asked about as that
+            // key press would be: a widget that discards a draft on Escape loses it.
+            Operation::Escape => {
+                if target.is_some() {
+                    let pressed = Decision { operation: Operation::Press, ..decision.clone() };
+                    let fact = "\nThe exact key chord to press is 'Escape'.\n";
+                    self.gate_irreversible_with_fact(state, observation, &pressed, Some(fact)).await?;
+                }
+                Ok(Action::new(Operation::Escape))
+            }
+            Operation::Back | Operation::Wait => Ok(Action::new(decision.operation)),
+            // No driver tool or replayable recipe step makes a search a step; the start route searches by itself.
+            Operation::Read | Operation::Done | Operation::Search => Err(Flow::Agent(crate::AgentError::Invalid(
+                format!("{} is handled by the loop, not dispatched", decision.operation),
+            ))),
         }
     }
 
@@ -798,7 +565,7 @@ impl Agent {
 
     /// The card of a pictured target, cut from the viewport, as one image keyed by its reference. Empty for any other
     /// target, or when there is no viewport to cut it from.
-    async fn looks_of(&self, decision: &Decision) -> Step<Images> {
+    pub(super) async fn looks_of(&self, decision: &Decision) -> Step<Images> {
         let Some(target) = decision.target.as_ref().filter(|target| target.pictured == Some(true)) else {
             return Ok(Images::new());
         };
@@ -999,68 +766,6 @@ impl Agent {
         Ok(Some(answer.probability > EVEN_ODDS))
     }
 
-    /// What the task says about signing in, asked once, of the task alone, at the first sign-in wall: three questions
-    /// apart, each one literal hop, which code combines into whether the wall stops the run. No answer to any of them
-    /// is None, and the wall stops the run as it did before they were asked.
-    pub(super) async fn sign_in_needs(&self, state: &mut RunState) -> Step<Option<SignInNeeds>> {
-        if let Some(needs) = state.sign_in {
-            return Ok(Some(needs));
-        }
-        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let noul =
-            |question: &str, yes: &str, no: &str| Question::Noul(NoulQuestion::new(question, Some(yes), Some(no)));
-        let questions = IndexMap::from([
-            (
-                "account".to_string(),
-                noul(
-                    "Does `task` need the agent to act as a signed-in user of the site, such as to see or change an account's own orders, messages, settings or other private pages?",
-                    "The task needs a signed-in account.",
-                    "The task can be done by a visitor who is not signed in.",
-                ),
-            ),
-            (
-                "credentials".to_string(),
-                noul(
-                    "Does `task` give the username, email, password or code to sign in with, or tell the agent to sign in with a saved or configured account or password?",
-                    "The task gives credentials to sign in with, or says to sign in with saved or configured ones.",
-                    "The task gives no credentials and does not say to sign in.",
-                ),
-            ),
-            (
-                "inspects".to_string(),
-                noul(
-                    "Does `task` ask about the site's access restrictions themselves, such as whether a page needs signing in?",
-                    "The task asks about access restrictions.",
-                    "The task asks about something else.",
-                ),
-            ),
-        ]);
-        let evaluation = jev_purpose(
-            JevPurpose::Authorization,
-            self.jev.evaluate(&json!({"task": self.caller_task(state)}), &questions),
-        )
-        .await?;
-        state.ledger.record([evaluation.cost.clone()])?;
-        let yes = |key: &str| match evaluation.answers.get(key) {
-            Some(Answer::Noul(answer)) => Some(answer.probability > EVEN_ODDS),
-            _ => None,
-        };
-        let (Some(account), Some(credentials), Some(inspects)) = (yes("account"), yes("credentials"), yes("inspects"))
-        else {
-            return Ok(None);
-        };
-        let needs = SignInNeeds { account, credentials, inspects };
-        self.event("sign_in", || {
-            Map::from_iter([
-                ("account".into(), account.into()),
-                ("credentials".into(), credentials.into()),
-                ("inspects".into(), inspects.into()),
-            ])
-        });
-        state.sign_in = Some(needs);
-        Ok(Some(needs))
-    }
-
     /// The one rule for an action that may commit: it proceeds when Jev judges it not irreversible, or when the run is
     /// authorized and Jev judges the task asked for it. Otherwise the run stops for confirmation. Before either, an
     /// action Jev judges the task says not to take is refused once, authorized or not.
@@ -1213,7 +918,7 @@ impl Agent {
             Some(self.redact(label)),
             confidence,
             Some(false),
-            if decision.replayed { Decider::Recipe } else { Decider::Jev },
+            decision.decider(),
         )
         .await?;
         Err(Stop::new(Status::NeedsConfirmation, "Confirm/irreversible", reason).into())
@@ -1376,876 +1081,10 @@ impl Agent {
             Some(self.redact(label)),
             Some(decision.confidence()),
             Some(false),
-            if decision.replayed { Decider::Recipe } else { Decider::Jev },
+            decision.decider(),
         )
         .await?;
         Err(Unsure::new(redacted).into())
-    }
-
-    /// The text a field gets: an input, a stored secret, or words Jev marks in the task, copied as the task has them.
-    pub(super) async fn text(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        decision: &Decision,
-        target: &Control,
-    ) -> Step<String> {
-        self.text_with_scope(state, observation, decision, target, false).await
-    }
-
-    /// The key a press sends to `target`: Jev picks one the control's role defines or a standard navigation or editing
-    /// key, or says the task gives the key instead, so Jev never writes one.
-    async fn key(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        decision: &Decision,
-        target: &Control,
-    ) -> Step<String> {
-        if decision.replayed && self.recorded_key(state, observation, target).is_some() {
-            return self.task_key(state, observation, decision, target).await;
-        }
-        let options: Vec<String> = press_keys(&target.role).iter().map(|key| key.to_string()).collect();
-        let mut question = format!(
-            "Which key should be pressed in {}? Each is named as a W3C UI Events key value; a {} supports the ones listed \
-             first, and the standard keys follow.",
-            text::repr(&describe(target)),
-            target.role
-        );
-        // A widget states its own keys (a draggable card: Space picks it up, an arrow moves it, Space drops it), and
-        // the recent actions say how far the sequence has got.
-        if let Some(role_description) = &target.role_description {
-            question.push_str(&format!(" The page calls it {}.", text::repr(role_description)));
-        }
-        if let Some(description) = &target.description {
-            question.push_str(&format!(" The page describes it: {}", text::repr(description)));
-        }
-        // An arrow moves the item one place in its list, so which place it holds is part of what the key does.
-        if let Some((position, count)) = item_place(target) {
-            question.push_str(&format!(" It is item {position} of the {count} items in its list."));
-        }
-        match self.choose_among(state, observation, &question, &options, &[(TASK_KEY, TASK_KEY_SAID)]).await? {
-            Chosen::Option(key) => {
-                state.text_source = Some(RecipeText::Literal(key.clone()));
-                Ok(key)
-            }
-            Chosen::Instead(_) => self.task_key(state, observation, decision, target).await,
-        }
-    }
-
-    /// A key copied from the task's words, checked by the key grammar of the page that presses it. Words that name no
-    /// key, as when the task gives none, leave the press unmade and Jev is asked again, rather than the page refusing
-    /// them and ending the run (#1212).
-    async fn task_key(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        decision: &Decision,
-        target: &Control,
-    ) -> Step<String> {
-        let key = self.text_with_scope(state, observation, decision, target, true).await?;
-        match self.page.key_error(&key) {
-            None => Ok(key),
-            Some(error) => Err(Unsure::new(format!(
-                "the task gives no key to press in {}: {error}",
-                text::repr(&describe(target))
-            ))
-            .into()),
-        }
-    }
-
-    /// The key a recipe recorded for `target`, which a replayed press sends again without asking.
-    fn recorded_key(&self, state: &RunState, observation: &Observation, target: &Control) -> Option<String> {
-        let missing = state.missing.contains(&(observation.url.clone(), target.label.clone(), target.context.clone()));
-        match state.replay.as_ref()?.text_for(target, missing)? {
-            RecipeText::Literal(key) => Some(key.clone()),
-            _ => None,
-        }
-    }
-
-    /// The text `text` gives, or with `task_only` words copied from the task alone: a key chord, which neither a secret
-    /// nor what was read can give.
-    async fn text_with_scope(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        decision: &Decision,
-        target: &Control,
-        task_only: bool,
-    ) -> Step<String> {
-        let origin = self.target_origin(target);
-        state.text_source = Some(RecipeText::Live);
-        let missing = state.missing.contains(&(observation.url.clone(), target.label.clone(), target.context.clone()));
-        let recorded = decision
-            .replayed
-            .then(|| state.replay.as_ref().and_then(|replay| replay.text_for(target, missing)).cloned())
-            .flatten();
-        // A key chord comes from the task alone, so a recipe gives one only as the literal it recorded: a secret or an
-        // input in its place would be pressed without the handling a secret's fill gets.
-        let recorded = recorded.filter(|source| !task_only || matches!(source, RecipeText::Literal(_)));
-        if let Some(source) = recorded {
-            match source {
-                RecipeText::Literal(text) => {
-                    state.text_source = Some(RecipeText::Literal(text.clone()));
-                    return Ok(text);
-                }
-                RecipeText::Input(name) => {
-                    let value = state.inputs.get(&name).cloned().ok_or_else(|| {
-                        Stop::new(Status::NeedsInput, "Recipe/input-missing", format!("the recipe needs input {name}"))
-                    })?;
-                    state.text_source = Some(RecipeText::Input(name));
-                    return Ok(value);
-                }
-                RecipeText::Secret(name) => {
-                    let value = self
-                        .secret(&name, &origin, target.sensitive || asks_for_credentials(&self.raw_target(target)))
-                        .await?;
-                    state.text_source = Some(RecipeText::Secret(name));
-                    return Ok(value);
-                }
-                RecipeText::Live => {}
-            }
-        }
-        if is_password(target) && !task_only {
-            let secrets = self.secret_names(&origin);
-            return self.sensitive_text(state, observation, target, secrets, &origin).await;
-        }
-        let Value { task, typed, read, label, group, mut sources, source_question, secrets } =
-            self.value(state, target);
-        if task_only {
-            sources.retain(|source, _| source == IN_TASK);
-        }
-        let (begins, ends) = self.located(state, observation, &task, &label, group).await?;
-        let mut asked =
-            value_questions(state, target, (&task, "the task"), &label, (&begins, &ends), source_question, sources);
-        let picks = match ahead_picks(decision, &asked) {
-            Some(picks) => picks,
-            None if asked[0].2.contains_key(IN_READ) => {
-                match self.ask_choices(state, Some(observation), asked.clone()).await {
-                    Err(Flow::Agent(error @ (AgentError::ObservationTooLarge(_) | AgentError::NotesTooLarge(_)))) => {
-                        let (_, question, options) = &mut asked[0];
-                        if !shorten_read(question, options) {
-                            return Err(error.into());
-                        }
-                        self.ask_choices(state, Some(observation), asked).await?
-                    }
-                    result => result?,
-                }
-            }
-            None => self.ask_choices(state, Some(observation), asked).await?,
-        };
-        let source = picks.get("source").cloned().unwrap_or_else(|| NO_VALUE.into());
-        if source == LEAVE {
-            return Err(self.untouched(state, observation, target));
-        }
-        if source == WRITTEN {
-            let mut field = crate::policy::described(target);
-            if let Some(limit) = target.max_length {
-                field += &format!(", which holds at most {limit} characters");
-            }
-            let written = write_value(
-                &*self.llm,
-                &self.model_task(state),
-                &field,
-                target.input_type.as_deref(),
-                &typed_into(state, target),
-                holding(target).as_deref(),
-                &crate::dates::dated(observation.captured_at, &state.dates),
-                &state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
-                Some(&state.ledger),
-            )
-            .await?;
-            state.ledger.record([written.cost])?;
-            return match written.data.value.filter(|value| !value.trim().is_empty()) {
-                Some(value) => {
-                    // Words the task gives as they were typed are the task's value, however Jev got to them, so a
-                    // recipe can type them again. Anything composed stays live.
-                    if state.raw_task.contains(value.as_str()) {
-                        state.text_source = Some(RecipeText::Literal(value.clone()));
-                    }
-                    Ok(value)
-                }
-                None => Err(self.missing(state, observation, target)),
-            };
-        }
-        if source == IN_READ {
-            state.text_source = Some(RecipeText::Live);
-            return self.copy_read(state, observation, target, &read, &label).await;
-        }
-        // A handle numbers what it offers, so a name the caller chose, which may hold a credential the boundary
-        // masks, never becomes the key Jev answers with (`value`).
-        let handle = |prefix: &str| source.strip_prefix(prefix).and_then(|at| at.parse::<usize>().ok());
-        if let Some((name, value)) = handle("input:").and_then(|at| state.inputs.get_index(at)) {
-            let value = value.clone();
-            state.text_source = Some(RecipeText::Input(name.clone()));
-            return Ok(value);
-        }
-        if let Some(name) = handle("secret:").and_then(|at| secrets.get(at)) {
-            state.text_source = Some(RecipeText::Secret(name.clone()));
-            return self.secret(name, &origin, asks_for_credentials(&self.raw_target(target))).await;
-        }
-        match source.as_str() {
-            IN_TASK => {
-                let value = self
-                    .copy_words(state, observation, target, (&task, "the task", &label), (begins, ends), &picks)
-                    .await?
-                    .ok_or_else(|| self.missing(state, observation, target))?;
-                // Jev picks the span on the masked task, which keeps one character per character, so the same span
-                // cut from the caller's task is the text to type, credentials in an address included (#1381).
-                let value: String = typed.chars().skip(value.start).take(value.len()).collect();
-                state.text_source = Some(RecipeText::Literal(value.clone()));
-                Ok(value)
-            }
-            NO_VALUE => Err(self.unsupplied(state, observation, target)),
-            _ => Err(self.missing(state, observation, target)),
-        }
-    }
-
-    async fn copy_read(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        target: &Control,
-        reads: &[ReadSource],
-        label: &str,
-    ) -> Step<String> {
-        let mut candidates = Vec::new();
-        for read in reads {
-            let spans = self.read_spans(state, observation, target, &read.text, label, reads.len() > 1).await?;
-            for span in spans {
-                let value = read.text.chars().skip(span.start).take(span.len()).collect::<String>();
-                let offsets = read.start + span.start as i64..read.start + span.end as i64;
-                candidates.push((value, offsets));
-            }
-        }
-        if candidates.len() == 1 {
-            return Ok(candidates.pop().unwrap().0);
-        }
-        if candidates.is_empty() {
-            return Err(self.missing(state, observation, target));
-        }
-        if candidates.len() >= self.jev.profile().max_choice_options {
-            return Err(AgentError::ObservationTooLarge("The fill candidates exceed Jev's choice limit".into()).into());
-        }
-        let question = format!(
-            "Which candidate copied from what was read is the exact value for {label}? {} Select none if no candidate states the value.",
-            several_values(target)
-        );
-        let compare = |ends| {
-            let mut options: IndexMap<_, _> = candidates
-                .iter()
-                .enumerate()
-                .map(|(n, (value, span))| {
-                    let shown = if ends { value_ends(value) } else { value.clone() };
-                    let shown = if shown != *value {
-                        format!(
-                            "{shown} ({} characters, read offsets {} to {})",
-                            span.end - span.start,
-                            span.start,
-                            span.end
-                        )
-                    } else {
-                        shown
-                    };
-                    (n.to_string(), JsonValue::from(shown))
-                })
-                .collect();
-            options.insert(NO_VALUE.into(), JsonValue::from("None of these candidates states the field's value."));
-            options
-        };
-        let picks = match self
-            .ask_choices(state, Some(observation), vec![("read_candidate", question.clone(), compare(false))])
-            .await
-        {
-            Err(Flow::Agent(AgentError::ObservationTooLarge(_) | AgentError::NotesTooLarge(_))) => {
-                self.ask_choices(
-                    state,
-                    Some(observation),
-                    vec![("read_candidate", format!("{question}{ELIDED}"), compare(true))],
-                )
-                .await?
-            }
-            result => result?,
-        };
-        picks
-            .get("read_candidate")
-            .and_then(|picked| picked.parse::<usize>().ok())
-            .and_then(|index| candidates.into_iter().nth(index))
-            .map(|(value, _)| value)
-            .ok_or_else(|| self.missing(state, observation, target))
-    }
-
-    async fn read_spans(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        target: &Control,
-        read: &str,
-        label: &str,
-        multiple: bool,
-    ) -> Step<Vec<Range<usize>>> {
-        let group = words(read, target.max_length);
-        let mut windows = vec![group.as_slice()];
-        let mut firsts = BTreeMap::new();
-        let mut lasts = BTreeMap::new();
-        let mut split = false;
-        while let Some(window) = windows.pop() {
-            match self.read_boundaries(state, observation, target, (read, label), window, split || multiple).await {
-                Ok((begins, ends, picks)) if !split => {
-                    return Ok(self
-                        .copy_words(state, observation, target, (read, "what was read", label), (begins, ends), &picks)
-                        .await?
-                        .into_iter()
-                        .collect());
-                }
-                Ok((begins, ends, picks)) => {
-                    if let Some(word) = picked_word(&picks, "first", &begins) {
-                        firsts.insert(word.index, word);
-                    }
-                    if let Some(word) = picked_word(&picks, "last", &ends) {
-                        lasts.insert(word.index, word);
-                    }
-                }
-                // Split the lookup to fit the request. Every word keeps its offset in the original source.
-                Err(Flow::Agent(AgentError::ObservationTooLarge(_) | AgentError::NotesTooLarge(_)))
-                    if window.len() > 1 =>
-                {
-                    let (left, right) = window.split_at(window.len() / 2);
-                    windows.extend([right, left]);
-                    split = true;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        let mut spans = Vec::new();
-        let chars: Vec<_> = read.chars().collect();
-        let max = self.jev.profile().max_choice_options;
-        for first in firsts.values() {
-            for last in lasts.range(first.index..).map(|(_, word)| word) {
-                if target.max_length.is_some_and(|limit| last.end - first.start > limit) {
-                    continue;
-                }
-                // Reuse the punctuation selection, with the boundaries already established for this read.
-                let question = format!(
-                    "Which exact text belongs in {label}? Choose whether the punctuation next to the copied value is part of it."
-                );
-                let edges = edge_options(&chars, (first, last), (0, 0), target.max_length, max);
-                let (lead, mut trail) = self.edges(state, observation, &question, edges).await?;
-                if target.max_length.is_some_and(|limit| last.end - first.start + lead + trail > limit) {
-                    let edges = edge_options(&chars, (first, last), (lead, 0), target.max_length, max);
-                    trail = self
-                        .edges(
-                            state,
-                            observation,
-                            &question,
-                            edges.into_iter().filter(|(edge, _)| *edge == "trail").collect(),
-                        )
-                        .await?
-                        .1;
-                }
-                spans.push(first.start - lead..last.end + trail);
-            }
-        }
-        Ok(spans)
-    }
-
-    async fn read_boundaries(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        target: &Control,
-        (read, label): (&str, &str),
-        window: &[Word],
-        optional: bool,
-    ) -> Step<(Vec<Word>, Vec<Word>, IndexMap<String, String>)> {
-        let (begins, ends) = self.located(state, observation, read, label, window.to_vec()).await?;
-        let mut asked = Vec::new();
-        let several = several_values(target);
-        let tried = field_history(state, target);
-        for (key, boundary, words) in [("first", "begins", &begins), ("last", "ends", &ends)] {
-            if words.is_empty() {
-                continue;
-            }
-            let mut question = word_question(("what was read", label), boundary, &several, &tried);
-            let mut options = word_options(read, words);
-            if optional {
-                question.push_str(" Select none if no word in this passage is the requested boundary.");
-                options.insert(NO_VALUE.into(), JsonValue::from("No word in this passage is the requested boundary."));
-            }
-            asked.push((key, question, options));
-        }
-        let picks =
-            if asked.is_empty() { IndexMap::new() } else { self.ask_choices(state, Some(observation), asked).await? };
-        Ok((begins, ends, picks))
-    }
-
-    async fn copy_words(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        target: &Control,
-        (task, holder, label): (&str, &str, &str),
-        (begins, ends): (Vec<Word>, Vec<Word>),
-        picks: &IndexMap<String, String>,
-    ) -> Step<Option<Range<usize>>> {
-        let (first, last) = (picked_word(picks, "first", &begins), picked_word(picks, "last", &ends));
-        if holder == "what was read" && matches!((&first, &last), (Some(first), Some(last)) if first.start >= last.end)
-        {
-            return Ok(None);
-        }
-        // A field with a limit takes the piece the value begins at, whatever the end was picked as.
-        let (first, last) = match (target.max_length, first.as_ref(), last.as_ref()) {
-            (Some(limit), Some(first), Some(last)) if last.end.saturating_sub(first.start) > limit => {
-                (Some(first), Some(first))
-            }
-            (Some(_), Some(first), Some(last)) if last.index < first.index => (Some(first), Some(first)),
-            (_, first, last) => (first, last),
-        };
-        let (Some(first), Some(last)) = (first, last) else {
-            return Ok(None);
-        };
-        // The two ends are picked apart, and each can land on a different value the task gives, or cross: the
-        // end is asked again knowing where this value begins, then the beginning knowing where it ends, since
-        // a beginning picked alone can take in the request around the value.
-        let chars: Vec<char> = task.chars().collect();
-        let text = |from: usize, to: usize| chars[from..to].iter().collect::<String>();
-        // An end touching punctuation is offered at each cut of it, from its letters and digits to the whole
-        // run, keyed `N`, `N+1`, ..., so the choice of that end also settles its punctuation. Offered only
-        // cut, a reply ending "or 100%." read "or 100", which is not the exact text, and Jev took the copy
-        // running on to the task's closing instructions instead (#881); a separate punctuation question after
-        // it dropped the reply's stop about half the time. Offered only whole, a postcode at a sentence's end
-        // read as "SW1A 1AA." and lost its second word. Past what one choice can offer, with one left for
-        // "none of these", the copies stay cut and the punctuation is asked after.
-        let max = self.jev.profile().max_choice_options;
-        let offered = |forms: Vec<(usize, Vec<String>)>| {
-            let every = forms.iter().map(|(_, cuts)| cuts.len()).sum::<usize>() < max;
-            let options: Vec<(String, String)> = forms
-                .into_iter()
-                .flat_map(|(index, cuts)| {
-                    let cuts = cuts.into_iter().enumerate().take(if every { usize::MAX } else { 1 });
-                    cuts.map(move |(kept, shown)| {
-                        let key = if kept == 0 { index.to_string() } else { format!("{index}{KEPT}{kept}") };
-                        (key, shown)
-                    })
-                })
-                .collect();
-            (options, every)
-        };
-        // The word index a choice names, and the punctuation it keeps when every cut was offered.
-        let picked_cut = |picked: &str, every: bool| {
-            let (index, kept) = picked.split_once(KEPT).unwrap_or((picked, "0"));
-            (index.parse::<usize>().ok(), kept.parse::<usize>().ok().filter(|_| every))
-        };
-        let run_task = self.model_task(state);
-        let several = several_values(target);
-        let exact = |bound: &str, options: &[(String, String)], elsewhere: &str| {
-            let question = format!(
-                "Which exact text belongs in {label}? Each choice is a candidate span copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
-            );
-            let (question, mut options) = self.offered_copies(&run_task, question, options);
-            options.insert(ELSEWHERE.into(), JsonValue::from(elsewhere));
-            (question, options)
-        };
-        let tried = field_history(state, target);
-        let (mut first, mut last, mut begins, mut ends) = (first.clone(), last.clone(), begins, ends);
-        // Each copy offered for one end runs from the other end as picked, so when that end is wrong every
-        // copy is: on a chat box told "Reply with only the word pong. Then send it. ...", a beginning picked
-        // at "Reply" offered only copies starting "Reply", and the end then picked among them ran on to the
-        // task's last word. Jev can say the value does not run from there, and that end is picked again
-        // without the word, so each round drops a word and the rounds end.
-        let (first, last, lead, trail) = loop {
-            let mut trail = None;
-            let ending: Vec<_> = ends
-                .iter()
-                .filter(|word| word.index >= first.index)
-                .map(|word| {
-                    let cuts = (0..=word.outer_end - word.end).map(|kept| text(first.start, word.end + kept));
-                    (word.index, cuts.collect())
-                })
-                .collect();
-            // The end was picked among words where the value may end; when none of them comes after the
-            // beginning, the value is the one word it begins at, as a crossed pick is.
-            if ending.is_empty() {
-                last = first.clone();
-            } else if first.index != last.index {
-                let (ending, every) = offered(ending);
-                let (question, options) = exact(
-                    "beginning at the selected word",
-                    &ending,
-                    "None of these: the value does not begin at the selected word.",
-                );
-                let picked = self.ask_choice(state, observation, &question, options).await?;
-                if picked == ELSEWHERE {
-                    begins.retain(|word| word.index != first.index);
-                    let Some(picked) =
-                        self.repick(state, observation, (task, holder, label, &tried), target, &begins).await?
-                    else {
-                        return Ok(None);
-                    };
-                    first = picked;
-                    continue;
-                }
-                let (index, kept) = picked_cut(&picked, every);
-                match ends.iter().find(|word| word.index >= first.index && Some(word.index) == index) {
-                    Some(word) => (last, trail) = (word.clone(), kept),
-                    None => last = first.clone(),
-                }
-            }
-            if first.index >= last.index {
-                break (first, last, None, trail);
-            }
-            let end = last.end + trail.unwrap_or(0);
-            let starting: Vec<_> = begins
-                .iter()
-                .filter(|word| word.index <= last.index)
-                .map(|word| {
-                    let cuts = (0..=word.start - word.outer_start).map(|kept| text(word.start - kept, end));
-                    (word.index, cuts.collect())
-                })
-                .collect();
-            let (starting, every) = offered(starting);
-            let (question, options) = exact(
-                "ending where the value ends",
-                &starting,
-                "None of these: the value does not end where these end.",
-            );
-            let picks = self.ask_choices(state, Some(observation), vec![("start", question, options)]).await?;
-            // The end was the one picked from this beginning, so it is picked again from there without it.
-            if picks.get("start").map(String::as_str) == Some(ELSEWHERE) {
-                ends.retain(|word| word.index != last.index);
-                continue;
-            }
-            let (index, kept) = picks.get("start").map_or((None, None), |picked| picked_cut(picked, every));
-            match begins.iter().find(|word| word.index <= last.index && Some(word.index) == index) {
-                Some(start) => break (start.clone(), last, kept, trail),
-                None => break (first, last, None, trail),
-            }
-        };
-        let (first, last) = (&first, &last);
-        // Words keep only their letters and digits, so punctuation the value starts or ends with, such as
-        // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave, where the
-        // choice of that end did not already settle it.
-        let question = format!(
-            "Which exact text belongs in {label}? Each choice is the complete value copied from {holder}; choose whether the punctuation next to it is part of the value."
-        );
-        let edges = edge_options(&chars, (first, last), (0, 0), target.max_length, max);
-        let edges =
-            edges.into_iter().filter(|(edge, _)| if *edge == "lead" { lead.is_none() } else { trail.is_none() });
-        let asked = self.edges(state, observation, &question, edges.collect()).await?;
-        let (lead, mut trail) = (lead.unwrap_or(asked.0), trail.unwrap_or(asked.1));
-        // Each edge was offered as it fits the field alone; when the two together do not, the end is asked
-        // again with what fits after the beginning Jev kept.
-        if target.max_length.is_some_and(|limit| last.end - first.start + lead + trail > limit) {
-            let edges = edge_options(&chars, (first, last), (lead, 0), target.max_length, max);
-            let edges: Vec<_> = edges.into_iter().filter(|(edge, _)| *edge == "trail").collect();
-            trail = self.edges(state, observation, &question, edges).await?.1;
-        }
-        Ok(Some(first.start - lead..last.end + trail))
-    }
-
-    /// The word among `words` where the value begins, asked again once Jev said it does not begin at the word picked
-    /// before. With no word left, the source does not state the value.
-    async fn repick(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        (text, holder, label, tried): (&str, &str, &str, &str),
-        target: &Control,
-        words: &[Word],
-    ) -> Step<Option<Word>> {
-        if words.is_empty() {
-            return Ok(None);
-        }
-        let question = word_question((holder, label), "begins", &several_values(target), tried);
-        let picks =
-            self.ask_choices(state, Some(observation), vec![("first", question, word_options(text, words))]).await?;
-        let picked = picks.get("first").and_then(|index| index.parse::<usize>().ok());
-        words
-            .iter()
-            .find(|word| Some(word.index) == picked)
-            .cloned()
-            .map(Some)
-            .ok_or_else(|| DecisionError::failed("expected a word of the source").into())
-    }
-
-    /// How many punctuation characters the beginning and the end of a value keep, as Jev picks among `edges`.
-    async fn edges(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        question: &str,
-        edges: Vec<(&'static str, Vec<(usize, String)>)>,
-    ) -> Step<(usize, usize)> {
-        if edges.is_empty() {
-            return Ok((0, 0));
-        }
-        let asked = edges
-            .into_iter()
-            .map(|(edge, options)| {
-                let options: Vec<_> = options.into_iter().map(|(kept, value)| (kept.to_string(), value)).collect();
-                let (question, options) = self.offered_copies(&self.model_task(state), question.to_string(), &options);
-                (edge, question, options)
-            })
-            .collect();
-        let picks = self.ask_choices(state, Some(observation), asked).await?;
-        let kept = |edge: &str| picks.get(edge).and_then(|kept| kept.parse::<usize>().ok()).unwrap_or(0);
-        Ok((kept("lead"), kept("trail")))
-    }
-
-    /// `options`, copies of a value keyed by what each keeps, as a choice offers them: whole when the question then
-    /// fits one decision request, and otherwise each by its ends, said in the question.
-    fn offered_copies(
-        &self,
-        task: &str,
-        question: String,
-        options: &[(String, String)],
-    ) -> (String, IndexMap<String, JsonValue>) {
-        let whole: IndexMap<String, JsonValue> =
-            options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value.as_str()))).collect();
-        if self.config.tokens.input_chars(&[page_question(task, &question, whole.clone()).dump_json()]) > 0 {
-            return (question, whole);
-        }
-        let ends = options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value_ends(value))));
-        (format!("{question}{ELIDED}"), ends.collect())
-    }
-
-    /// `group` cut down to what one choice can offer, once for where the value begins and once for where it ends, so a
-    /// value longer than one part is still found whole. A part without one boundary may still hold the other.
-    async fn located(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        task: &str,
-        label: &str,
-        group: Vec<Word>,
-    ) -> Step<(Vec<Word>, Vec<Word>)> {
-        let max = self.jev.profile().max_choice_options;
-        if max < 3 {
-            return Err(fastbrowse_core::decision::DecisionError::failed(
-                "value selection needs a provider supporting at least three choices",
-            )
-            .into());
-        }
-        // Parts cover the whole source and overlap so a value's end across a cut remains whole. Reserving one choice
-        // for no value lets Jev refuse a source instead of being forced to pick unrelated words. The words left keep
-        // one choice free too, for the answer that a copy does not run from the end picked.
-        let chars: Vec<char> = task.chars().collect();
-        let (mut begins, mut ends) = (group.clone(), group);
-        while begins.len() >= max || ends.len() >= max {
-            let mut asked = Vec::new();
-            let mut cut = Vec::new();
-            for (key, group) in [("begins", &begins), ("ends", &ends)] {
-                if group.len() < max {
-                    continue;
-                }
-                let step = group.len().div_ceil((max - 1).min(VALUE_SOURCE_PARTS));
-                let width = (2 * step).min(group.len() - 1);
-                let parts: Vec<Vec<Word>> = (0..group.len().div_ceil(step))
-                    .map(|n| group[n * step..(n * step + width).min(group.len())].to_vec())
-                    .collect();
-                let mut criteria: IndexMap<String, JsonValue> = parts
-                    .iter()
-                    .enumerate()
-                    .map(|(n, part)| {
-                        let shown: String = chars[part[0].start..part[part.len() - 1].end].iter().collect();
-                        (n.to_string(), JsonValue::from(shown))
-                    })
-                    .collect();
-                criteria.insert(NO_VALUE.into(), JsonValue::from("None of these parts states the field's value."));
-                let question = format!(
-                    "Which part of this source holds the word the value for {label} {key} at, if any does? The value may run on into other parts."
-                );
-                asked.push((key, question, criteria));
-                cut.push((key, parts));
-            }
-            let picks = self.ask_choices(state, Some(observation), asked).await?;
-            for (key, parts) in cut {
-                let picked = picks.get(key).map(String::as_str).unwrap_or(NO_VALUE);
-                if picked == NO_VALUE {
-                    if key == "begins" {
-                        begins.clear()
-                    } else {
-                        ends.clear()
-                    }
-                    continue;
-                }
-                let chosen = picked
-                    .parse::<usize>()
-                    .map_err(|_| fastbrowse_core::decision::DecisionError::failed("expected a source part index"))?;
-                let part = parts
-                    .into_iter()
-                    .nth(chosen)
-                    .ok_or_else(|| fastbrowse_core::decision::DecisionError::failed("expected a source part index"))?;
-                if key == "begins" { begins = part } else { ends = part }
-            }
-        }
-        Ok((begins, ends))
-    }
-
-    /// What a field's value is picked from, and the question that says where it comes from.
-    pub(super) fn value(&self, state: &RunState, target: &Control) -> Value {
-        // Only what this field's own frame may receive: a password manager offers its names across every site it
-        // holds, and offering one that cannot be typed here ended a sign-in at needs_input, naming a secret the
-        // page was never going to get, where needs_login says what the caller can fix.
-        let secrets = self.secret_names(&self.target_origin(target));
-        // A value can come from a page, such as a code a site sent: a fact that answers, or one a read kept for the steps.
-        // Offered only answers, a sign-in code on a Phone page read as one the steps need was nowhere to type from.
-        // A fact a later read replaced, such as a code the page has since changed, is no value to type.
-        let for_steps = |fact: &crate::memory::Fact| {
-            fact.evidence.as_ref().is_some_and(|evidence| state.step_pages.contains(&evidence.capture_sha256))
-        };
-        let facts: Vec<_> = state
-            .notes
-            .facts_by_id()
-            .iter()
-            .filter(|(key, fact)| !state.notes.superseded(key) && (fact.answers || for_steps(fact)))
-            .map(|(_, fact)| fact)
-            .collect();
-        let shown = facts.iter().map(|fact| fact.text.as_str()).collect::<Vec<_>>().join("\n");
-        let read = read_sources(state, &facts);
-        // Jev reads the task with credentials in its addresses masked; the same text unmasked is what a span it picks
-        // is cut from (#1381).
-        let typed = state.raw_task.clone();
-        let task = self.mask(&typed);
-        let group = words(&task, target.max_length);
-        // Keyed by code-made handles, each name said only in its description: a caller's input or secret name is the
-        // caller's text, and an address credential in one is masked there, where a key masked the same way would no
-        // longer name what Jev picked (#1381).
-        let mut sources: IndexMap<String, JsonValue> = state
-            .inputs
-            .iter()
-            .enumerate()
-            .map(|(at, (k, v))| (format!("input:{at}"), JsonValue::from(format!("The provided value named {k}: {v}"))))
-            .collect();
-        for (at, name) in secrets.iter().enumerate() {
-            sources.insert(format!("secret:{at}"), format!("The stored secret named {name} (value hidden)").into());
-        }
-        // Said as the exact text to type: a task to write a three-line list of three items it names was copied as one
-        // of the items, since the task holds them word for word, though not as the lines it asks for (#1187). The
-        // write choice names that case too: on a field that already held the lines, with the items in the task and in
-        // what was read, the task choice won 0.88 to 0.09 and its span loop could only end on one of the items, where
-        // saying the items set out as lines are written took the write choice 6 times in 6 (#1189).
-        sources.insert(
-            IN_TASK.into(),
-            "The task states the exact text to type, word for word, whole or as part of something longer.".into(),
-        );
-        sources.insert(
-            WRITTEN.into(),
-            "The task asks for text it does not state word for word, such as a search query for what it looks for, or text it asks to be written or composed, including items it names set out as the lines, sentences or list it asks for, so it is written from the task.".into(),
-        );
-        if !read.is_empty() {
-            sources.insert(IN_READ.into(), JsonValue::from(format!("{READ_SOURCE}{shown}")));
-        }
-        sources.insert(NO_VALUE.into(), NO_VALUE_SAID.into());
-        sources.insert(LEAVE.into(), LEAVE_SAID.into());
-        let mut label = text::repr(&target.label);
-        if let Some(limit) = target.max_length {
-            label = format!("{label}, which holds at most {limit} characters,");
-        }
-        // Amazon labels its sign-in field "Enter mobile number or email", and Jev, seeing only a secret named
-        // `username`, chose the task. Only for signing in: a checkout's contact email is the task's value.
-        let mut source_question = format!(
-            "What should be typed into {label}? Stored secrets are this site's sign-in credentials, named by role, and are only for signing in to the account: when this field is a sign-in field, the username is also the account's email address or phone number. Any other field takes a value the task gives, and a search field takes what the task is looking for."
-        );
-        // A page kept for the steps is kept whole, so what was read is offered by its ends when the question with it
-        // whole does not fit one decision request; the value itself is then found in it part by part.
-        let model_task = self.model_task(state);
-        let whole = page_question(&model_task, &source_question, sources.clone()).dump_json();
-        if !read.is_empty() && self.config.tokens.input_chars(&[whole]) == 0 {
-            shorten_read(&mut source_question, &mut sources);
-        }
-        Value { task, typed, read, label, group, source_question, sources, secrets }
-    }
-
-    /// Resolve replacement passwords separately from existing credentials, without model-written values.
-    async fn sensitive_text(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        target: &Control,
-        secrets: Vec<String>,
-        origin: &str,
-    ) -> Step<String> {
-        let replacement = match sets_new_password(&observation.controls, target) {
-            Some(replacement) => replacement,
-            None => {
-                let criteria = IndexMap::from([
-                    (
-                        "current".into(),
-                        JsonValue::from(
-                            "The field takes the account's existing password for signing in or confirming identity.",
-                        ),
-                    ),
-                    (
-                        "replacement".into(),
-                        JsonValue::from("The field sets a new account password or confirms that new password."),
-                    ),
-                    (
-                        "unclear".into(),
-                        JsonValue::from("The task and form do not establish which password the field takes."),
-                    ),
-                ]);
-                let question = format!(
-                    "Which password role does {} have for this task? Consider the task, field context and form controls. A sign-in page may mark its password field new-password to prevent autofill, so that marker alone does not establish a replacement. Choose unclear when the role cannot be established.",
-                    text::repr(&target.label),
-                );
-                match self.ask_choice(state, observation, &question, criteria).await?.as_str() {
-                    "replacement" => true,
-                    "current" => false,
-                    _ => {
-                        return Err(Stop::new(
-                            Status::NeedsInput,
-                            "Password/unclear-role",
-                            format!(
-                                "{} does not establish whether it takes the current password or a replacement",
-                                text::repr(&target.label),
-                            ),
-                        )
-                        .into());
-                    }
-                }
-            }
-        };
-        if replacement {
-            if !secrets.iter().any(|name| name == "new_password") {
-                return Err(Stop::new(
-                    Status::NeedsInput,
-                    "Password/replacement-unset",
-                    "A replacement password requires --secret new_password=ENV_VAR@https://host; set ENV_VAR to the new value instead of putting it in the task.",
-                )
-                .into());
-            }
-            state.text_source = Some(RecipeText::Secret("new_password".into()));
-            return self.secret("new_password", origin, false).await;
-        }
-        let secrets: Vec<String> = secrets.into_iter().filter(|name| name != "new_password").collect();
-        match secrets.as_slice() {
-            [] => Err(Stop::new(
-                Status::NeedsLogin,
-                "Secret/none-stored",
-                format!("{} wants a secret and none is stored", text::repr(&target.label)),
-            )
-            .into()),
-            [only] => {
-                state.text_source = Some(RecipeText::Secret(only.clone()));
-                self.secret(only, origin, true).await
-            }
-            _ => {
-                // Numbered, the names said only as descriptions, as `value` offers them.
-                let criteria: IndexMap<String, JsonValue> = secrets
-                    .iter()
-                    .enumerate()
-                    .map(|(at, name)| (at.to_string(), format!("The stored secret named {name}").into()))
-                    .collect();
-                let question = format!("Which stored secret belongs in {}?", text::repr(&target.label));
-                let picked = self.ask_choice(state, observation, &question, criteria).await?;
-                let name = picked.parse::<usize>().ok().and_then(|at| secrets.get(at)).cloned().ok_or_else(|| {
-                    fastbrowse_core::decision::DecisionError::failed("expected a stored secret's index")
-                })?;
-                state.text_source = Some(RecipeText::Secret(name.clone()));
-                self.secret(&name, origin, true).await
-            }
-        }
     }
 
     pub(super) fn raw_target(&self, target: &Control) -> Control {
@@ -2267,6 +1106,16 @@ impl Agent {
             None => None,
         };
         let Some(value) = value else {
+            // A name the model got wrong is its to correct when the origin has others: ended as needs_login, a run
+            // holding the right secret stopped at the sign-in.
+            let names = self.secret_names(origin);
+            if !names.is_empty() && !names.iter().any(|known| known == name) {
+                return Err(Unsure::new(format!(
+                    "no secret named {name} is available for {origin}; its secrets are {}",
+                    names.join(", ")
+                ))
+                .into());
+            }
             if credential {
                 let error = format!("sign-in required at {origin}: secret {name} is not available there");
                 return Err(Stop::new(Status::NeedsLogin, "Secret/sign-in", error).into());
@@ -2280,51 +1129,6 @@ impl Agent {
         };
         self.redactor().register(name, &value, Some(origin));
         Ok(value)
-    }
-
-    /// A field the task gives no value for is a wrong pick, and a missing input if the run cannot go on without it.
-    ///
-    /// Most such fields are optional, and the right move is to leave them on every page. The field is then not offered
-    /// at this address, and a run that stalls here without it ends needing that input.
-    fn missing(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
-        state.missing.insert((observation.url.clone(), target.label.clone(), target.context.clone()));
-        Unsure {
-            reason: format!(
-                "the task gives no value for {}: leave it unless the task cannot go on without it",
-                text::repr(&target.label)
-            ),
-            gives_up_as: Status::NeedsInput,
-        }
-        .into()
-    }
-
-    /// A field Jev found the task asks for and gives no value for. One the page marks required is an input no further
-    /// step can supply, so the run ends needing it; given another try, a run left a profile form's required Country for
-    /// the site's Account link and ended on a sign-in it never needed. Any other is [`Self::missing`].
-    fn unsupplied(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
-        if target.required == Some(true) {
-            let error = format!("{} needs a value the task does not give", text::repr(&target.label));
-            return Stop::new(Status::NeedsInput, "Field/required-unsupplied", error).into();
-        }
-        self.missing(state, observation, target)
-    }
-
-    /// A field the task asks nothing of is a wrong pick, left out of what is offered here as a missing one is. One the
-    /// page marks required is an input no further step can supply, exactly as one the task asks for and gives no value
-    /// for is: given another try, a profile form's required Country was left for the site's Account link and the run
-    /// ended `needs_login` on a sign-in it never needed. Any other is left, and is no input the run lacks.
-    fn untouched(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
-        if target.required == Some(true) {
-            return self.unsupplied(state, observation, target);
-        }
-        let key = (observation.url.clone(), target.label.clone(), target.context.clone());
-        state.missing.insert(key.clone());
-        state.untouched.insert(key);
-        Unsure {
-            reason: format!("the task asks nothing of {}: leave it as it is", text::repr(&target.label)),
-            gives_up_as: Status::Stuck,
-        }
-        .into()
     }
 
     pub(super) async fn choose(
@@ -2561,6 +1365,38 @@ impl Agent {
         Ok(self.ask_choice(state, observation, question, criteria).await? == "confirm")
     }
 
+    /// The task and the steps taken, for a verdict on the page that turns on both. Sent neither, the site-failure
+    /// question, which asks about a load unfinished across steps and the content the task is about, judged a page
+    /// showing "Loading..." beside the stock count it was asked for a failure at 0.72.
+    fn verdict_context(&self, state: &RunState) -> Map<String, JsonValue> {
+        // Masked here, as the task is: a secret typed after the run opened its first page can sit in that address.
+        let mut history = JsonValue::Array(state.actions_taken().map(HistoryEntry::seen).collect());
+        self.mask_strings(&mut history);
+        Map::from_iter([("task".to_string(), self.caller_task(state).into()), ("recent_actions".to_string(), history)])
+    }
+
+    /// Whether this page reports that the site failed, for a finish that asks nothing about steps.
+    pub(super) async fn site_failed(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        let questions = IndexMap::from([("site_failure".to_string(), Question::Noul(site_failure_question()))]);
+        let context = self.verdict_context(state);
+        let state_json = page_verdict_state(
+            observation,
+            &Notes::default(),
+            &self.config.tokens,
+            &questions.values().map(Dump::dump_json).collect::<Vec<_>>(),
+            Some(&context),
+            &state.dates,
+        )?;
+        fastbrowse_core::decision::reserve(&state.ledger, self.jev.as_ref(), JevPurpose::Action, 0.0, 1)?;
+        let evaluation =
+            jev_purpose(JevPurpose::Action, self.jev.evaluate_images(&state_json, &questions, &Images::new())).await?;
+        state.ledger.record([evaluation.cost.clone()])?;
+        match evaluation.answers.get("site_failure") {
+            Some(Answer::Noul(answer)) => Ok(answer.probability > 0.5),
+            _ => Err(DecisionError::failed("expected a yes-or-no answer to site_failure").into()),
+        }
+    }
+
     /// Whether what the task asks to be done in the browser has been done, judged from the steps taken and this page,
     /// or cannot be because the site does not allow it. A read that answers the question can come before the actions
     /// the task puts first: a run asked to sign in and then report its account's email read the email off another page
@@ -2600,10 +1436,7 @@ impl Agent {
             ),
             Some("Nothing shown says the site refuses a step the task asks for."),
         );
-        // Masked here, as the task is: a secret typed after the run opened its first page can sit in that address.
-        let mut history = JsonValue::Array(state.actions_taken().map(HistoryEntry::seen).collect());
-        self.mask_strings(&mut history);
-        let mut context = Map::from_iter([("recent_actions".to_string(), history)]);
+        let mut context = self.verdict_context(state);
         // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
         // fields left empty once the run stalled on a task to carry out (#812).
         // A run that has only read can find a page already showing what the task asks to be made, such as an editor
@@ -2611,7 +1444,7 @@ impl Agent {
         let untouched = (!state.history.iter().any(HistoryEntry::acted)).then(|| NOTHING_ACTED.to_string());
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
-            .chain(state.to_carry_out.then(|| empty_fields_fact(&state.missing, observation)).flatten())
+            .chain(state.to_carry_out.then(|| empty_fields_fact(observation)).flatten())
             .chain(untouched)
             .collect();
         if !facts.is_empty() {
@@ -2644,6 +1477,7 @@ impl Agent {
         let questions = IndexMap::from([
             ("carried".to_string(), Question::Noul(carried)),
             ("refused".to_string(), Question::Noul(refused)),
+            ("site_failure".to_string(), Question::Noul(site_failure_question())),
         ]);
         let state_json = page_verdict_state(
             &page,
@@ -2661,7 +1495,9 @@ impl Agent {
             Some(Answer::Noul(answer)) => Ok(answer.probability > 0.5),
             _ => Err(DecisionError::failed(format!("expected a yes-or-no answer to {key}"))),
         };
-        Ok(if holds("carried")? {
+        Ok(if holds("site_failure")? {
+            Carried::SiteFailed
+        } else if holds("carried")? {
             Carried::Done
         } else if holds("refused")? {
             Carried::Refused
@@ -2741,7 +1577,7 @@ impl Agent {
 
     async fn accept_dialog(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
         let Some(dialog) = &observation.dialog else {
-            return Err(Stop::new(Status::Stuck, "Dialog/none-open", "DIALOG chosen with no dialog open").into());
+            return Err(Unsure::new("no dialog is open").into());
         };
         let question = format!(
             "The page shows a {} dialog saying {}, opened by the agent's last action. Accept it if it asks to go ahead with what the task wants done; dismiss it if it would do something the task did not ask for.",
@@ -2753,60 +1589,6 @@ impl Agent {
             ("dismiss".to_string(), JsonValue::from("Dismiss / Cancel")),
         ]);
         Ok(self.ask_choice(state, observation, &question, criteria).await? == "accept")
-    }
-
-    /// The stop at a sign-in wall Jev judged blocks the task, naming the credentials the page asks for.
-    pub(super) fn meet_wall(&self, observation: &Observation, raw: &Observation) -> Flow {
-        let origin = fastbrowse_core::safety::origin_of(&observation.url);
-        // Which fields ask for credentials, and what each takes, is read from the raw page, whose flags masking cannot
-        // have changed.
-        let credential: HashMap<&String, CredentialField> =
-            raw.controls.iter().filter_map(|c| Some((&c.id, credential_field(c)?))).collect();
-        let mut asked: Vec<String> = observation
-            .controls
-            .iter()
-            .filter_map(|c| {
-                let field = credential.get(&c.id)?;
-                Some(if !c.label.is_empty() {
-                    c.label.clone()
-                } else {
-                    c.input_name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| takes(*field).into())
-                })
-            })
-            .collect();
-        if asked.is_empty() {
-            // The credential fields models saw none of are named by what they take.
-            for field in raw.controls.iter().filter_map(credential_field) {
-                if !asked.iter().any(|a| a == takes(field)) {
-                    asked.push(takes(field).into());
-                }
-            }
-        }
-        if raw.controls.iter().any(offers_passkey) && !asked.iter().any(|a| a == PASSKEY) {
-            asked.push(PASSKEY.into());
-        }
-        let evidence = if asked.is_empty() {
-            let page = if observation.title.is_empty() { &observation.url } else { &observation.title };
-            format!("{page} offers only sign-in")
-        } else {
-            format!("the page asks for {}", asked.join(", "))
-        };
-        // The error reaches the caller as it is, so it is built from what models see and redacted as well: a page can
-        // echo a typed secret into its title or a field's label.
-        Stop::new(Status::NeedsLogin, "Wall/sign-in", self.redact(&format!("sign-in required at {origin}: {evidence}")))
-            .into()
-    }
-}
-
-const PASSKEY: &str = "a security key or passkey";
-
-/// What a credential field takes, in the words a needs_login stop names a field with no label or name by.
-fn takes(field: CredentialField) -> &'static str {
-    match field {
-        CredentialField::Password => "a password",
-        CredentialField::OneTimeCode => "a one-time code",
-        CredentialField::Username => "an account name",
-        CredentialField::Passkey => PASSKEY,
     }
 }
 

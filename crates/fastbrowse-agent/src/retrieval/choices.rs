@@ -393,19 +393,17 @@ pub(crate) struct PageRead {
     /// Jev answered the read with an offered option. A read whose requests failed, whose reply held no usable answer,
     /// or whose Absent rests on passages left unjudged, took nothing from the page without saying it holds nothing.
     pub finished: bool,
-    /// The page holds a fact the task's steps need, such as a code to enter, and nothing that answers the task.
-    pub for_steps: bool,
 }
 
 impl PageRead {
     /// A read that took nothing because it did not finish.
     fn unfinished() -> PageRead {
-        PageRead { facts: Vec::new(), compose: false, finished: false, for_steps: false }
+        PageRead { facts: Vec::new(), compose: false, finished: false }
     }
 
     /// A finished read that found nothing on the page for the task.
     fn absent() -> PageRead {
-        PageRead { facts: Vec::new(), compose: false, finished: true, for_steps: false }
+        PageRead { facts: Vec::new(), compose: false, finished: true }
     }
 }
 
@@ -508,11 +506,11 @@ pub(crate) async fn read_page(
         ])
     });
     if choice == SYNTHESIS {
-        return Ok(PageRead { facts: whole_page_facts(capture), compose: true, finished: true, for_steps: false });
+        return Ok(PageRead { facts: whole_page_facts(capture), compose: true, finished: true });
     }
     // The page is kept as notes the steps see, none of them an answer: a code shown here is typed on a later page.
     if choice == STEPS && shows {
-        return Ok(PageRead { facts: whole_page_facts(capture), compose: false, finished: true, for_steps: true });
+        return Ok(PageRead { facts: whole_page_facts(capture), compose: false, finished: true });
     }
     // Absent is offered only when the read may skip the page; outside that, like any pick outside the offered set, it is
     // no answer about the page.
@@ -548,7 +546,7 @@ pub(crate) async fn read_page(
         basis,
         reader: FactReader::JevChoice,
     });
-    Ok(PageRead { facts, compose: false, finished: true, for_steps: false })
+    Ok(PageRead { facts, compose: false, finished: true })
 }
 
 /// `_block_context`: the whole block a narrowed quote was cut from, kept beside it as context.

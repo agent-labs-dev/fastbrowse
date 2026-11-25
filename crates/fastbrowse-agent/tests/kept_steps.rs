@@ -3,9 +3,8 @@
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::agent::{Agent, RunOptions};
-use fastbrowse_agent::scripted::{ScriptedJev, ScriptedLLM, steps};
+use fastbrowse_agent::scripted::{ScriptedDriver, ScriptedJev, steps};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
     Answer, DecisionClient, DecisionError, DecisionProfile, Evaluation, NoulAnswer, NoulTag, Question,
 };
@@ -126,8 +125,11 @@ async fn a_reversible_save_reaches_coverage_after_its_effect_is_recorded() {
         coverage: Mutex::default(),
         lasting: Mutex::new(false),
     });
-    let agent = Agent::new(Arc::new(Editor(Mutex::new(false))), jev.clone(), Arc::new(ScriptedLLM))
-        .with_config(Config { plan_ahead: false, ..Config::default() });
+    let agent = Agent::new(
+        Arc::new(Editor(Mutex::new(false))),
+        jev.clone(),
+        Arc::new(ScriptedDriver::new(steps("click Save").unwrap())),
+    );
     let result = agent
         .run(
             "Save the setting and report the status",

@@ -11,11 +11,11 @@ evals rather than taken from Typesafe.
 | OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `crates/fastbrowse-clients/src/system_one.rs` with base URL `https://openrouter.ai/api`; a supported Jev route, images included, when `OPENROUTER_API_KEY` is set and no direct TypeSafe key is supplied. Not recommended |
 | Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `crates/fastbrowse-clients/src/system_one.rs`, selected with `FASTBROWSE_DECISION_SOURCE=typesafe`, or when `TYPESAFE_API_KEY` is set and no source override is supplied. The recommended Jev route |
 | Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `crates/fastbrowse-clients/src/vercel.rs`, used with `AI_GATEWAY_API_KEY` as a backup for an outage or the last resort when no other Jev key is supplied. A last resort rather than the recommended Jev route, and it receives no Jev image input. `FASTBROWSE_DECISION_BASE_URL` retargets the selected source |
-| Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `crates/fastbrowse-clients/src/validation.rs` decodes each shape separately; `crates/fastbrowse-agent/src/policy.rs` asks one per control to filter a dense page |
-| Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `crates/fastbrowse-agent/src/policy.rs` (operation and target), `crates/fastbrowse-agent/src/retrieval/` (field and short-fact reads) |
+| Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `crates/fastbrowse-clients/src/validation.rs` decodes each shape separately; `crates/fastbrowse-agent/src/retrieval/choices.rs` asks one per window of a dense page |
+| Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `crates/fastbrowse-agent/src/agent/acting.rs` (authorization), `crates/fastbrowse-agent/src/retrieval/` (field and short-fact reads) |
 | Score | Ordered levels, returning a probability-weighted index ([Score](https://docs.typesafe.ai/primitives/score)) | Modelled in `crates/fastbrowse-core/src/decision.rs`, not yet called |
-| Options | At most 255 per Choice ([Choice](https://docs.typesafe.ai/primitives/choice)) | `DecisionProfile::jev()` in `crates/fastbrowse-core/src/decision.rs`; group-then-element selection is **ours** |
-| Tokens | 32k for state plus the largest question, 64k in total; 262k for both on a request with the `TypeSafe-Danger-Zone-Long-Context: true` header ([Models](https://docs.typesafe.ai/models#long-context)). OpenRouter ([Jev](https://openrouter.ai/docs/guides/community/jev)) and AIMLAPI ([Jev 1.14](https://docs.aimlapi.com/api-references/decision-models/typesafe/jev-1.14)) list Jev at 262,144 tokens; the gateway's catalog lists 32,000 | `TokenBudget` (`crates/fastbrowse-core/src/config.rs`) holds the documented 32k and 64k. TypeSafe publishes no tokenizer, so tokens are estimated locally: a Jev request is counted at 1.5 characters a token (**ours**; recorded dense JSON used 1.84), and an LLM prompt at `chars_per_token = 3.0` (**ours**). Direct TypeSafe sends the long-context header on every request, and it, OpenRouter and AIMLAPI fit a Jev request to 262k: the budget scales with the route's context, while an LLM prompt keeps the 32k and 64k budget. A route whose context is scaled that far is fitted at `JEV_LONG_CONTEXT_CHARS_PER_TOKEN`, 1.1 characters a token, so a step's state reaches 288,358 characters rather than the 393,216 that assumed 1.5 (**ours**, measured on 2026-11-11 against Jev 1.14: base64 took 1.19 characters a token and hex 1.34, against 2.05 to 2.28 for dense checkout JSON and 2.14 for a cart summary; a base64 state of 393,216 characters was refused with `max_tokens_exceeded`, the failure in [#959](https://github.com/agent-labs-dev/fastbrowse/issues/959), where 288,358 was answered). The gateway keeps 32k and 64k. A step request that does not fit loses its oldest actions, then has its recovery memory, page text and notes cut, each saying what was left out |
+| Options | At most 255 per Choice ([Choice](https://docs.typesafe.ai/primitives/choice)) | `DecisionProfile::jev()` in `crates/fastbrowse-core/src/decision.rs`; group-then-value selection of a field's candidates (`retrieval/fields.rs`) is **ours** |
+| Tokens | 32k for state plus the largest question, 64k in total; 262k for both on a request with the `TypeSafe-Danger-Zone-Long-Context: true` header ([Models](https://docs.typesafe.ai/models#long-context)). OpenRouter ([Jev](https://openrouter.ai/docs/guides/community/jev)) and AIMLAPI ([Jev 1.14](https://docs.aimlapi.com/api-references/decision-models/typesafe/jev-1.14)) list Jev at 262,144 tokens; the gateway's catalog lists 32,000 | `TokenBudget` (`crates/fastbrowse-core/src/config.rs`) holds the documented 32k and 64k. TypeSafe publishes no tokenizer, so tokens are estimated locally: a Jev request is counted at 1.5 characters a token (**ours**; recorded dense JSON used 1.84), and an LLM prompt at `chars_per_token = 3.0` (**ours**). Direct TypeSafe sends the long-context header on every request, and it, OpenRouter and AIMLAPI fit a Jev request to 262k: the budget scales with the route's context, while an LLM prompt keeps the 32k and 64k budget. A route whose context is scaled that far is fitted at `JEV_LONG_CONTEXT_CHARS_PER_TOKEN`, 1.1 characters a token, so a step's state reaches 288,358 characters rather than the 393,216 that assumed 1.5 (**ours**, measured on 2026-11-11 against Jev 1.14: base64 took 1.19 characters a token and hex 1.34, against 2.05 to 2.28 for dense checkout JSON and 2.14 for a cart summary; a base64 state of 393,216 characters was refused with `max_tokens_exceeded`, the failure in [#959](https://github.com/agent-labs-dev/fastbrowse/issues/959), where 288,358 was answered). The gateway keeps 32k and 64k. A request that does not fit is never sent with parts cut: a gate question on a page too large to ask about refuses the action, and a read falls back to the LLM reader |
 | Rate limits | 1,200 requests a minute and 250k tokens a second on the direct API, subject to change ([Models](https://docs.typesafe.ai/models)); no extra gateway limit on paid tiers ([Gateway limits](https://vercel.com/docs/ai-gateway/rate-limits)) | Retries handle 429 responses; concurrent runs share their provider's limits |
 | Errors | 400/401/403/404/422/429/5xx, with 529 for overload; retry with backoff, honouring server retry headers ([Exceptions](https://docs.typesafe.ai/sdk/python/api/exceptions)) | `post_with_retry` retries 408, 429, 500, 502, 503, 504, 520 to 524 and 529 (not the 4xx request errors) and honours `retry-after-ms` and `retry-after`, capped at 10s |
 | Price | $0.042 per million input tokens; output is free ([Models](https://docs.typesafe.ai/models), [gateway catalog](https://ai-gateway.vercel.sh/v1/models)) | `DecisionProfile::jev()`, and `CostComponent::Jev` on the ledger |
@@ -77,14 +77,14 @@ Direct TypeSafe remains available and adds no service between fastbrowse and the
 The Vercel AI Gateway is a last resort rather than a recommended Jev route. `AI_GATEWAY_API_KEY` alone
 serves the LLM and also serves Jev as the last resort; beside a direct or OpenRouter key it adds a Jev backup.
 
-Jev images go to OpenRouter and to TypeSafe's own API. On those routes each step's action decision is sent the viewport
-screenshot: the state names it `viewport_screenshot`, and the request carries the PNG in TypeSafe's
+Jev images go to OpenRouter and to TypeSafe's own API. On those routes the check that the task's steps were carried out is sent the viewport
+screenshot when a control on the page is drawn or pictured: the state names it `viewport_screenshot`, and the request carries the PNG in TypeSafe's
 `assets` map with the `TypeSafe-Danger-Zone-Images` header. A screenshot outside TypeSafe's documented
-sizes, or one taken while a secret shows as page text, is not sent. A step's request is fitted to TypeSafe's
+sizes, or one taken while a secret shows as page text, is not sent. A Jev request is fitted to TypeSafe's
 32 MiB body limit by its bytes as sent, base64 pictures included, before it goes: past it, recent actions'
 cards are left out from the oldest, then targets' cards, then the screenshot, before any text or control is cut. A
 request Jev still refuses as too large is asked again without a kind of picture, never with the same ones. The
-pictures also take room from the step's text before it is sent: Jev counts each image at two tokens for every
+pictures also take room from the request's text before it is sent: Jev counts each image at two tokens for every
 28-pixel tile it covers, rounded up on each side, plus 13, and again for each place the request refers to it
 (**ours**, measured on 2026-11-22 against Jev 1.14 through OpenRouter, where TypeSafe publishes no rate: 280x280
 added 213 tokens, 560x560 813, 1568x882 3,597). A request with eight cards once fitted its text and was refused
@@ -107,45 +107,13 @@ answers with a box, so the click lands at the box's centre only when both answer
 click stays refused. The step's irreversible-action check
 runs on that click as on any other.
 
-## One request a step
+## What Jev is asked
 
-The relevance pass on a dense page asks whether any still-needed part of the task or current subgoal could use each control.
-It sees the task, recovery subgoal, recent actions, page address and title, and each control's label, role,
-operations, context and destination. It omits scroll actions, whether evidence is already in the notes, and whether
-a control is offscreen, so scrolling reuses unchanged judgments. Read state stays in each control's question because it can change
-whether a link is useful. The action decision still sees current state when choosing its next step. Changed control descriptions
-and changed recovery subgoals are judged again.
+The LLM driver picks every action, so Jev answers only the questions code gates on: whether a click, key chord, file or dialog acceptance is irreversible and whether the task asked for it; whether the task's steps were carried out; which quoted spans a read keeps; and whether a claim, tally or coverage holds against its quotes. Questions that share one state go in one request, and an answer cannot see another.
 
-At startup, one request asks whether the task names dates, what output it asks for, where its evidence can be
-seen and how much of a list it covers. Over HTTP it also asks whether the task needs a browser action. Each
-question reads the task alone. Output judgments are kept until needed; date extraction still runs only when
-Jev judges that the task names a date. The questions use the task with its supplied inputs. If a provider rejects
-the batch for its input size, dates are asked separately and output stays a later request. A browser handoff keeps
-the startup judgments even when the first HTTP navigation produced no capture.
+A question that decides whether an action is harmless sees only the task and the page's origin: the page's own text is what would argue a harmful action is harmless. The questions for a control that saves a form also state what the run changed in that form, from its own steps: each field it filled, the value the field held before and the value typed, and the control the run clicked to open the form. Only the run's steps since it last opened that form count, so a form a page reuses for another record starts clean.
 
-All questions in a request see the same state, so what the agent would otherwise ask after a decision goes with it:
-for each offered control, which words a text field takes or which task text supplies a key chord. Only the chosen target's answers are used. Whether a press
-commits anything, and whether the task asked for that on an authorized run, stay follow-ups that see only the task, the
-address and the page's title: the page's own text is what would argue a harmful action is harmless. The smallest go first, and only while the
-request stays under the 32,000 bytes where OpenRouter switches to long-context mode, and none go with a screenshot,
-which is in that mode already. Those left out stay follow-ups.
-
-The questions for a control that saves a form also state what the run changed in that form, from its own steps: each field
-it filled, the value the field held before and the value typed, and the control the run clicked to open the form. Only
-the run's steps since it last opened that form count, so a form a page reuses for another record starts clean.
-
-An editable field can offer `press` beside `fill`. Jev chooses the source and first word of a chord from the task,
-using the same span choices as a fill value. The page cannot provide the chord. A chord that includes Enter or can
-submit or save is sent through the action and authorization checks before the browser receives it.
-
-With `Config(plan_ahead=True)` the request also asks, for each offered field, whether the task needs it filled on
-this page besides the next action. When the chosen action is a fill, code fills the other fields of the chosen field's
-form that Jev judges more likely than not, in page order, without another action decision. A field's value comes
-from its ahead answer when present, otherwise a follow-up asks for it. Before each it observes
-the page again and returns to deciding when the address, the document or the field is gone, a dialog opened, or the
-value before it was unsure. Presses are never planned: a press changes the page in ways seen only after it, and two
-controls that do the same job would both be judged needed. On requests with a viewport, a pictured control or a
-pictured history entry, values stay follow-ups for the fields Jev chooses. Images do not make unused questions free.
+At startup, one request asks whether the task names dates, what output it asks for, where its evidence can be seen and how much of a list it covers. Each question reads the task alone, with its supplied inputs. If a provider rejects the batch for its input size, dates are asked separately and output stays a later request.
 
 ## Provider failover
 
@@ -204,7 +172,7 @@ summarises how concentrated the distribution is; it is not the chosen option's p
 ([Confidence](https://docs.typesafe.ai/confidence)). Noul has no separate confidence: its probability is
 the answer.
 
-Every threshold in `crates/fastbrowse-core/src/config.rs` (such as `login_required_above` 0.70) is **ours**. None is a
+Every threshold in `crates/fastbrowse-core/src/config.rs` (such as `irreversible_above` 0.50) is **ours**. None is a
 Typesafe recommendation. Each is set per question on the evals.
 
 ## How the questions are written
@@ -216,14 +184,14 @@ and where fastbrowse follows it:
 - **Narrow, explicit judgments, with true/false descriptions that match the instruction.** Every Noul
   question in `crates/fastbrowse-agent/src/verification/` and `crates/fastbrowse-core/src/safety.rs` carries both descriptions.
 - **Concrete option boundaries, plus an escape option when coverage is incomplete.** The read offers
-  `synthesis` for an answer composed from more than one fact and `absent` for no relevant evidence. A page the step
-  judged to show what the task needs is offered `steps` instead of `absent`: it holds a fact the steps need, such as a
-  link to follow, and nothing that answers. Scalar field
+  `synthesis` for an answer composed from more than one fact and `absent` for no relevant evidence. A page the run
+  is composing records from and has not read is offered `steps` instead of `absent`: it holds a fact the driver's
+  actions need, such as a link to follow, and nothing that answers. Scalar field
   extraction offers `none`. Repeated short values from the same page and frame share one option
   with every source context, so identical answers do not compete as separate choices.
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.
 - **Batch independent questions that share one state; answers cannot see each other.** The policy batches
-  operation and target choices and applicable sign-in and bot checks. Grouped targets need a second choice.
+  the irreversible-action checks.
 - **A question about the page states the task itself, and an option describes its own word.** TypeSafe's
   [State](https://docs.typesafe.ai/concepts/state) guidance puts content in the state once, and two cuts to
   repeated question text followed it (#903). Two probes each sent 120 recorded requests in the old and the new
@@ -242,24 +210,16 @@ and where fastbrowse follows it:
   Jev ties a judgment to the text beside it: a word or a task it has to look up elsewhere in the request is
   linked less reliably. A further cut to this text needs the same probe before it ships.
 - **Filter before choosing on a dense page.** The Jev 1.13 jaggedness notes say accuracy falls with a large
-  state full of irrelevant detail, and suggest a Noul to filter for relevance. When a page has more controls than
-  one group step can offer (`group_size` times the model's options per Choice) or its request does not fit Jev's
-  limit, the policy asks one Noul per control, packed into requests of about 8k tokens (**ours**) and sent
-  together, and offers the highest-scoring controls. A Noul is used rather than ranking one Choice's
-  probabilities: a Choice ranks alternatives against each other, and its two-decimal probabilities leave all but
-  a handful of 255 options tied at zero. The rubric sits once in the shared state, so each question carries only
-  its control. Protected controls skip the check and an unanswered one is kept.
-  The short-fact read does the same when a page has more quotable spans than a Choice can offer or more
-  text than its input allows: one Noul per window of about 1,500 characters (**ours**), a longer block asked about
-  in pieces. Jev chooses when every window was answered: the passages go in by score, highest first, until the next would pass
-  the input limit or the Choice's option limit, and an unanswered window sends the page to the LLM reader whole.
-  Requests stay small because the gateway sheds large ones: measured on Wikipedia windows, a 26k-token Noul
-  batch returned 503 until its retries ran out on five of eight tries, a 4k-token batch on none.
-  The step request cannot be split that way, since its state is shared: when one larger than a batch runs out
-  of retries, the policy asks it again once with the on-screen controls only, and past that reports the outage. Replayed
-  against the gateway, a 27k-token step from a Wikipedia article was answered four times in ten, while requests
-  under 10k tokens were answered in all but two of 29 (**ours**).
-- **Match state to the question.** Navigation uses the redacted viewport, controls and working notes;
+  state full of irrelevant detail, and suggest a Noul to filter for relevance. The short-fact read does this when a
+  page has more quotable spans than a Choice can offer or more text than its input allows: one Noul per window of
+  about 1,500 characters (**ours**), a longer block asked about in pieces. A Noul is used rather than ranking one
+  Choice's probabilities: a Choice ranks alternatives against each other, and its two-decimal probabilities leave
+  all but a handful of 255 options tied at zero. Jev chooses when every window was answered: the passages go in by
+  score, highest first, until the next would pass the input limit or the Choice's option limit, and an unanswered
+  window sends the page to the LLM reader whole. Requests stay small because the gateway sheds large ones: measured
+  on Wikipedia windows, a 26k-token Noul batch returned 503 until its retries ran out on five of eight tries, a
+  4k-token batch on none (**ours**).
+- **Match state to the question.** The finish check uses the redacted viewport, the recent actions and working notes;
   short-fact selection sees the full capture. Counts, totals and extremes in a composed answer are worked out in code, never verified by Jev ([below](#where-jev-is-not-used)).
 
 ## Where Jev is not used
@@ -295,7 +255,7 @@ field, not against the name or place of the group code computed.
 ## Unused primitives
 
 - **Structured instructions** ([Structure](https://docs.typesafe.ai/primitives/advanced)): `crates/fastbrowse-core/src/decision.rs`
-  types instructions as strings. Structured criteria are used where they help: the tab choice passes each tab as an object.
+  types instructions as strings. No question passes structured criteria yet.
 - **Score** for graded judgments such as relevance.
 - **Full Choice distributions** for trying a second-best target, rather than only the top pick
   ([hierarchical classification](https://docs.typesafe.ai/cookbooks/hierarchical_classification)).

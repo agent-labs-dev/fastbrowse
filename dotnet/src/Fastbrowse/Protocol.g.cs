@@ -335,11 +335,13 @@ public sealed record CostLine
 }
 
 /// <summary>
-/// Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
+/// Who chose a step: the model driving the run (llm), Jev, a rule in code, or a saved recipe action.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<Decider>))]
 public enum Decider
 {
+    [JsonStringEnumMemberName("llm")]
+    Llm,
     [JsonStringEnumMemberName("jev")]
     Jev,
     [JsonStringEnumMemberName("code")]
@@ -415,6 +417,8 @@ public enum FactReader
     JevChoice,
     [JsonStringEnumMemberName("llm_image")]
     LlmImage,
+    [JsonStringEnumMemberName("llm_quote")]
+    LlmQuote,
 }
 
 /// <summary>
@@ -916,13 +920,13 @@ public sealed record StepChoice
     public required string Role { get; init; }
 
     /// <summary>
-    /// The label as Jev read it, with resolved secrets masked.
+    /// The label as the driver read it, with resolved secrets masked.
     /// </summary>
     [JsonPropertyName("label")]
     public required string Label { get; init; }
 
     /// <summary>
-    /// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+    /// The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.
     /// </summary>
     [JsonPropertyName("context")]
     public string? Context { get; init; }
@@ -931,7 +935,7 @@ public sealed record StepChoice
     public required IReadOnlyList<Operation> Operations { get; init; }
 
     /// <summary>
-    /// Whether Jev chose this control: the target, and for a drag the destination too.
+    /// Whether the driver acted on this control: the target, and for a drag the destination too.
     /// </summary>
     [JsonPropertyName("chosen")]
     public required bool Chosen { get; init; }
@@ -1056,7 +1060,7 @@ public sealed record StepResult
     public required long DurationMs { get; init; }
 
     /// <summary>
-    /// The controls Jev was offered for this step's decision, when <c>Config.step_choices</c> asked for them.
+    /// The controls the driver was shown for this step's action, when <c>Config.step_choices</c> asked for them.
     /// </summary>
     [JsonPropertyName("choices")]
     public IReadOnlyList<StepChoice>? Choices { get; init; }

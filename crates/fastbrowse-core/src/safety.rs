@@ -143,7 +143,15 @@ fn describe_control(
     {
         instructions.push_str(&format!("It is a link to {href}\n"));
     }
-    if matches!(operation, Operation::Enter | Operation::Press)
+    // Asked about a click on "Change ticket type. Round trip" without its role, state or value, Jev judged opening
+    // the ticket type list unrequested for a task naming a round trip, and the gate refused the run's first step.
+    if operation == Operation::Click
+        && let Some(expanded) = control.expanded
+    {
+        let state = if expanded { "expanded" } else { "collapsed" };
+        instructions.push_str(&format!("It is a {}, which the page marks {state}.\n", control.role));
+    }
+    if matches!(operation, Operation::Enter | Operation::Press | Operation::Click)
         && !control.sensitive
         && let Some(value) = control.value.as_deref().filter(|value| !value.is_empty())
     {
@@ -622,33 +630,11 @@ pub fn is_password(control: &Control) -> bool {
     control.input_type.as_deref() == Some("password")
 }
 
-fn autocompletes(control: &Control, token: &str) -> bool {
-    let tokens = control.autocomplete.as_deref().unwrap_or("").to_lowercase();
-    text::split(&tokens).any(|t| t == token)
-}
-
 /// The password fields of `control`'s form, in page order; None for a control outside any form.
 fn form_passwords<'a>(controls: &'a [Control], control: &Control) -> Option<Vec<&'a Control>> {
     control.form_id.as_ref()?;
     let same_form = |c: &&Control| (&c.frame_id, &c.form_id) == (&control.frame_id, &control.form_id);
     Some(controls.iter().filter(same_form).filter(|c| is_password(c)).collect())
-}
-
-/// Whether an explicit autocomplete role identifies the password this field takes.
-///
-/// Unmarked fields leave their role to the task and page-context decision: field count and order cannot
-/// distinguish sign-in, reset and sign-up forms. A lone new-password marker is also ambiguous because sign-in
-/// pages use it to prevent autofill.
-pub fn sets_new_password(controls: &[Control], field: &Control) -> Option<bool> {
-    if autocompletes(field, "current-password") {
-        return Some(false);
-    }
-    if autocompletes(field, "new-password")
-        && form_passwords(controls, field).is_some_and(|passwords| passwords.len() > 1)
-    {
-        return Some(true);
-    }
-    None
 }
 
 /// Whether this step submits a form that changes an account's password: an Enter in, or a button of, a form holding
@@ -695,12 +681,6 @@ pub fn credential_field(control: &Control) -> Option<CredentialField> {
         return Some(CredentialField::Username);
     }
     tokens.contains(&"webauthn").then_some(CredentialField::Passkey)
-}
-
-/// Whether the page marks this field as where a passkey or security key signs in (`autocomplete=webauthn`), whatever
-/// other role the field has: a conditional-UI username field carries `username webauthn`.
-pub fn offers_passkey(control: &Control) -> bool {
-    autocompletes(control, "webauthn")
 }
 
 /// Whether a field takes an account's credentials: the page's own evidence that it wants a sign-in.
@@ -2521,6 +2501,20 @@ mod tests {
     }
 
     #[test]
+    fn click_questions_state_the_targets_state_and_held_value() {
+        let mut target = Control::new("t", "combobox", "Change ticket type. Round trip", [Operation::Click]);
+        target.expanded = Some(false);
+        target.value = Some("Round trip".into());
+        let question = requested_question(&control_action(Operation::Click, &target, None, &[]));
+        assert!(question.instructions.contains("It is a combobox, which the page marks collapsed.\n"));
+        assert!(question.instructions.contains("The target currently holds 'Round trip'.\n"));
+
+        target.sensitive = true;
+        target.value = Some("target-secret".into());
+        assert!(!irreversible_question(Operation::Click, &target, None, &[]).instructions.contains("target-secret"));
+    }
+
+    #[test]
     fn irreversible_enter_question_includes_the_submitted_value_without_secrets() {
         let mut target = Control::new("message", "textbox", "Message", [Operation::Enter]);
         target.value = Some("send this".into());
@@ -2643,32 +2637,6 @@ mod tests {
         assert!(asks_for_credentials(&otp));
     }
 
-    #[test]
-    fn explicit_password_roles_are_used_and_unmarked_roles_are_not_guessed() {
-        let (current, new, again) =
-            (password("p0", Some("f"), None), password("p1", Some("f"), None), password("p2", Some("f"), None));
-        let form = [current.clone(), new.clone(), again.clone()];
-        assert_eq!(sets_new_password(&form, &current), None);
-        assert_eq!(sets_new_password(&form, &new), None);
-        assert_eq!(sets_new_password(&form, &again), None);
-        let sign_in = password("p", Some("f"), None);
-        assert_eq!(sets_new_password(std::slice::from_ref(&sign_in), &sign_in), None);
-        let marked = password("p", Some("f"), Some("new-password"));
-        assert_eq!(sets_new_password(std::slice::from_ref(&marked), &marked), None);
-        let (first, second) = (password("n", Some("f"), Some("new-password")), password("c", Some("f"), None));
-        assert_eq!(sets_new_password(&[first.clone(), second.clone()], &first), Some(true));
-        // The first of two unmarked fields may set a new password rather than request an existing one.
-        let pair = [password("a", Some("f"), None), password("b", Some("f"), None)];
-        assert_eq!((sets_new_password(&pair, &pair[0]), sets_new_password(&pair, &pair[1])), (None, None));
-        let old = password("o", Some("f"), Some("current-password"));
-        assert_eq!(sets_new_password(&[old.clone(), pair[0].clone()], &pair[0]), None);
-        assert_eq!(sets_new_password(&[old.clone(), pair[0].clone()], &old), Some(false));
-        let loose = [password("a", None, None), password("b", None, None)];
-        assert_eq!(sets_new_password(&loose, &loose[1]), None);
-        assert_eq!(sets_new_password(&loose[..1], &loose[0]), None);
-        assert_eq!(sets_new_password(&loose, &password("c", None, Some("current-password"))), Some(false));
-    }
-
     /// A username that took a stored secret is masked like a password, and is still not one.
     #[test]
     fn a_secret_filled_username_does_not_decide_the_password_role() {
@@ -2678,7 +2646,6 @@ mod tests {
         let mut login = button("Login");
         login.form_id = Some("f".into());
         let form = [username.clone(), password.clone(), login.clone()];
-        assert_eq!(sets_new_password(&form, &password), None);
         assert!(!changes_credentials(&form, &login, Operation::Click));
         assert!(!changes_credentials(&form, &password, Operation::Enter));
         assert_ne!(credential_field(&username), Some(CredentialField::Password));
@@ -2693,24 +2660,7 @@ mod tests {
         let mut login = button("Login");
         login.form_id = Some("f".into());
         let form = [username, password_field.clone(), login.clone()];
-        assert_eq!(sets_new_password(&form, &password_field), None);
         assert!(!changes_credentials(&form, &login, Operation::Click));
-
-        let standalone = password("standalone", None, Some("new-password"));
-        assert_eq!(sets_new_password(std::slice::from_ref(&standalone), &standalone), None);
-    }
-
-    #[test]
-    fn unmarked_replacement_fields_leave_their_role_to_context() {
-        let mut reset = password("reset", Some("reset-form"), None);
-        reset.label = "New password".into();
-        assert_eq!(sets_new_password(std::slice::from_ref(&reset), &reset), None);
-        let mut confirmation = password("confirmation", Some("reset-form"), None);
-        confirmation.label = "Confirm new password".into();
-        let form = [reset, confirmation];
-        for field in &form {
-            assert_eq!(sets_new_password(&form, field), None);
-        }
     }
 
     #[test]
@@ -2734,9 +2684,6 @@ mod tests {
         let mut conditional = Control::new("f", "textbox", "Email", [Operation::Fill]);
         conditional.autocomplete = Some("username webauthn".into());
         assert_eq!(credential_field(&conditional), Some(CredentialField::Username));
-        assert!(offers_passkey(&conditional));
-        conditional.autocomplete = Some("username".into());
-        assert!(!offers_passkey(&conditional));
         for (fields, kind) in [
             (vec![code, code], WallKind::OneTimeCode),
             (vec![username, password], WallKind::Password),
