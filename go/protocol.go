@@ -580,6 +580,7 @@ const (
 	StepOutcomeCovered  StepOutcome = "covered"
 	StepOutcomeStale    StepOutcome = "stale"
 	StepOutcomeFailed   StepOutcome = "failed"
+	StepOutcomeRefused  StepOutcome = "refused"
 )
 
 type StepResult struct {
