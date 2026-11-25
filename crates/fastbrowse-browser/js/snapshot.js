@@ -2221,6 +2221,11 @@
     }
     return null;
   });
+  const controlCounts = new Map();
+  for (const c of controls) {
+    for (let e = registry.nodes.get(c.id)?.parentElement; e; e = e.parentElement) controlCounts.set(e, (controlCounts.get(e) || 0) + 1);
+  }
+  const controlsIn = card => controlCounts.get(card) || 0;
   // The repeating card around a record, for a record that names nothing.
   const recordAbove = card => {
     for (let e = card.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
@@ -2240,13 +2245,19 @@
     const element = registry.nodes.get(c.id);
     const record = recordOf(element);
     if (!record) continue;
-    let context = '';
+    let context = '',
+      owner = record;
     // A lone record is a record of its own (the only reply names itself, not the comment it answers); only a repeating
     // card can be a layout row that defers to the record around it.
     for (let card = record; card && !context; card = cardCount(card.parentElement) > 1 ? recordAbove(card) : null) {
       context = titleOf(card, element, c.label);
     }
-    context ||= nameOf(record, element, c.label, true);
+    // No card has a title, so a first line names it. A comment that names its author in bold has no heading: its
+    // counter read the layout row's "Actions" while the Reply beside it read the author. The record is the widest card
+    // around the counter that holds no control the narrower one lacks, the card the twin path reaches for a Reply,
+    // since a card holding another record's controls is a different comment.
+    for (let above = recordAbove(owner); above && controlsIn(above) === controlsIn(owner); above = recordAbove(above)) owner = above;
+    context ||= nameOf(owner, element, c.label, true);
     if (context) c.context = context;
   }
   for (const c of controls) {

@@ -873,3 +873,32 @@ async fn test_a_reply_counter_is_named_by_the_comment_it_belongs_to() {
     assert_eq!(context("Files"), "");
     h.close().await;
 }
+
+/// A comment that names its author in bold has no heading, so its counter sat in a layout row repeated inside every
+/// comment and read that row's "Actions" while the Reply beside it read the author. The counter is named by the same
+/// comment, in a list item and in a class-styled card.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_counter_in_a_layout_row_is_named_by_its_text_named_comment() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    for card in ["li", "div class=comment-card"] {
+        let tag = card.split(' ').next().unwrap();
+        let comments: String = [("Ada", 3), ("Grace", 4)]
+            .iter()
+            .map(|(author, count)| {
+                format!(
+                    "<{card}><b>{author}</b><div class=row>Text by {author}.</div><div class=row><p>Actions</p>\
+                     <button>Reply</button><button>Hide {count} Replies</button></div></{tag}>"
+                )
+            })
+            .collect();
+        let html = format!("<section><h2>Comments</h2><ul>{comments}</ul></section>");
+        eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(&html).unwrap())).await;
+        let observation = h.observe().await;
+        let context = |label: &str| find(&observation, label).context.clone().unwrap_or_default();
+        for (label, author) in [("Hide 3 Replies", "Ada"), ("Hide 4 Replies", "Grace")] {
+            assert_eq!(context(label), author, "{card}: {label}");
+        }
+    }
+    h.close().await;
+}
