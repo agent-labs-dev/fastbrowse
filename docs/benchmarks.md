@@ -12,9 +12,9 @@ establish cause.
 ## Where the published campaign stands against the release
 
 The page publishes `release-0.10.0`: fastbrowse-evals at commit `2e94d24`, run 2026-11-09, judged by
-anthropic/claude-opus-5.5 through OpenRouter. 0.10.0, tagged 2026-11-10, is the current release, so the
-published campaign measures the build that ships rather than lagging a release behind it. No campaign measured
-on a 0.10.1 build has been published, so no figure here describes 0.10.1.
+anthropic/claude-opus-5.5 through OpenRouter. It measures 0.10.0, whose agent had Jev pick each step. The agent in
+the current release is driven by one LLM conversation, and no published campaign has measured it, so no figure
+here describes it.
 
 A campaign becomes published only when its groups have run and its candidate export has been verified and
 merged, and since `bd02773b` a release does not wait on an eval run for its build, so a later tag can again run

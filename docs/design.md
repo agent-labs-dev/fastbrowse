@@ -406,8 +406,8 @@ cancellation and finish their cleanup. Returning while a paid request still runs
 Split batches collect provider receipts once. Custom decision clients that return partial answers without recording
 receipts retain those answers' costs through the error.
 
-Jev cost lines carry an optional `decision_purpose`: `action`, `authorization`, `relevance`, `read`,
-`verify` or `locate`. The owning call supplies it before dispatch, so retries, provider failover and
+Jev cost lines carry an optional `decision_purpose`: `action`, `authorization`, `read`,
+`verify` or `locate` (receipts from older builds may also carry `relevance`). The owning call supplies it before dispatch, so retries, provider failover and
 cancellation keep the same attribution. LLM lines retain their separate `purpose` field. Calls made
 directly through a decision client without an agent purpose omit `decision_purpose`; older receipts
 remain readable. Purpose labels group calls without changing their charges.
@@ -597,10 +597,10 @@ a value percent-encoded twice, hex and a credential split across a page's text n
 or matches.
 
 The browser opens an address as written, credentials included, and a path the task names is resolved on the start
-with them. A value Jev picks from the task to type is cut from the task as written, at the same offsets: masking keeps
-the text's length in code points. A model's proposed address with a user name or password in it is discarded, except
-an address the task writes, given back as the model was shown it, which opens as written. The known pages and start
-page requests are told what the bullets are.
+with them. A value the driver types from a credentialed task address is mapped back to the task as written, at the same offsets:
+masking keeps the text's length in code points. A model's proposed address with a user name or password in it is discarded, except
+an address the task writes, given back as the model was shown it, which opens as written. The driver and the start
+page request are told what the bullets are.
 
 ## Recipes
 

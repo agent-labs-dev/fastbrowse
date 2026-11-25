@@ -26,8 +26,7 @@ evals rather than taken from Typesafe.
 
 Every limit and price above is Jev's, and fastbrowse reads them from the model's `DecisionProfile`
 (`crates/fastbrowse-core/src/decision.rs`) rather than from constants. A model's limits bound every request, including
-a caller's own `Config`: the choices the policy offers, the group size and shortlist that follow from them, the
-token budget, and the questions per request. Its thresholds apply only when the caller passes no `Config`.
+a caller's own `Config`: the choices the policy offers, the token budget, and the questions per request. Its thresholds apply only when the caller passes no `Config`.
 
 A model fastbrowse has no record of, such as one pinned with `FASTBROWSE_DECISION_MODEL`, gets the tightest limits any
 documented System One host sets: 26 options a Choice, 64 questions and 64 KiB a request ([System

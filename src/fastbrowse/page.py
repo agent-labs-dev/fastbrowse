@@ -1,6 +1,6 @@
 """What a page reads and does, as `connect_cdp`'s page returns it, and the errors it raises.
 
-An `Observation` is bounded, for Jev's action choice; a `Capture` is complete, for reading; an `Action` is what the
+An `Observation` is bounded, for the driver's next action; a `Capture` is complete, for reading; an `Action` is what the
 page is asked to do.
 """
 

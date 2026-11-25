@@ -196,7 +196,7 @@ async def run_task(
 
     Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
     an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
-    `recipe` reuses saved values when Jev selects a matching action on the same page, through the same
+    `recipe` runs each saved step first while its page and control match, through the same
     authorization and secret gates. The task must match the recorded task. `save_recipe`
     writes the run's steps as a recipe when it ends `complete`; it may name the `recipe` file, to repair it.
     A recipe write failure is logged without changing the task status; check that the file exists before replay.
@@ -241,7 +241,7 @@ async def run_task(
     the extension reaches it, so it could not be refused first.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
-    caller already knows. Jev sees it as `background`.
+    caller already knows. The driver sees it as background from the user.
 
     `settings` configures the run by the environment variables' own names (`OPENROUTER_API_KEY`,
     `AI_GATEWAY_API_KEY`, `TYPESAFE_API_KEY`, `FASTBROWSE_DECISION_SOURCE`, `FASTBROWSE_LLM_PROVIDER`,

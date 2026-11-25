@@ -71,7 +71,7 @@ finished but its data fails the `output` schema. A run that fails after it start
 callback throws, resolves with status `error`.
 
 Jev cost lines include `decision_purpose` when the agent named the decision: `action`, `authorization`,
-`relevance`, `read`, `verify` or `locate`. LLM lines keep their existing `purpose`. An unscoped decision
+`read`, `verify` or `locate`; receipts from older builds may also carry `relevance`. LLM lines keep their existing `purpose`. An unscoped decision
 client call omits the optional field, and older receipts remain readable.
 
 Cost lines also include `model`, the model that served the call, when one is known.
