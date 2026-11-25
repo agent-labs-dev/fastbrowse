@@ -244,6 +244,32 @@ pub(crate) fn address(url: &str) -> String {
     out
 }
 
+/// For each block, the smallest whole-record block of the same source that holds it, if any. One sweep over blocks and
+/// records in document order with a stack of the records still open, so a capture of thousands of records costs a
+/// sort, not a scan of every record per block.
+fn record_holders(blocks: &[fastbrowse_core::page::Block]) -> Vec<Option<usize>> {
+    let mut order: Vec<usize> = (0..blocks.len()).collect();
+    order.sort_by_key(|&at| (blocks[at].source_url.as_deref(), blocks[at].start, std::cmp::Reverse(blocks[at].end)));
+    let mut holders = vec![None; blocks.len()];
+    let mut open: Vec<usize> = Vec::new();
+    let mut source = None;
+    for at in order {
+        let block = &blocks[at];
+        if source != Some(block.source_url.as_deref()) {
+            source = Some(block.source_url.as_deref());
+            open.clear();
+        }
+        while open.last().is_some_and(|&record| blocks[record].end < block.start) {
+            open.pop();
+        }
+        if block.whole_record {
+            open.push(at);
+        }
+        holders[at] = open.iter().rev().copied().find(|&record| block.end <= blocks[record].end);
+    }
+    holders
+}
+
 fn digest16(text: &str) -> String {
     sha256_hex(text.as_bytes())[..16].to_string()
 }
@@ -418,17 +444,9 @@ impl Notes {
             let byte = |at: i64| offsets.get(&(at.max(0) as usize)).copied().unwrap_or(capture.text.len());
             &capture.text[byte(start)..byte(end).max(byte(start))]
         };
-        let records: Vec<&fastbrowse_core::page::Block> =
-            capture.blocks.iter().filter(|block| block.whole_record).collect();
-        for block in &capture.blocks {
-            let holder = records
-                .iter()
-                .filter(|record| {
-                    record.source_url == block.source_url && record.start <= block.start && block.end <= record.end
-                })
-                .min_by_key(|record| record.end - record.start)
-                .copied()
-                .unwrap_or(block);
+        let holders = record_holders(&capture.blocks);
+        for (index, block) in capture.blocks.iter().enumerate() {
+            let holder = holders[index].map_or(block, |record| &capture.blocks[record]);
             let url = block.source_url.as_ref().unwrap_or(&capture.url);
             let identity = (capture.sha256.clone(), url.clone(), capture.captured_at);
             sources.entry(identity).or_default().push(SourceBlock {
@@ -1010,6 +1028,21 @@ mod tests {
         assert!(!rate.repeats_page_text("Annual interest rate 5\u{2030}", url));
         // A hyphen between words is still a break, as before.
         assert_eq!(words("well-known -5 a-1"), ["well", "known", "-5", "a", "1"]);
+    }
+
+    #[test]
+    fn each_block_is_held_by_the_smallest_whole_record_around_it() {
+        use crate::retrieval::testing::capture;
+        let mut page = capture(&[
+            (BlockKind::Paragraph, "outer card text here"),
+            (BlockKind::Paragraph, "inner"),
+            (BlockKind::Paragraph, "loose"),
+        ]);
+        // The blocks lie end to end; widen the first to hold the second as a nested record, and leave the third out.
+        page.blocks[0].end = page.blocks[1].end;
+        page.blocks[0].whole_record = true;
+        page.blocks[1].whole_record = true;
+        assert_eq!(record_holders(&page.blocks), vec![Some(0), Some(1), None]);
     }
 
     #[test]
