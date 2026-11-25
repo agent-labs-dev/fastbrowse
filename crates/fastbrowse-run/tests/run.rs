@@ -513,7 +513,7 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
                 o.extension = true;
                 o.launch = true;
             }),
-            "extension drives the browser it is connected in; drop launch",
+            "extension drives the browser the fastbrowse extension is connected in; drop launch",
         ),
         (
             task(|o, _| {

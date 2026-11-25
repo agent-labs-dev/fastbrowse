@@ -410,15 +410,19 @@ fn checked(task: &RunTask, secrets: bool, names: Names<'_>) -> Result<Checked, R
         (Field::CloudExtensions, !task.cloud_extensions.is_empty()),
         (Field::CloudTimeoutMinutes, task.cloud_timeout_minutes.is_some()),
     ]);
-    if !handed && !cloud.is_empty() && (task.local || task.launch || chrome.headed || chrome.profile.is_some()) {
+    // Only the options that were given are named: listing every one named options the caller never passed, and some
+    // that an entry point (the CLI's `launch`) does not have.
+    let on_machine = given(&[
+        (Field::Local, task.local),
+        (Field::Launch, task.launch),
+        (Field::ChromeHeaded, chrome.headed),
+        (Field::ChromeProfile, chrome.profile.is_some()),
+    ]);
+    if !handed && !cloud.is_empty() && !on_machine.is_empty() {
         return refuse(format!(
-            "{} needs the cloud browser: drop it, or drop {}, {}, {} and {} \
-             (and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)",
+            "{} needs the cloud browser: drop it, or drop {} (and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)",
             cloud.join(", "),
-            names(Field::Local),
-            names(Field::Launch),
-            names(Field::ChromeHeaded),
-            names(Field::ChromeProfile)
+            on_machine.join(", ")
         ));
     }
     if extension {
@@ -447,7 +451,7 @@ fn checked(task: &RunTask, secrets: bool, names: Names<'_>) -> Result<Checked, R
                 ));
             }
             return refuse(format!(
-                "{} drives the browser it is connected in; drop {}",
+                "{} drives the browser the fastbrowse extension is connected in; drop {}",
                 names(Field::Extension),
                 other.join(", ")
             ));

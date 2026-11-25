@@ -184,6 +184,8 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
         (&["--save-recipe", "f.json"], "--save-recipe"),
         (&["--target-match", "x"], "--target-match"),
         (&["--extension-browser", "Work"], "--extension-browser"),
+        // Both set one option, and naming only one sent the user back for a second refusal.
+        (&["--extension", "--extension-browser", "Work"], "--extension, --extension-browser"),
         (&["--cursor"], "--cursor"),
         (&["--downloads", "/tmp/d"], "--downloads"),
         // A fetched page can only follow links, so nothing it is given is ever typed, attached or submitted (#1337).
@@ -233,18 +235,41 @@ async fn extension_and_cloud_refusals_name_the_cli_flags() {
         let ran = cli(&argv).await;
         assert!(ran.call.is_none());
         let error = ran.json()["error"].as_str().unwrap().to_string();
-        assert!(error.starts_with("--extension drives the browser it is connected in; drop "), "{error}");
+        // Nothing chose the extension: it is the CLI's browser whenever --cloud and --fetch are absent.
+        assert!(
+            error.starts_with(
+                "a run without --cloud drives the browser the fastbrowse extension is connected in; drop "
+            ),
+            "{error}"
+        );
         assert!(error.contains(expected) && !error.contains('_') && !error.contains("chrome."), "{error}");
     }
 
     let ran = cli(&["task", "--json", "--extension-browser", "Work", "--headed"]).await;
     let error = ran.json()["error"].as_str().unwrap().to_string();
-    assert_eq!(error, "--extension-browser drives the browser it is connected in; drop --headed");
+    assert_eq!(error, "--extension-browser drives the browser the fastbrowse extension is connected in; drop --headed");
 
-    let ran = cli(&["task", "--json", "--cloud", "--attach"]).await;
-    assert!(ran.call.is_none());
+    // `--local` chose the extension, so the refusal names it rather than a flag that was never passed.
+    let ran = cli(&["task", "--json", "--local", "--headed"]).await;
     let error = ran.json()["error"].as_str().unwrap().to_string();
-    assert_eq!(error, "--attach and --target-match need --cdp-url, --cdp-port or --extension");
+    assert_eq!(error, "--local drives the browser the fastbrowse extension is connected in; drop --headed");
+
+    // Only the given options are named as the ones to drop: never `launch`, which the CLI has no flag for.
+    let ran = cli(&["task", "--json", "--headed", "--proxy-country", "uk"]).await;
+    let error = ran.json()["error"].as_str().unwrap().to_string();
+    assert_eq!(
+        error,
+        "--proxy-country needs the cloud browser: drop it, or drop --headed (and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)"
+    );
+
+    // A cloud run has no running browser to pick a tab in, and the CLI cannot attach over DevTools.
+    for flag in [&["--attach"][..], &["--target-match", "x"]] {
+        let mut argv = vec!["task", "--json", "--cloud"];
+        argv.extend_from_slice(flag);
+        let ran = cli(&argv).await;
+        assert!(ran.call.is_none());
+        assert!(ran.json()["error"].as_str().unwrap().starts_with("--cloud cannot be combined with"));
+    }
 }
 
 #[tokio::test]

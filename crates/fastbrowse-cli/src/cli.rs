@@ -463,9 +463,14 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let explicit_extension = args.extension || args.extension_browser.is_some();
     let extension = explicit_extension || (!args.cloud && !args.fetch);
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension) {
+    // `--attach` and `--target-match` pick a tab in a browser already running, which a cloud run never has.
+    let attaching = args.attach || args.target_match.is_some();
+    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension || attaching)
+    {
         return Err(ConfigurationError(
-            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
+            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch, --extension, --extension-browser, \
+             --attach or --target-match"
+                .into(),
         ));
     }
     let cdp_port = args
@@ -729,8 +734,9 @@ fn json_result(
     fields.into()
 }
 
-/// The flags the user typed for a run option a refusal names. `--extension` and `--extension-browser`, and `--secret`
-/// and `--bitwarden`, set the same option, so the ones passed are the ones named; an option with no flag keeps its SDK name.
+/// The flags the user typed for a run option a refusal names. Several flags can set one option (`--extension`,
+/// `--extension-browser` and `--local`; `--secret` and `--bitwarden`), so the ones passed are the ones named; an option
+/// with no flag keeps its SDK name.
 fn flag_name(field: Field, args: &Args) -> String {
     let flags: Vec<&str> = match field {
         Field::Fetch => vec!["--fetch"],
@@ -755,8 +761,21 @@ fn flag_name(field: Field, args: &Args) -> String {
         Field::SaveRecipe => vec!["--save-recipe"],
         Field::Cursor => vec!["--cursor"],
         Field::Downloads => vec!["--downloads"],
-        Field::Extension if args.extension_browser.is_some() && !args.extension => vec!["--extension-browser"],
-        Field::Extension => vec!["--extension"],
+        // Without `--cloud` or `--fetch` the CLI drives the extension whatever was passed, and `--local` means it too.
+        Field::Extension => {
+            let chose: Vec<&str> = [
+                (args.extension, "--extension"),
+                (args.extension_browser.is_some(), "--extension-browser"),
+                (args.local, "--local"),
+            ]
+            .into_iter()
+            .filter_map(|(given, flag)| given.then_some(flag))
+            .collect();
+            if chose.is_empty() {
+                return "a run without --cloud".into();
+            }
+            chose
+        }
         Field::Inputs => vec!["--input"],
         Field::Attachments => vec!["--file"],
         Field::Authorization => vec!["--authorize"],
