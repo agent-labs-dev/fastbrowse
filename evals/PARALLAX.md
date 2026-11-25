@@ -1,6 +1,6 @@
 # Parallax pin
 
-The eval plugin pins `parallax-evals[browser]==2.0.0.dev57` in
+The eval plugin pins `parallax-evals[browser]==2.0.0.dev58` in
 `evals/pyproject.toml` and `evals/uv.lock`, and the root `evals` extra and dev
 group pin the same version in `pyproject.toml` and `uv.lock`. The dependency
 resolves directly from PyPI. No local source override is used.
