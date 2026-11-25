@@ -142,6 +142,10 @@ The optional `invalid` flag reports `aria-invalid` or a failed native constraint
 in form validation. It describes the current field, without claiming that a submission occurred. A field
 that fails a native constraint also carries `validation_message`, the browser's own words for why, which
 the driver reads beside the field as `refused: "..."`: a refused submit shows that reason only in a browser bubble, not in page text.
+A control the page disables (`disabled`, or inside `aria-disabled="true"`) stays in the observation with
+`disabled: true` and no operations. The driver sees it listed as `disabled`, so a Save that an edit did not enable
+reads as a disabled Save rather than no Save, and an action on it is refused with that reason. A step that enables or
+disables a control says so in its effect, and the page state counts it.
 
 ## Reading and citations
 

@@ -57,11 +57,18 @@ pub async fn description(page: &CdpPage, session: &BrowserSession, base: &str) {
     assert_eq!(eval(page, session, "state.value === state.stored").await, json!(true));
     eval(page, session, "render()").await;
     let observation = page.observe().await.expect("observe");
+    // Save is on the page before any edit, disabled and offering nothing: left out, a Save that stayed disabled after
+    // a fill read as no Save at all (#1415).
+    let unsaved = find(&observation, |c| c.label == "Save", "the disabled Save");
+    assert!(unsaved.disabled == Some(true) && unsaved.operations.is_empty(), "{unsaved:?}");
     let editor = find(&observation, |c| c.label == "Description" && c.role == "textbox", "description editor");
     act(page, Operation::Fill, editor, Some(DESCRIPTION), &observation).await;
     assert_eq!(eval(page, session, "state.value").await, json!(DESCRIPTION), "the edit reached the page's state");
-    let observation = page.observe().await.expect("observe");
-    let save = find(&observation, |c| c.label == "Save", "an enabled Save");
+    let filled = page.observe().await.expect("observe");
+    let told = fastbrowse_core::effects::effect(&observation, &filled, None, false).summary;
+    assert!(told.contains("Save disabled: True -> False"), "the fill's effect says the page took it: {told}");
+    let observation = filled;
+    let save = find(&observation, |c| c.label == "Save" && c.operations.contains(&Operation::Click), "an enabled Save");
     act(page, Operation::Click, save, None, &observation).await;
     eval_until(page, session, "state.stored === state.value && !state.saving").await;
     assert_eq!(eval(page, session, "state.stored").await, json!(DESCRIPTION));
