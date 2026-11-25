@@ -376,7 +376,7 @@ impl Agent {
         let mut typed: Option<String> = None;
         let mut destination = None;
         let mut effect_now: Option<String> = None;
-        let mut put_now: Vec<String> = Vec::new();
+        let mut put_now: Option<(String, Vec<String>)> = None;
         let mut setting = false;
         let mut set: Vec<FieldChange> = Vec::new();
         let frames = self.on_event.is_some() && self.config.step_frames;
@@ -655,7 +655,7 @@ impl Agent {
                         was_target: false,
                     });
                 }
-                put_now = done.put;
+                put_now = (!done.put.is_empty()).then(|| (landed.url.clone(), done.put));
                 effect_now = Some(done.summary);
             }
             progressed = judged;
@@ -1078,7 +1078,16 @@ impl Agent {
             }
             state.read_tries.remove(&page);
         }
-        last.put.extend(done.put.iter().cloned());
+        // What the effect says the step put on this page, which a commit that stayed on its document names (a step that
+        // went to another page added that page's text, not its own).
+        if !done.put.is_empty() {
+            let (_, put) = last.put.get_or_insert_with(|| (observation.url.clone(), Vec::new()));
+            for piece in &done.put {
+                if !put.contains(piece) {
+                    put.push(piece.clone());
+                }
+            }
+        }
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),
             None => done.summary,
