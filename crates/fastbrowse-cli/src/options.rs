@@ -129,6 +129,48 @@ impl<'a> SplitUrl<'a> {
     }
 }
 
+/// The address a `--start` names, with a scheme added when it names none: `https` for a site and `http` for a
+/// loopback host, as a browser's address bar fills them in. An address that states its own scheme is left exactly as
+/// given, and an empty value stays empty so a caller that meant "no start" keeps it.
+pub fn start_url(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if states_scheme(trimmed) {
+        return trimmed.to_string();
+    }
+    // A leading `//` is protocol-relative; the host begins after it.
+    let rest = trimmed.strip_prefix("//").unwrap_or(trimmed);
+    let secure = format!("https://{rest}");
+    // Use the host Chrome will load, which includes loopback spellings such as 127.1.
+    let loopback = url::Url::parse(&secure).ok().is_some_and(|parsed| match parsed.host() {
+        Some(url::Host::Domain(host)) => host == "localhost",
+        Some(url::Host::Ipv4(host)) => host.is_loopback(),
+        Some(url::Host::Ipv6(host)) => host.is_loopback(),
+        None => false,
+    });
+    if loopback { format!("http://{rest}") } else { secure }
+}
+
+/// Whether an address states its own scheme, so it must not be rewritten. A scheme is `name:` followed by `//`, or by
+/// anything that is not a port: `about:blank`, `mailto:x@y` and `http:127.0.0.1/page` are addresses, while
+/// `example.com:8080` and `localhost:3000/x` are a host and a port. A port is all digits up to the end of the
+/// authority (`/`, `?`, `#` or the end), so a payload that merely begins with digits is not one. Digits alone are
+/// ambiguous (`http:2130706433` is an address, `intranet:8080` a host), so a name the URL standard registers as a
+/// scheme is one whatever follows it.
+const STANDARD_SCHEMES: [&str; 11] =
+    ["http", "https", "ws", "wss", "ftp", "file", "about", "data", "blob", "mailto", "javascript"];
+
+fn states_scheme(value: &str) -> bool {
+    let Some((head, tail)) = value.split_once(':') else { return false };
+    let named = head.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && head.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
+    let digits = tail.chars().take_while(char::is_ascii_digit).count();
+    let is_port = digits > 0 && matches!(tail[digits..].chars().next(), None | Some('/' | '?' | '#'));
+    named && (tail.starts_with("//") || !is_port || STANDARD_SCHEMES.contains(&head.to_ascii_lowercase().as_str()))
+}
+
 /// The variables a `--secret` names that the environment does not hold, so a run fails before a browser opens.
 pub fn unset_variables(pairs: &[(String, String, Option<String>)], environ: &HashMap<String, String>) -> Vec<String> {
     let missing: BTreeSet<&String> =
@@ -275,6 +317,33 @@ pub fn check_model_keys(settings: &Settings) -> Result<(), ConfigurationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_start_url_with_no_scheme_gets_one_and_explicit_schemes_are_kept() {
+        assert_eq!(start_url("example.com"), "https://example.com");
+        assert_eq!(start_url("example.com/a?b=1#c"), "https://example.com/a?b=1#c");
+        assert_eq!(start_url("news.ycombinator.com"), "https://news.ycombinator.com");
+        assert_eq!(start_url("example.com:8080/x"), "https://example.com:8080/x");
+        assert_eq!(start_url("localhost:3000"), "http://localhost:3000");
+        assert_eq!(start_url("127.0.0.1:8080"), "http://127.0.0.1:8080");
+        assert_eq!(start_url("127.1:8080"), "http://127.1:8080");
+        assert_eq!(start_url("127.example.com:8080"), "https://127.example.com:8080");
+        assert_eq!(start_url("[::1]:8000"), "http://[::1]:8000");
+        assert_eq!(start_url("//example.com/x"), "https://example.com/x");
+        assert_eq!(start_url("  example.com  "), "https://example.com");
+        assert_eq!(start_url("http://example.com"), "http://example.com");
+        assert_eq!(start_url("https://example.com/x"), "https://example.com/x");
+        assert_eq!(start_url("about:blank"), "about:blank");
+        assert_eq!(start_url("http:127.0.0.1:8080/page"), "http:127.0.0.1:8080/page");
+        assert_eq!(start_url("https:192.0.2.1/page"), "https:192.0.2.1/page");
+        assert_eq!(start_url("file:123.html"), "file:123.html");
+        assert_eq!(start_url("file:///tmp/x.html"), "file:///tmp/x.html");
+        for numeric in ["http:2130706433", "http:127", "https:123/page", "file:123456", "about:123"] {
+            assert_eq!(start_url(numeric), numeric);
+        }
+        assert_eq!(start_url("intranet:8080/x"), "https://intranet:8080/x");
+        assert_eq!(start_url(""), "");
+    }
 
     #[test]
     fn a_secret_flag_takes_the_name_before_the_origin() {

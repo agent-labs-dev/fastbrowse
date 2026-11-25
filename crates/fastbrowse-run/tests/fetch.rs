@@ -455,14 +455,16 @@ async fn test_a_click_on_a_link_opens_it_and_anything_else_needs_a_browser() {
         let body = if request.url.ends_with("/next") {
             "<h1>Next</h1>"
         } else {
-            "<a href='/next'>Next</a><a href='#top'>Top</a><a href='javascript:go()'>Go</a><button>Press</button>"
+            "<a href='/next'>Next</a><a href='#top'>Top</a><a href='javascript:go()'>Go</a><button>Press</button>\
+             <a href='/next' aria-disabled='true'>Later</a>"
         };
         Response::new(200, body).with_header("content-type", "text/html")
     });
     let page = FetchedPage::new(http, None, None);
     page.navigate("https://shop.example.com/", None).await.expect("navigate");
     let observation = page.observe().await.expect("observe");
-    for label in ["Top", "Go", "Press"] {
+    // A disabled link offers nothing, and a click on it follows it nowhere.
+    for label in ["Top", "Go", "Press", "Later"] {
         let id = observation.controls.iter().find(|control| control.label == label).expect("offered").id.clone();
         let action = Action { target_id: Some(id), ..Action::new(Operation::Click) };
         assert!(page.act(&action, &observation).await.unwrap_err().needs_browser(), "{label}");

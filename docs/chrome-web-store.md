@@ -163,7 +163,7 @@ make it work. It shows **Not connected** until step 3 has run.
 3. Add this extension, then restart Chrome so the service worker connects. The popup should say **Connected**,
    with the browser's own name in the Browser name field.
 4. Give the agent one [OpenRouter](https://openrouter.ai/) key: `export OPENROUTER_API_KEY=...`. That single key
-   serves both models a run needs, Jev, which picks each action, and the LLM that writes the answer. A provider
+   serves both models a run needs, the LLM that drives the run and writes the answer, and Jev, which judges what code gates on. A provider
    key such as `OPENAI_API_KEY` alone is not enough: it configures neither the provider nor Jev's decision source,
    and the run stops during configuration.
 5. Run a task: `fastbrowse "What is the title of this page?" --start https://example.com/ --extension`

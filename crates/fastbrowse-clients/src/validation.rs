@@ -974,11 +974,6 @@ impl JevSpend {
         SPEND.scope(self, future).await
     }
 
-    /// The ledger a request in this scope is priced against.
-    pub(crate) fn ledger(&self) -> Option<Arc<Ledger>> {
-        self.0.ledger.clone()
-    }
-
     /// `record_jev_spend`.
     pub fn record(&self, costs: impl IntoIterator<Item = CostLine>) {
         let purpose = current_jev_purpose();

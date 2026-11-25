@@ -3,15 +3,11 @@
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::agent::{Agent, RunOptions};
-use fastbrowse_agent::scripted::{ScriptedJev, ScriptedLLM, steps};
+use fastbrowse_agent::scripted::{ScriptedDriver, ScriptedJev, steps};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, DecisionProfile, Evaluation, Question};
-use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
-use fastbrowse_core::models::{
-    Artifact, Authorization, CostBasis, CostComponent, CostLine, LLMPurpose, Limits, Operation, StepOutcome,
-};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, DecisionProfile, Evaluation, Question};
+use fastbrowse_core::models::{Artifact, Authorization, Limits, Operation, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Observation, Page, PageResult};
-use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
@@ -115,35 +111,7 @@ impl DecisionClient for Questions {
             {
                 self.saves.lock().unwrap().push(requested.instructions.clone());
             }
-            let mut evaluation = self.script.evaluate(state, questions).await?;
-            for (key, answer) in &mut evaluation.answers {
-                if let Answer::Choice(answer) = answer
-                    && key.ends_with(":source")
-                {
-                    answer.choice = "write".into();
-                }
-            }
-            Ok(evaluation)
-        })
-    }
-}
-
-struct Typist;
-
-impl LLMClient for Typist {
-    fn generate_value<'a>(
-        &'a self,
-        purpose: LLMPurpose,
-        messages: &'a [Message],
-        schema: &'a dyn ResponseSchema,
-        ledger: Option<&'a Ledger>,
-    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
-        if purpose != LLMPurpose::Fill {
-            return ScriptedLLM.generate_value(purpose, messages, schema, ledger);
-        }
-        Box::pin(async move {
-            let data = schema.validate_json(r#"{"value":"New title"}"#).map_err(LLMError::schema)?;
-            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+            self.script.evaluate(state, questions).await
         })
     }
 }
@@ -167,7 +135,7 @@ async fn a_save_names_an_opener_that_belongs_to_another_form() {
             script: ScriptedJev::new(steps("click Edit second card; fill Title; click Apply").unwrap()),
             saves: saves.clone(),
         }),
-        Arc::new(Typist),
+        Arc::new(ScriptedDriver::new(steps("click Edit second card; fill Title = New title; click Apply").unwrap())),
     );
     agent
         .run(

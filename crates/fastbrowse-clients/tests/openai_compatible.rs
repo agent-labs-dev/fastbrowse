@@ -12,9 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use common::{Model, Script, Step, answering, reply, result_model, text};
 use fastbrowse_clients::http::{Http, Response, TransportError};
-use fastbrowse_clients::openai_compatible::{
-    LLMOptions, OpenAICompatibleLLM, ROUTED_OUTPUT_TOKENS, openrouter_routing_for,
-};
+use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM, ROUTED_OUTPUT_TOKENS};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, Role};
 use fastbrowse_core::models::{Bytes, CostBasis, LLMPurpose, Limits};
@@ -307,6 +305,18 @@ async fn test_json_that_ends_mid_value_is_truncation_even_when_the_provider_says
 }
 
 #[tokio::test]
+async fn test_a_response_the_provider_filtered_is_named_as_filtered_not_cut_off() {
+    let filtered =
+        reply(200, json!({"choices": [{"message": {"content": r#"{"count":"#}, "finish_reason": "content_filter"}]}));
+    let script = Script::new([filtered]);
+    let llm = client(script.http(), "https://llm.test", LLMPurpose::Start, "reader");
+    let error = generate(&llm, LLMPurpose::Start, &[], None).await.unwrap_err();
+    assert_eq!(error.fault().map(|fault| fault.class), Some(fastbrowse_core::llm::FaultClass::Filtered));
+    assert!(!error.to_string().contains("cut off"), "{error}");
+    assert_eq!(script.requests().len(), 1);
+}
+
+#[tokio::test]
 async fn test_complete_json_marked_truncated_never_becomes_a_citable_read() {
     let script = Script::new([truncated(r#"{"count":5}"#), truncated(r#"{"count":5}"#)]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Start, "reader");
@@ -515,6 +525,20 @@ async fn test_gateway_byok_receipt_includes_estimated_provider_spend() {
         assert!(approx(result.cost.dollars.unwrap(), 0.301));
         assert!(capped(Some(0.25)).record([result.cost]).is_err());
     }
+}
+
+#[tokio::test]
+async fn test_a_byok_replys_inline_fee_is_settled_from_its_receipt() {
+    // The inline cost of a bring-your-own-key reply is the gateway's fee alone; read as the charge, a cap of a quarter
+    // passed a call that spent thirty cents upstream.
+    let mut completion = without_cost("generation-byok");
+    completion["usage"]["cost"] = json!(0.001);
+    completion["usage"]["is_byok"] = json!(true);
+    let receipt = json!({"data": {"id": "generation-byok", "is_byok": true, "total_cost": 0.001, "upstream_inference_cost": 0.3}});
+    let llm = client(receipts(completion, receipt), OPENROUTER, LLMPurpose::Start, "writer");
+    let result = generate(&llm, LLMPurpose::Start, &[], None).await.unwrap();
+    assert_eq!(result.cost.basis, CostBasis::Estimated);
+    assert!(approx(result.cost.dollars.unwrap(), 0.301));
 }
 
 #[tokio::test(start_paused = true)]
@@ -953,16 +977,6 @@ async fn test_an_optional_object_goes_out_as_nullable_leaves_and_comes_back_whol
         body["provider"],
         json!({"require_parameters": true, "sort": "latency", "order": ["parasail", "deepinfra", "inference-net"], "ignore": ["together"]})
     );
-}
-
-#[test]
-fn test_the_routing_a_record_proxy_sends_pins_the_endpoints_a_run_is_routed_to() {
-    // The eval record proxy sends this routing for a run aimed at it, so a cassette holds the pinned endpoints' answers.
-    assert_eq!(
-        openrouter_routing_for("deepseek/deepseek-v4.1-flash-1017"),
-        json!({"require_parameters": true, "sort": "latency", "order": ["parasail", "deepinfra", "inference-net"], "ignore": ["together"]})
-    );
-    assert_eq!(openrouter_routing_for("openai/gpt-6-luna"), json!({"require_parameters": true, "sort": "latency"}));
 }
 
 #[tokio::test]

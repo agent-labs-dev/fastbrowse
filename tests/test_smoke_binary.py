@@ -43,7 +43,8 @@ def test_the_checkout_completes_the_scripted_run_on_local_chrome() -> None:
     done = _smoke(_command(), "--case", "run")
 
     assert done.returncode == 0, done.stderr
-    assert done.stdout.startswith("run: complete in 1 steps against http://127.0.0.1:")
+    # The scripted click, then the read of the page the driver called done on.
+    assert done.stdout.startswith("run: complete in 2 steps against http://127.0.0.1:")
 
 
 def test_an_executable_that_is_not_fastbrowse_fails_and_names_the_case() -> None:

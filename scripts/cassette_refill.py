@@ -794,8 +794,55 @@ def commit_batch(
         except (AttributeError, IndexError, KeyError, TypeError, ValueError, RuntimeError) as verification_error:
             raise ValueError(f"GitHub's commit result could not be verified: {error}; {verification_error}") from error
         if recovered is None:
-            raise ValueError(f"GitHub's commit result could not be verified: {error}") from error
+            reason = f"GitHub's commit result could not be verified: {error}"
+            if isinstance(error, GitHubGatewayTimeout) and tip_is(repo, number, branch, parent, token):
+                raise BatchTimedOut(reason) from error
+            raise ValueError(reason) from error
         return recovered
+
+
+class BatchTimedOut(ValueError):
+    """A commit that timed out at GitHub's gateway and never landed: the branch tip is still its parent."""
+
+
+def tip_is(repo: str, number: str, branch: str, parent: str, token: str) -> bool:
+    try:
+        facts, actual_branch = pull_facts(repo, number, token)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError, RuntimeError):
+        return False
+    return facts.open and actual_branch == branch and facts.head_sha == parent
+
+
+def commit_split(
+    repo: str,
+    number: str,
+    branch: str,
+    parent: str,
+    batch: Sequence[Path],
+    sha: str,
+    verdict: FillVerdict,
+    token: str,
+    commit_token: str,
+    *,
+    last: bool,
+) -> Iterator[dict[str, str]]:
+    """Yield the commits that publish a batch, each built on the one before it. Only the final one carries the
+    terminal trailer when `last`, so a split batch still ends in exactly one."""
+    tasks = [path.name.removesuffix(".jsonl") for path in batch]
+    try:
+        yield commit_batch(
+            repo, number, branch, parent, commit_message(tasks, sha, verdict, last=last), batch, token, commit_token
+        )
+        return
+    except BatchTimedOut:
+        # 40 MiB mutations fit GitHub's size cap but 504 at its gateway, so a batch that never landed is halved.
+        if len(batch) == 1:
+            raise
+    middle = len(batch) // 2
+    for half, is_last in ((batch[:middle], False), (batch[middle:], last)):
+        for commit in commit_split(repo, number, branch, parent, half, sha, verdict, token, commit_token, last=is_last):
+            parent = commit["oid"]
+            yield commit
 
 
 def publish() -> int:
@@ -826,11 +873,20 @@ def publish() -> int:
             head = sha
             batches = commit_batches(files, COMMIT_PAYLOAD_LIMIT)
             for position, batch in enumerate(batches, 1):
-                batch_tasks = [path.name.removesuffix(".jsonl") for path in batch]
-                message = commit_message(batch_tasks, sha, verdict, last=position == len(batches))
-                commit = commit_batch(repo, number, branch, head, message, batch, token, env["COMMIT_TOKEN"])
-                head = commit["oid"]
-                links.append(f"[{head[:12]}]({commit['url']})")
+                for commit in commit_split(
+                    repo,
+                    number,
+                    branch,
+                    head,
+                    batch,
+                    sha,
+                    verdict,
+                    token,
+                    env["COMMIT_TOKEN"],
+                    last=position == len(batches),
+                ):
+                    head = commit["oid"]
+                    links.append(f"[{head[:12]}]({commit['url']})")
             outcome = f"Committed the refilled cassettes as {', '.join(links)}; CI runs again on it."
             committed = True
         except (ValueError, RuntimeError) as error:

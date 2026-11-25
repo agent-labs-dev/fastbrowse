@@ -1,4 +1,5 @@
 export { AbortError, FastbrowseError, ProcessExitedError, RpcError } from './errors.ts';
+export type { ConnectedBrowser, ExtensionInstall, ExtensionStatus, UnreachableHost } from './extension.ts';
 export { type CloseOptions, Fastbrowse, type StartOptions } from './fastbrowse.ts';
 export {
   type JsonSchema,

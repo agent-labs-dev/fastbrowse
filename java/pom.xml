@@ -10,7 +10,7 @@
   <packaging>jar</packaging>
 
   <name>fastbrowse</name>
-  <description>A browser agent that picks instead of generating: cited answers, structured output, and credentials and authorization held in code.</description>
+  <description>A browser agent that picks from the controls a page has: cited answers, structured output, and credentials and authorization held in code.</description>
   <url>https://github.com/agent-labs-dev/fastbrowse</url>
   <licenses>
     <license>

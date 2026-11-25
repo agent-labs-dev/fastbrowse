@@ -1,9 +1,10 @@
 # AGENTS.md
 
-A browser agent that **picks instead of generating**: every page is indexed into the controls it has, and
-[Jev](https://typesafe.ai), a choice model, picks one. An LLM plans, reads and writes prose. Jev also decides when a
-page is read and when the run is done. Code owns authorization gates, secret resolution and cost limits, and states
-what it knows to Jev instead of overruling it. The core is Rust in [crates/](crates); the Python package is a thin
+A browser agent driven by one LLM conversation: every page is indexed into the controls it has, and the LLM is
+shown them by number, with what its last actions did, and picks the actions to take. [Jev](https://typesafe.ai), a
+choice model, answers the questions code gates on, such as whether a click is irreversible and whether the task
+asked for it. Code owns authorization gates, quote checks, secret resolution and cost limits, and states what it
+knows to the LLM instead of overruling it. The core is Rust in [crates/](crates); the Python package is a thin
 layer over it, so a behaviour change lands in the crates.
 
 ## Verify
@@ -24,12 +25,13 @@ A reviewer rejects a change that breaks one.
 
 - **No eval tuning.** Never special-case a benchmark task, site, page wording, selector or known answer in product
   code, prompts, Jev questions, defaults or the harness ("if Google Flights says reload, then wait" is forbidden).
-  Fix the general cause: state the facts to Jev and let it decide. Tests and eval fixtures may name sites. A
+  Fix the general cause: state the facts to the model and let it decide. Tests and eval fixtures may name sites. A
   transient site problem (error page, 5xx, 429, maintenance, endless loading, a network error the agent did not
   cause) is an environment interruption: retry it in general ways; the harness judges it not an agent failure.
-- **Jev decides.** Steps, reads and completion move toward Jev, never away; the LLM is the fallback for what Jev
-  cannot be asked. When Jev picks wrong, give it the fact it lacked. A code gate that overrules Jev is deleted, not
-  stacked with another.
+- **The LLM drives, Jev judges what code gates on.** Steps and completion are the driver's: one conversation that
+  sees each page and what its actions did. Jev answers the closed questions a code gate needs (authorization, a
+  per-item count), never the next step. When the driver acts wrong, give it the fact it lacked. A code gate that
+  overrules the driver is deleted, not stacked with another; a gate that refuses states its rule to the driver.
 - **Fix the producer.** Fix a wrong answer where the wrong value is first made (the capture that left text out, the
   request that misled a model, the schema that made it commit early). Read what the model was given and replay
   that request to prove the cause first. A retry hoping for a different answer, a downstream symptom check, or a
@@ -80,11 +82,11 @@ A reviewer rejects a change that breaks one.
   Masking covers an address with a scheme, read to its last `@`, in each form [docs/design.md](docs/design.md) lists;
   its limits are listed there.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code refuses an
-  irreversible one unless the run is authorized and Jev judges the task asked for it. Only code-selected pagination
-  skips classification.
+  irreversible one unless the run is authorized and Jev judges the task asked for it, and tells the driver why. Only
+  code-selected pagination skips classification.
 - **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE, a return to a seen page
   state with nothing read since, and any return after the first since the last new evidence are each no progress;
-  `unchanged_actions` of them in a row ask Jev again without the stalled action. An unseen page state or new evidence
+  `unchanged_actions` of them in a row tell the driver so it plans another way. An unseen page state or new evidence
   renews that budget. Rewriting a field's current value never counts as progress. A run sends at most three rejected drafts back to gather, progress or not.
 
 ## Prompts and models

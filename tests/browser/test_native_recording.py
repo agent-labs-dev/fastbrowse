@@ -3,16 +3,17 @@ in the page goes on as it would without it, and the final frame reaches the call
 
 import asyncio
 import shutil
-from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from pydantic import JsonValue
+from pydantic import BaseModel
 
 from fastbrowse import run_task
 from fastbrowse.config import Config
-from fastbrowse.jev import Evaluation, Question
-from fastbrowse.models import RecordingError, Status
+from fastbrowse.llm import Generation, Message
+from fastbrowse.models import LLMPurpose, RecordingError, Status
+from fastbrowse.telemetry import Ledger
 from tests.scripted import ScriptedJev, ScriptedLLM, steps
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="recording needs ffmpeg")
@@ -89,17 +90,17 @@ async def test_a_run_cancelled_during_the_result_card_still_writes_both_videos(
     tmp_path: Path,
 ) -> None:
     finished = asyncio.Event()
-    jev = ScriptedJev(steps(""))
-    evaluate = jev.evaluate
 
-    async def judged(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-        # The plan requires nothing, so the done check asks Jev nothing and the step that chose done is the run's
-        # last question; the card is shown right after it.
-        if "operation" in questions:
-            finished.set()
-        return await evaluate(state, questions)
+    class Driver(ScriptedLLM):
+        async def generate[T: BaseModel](
+            self, purpose: LLMPurpose, messages: Sequence[Message], schema: type[T], *, ledger: Ledger | None = None
+        ) -> Generation[T]:
+            # The plan requires nothing, so the done check asks Jev nothing and the driver's turn that calls done is
+            # the run's last question; the card is shown right after it.
+            if purpose is LLMPurpose.ACTION:
+                finished.set()
+            return await super().generate(purpose, messages, schema, ledger=ledger)
 
-    jev.evaluate = judged
     record = tmp_path / "run.mp4"
     run = asyncio.create_task(
         run_task(
@@ -107,8 +108,8 @@ async def test_a_run_cancelled_during_the_result_card_still_writes_both_videos(
             start=f"{main_site}/dispatch.html",
             cdp_url=cdp_url,
             record=record,
-            jev=jev,
-            llm=ScriptedLLM(),
+            jev=ScriptedJev(steps("")),
+            llm=Driver(),
         )
     )
     await asyncio.wait_for(finished.wait(), 60)

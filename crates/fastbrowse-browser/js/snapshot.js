@@ -12,9 +12,15 @@
   // The run's own cursor (cursor.js) goes into the page and out again around actions and screenshots. That is the run
   // drawing, not the page changing, so its host's records are left out of every observer below.
   const cursorHost = node => node.nodeType === Node.ELEMENT_NODE && node.hasAttribute('data-fastbrowse-cursor');
+  // An attribute written with the value it already held moves nothing: `attributeOldValue` lets a record say so.
+  const rewritten = r =>
+    r.type === 'attributes' && r.oldValue !== null && r.oldValue === r.target.getAttributeNS(r.attributeNamespace, r.attributeName);
   const pageRecords = records =>
     records.filter(
-      r => !cursorHost(r.target) && !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(cursorHost)),
+      r =>
+        !cursorHost(r.target) &&
+        !rewritten(r) &&
+        !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(cursorHost)),
     );
   const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
   // Whether `read`, this document's `getEventListeners` (`listeners` below), finds a listener for one of `types` on `e`.
@@ -89,8 +95,21 @@
         return [style.writingMode, style.direction, style.display,
           style.display.includes('flex') ? style.flexDirection : null, style.overflowX, style.overflowY];
       }
+      // Both pseudo-elements in one fact: one cache entry and one recorded input per element instead of two. Their
+      // other properties matter only when `content` draws a string, so a pseudo-element without one reads no more.
+      case 'pseudo': {
+        const view = target.ownerDocument.defaultView;
+        return ['::before', '::after'].flatMap(pseudo => {
+          const style = view.getComputedStyle(target, pseudo);
+          const content = style.content;
+          return content === 'none' || content === 'normal'
+            ? [null, null, content, null, null]
+            : [style.display, style.visibility, content, style.marginInlineStart, style.marginInlineEnd];
+        });
+      }
       case 'text': return target?.innerText;
       case 'query': return target.querySelectorAll(args);
+      case 'stack': return target.elementsFromPoint(args[0], args[1]);
       case 'state': return target.matches(args);
       case 'active': return target.activeElement;
       case 'selected': return [...target.selectedOptions];
@@ -101,7 +120,7 @@
   const renderValue = (kind, value) =>
     kind === 'box' || kind === 'textBox'
       ? [value.x, value.y, value.width, value.height, value.left, value.top, value.right, value.bottom]
-      : kind === 'query' ? [...value] : value;
+      : kind === 'query' || kind === 'stack' ? [...value] : value;
   const sameRenderValue = (left, right) =>
     Array.isArray(left) ? Array.isArray(right) && left.length === right.length &&
       left.every((value, i) => Object.is(value, right[i])) : Object.is(left, right);
@@ -110,7 +129,7 @@
     if (kind === 'box' || kind === 'textBox')
       return boxFields.every(
         (field, i) => Object.is(value[i], current[field]));
-    if (kind === 'query') return value.length === current.length && value.every((node, i) => node === current[i]);
+    if (kind === 'query' || kind === 'stack') return value.length === current.length && value.every((node, i) => node === current[i]);
     return sameRenderValue(value, current);
   };
   const renderFact = (kind, target, args = null) => {
@@ -367,8 +386,16 @@
     registry.observeRoot = root => {
       if (observed.has(root)) return;
       observed.add(root);
-      new MutationObserver(records => pageRecords(records).length && bumped()).observe(root, { subtree: true, characterData: true, childList: true, attributes: true });
+      new MutationObserver(records => {
+        records = pageRecords(records);
+        if (!records.length) return;
+        bumped();
+        // A same-origin iframe moves the page as the top document does: the settle and the changed text below watch the
+        // top document only, so its frames report here.
+        if (root !== document) registry.moved?.(records);
+      }).observe(root, { subtree: true, characterData: true, childList: true, attributes: true, attributeOldValue: true });
       const target = root.nodeType === Node.DOCUMENT_NODE ? root.defaultView : root;
+      if (root.nodeType === Node.DOCUMENT_NODE && root !== document) registry.listenInput?.(target);
       // Passive, as Chrome makes a wheel listener only on a window, document or body: one on a shadow root would hold
       // every scroll inside it to the main thread.
       for (const type of events) target.addEventListener(type, bumped, { capture: true, passive: true });
@@ -523,15 +550,17 @@
       registry.lastInput = performance.now();
     };
     // Chrome can deliver release in a later task than press, after the press's input turn has ended.
-    for (const type of [
-      'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick',
-      'keydown', 'keyup', 'keypress', 'submit', 'input', 'change', 'wheel', 'scroll',
-    ]) {
-      addEventListener(type, input, true);
-    }
-    new MutationObserver(records => {
-      records = pageRecords(records);
-      if (!records.length) return;
+    // A frame's window hears its own events, so each same-origin child document asks for the same listeners.
+    registry.listenInput = target => {
+      for (const type of [
+        'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick',
+        'keydown', 'keyup', 'keypress', 'submit', 'input', 'change', 'wheel', 'scroll',
+      ]) {
+        target.addEventListener(type, input, true);
+      }
+    };
+    registry.listenInput(window);
+    registry.moved = records => {
       registry.lastMutation = performance.now();
       for (const r of records) {
         // An attribute change moves the page but rewrites no text, so it stamps the clock above and is not a changed
@@ -542,7 +571,11 @@
         const element = r.type === 'characterData' ? r.target.parentElement : r.target;
         if (textOnly && element) registry.changed.add(element);
       }
-    }).observe(document, { subtree: true, characterData: true, childList: true, attributes: true });
+    };
+    new MutationObserver(records => {
+      records = pageRecords(records);
+      if (records.length) registry.moved(records);
+    }).observe(document, { subtree: true, characterData: true, childList: true, attributes: true, attributeOldValue: true });
   }
   if (mode !== 'glance') {
     if (registry.quiet) for (const e of registry.changed) registry.selfUpdating.add(e);
@@ -597,6 +630,14 @@
               e.getAttribute('aria-selected'),
             ]),
           );
+        // A fill whose only visible effect is enabling Save changed the page: a Wait that ignored it waited out its
+        // whole budget for a change that had already happened (#1415). Only the effective state counts: an absent
+        // aria-disabled and "false" both mean enabled, and a page that adds the "false" as it hydrates changed nothing.
+        if (
+          (e.matches('button,input,select,textarea,fieldset') || e.getAttribute('aria-disabled') === 'true') &&
+          e.checkVisibility({checkVisibilityCSS: true})
+        )
+          hashText(JSON.stringify([e.matches(':disabled'), e.getAttribute('aria-disabled') === 'true']));
         // A role key can change only the widget's announced value, without editing text or an input field.
         if (
           (e.matches('input[type="range"],input[type="number"]') || ['slider', 'spinbutton'].includes(e.getAttribute('role'))) &&
@@ -925,7 +966,7 @@
       return false;
     if (!choice) return true;
     const r = boxOf(e);
-    return r.width > 0 && r.height > 0 && !e.matches(':disabled') && !e.closest('[aria-disabled="true"]');
+    return r.width > 0 && r.height > 0;
   });
   registry.visible = visible;
   // Styled checkboxes and radios often hide the native input. Its visible label is the click
@@ -1088,6 +1129,74 @@
     return labels;
   };
   const referencedNode = (root, id) => root.getElementById ? root.getElementById(id) : document.getElementById(id);
+  // An image's alt text and the words beside it often say the same thing: a card holds a picture whose alt is its title
+  // and a span showing that title. Accname would name the card with both, so every label read "Test image Test image"
+  // (#1457). The alt text only stands in for the picture, so it is left out when a sibling already shows it.
+  const namedByContent = (e, seen) => {
+    const flat = text => text.replace(/\s+/g, ' ').trim();
+    // A picture may sit in a wrapper (<picture>, a thumbnail span): the wrapper counts as the picture when it holds
+    // an image and no words of its own. A <source> beside the <img> in a <picture> shows nothing itself.
+    const isPicture = n =>
+      n.nodeType === 1 &&
+      (n.tagName === 'IMG' ||
+        (n.children.length > 0 &&
+          [...n.childNodes].every(
+            c => (c.nodeType === 3 ? !c.textContent.trim() : c.nodeType !== 1 || c.tagName === 'SOURCE' || isPicture(c)),
+          )));
+    // A wrapper that is named only by its content ("<span><span>Test image</span><span>New</span></span>") is read
+    // through, so each picture and each run of words keeps what it is: flattening the wrapper to one string lost
+    // which part was the picture's alt and left the title doubled beside a badge.
+    const namedByOwnContent = n =>
+      !n.getAttribute('aria-labelledby') &&
+      !n.getAttribute('aria-label') &&
+      !n.hasAttribute('alt') &&
+      !labelsFor(n).length &&
+      !['button', 'submit', 'reset'].includes(nativeProperty(n, 'type')) &&
+      !['INPUT', 'SELECT', 'TEXTAREA'].includes(n.tagName) &&
+      !FIELD_CONTAINERS.has(n.getAttribute('role'));
+    const contentParts = parent =>
+      [...parent.childNodes].flatMap(n => {
+        if (n.nodeType === 3) return [{ image: false, text: n.textContent }];
+        if (n.nodeType !== 1 || CODE.has(n.tagName) || n.getAttribute('aria-hidden') === 'true') return [];
+        if (!shown(n) && shown(parent)) return [];
+        // A wrapper of several images is read through, so each image stays its own part and drops its own repeated title.
+        if (isPicture(n) && (n.tagName === 'IMG' || n.querySelectorAll('img').length <= 1))
+          return [{ image: true, text: labelFrom(n, seen) }];
+        if (!seen.has(n) && namedByOwnContent(n)) {
+          seen.add(n);
+          nameReads?.nodes.add(n);
+          const inner = contentParts(n);
+          return inner.some(part => part.text.trim())
+            ? inner
+            : [{ image: false, text: n.getAttribute('title') || '' }];
+        }
+        return [{ image: false, text: labelFrom(n, seen) }];
+      });
+    const parts = contentParts(e);
+    const words = parts.filter(part => !part.image).map(part => part.text);
+    // Words split across inline nodes ("Test <b>image</b>") repeat the alt as a whole.
+    // A badge or status beside the title must not hide it, so any run of adjacent texts may match. A run is grown only
+    // while it is still the start of the alt: building every run made strings quadratic in the node count, and a
+    // control named by 1,000 spans exhausted the renderer's heap.
+    const shownBeside = alt => {
+      const target = flat(alt);
+      if (!target) return false;
+      for (let i = 0; i < words.length; i++) {
+        let run = '';
+        for (let j = i; j < words.length; j++) {
+          run = flat(`${run} ${words[j]}`);
+          if (run === target) return true;
+          if (!target.startsWith(run)) break;
+        }
+      }
+      return false;
+    };
+    return parts
+      .filter(part => !part.image || !shownBeside(part.text))
+      .map(part => part.text)
+      .join(' ')
+      .trim();
+  };
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -1122,19 +1231,7 @@
       // the gate read that text as what a click on the field would do (#885).
       (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName) || FIELD_CONTAINERS.has(e.getAttribute('role'))
         ? ''
-        : [...e.childNodes]
-            .map(n =>
-              n.nodeType === 3
-                ? n.textContent
-                : n.nodeType === 1 &&
-                    !CODE.has(n.tagName) &&
-                    n.getAttribute('aria-hidden') !== 'true' &&
-                    (shown(n) || !shown(e))
-                  ? labelFrom(n, seen)
-                  : '',
-            )
-            .join(' ')
-            .trim()) ||
+        : namedByContent(e, seen)) ||
       e.getAttribute('title') ||
       e.getAttribute('placeholder') ||
       ''
@@ -1266,7 +1363,9 @@
     return pressable(e) ? 'button' : null;
   };
 
-  const submitSemantics = memo(e => {
+  // What submitting from a control sends, and whether its submit control is disabled now. A disabled submit sends
+  // nothing, but it is the same submit once enabled: the pairing key reads the semantics apart from that state.
+  const submitFacts = memo(e => {
     const form = e.form;
     const explicit = ['BUTTON', 'INPUT'].includes(e.tagName) && ['submit', 'image'].includes(nativeProperty(e, 'type'));
     const implicit = [
@@ -1287,20 +1386,25 @@
     const submit = explicit ? e : [...form.getRootNode().querySelectorAll('button,input')].find(
       c => c.form === form && (nativeProperty(c, 'type') === 'submit' || nativeProperty(c, 'type') === 'image'),
     );
-    if (submit?.matches(':disabled')) return null;
+    const disabled = !!submit?.matches(':disabled');
     if (!submit && [...form.elements].filter(c => c.tagName === 'INPUT' && implicit.includes(nativeProperty(c, 'type'))).length > 1)
       return null;
     // A page can make any of these properties return something other than text. Coursera's React app left an
     // HTMLInputElement where a method string belongs and `JSON.stringify` threw on React's circular fiber, which ended
     // the run as a browser error; a value that is not text is no more use to a caller than none.
     const shown = v => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
-    return JSON.stringify({
+    const semantics = JSON.stringify({
       label: shown(submit ? labelOf(submit) : labelOf(form)),
       method: shown(submit?.getAttribute('formmethod') || form.method),
       action: shown(submit?.getAttribute('formaction') || form.action),
       text: shown(innerTextOf(form)),
     });
+    return { disabled, semantics };
   });
+  const submitSemantics = e => {
+    const facts = submitFacts(e);
+    return facts && !facts.disabled ? facts.semantics : null;
+  };
 
   const framePath = doc => {
     if (doc === document) return null;
@@ -1360,7 +1464,10 @@
       e.getAttribute('aria-label'), e.getAttribute('aria-labelledby'), e.getAttribute('title'),
       e.ownerDocument.location.origin, e.ownerDocument.defaultView.performance.timeOrigin, identity(e)];
     const source = sourceOf(e);
-    if (source !== e && (source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))) return null;
+    // A redraw that disables or enables a label's field is still the same control, so the pairing key skips the
+    // field's disabled state; the live guard still refuses it.
+    const sourceDisabled = () => source.matches(':disabled') || !!source.closest('[aria-disabled="true"]');
+    if (source !== e && (source.closest('[inert]') || (!stable && sourceDisabled()))) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
     const own = value => (stable ? null : value);
     // An absent aria-disabled and "false" both mean enabled. Google Flights adds the "false" as it hydrates, and
@@ -1373,8 +1480,11 @@
       own(nativeProperty(source, 'checked') ?? null),
       own(chosen(e)),
       nativeProperty(e, 'readOnly') ?? null,
-      e.matches(':disabled'),
-      e.getAttribute('aria-disabled') === 'true',
+      // Disabling or enabling is the control's own state: a redraw that also enabled Save left it unpaired, so the
+      // change was reported as one Save removed and another shown. A container's aria-disabled disables it as its
+      // own does, as the capture reads it.
+      own(e.matches(':disabled')),
+      own(!!e.closest('[aria-disabled="true"]')),
       own(e.getAttribute('aria-expanded')),
       own(e.getAttribute('aria-checked')),
       own(e.getAttribute('aria-pressed')),
@@ -1383,7 +1493,8 @@
       scope ? scopeDigest(scope) : '',
       e.ownerDocument.location.origin,
       e.ownerDocument.defaultView.performance.timeOrigin,
-      submitSemantics(e),
+      // A redraw that replaced and enabled Save changed what it submits from nothing to the form, and left it unpaired.
+      stable ? (submitFacts(e)?.semantics ?? null) : submitSemantics(e),
       source.getAttribute('name'),
       source.getAttribute('autocomplete'),
       identity(source),
@@ -1420,13 +1531,13 @@
     return null;
   };
   for (const e of walk(document)) {
-    if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) continue;
+    if (!safe(e) || !visible(e) || e.closest('[inert]')) continue;
     const source = sourceOf(e);
-    if (
-      source !== e &&
-      (visible(source) || source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))
-    )
-      continue;
+    if (source !== e && (visible(source) || source.closest('[inert]'))) continue;
+    // A disabled control stays in the observation, marked and offered nothing: left out, a Save the page keeps
+    // disabled after a fill read the same as a page with no Save, and a run on the CurseForge description editor ended
+    // stuck without knowing its edit had not taken (#1415).
+    const disabled = [e, source].some(n => n.matches(':disabled') || !!n.closest('[aria-disabled="true"]'));
     const r = boxOf(e),
       x = r.x + r.width / 2,
       y = r.y + r.height / 2,
@@ -1548,11 +1659,13 @@
       base.operations = ['upload'];
       base.value = null;
     } else {
-      const editable =
-        !nativeProperty(e, 'readOnly') &&
-        e.getAttribute('aria-readonly') !== 'true' &&
-        (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
-          (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
+      const fieldRole = ['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
+        (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName));
+      const readOnly = !!nativeProperty(e, 'readOnly') || e.getAttribute('aria-readonly') === 'true';
+      const editable = !readOnly && fieldRole;
+      // A readonly field still takes a click (a datepicker opens on it) but fill is refused: say so, since the
+      // click operation alone reads as an ordinary button.
+      if (readOnly && fieldRole) base.read_only = true;
       // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
       // A scripted value control announces its current value instead of exposing a field's value property.
       const announced = ['slider', 'spinbutton'].includes(rname)
@@ -1562,7 +1675,7 @@
       // Only an element that names itself draggable, a drawn surface to draw on, or one the page gives a grab cursor
       // is offered as a drag source: `draggable` reports true for every <a> and <img> by default, which would offer
       // the whole page as draggable. A custom widget names itself with an `aria-roledescription` (a sortable card,
-      // which its pointer sensor also takes by drag), as a press is offered it; Jev reads the description and decides
+      // which its pointer sensor also takes by drag), as a press is offered it; the driver reads the description and decides
       // whether to drag or press.
       if (e.getAttribute('draggable') === 'true' || base.drawn || draggedByPointer(e) ||
           e.hasAttribute('aria-roledescription')) base.operations.push('drag');
@@ -1576,6 +1689,13 @@
         !activation && !['textbox', 'searchbox'].includes(rname) &&
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
       base.operations.push('press');
+    // A disabled next link is no next page, as the HTTP reader has it: GitHub's last issue page keeps one pointing past
+    // the end.
+    if (disabled) {
+      base.disabled = true;
+      base.operations = [];
+      delete base.next_page;
+    }
     controls.push(base);
   }
 
@@ -1661,7 +1781,13 @@
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    return firstLine(linesOf(scope, element, label, own).join('\n'));
+    // A line kept though other controls share it, as a commenter's name link is under each of their comments, does
+    // not name the card alone: an "Edit" link in one card of several would name that card "Edit" and drop the
+    // product it edits. The card's lines run on to its first one no control shares, so "Edit" and "Delete" links
+    // ahead of a product's name keep it beside them.
+    const lines = linesOf(scope, element, label, own);
+    const named = lines.findIndex(line => !repeated.has(line));
+    return (named < 0 ? lines.slice(0, 2) : lines.slice(0, named + 1)).join(' / ');
   };
   // The lines of `scope` that can name `element`, in reading order.
   const linesOf = (scope, element, label, own = null) => {
@@ -1834,12 +1960,16 @@
   // from assistive technology is decoration, not a picture: GitHub's license badge (a law icon beside
   // "BSD-3-Clause") was offered as a hover target on every repository card, and the run hovered one instead of
   // opening the repository. Only the outermost such card is offered.
-  const holding = new Set();
-  for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
   // Looked up per hovered card: a scan of every control for each card was quadratic on a long feed.
   for (const c of controls) {
     const element = registry.nodes.get(c.id);
     if (!controlByElement.has(element)) controlByElement.set(element, c);
+  }
+  // A disabled control is listed but offers nothing, so a card holding only one still has nothing to act on.
+  const holding = new Set();
+  for (const e of offered) {
+    if (controlByElement.get(e)?.disabled) continue;
+    for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
   }
   for (const doc of docs) {
     let host = null;
@@ -1850,7 +1980,8 @@
         // gains Hover beside Click, as one choice rather than a second control for the same element.
         if (hoverListened(e)) {
           const own = controlByElement.get(e);
-          if (own && !own.operations.includes('hover')) own.operations.push('hover');
+          // A disabled control offers nothing, Hover included.
+          if (own && !own.disabled && !own.operations.includes('hover')) own.operations.push('hover');
         }
         continue;
       }
@@ -2060,10 +2191,46 @@
   // is attached here on its own, without the twin-avoidance `contextOf` needs to keep a card from naming its neighbour.
   // Each ancestor is asked only for titles outside the one below it, whose own were already turned down; a title
   // inside the control is its own content, never the section it sits in.
+  // A comments section's own "Comment text area" sits before the list of comments and inside none of them, yet got
+  // only the section's heading, the same context every comment's own Reply has, so a task to reply to one comment
+  // filled the page's new-comment box (#1476). The DOM states whether a control is in a record: a record is what
+  // `scopeOf` already stops at (an article or list item), and a section lists records when at least two hold a control.
+  // A record also holds text of its own beside its controls: an editor's toolbar is a list whose items each hold one
+  // button and nothing else, and counted as records it named the editor's Save "outside every item listed".
+  const RECORD = 'article,li,[role="listitem"]';
+  // Built on first use: most captures name every control without asking whether a section lists records.
+  let controlNodes = null;
+  let recordsHoldingControls = null;
+  const holdingControls = record => {
+    if (!recordsHoldingControls) {
+      controlNodes = new Set(controls.map(c => registry.nodes.get(c.id)));
+      recordsHoldingControls = new Set();
+      for (const e of controlNodes) for (let r = e?.closest(RECORD); r; r = r.parentElement?.closest(RECORD)) recordsHoldingControls.add(r);
+    }
+    return recordsHoldingControls.has(record);
+  };
+  const holdsOwnText = memo(record => {
+    const texts = record.ownerDocument.createTreeWalker(record, NodeFilter.SHOW_TEXT);
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      if (!node.data.trim()) continue;
+      let inControl = false;
+      for (let e = node.parentElement; e && !inControl; e = e === record ? null : e.parentElement) inControl = controlNodes.has(e);
+      if (!inControl) return true;
+    }
+    return false;
+  });
+  const recordCount = memo(section =>
+    [...descendants(section, RECORD)].filter(r => holdingControls(r) && holdsOwnText(r)).length);
+  const listsRecordsOutside = (section, element) => {
+    if (recordCount(section) < 2) return false;
+    for (let e = element; e && e !== section; e = e.parentElement) if (e.matches(RECORD)) return false;
+    return true;
+  };
+  // The section's name, and whether the control sits outside every record the section lists.
   const nearestHeading = (element, label) => {
     for (let inner = element, e = element.parentElement; e && e !== e.ownerDocument.body; inner = e, e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
-      if (aria && aria !== label) return aria;
+      if (aria && aria !== label) return { name: aria, outside: listsRecordsOutside(e, element) };
       let first = '',
         before = '';
       for (const title of openTitles(e)) {
@@ -2073,15 +2240,19 @@
         first ||= text;
         if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
       }
-      if (before || first) return before || first;
+      const name = before || first;
+      if (name) return { name, outside: listsRecordsOutside(e, element) };
     }
-    return '';
+    return { name: '' };
   };
+  // A twin already has a context that tells it from its twins, but a reply editor opening beside the page's own box
+  // made both labels twins and the box lost the note that it sits outside the comments, so it keeps that note too.
   for (const c of controls) {
-    if (!c.context) {
-      const context = nearestHeading(registry.nodes.get(c.id), c.label);
-      if (context) c.context = context;
-    }
+    const { name, outside } = nearestHeading(registry.nodes.get(c.id), c.label);
+    if (!name) continue;
+    const note = outside ? `${name}, outside every item listed under ${name}` : name;
+    if (!c.context) c.context = note;
+    else if (outside) c.context = `${note} / ${c.context}`;
   }
 
   // Flattened text loses empty cells: a calendar day then has no weekday, and the chooser picked a Tuesday
@@ -2148,6 +2319,39 @@
     const orientation = e?.getAttribute('aria-orientation') ?? owner?.getAttribute('aria-orientation');
     if (orientation === 'vertical' || orientation === 'horizontal')
       c.context = [c.context, `orientation: ${orientation}`].filter(Boolean).join('; ');
+  }
+
+  // A popup a page appends to <body> (a datepicker, a menu, a combobox's list) is drawn beside the control that opened
+  // it but comes last in reading order, under whatever section ends the page: a driver read a datepicker popup's
+  // December as the inline calendar's below it (#1538). A layer is an element taken out of flow (absolute or fixed),
+  // positioned against the page rather than inside a component (a card's badge is positioned against its card), and
+  // drawn over something that is not its own ancestor, as a hit test at the centre of its visible part shows.
+  const drawnOver = e => {
+    const box = boxOf(e);
+    const view = e.ownerDocument.defaultView;
+    const left = Math.max(box.left, 0), right = Math.min(box.right, view.innerWidth);
+    const top = Math.max(box.top, 0), bottom = Math.min(box.bottom, view.innerHeight);
+    if (right <= left || bottom <= top) return false;
+    const stack = renderFact('stack', e.ownerDocument, [(left + right) / 2, (top + bottom) / 2]);
+    const own = stack.findIndex(hit => e.contains(hit));
+    return own >= 0 && stack.slice(own).some(hit => !e.contains(hit) && !hit.contains(e));
+  };
+  const layerOf = memo(e => {
+    if (!e || e === e.ownerDocument.body || e === e.ownerDocument.documentElement) return null;
+    const position = styleProperty(e, 'position');
+    if (position === 'absolute' || position === 'fixed') {
+      const against = nativeProperty(e, 'offsetParent');
+      if ((!against || against === e.ownerDocument.body || against === e.ownerDocument.documentElement) && drawnOver(e))
+        return e;
+    }
+    return layerOf(e.parentElement ?? e.getRootNode().host);
+  });
+  const layers = [];
+  for (const c of controls) {
+    const layer = layerOf(registry.nodes.get(c.id));
+    if (!layer) continue;
+    if (!layers.includes(layer)) layers.push(layer);
+    c.layer = layers.indexOf(layer) + 1;
   }
 
   // "First" and "last" are places in a list, which a label does not state. The page's own `aria-posinset` and
@@ -2343,32 +2547,163 @@
       read(inner, dx + f.left + left, dy + f.top + top);
     }
   };
+  // The box a text node's line is laid out in: the nearest ancestor that is not inline, as capture.js splits blocks.
+  // Text nodes in one box read as one line, the way the page shows them. One line per node showed React's split
+  // `Total: $` and `43.18` on two lines, a text no capture held, and every quote of saucedemo's total was refused.
+  const lineBox = memo(e => {
+    for (let at = e; at; at = at.parentElement) {
+      const display = styleProperty(at, 'display');
+      if (!(display.startsWith('inline') || display === 'contents')) return at;
+    }
+    return null;
+  });
+  // Spaces collapse across the nodes of a line too: a card's icon button between two gaps showed one space, not two.
+  const joined = (line, value) => (line.endsWith(' ') && value.startsWith(' ') ? line + value.slice(1) : line + value);
+  // CSS strings as capture.js reads them (its `cssStrings`), so the text the driver quotes is the text its quotes are
+  // checked against: Google Flights draws "JetBlue · Tap Air Portugal" with the dot as generated content, the capture
+  // held the dot and this text did not, and each quote of "JetBlueTap Air Portugal" was refused. Counters, images and
+  // other functions are not rendered strings; an empty alternative marks the content as decoration.
+  const cssStrings = content => {
+    const strings = /"((?:[^"\\]|\\.)*)"\s*/gy;
+    let value = '';
+    while (strings.lastIndex < content.length) {
+      const at = strings.lastIndex;
+      const match = strings.exec(content);
+      if (!match) {
+        if (content[at] === '/') return cssStrings(content.slice(at + 1).trim()) ? value : null;
+        const token = /[-\w]+/y;
+        token.lastIndex = at;
+        if (!token.exec(content)) return null;
+        let end = token.lastIndex;
+        if (content[end] === '(') {
+          let depth = 0;
+          let quote = '';
+          do {
+            const char = content[end++];
+            if (char === '\\') end++;
+            else if (quote) {
+              if (char === quote) quote = '';
+            } else if (char === '"' || char === "'") quote = char;
+            else if (char === '(') depth++;
+            else if (char === ')') depth--;
+          } while (end < content.length && (depth || quote));
+          if (depth || quote) return null;
+        }
+        while (/\s/.test(content[end] ?? '') && end < content.length) end++;
+        strings.lastIndex = end;
+        continue;
+      }
+      value += match[1].replace(/\\([\da-fA-F]{1,6}[ \t\r\n\f]?|.)/g, (_, escaped) => {
+        if (!/^[\da-fA-F]/.test(escaped)) return escaped;
+        const code = parseInt(escaped.trim(), 16);
+        return String.fromCodePoint(code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ? 0xfffd : code);
+      });
+    }
+    return value;
+  };
+  // An element's ::before and ::after text as capture.js's `generatedOf` reads it: a block one is a line of its own,
+  // an inline one keeps the gap its margins or its host's margins draw. An icon font's glyph is named elsewhere.
+  const generatedOf = memo(e => {
+    const read = ([display, visibility, content, start, end]) => {
+      if (display === 'none' || visibility !== 'visible') return '';
+      const value = cssStrings(content);
+      if (!value) return '';
+      if (!(display.startsWith('inline') || display === 'contents')) return {block: value};
+      return `${parseFloat(start) > 0 ? ' ' : ''}${value}${parseFloat(end) > 0 ? ' ' : ''}`;
+    };
+    // Most elements draw none, so the pseudo-elements are read before the host's own tests.
+    const facts = renderFact('pseudo', e);
+    const found = [read(facts.slice(0, 5)), read(facts.slice(5))];
+    if (!found.some(Boolean)) return ['', ''];
+    if (e.getAttribute('aria-hidden') === 'true' || [...e.classList].some(token => {
+      const glyph = ICON_CLASS.exec(token);
+      return glyph && !ICON_STYLE.test(glyph[1]);
+    })) return ['', ''];
+    // The generated text's host can carry the gap instead, on either side of what it holds.
+    if (typeof found[0] === 'string' && parseFloat(styleProperty(e, 'marginInlineStart')) > 0) found[0] = ` ${found[0]}`;
+    if (typeof found[1] === 'string' && parseFloat(styleProperty(e, 'marginInlineEnd')) > 0) found[1] += ' ';
+    return found;
+  });
   // Size, the cheapest test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    // The line being read: its list, its box and its place in the list. A <br> ends it.
+    let run = null;
+    // Generated text joins the line it is drawn in; a block of it is a line of its own in the list being read.
+    const generate = (value, element) => {
+      if (!value) return;
+      if (typeof value !== 'string') {
+        const r = boxOf(element);
+        const list = r.top + dy + r.height > 0 && r.top + dy < innerHeight ? words : offscreen;
+        list.push(value.block);
+        run = null;
+        return;
+      }
+      const box = lineBox(element);
+      if (run && run.box === box) {
+        run.list[run.at] = joined(run.list[run.at], value);
+        return;
+      }
+      const r = boxOf(element);
+      const list = r.top + dy + r.height > 0 && r.top + dy < innerHeight && r.left + dx + r.width > 0 &&
+        r.left + dx < innerWidth ? words : offscreen;
+      run = {list, box, at: list.push(value) - 1};
+    };
+    // The ::after text of the elements the walk is inside, written once the walk leaves each one.
+    const after = [];
+    const leave = node => {
+      while (after.length && !after.at(-1)[0].contains(node)) {
+        const [element, value] = after.pop();
+        generate(value, element);
+      }
+    };
     let node;
     while ((node = walker.nextNode())) {
-      const value = node.textContent.trim(),
+      leave(node);
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.tagName === 'BR') run = null;
+        if (!CODE.has(node.tagName)) {
+          const [before, end] = generatedOf(node);
+          // Visibility is the dearer test, so only an element that draws generated text asks it.
+          if ((before || end) && visible(node)) {
+            generate(before, node);
+            if (end) after.push([node, end]);
+          }
+        }
+        continue;
+      }
+      // Whitespace collapses as CSS lays out normal text: a gap between two inline nodes is one space of the line.
+      // Visible text is read whole on every observe, as it always was; the context lines' cache counts its own
+      // `replace` normalizations of unchanged text, so this pass does not go through `replace`.
+      const value = node.textContent.split(/\s+/).join(' '),
         parent = node.parentElement;
-      if (!value || !parent) continue;
+      if (!parent) continue;
+      if (!value.trim()) {
+        if (run && lineBox(parent) === run.box) run.list[run.at] = joined(run.list[run.at], ' ');
+        continue;
+      }
       const r = textBoxOf(node);
       if (r.width <= 0 || r.height <= 0 || parent.closest('script,style,noscript,template') || !visible(parent)) {
         continue;
       }
       const top = r.top + dy,
         left = r.left + dx;
-      if (top + r.height > 0 && top < innerHeight && left + r.width > 0 && left < innerWidth) {
-        words.push(value);
+      const list =
+        top + r.height > 0 && top < innerHeight && left + r.width > 0 && left < innerWidth ? words : offscreen;
+      const box = lineBox(parent);
+      if (run && run.list === list && run.box === box) {
+        list[run.at] = joined(list[run.at], value);
       } else {
-        offscreen.push(value);
+        run = {list, box, at: list.push(value) - 1};
       }
     }
+    leave(null);
     readFrames(doc, dx, dy, readText);
   };
   readText(document, 0, 0);
-  const viewport_text = words.join('\n');
-  const offscreen_text = offscreen.join('\n');
+  const viewport_text = words.map(line => line.trim()).join('\n');
+  const offscreen_text = offscreen.map(line => line.trim()).join('\n');
 
   // Page state carried by pixels: a chart, a picture, a drawing or a video is evidence the page text and the
   // control list cannot hold, and the verifier needs the screenshot for it. Only what the viewport shows counts,
@@ -2581,6 +2916,15 @@
   };
   // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
   if (modal !== null) result.modal = modal;
+  // A JSON document is shown by its structure, as capture.js sends it to be read: shown Chrome's rendering of the
+  // served text, the driver quoted `"size": "large"` off httpbin's echo, and the check, which reads the document key by
+  // key, found no page that said it.
+  const type = document.contentType.toLowerCase();
+  const served = document.querySelector('body > pre');
+  if (served && (type === 'application/json' || (type.startsWith('application/') && type.endsWith('+json')))) {
+    result.content_type = document.contentType;
+    result.json_text = served.textContent;
+  }
   const previous = own.snapshots?.[mode];
   own.snapshots ||= {};
   own.snapshots[mode] = { read, document_key: result.document_key, controls: semantics, guards, retarget_keys };

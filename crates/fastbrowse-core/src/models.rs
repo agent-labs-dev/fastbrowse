@@ -25,9 +25,10 @@ pub const BACKGROUND: &str =
 
 str_enum! {
     pub enum Status {
-        /// Jev judged the task done and the caller's `until` check (if any) passed.
+        /// The finish checks accepted the result, and the caller's `until` check (if any) passed. The result is the
+        /// driver's `done`, or, for a read-only run that stopped stuck, the answer composed from what it read.
         Complete = "complete",
-        /// Jev finished, but code could not confirm the result: for example, an answer failed its check against
+        /// The run produced a result code could not confirm: for example, an answer failed its check against
         /// the page, part of a list the task covers went unread, or the site refused a requested step.
         Unverified = "unverified",
         /// Stopped before an irreversible action the caller has not authorized, having committed nothing.
@@ -128,9 +129,11 @@ impl Operation {
 }
 
 str_enum! {
-    /// Who chose a step: Jev, or a rule in code.
-    doc: "Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.";
+    /// Who chose a step: the model driving the run, a rule in code, or a saved recipe action. A run never writes `jev`,
+    /// which stays in the protocol for traces and SDKs that name it.
+    doc: "Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.";
     pub enum Decider {
+        Llm = "llm",
         Jev = "jev",
         Code = "code",
         Recipe = "recipe",
@@ -381,6 +384,7 @@ str_enum! {
     pub enum FactReader {
         JevChoice = "jev_choice",
         LlmImage = "llm_image",
+        LlmQuote = "llm_quote",
     }
 }
 
@@ -416,20 +420,20 @@ impl Schema for StepFact {
     }
 }
 
-/// One control Jev was offered on a step, so a run that picked the wrong element, or fell back to the LLM, shows whether
-/// the right one was there to pick.
+/// One control the driver was shown on a step, so a run that picked the wrong element shows whether the right one was
+/// there to pick.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepChoice {
     pub id: String,
     pub role: String,
-    /// The label as Jev read it, with resolved secrets masked.
+    /// The label as the driver read it, with resolved secrets masked.
     pub label: String,
-    /// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+    /// The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.
     #[serde(default)]
     pub context: Option<String>,
     pub operations: Vec<Operation>,
-    /// Whether Jev chose this control: the target, and for a drag the destination too.
+    /// Whether the driver acted on this control: the target, and for a drag the destination too.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub chosen: bool,
 }
@@ -441,13 +445,13 @@ impl Schema for StepChoice {
             vec![
                 Field::required("id", Ty::Str),
                 Field::required("role", Ty::Str),
-                Field::required("label", Ty::Str).doc("The label as Jev read it, with resolved secrets masked."),
+                Field::required("label", Ty::Str).doc("The label as the driver read it, with resolved secrets masked."),
                 Field::default("context", Ty::optional(Ty::Str), Value::Null).doc(
-                    "The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.",
+                    "The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.",
                 ),
                 Field::required("operations", Ty::list(Operation::ty())),
                 Field::default("chosen", Ty::Bool, Value::Bool(false))
-                    .doc("Whether Jev chose this control: the target, and for a drag the destination too."),
+                    .doc("Whether the driver acted on this control: the target, and for a drag the destination too."),
             ],
         )
         .ty()
@@ -533,7 +537,7 @@ str_enum! {
         Search = "search",
         Unobtainable = "unobtainable",
         Groups = "groups",
-        /// The next browser action, picked by the LLM in place of Jev (FASTBROWSE_ACTION_PICKER=llm).
+        /// A turn of the conversation that drives the browser: what the last actions did, and the next ones.
         Action = "action",
     }
 }
@@ -722,7 +726,7 @@ pub struct StepResult {
     pub page_changed: Option<bool>,
     #[serde(deserialize_with = "lax::int_ge0")]
     pub duration_ms: i64,
-    /// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+    /// The controls the driver was shown for this step's action, when `Config.step_choices` asked for them.
     // Left out of the output when empty, so a run that did not ask reports what it always has.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<StepChoice>,
@@ -749,7 +753,7 @@ impl Schema for StepResult {
                     .doc("Whether the page's fingerprint changed; None for steps that do not act (read)."),
                 Field::required("duration_ms", Ty::Int.ge(0)),
                 Field::default("choices", Ty::list(StepChoice::ty()), Value::Array(vec![])).omitted_when_empty().doc(
-                    "The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.",
+                    "The controls the driver was shown for this step's action, when `Config.step_choices` asked for them.",
                 ),
             ],
         )

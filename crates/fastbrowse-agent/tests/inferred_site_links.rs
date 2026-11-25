@@ -3,22 +3,24 @@
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::agent::{Agent, RunOptions};
-use fastbrowse_agent::scripted::{ScriptedJev, ScriptedLLM, steps};
+use fastbrowse_agent::scripted::{ScriptedDriver, ScriptedJev, steps};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{DecisionClient, DecisionError, DecisionProfile, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::telemetry::Ledger;
 
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, LLMPurpose, Limits, Operation, Status};
 use fastbrowse_core::page::Control;
-use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 #[path = "common/form_page.rs"]
 mod form_page;
 use form_page::FormPage;
 
-struct ChooseOpening;
+/// Proposes the preview as the opening page, and keeps each page the driver is shown.
+struct ChooseOpening {
+    driver: ScriptedDriver,
+    shown: Mutex<Vec<String>>,
+}
 
 impl LLMClient for ChooseOpening {
     fn generate_value<'a>(
@@ -28,35 +30,18 @@ impl LLMClient for ChooseOpening {
         schema: &'a dyn ResponseSchema,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        if purpose == LLMPurpose::Action
+            && let Some(last) = messages.last()
+        {
+            self.shown.lock().unwrap().push(last.content.clone());
+        }
         if purpose != LLMPurpose::Start {
-            return ScriptedLLM.generate_value(purpose, messages, schema, ledger);
+            return self.driver.generate_value(purpose, messages, schema, ledger);
         }
         Box::pin(async move {
             let data = schema.validate_json(r#"{"url":"https://preview.pages.dev/"}"#).map_err(LLMError::schema)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
-    }
-}
-
-struct ObserveQuestions {
-    inner: ScriptedJev,
-    states: Arc<Mutex<Vec<Value>>>,
-}
-
-impl DecisionClient for ObserveQuestions {
-    fn profile(&self) -> DecisionProfile {
-        self.inner.profile()
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        state: &'a Value,
-        questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        if questions.contains_key("operation") {
-            self.states.lock().unwrap().push(state.clone());
-        }
-        self.inner.evaluate(state, questions)
     }
 }
 
@@ -71,12 +56,12 @@ async fn an_agent_selected_opening_site_marks_its_external_links() {
         "captured_at": "2026-09-26T20:00:00Z", "controls": [external], "viewport_text": "Preview", "tabs": [],
     }))
     .unwrap();
-    let states = Arc::new(Mutex::new(Vec::new()));
-    let jev = ObserveQuestions { inner: ScriptedJev::new(steps("wait").unwrap()), states: states.clone() };
+    let llm =
+        Arc::new(ChooseOpening { driver: ScriptedDriver::new(steps("wait").unwrap()), shown: Mutex::new(Vec::new()) });
     let agent = Agent::new(
         Arc::new(FormPage { page: Mutex::new(page), confirms_post: false }),
-        Arc::new(jev),
-        Arc::new(ChooseOpening),
+        Arc::new(ScriptedJev::new(steps("wait").unwrap())),
+        llm.clone(),
     );
     let result = agent
         .run(
@@ -90,11 +75,11 @@ async fn an_agent_selected_opening_site_marks_its_external_links() {
         .await
         .unwrap();
     assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
-    let states = states.lock().unwrap();
-    assert!(!states.is_empty(), "the run asked for an action after opening the proposed page");
-    assert_eq!(
-        states[0]["elements"][0]["other_site"],
-        json!(true),
-        "the browser opened the preview for the task, so Store must be marked as leaving it"
+    let shown = llm.shown.lock().unwrap();
+    let first = shown.first().expect("the run asked for an action after opening the proposed page");
+    let store = first.lines().find(|line| line.contains("\"Store\"")).expect("Store is listed");
+    assert!(
+        store.contains("leads to another site"),
+        "the browser opened the preview for the task, so Store must be marked as leaving it: {store}"
     );
 }

@@ -13,7 +13,7 @@ what to do next. The full table is in [Results](cli.md#results).
 | [blocked](#blocked-exit-6) | 6 | a bot check or a refusal |
 | [budget_exceeded](#budget_exceeded-exit-7) | 7 | a limit you set was reached |
 | [unavailable](#unavailable-exit-8) | 8 | a model or browser provider stayed down |
-| [stuck](#stuck-exit-9) | 9 | Jev found no way forward |
+| [stuck](#stuck-exit-9) | 9 | the run found no way forward |
 | [unverified](#unverified-exit-10) | 10 | the requested data could not be filled from the page, nothing read answers a question the task asks, or the site refused a requested step |
 | [observation_limit](#observation_limit-exit-11) | 11 | the page does not fit the prompt budget |
 | [cancelled](#cancelled-exit-12) | 12 | you stopped an `--extension` run in your browser |
@@ -32,11 +32,12 @@ use the status to determine whether the task completed.
 
 `failure_kind` names the cause without quoting the page or the provider: for example
 `Jev.Failed/openrouter/verify/http-500` for a decision call the provider refused, `Budget/dollars` for the spend
-limit, or `Wall/sign-in` for a sign-in page. Group failures by it, and read `error` for the detail. See
+limit, or `Chat/give-up` for a run the driver ended itself, such as at a sign-in page. Group failures by it,
+and read `error` for the detail. See
 [Results](cli.md#results) for its parts.
 
-The causes below name Jev, the model that picks each action from the controls on the page; the LLM
-plans, reads and writes. See [Models](cli.md#models).
+The causes below name Jev, the model that judges what code gates on, such as authorization; the LLM
+drives the run, reports sign-in and bot walls through `give_up`, reads and writes. See [Models](cli.md#models).
 
 ## error (exit 1)
 
@@ -87,17 +88,15 @@ what you want, run again with authorization:
 
 **Common causes.**
 
-- Jev judged a fresh page to be a sign-in wall, and no secret is declared for that page's origin. The error is
-  `sign-in required at <origin>`. It names the fields the page asks for, and `a security key or passkey`
-  when the page marks a passkey field (`autocomplete="webauthn"`).
-- The run reached a field that takes a secret, such as a password, and none is stored. The error is
-  `'<field>' wants a secret and none is stored`.
-- The site answered HTTP 401 and Jev found no way on. The error is
+- The driver gave up as `needs_login` on a page that asks for a sign-in no secret covers. The failure kind is
+  `Chat/give-up` and the error is the driver's own reason. The result's `wall` names the origin and the fields the
+  page asks for, and a passkey field (`autocomplete="webauthn"`) is read as a passkey wall.
+- The site answered HTTP 401 and the driver found no way on. The error is
   `Could not complete the task after HTTP 401 at <url> in this browser session; the cause is unknown.`
 - A secret is declared, but for a different origin. A field is offered only the secrets declared for the
   origin of the frame it sits in, so this reads the same as no secret.
 - A secret is declared for the origin but resolves to nothing, such as a password manager item that changed
-  during the run. The error is `sign-in required at <origin>: secret <name> is not available there`.
+  during the run. The failure kind is `Secret/sign-in` and the error is `sign-in required at <origin>: secret <name> is not available there`.
 
 The CLI adds what to pass: `Pass --secret NAME=ENV_VAR@https://host with the password in that environment
 variable; credentials in task text are not used.` The result's `wall` field says what the wall asked for, so a
@@ -153,13 +152,10 @@ limit.
 
 **Common causes.**
 
-- A bot check, such as a CAPTCHA, that did not clear. The run waits while the page is still loading, or while
-  a Browser Use Cloud browser's CAPTCHA solver works on the check, up to the run's time limit. A load counts as
-  still loading for as long as a navigation is given, 225 s from its start. It stops at once
-  when nothing is working on the check or the solver gives up. The error is `bot check at <origin>; it is not a
-  sign-in and no credential passes it, and no other route to the task was found. Retry after the check clears
-  or choose another source for the task.`
-- The site answered HTTP 403 and Jev found no way on. The error is
+- A bot check, such as a CAPTCHA, that did not clear. While a Browser Use Cloud browser's CAPTCHA solver works on the
+  page, the driver is told so and can wait for it; it is told too when the solver gives up. A driver that finds no
+  other route to the task ends the run with `give_up`, and the error is the reason it gave.
+- The site answered HTTP 403 and the driver found no way on. The error is
   `Could not complete the task after HTTP 403 at <url>: the site refused this browser session, which may be an access or bot check or a sign-in it requires.`
 
 A bot check can block a cloud browser before any task step runs. Credentials do not pass a CAPTCHA, so
@@ -216,10 +212,10 @@ the task again.
   retryable status.
 - Before the first step, the start page never loaded, or Chrome reported a dropped, refused or empty
   connection. A name that does not resolve is not counted here, since it can be a mistyped address.
-- The site answered HTTP 408, 419, 429 or a 5xx status, and Jev found no way on.
+- The site answered HTTP 408, 419, 429 or a 5xx status, and the driver found no way on.
 - Mid-run, the browser could not open an address the run chose, after its own retries:
   `Could not complete the task after opening <url> failed in this browser session: <error>.`
-- Jev judged that the page reports the site failed, such as an error shown in place of search results, a
+- The driver judged that the page reports the site failed, such as an error shown in place of search results, a
   maintenance notice or a load that never finished, and reloading found no way past it:
   `Could not complete the task after the page at <url> reported that the site failed to deliver what was asked.`
 - A browser command went unanswered while the browser still answered health checks. A command to a page that
@@ -238,11 +234,12 @@ the task again.
 
 - Read `error` for the provider or address, then run the task again later.
 - For a deadline, set `Limits(max_seconds=...)` in the embedding API, or `--max-seconds` on the MCP server.
-  Step and dollar limits do not bound elapsed time. Without `max_seconds` a Wait waits for the page to change, with
-  no bound, so a run nobody watches, such as a benchmark or a scheduled job, should set one.
+  Step and dollar limits do not bound elapsed time. Each Wait lasts at most the seconds the driver asked for, but
+  without `max_seconds` nothing bounds the run itself, so a run nobody watches, such as a benchmark or a scheduled
+  job, should set one.
 - For a stalled run, read the trace its result names in `trace` (kept for any CLI or MCP run that ends short of
   `complete`), or write one with `--trace FILE` or `FASTBROWSE_TRACE=FILE`, and keep the last event with the
-  result. Each `decide_choices` event lists the controls a step was chosen from, the chosen one marked.
+  result. Each `driver_turn` event holds one driver turn: the model's account of what changed and the actions it named.
 
 ### An attached Chrome that waits for approval
 
@@ -330,11 +327,9 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
 
 **Common causes.**
 
-- Jev, told each time what failed, found no way forward before `max_recoveries` ran out.
+- The driver, told each time what failed, found no way forward before `max_recoveries` ran out.
 - The task says to change nothing, so the run cannot type into fields, pick options or tick boxes. A run
   that needs a value entered must not forbid edits. Typing a search is still allowed.
-- The run chose to open an address that neither the task nor `--start` supplied:
-  `navigation address was not supplied by the caller`.
 - The page does not exist: `Could not complete the task after HTTP 404 at <url>: the page does not exist.`, or
   the same with HTTP 410. When the address the run started at answers this, a run that leaves it and stalls on
   another page still ends with this error. Check the address, or whether the page is public yet.
@@ -348,11 +343,10 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
 **Next step.**
 
 - Try a `--start` URL closer to the goal, or a narrower task.
-- Name any address the run needs in the task or in `--start`.
 - On a drawn page, fastbrowse reads the DOM first, so it has two limits: a control that exists only in the
   pixels has no element to act on, and text that exists only in the pixels is not in the page text it quotes.
-  The screenshot is the fallback for reading. When Jev's route accepts images, each step on a drawn page sends
-  Jev the viewport, and before the run answers or gives up, the LLM reads the screenshot for text that answers
+  The screenshot is the fallback for reading. When Jev's route accepts images, the check that the task's steps were carried out
+  sends Jev the viewport of a drawn page, and before the run answers or gives up, the LLM reads the screenshot for text that answers
   the task, cited as read from the image. A drawn control still cannot be clicked, so start from a page of the
   site that offers the same action as an HTML control.
 - Open an issue with the task, the start page, the status and the `--json` step trace, as
@@ -360,13 +354,13 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
 
 ## unverified (exit 10)
 
-**What it means.** Jev finished, but the data the run was asked for could not be filled from the page, nothing read
+**What it means.** The run ended with done, but the data the run was asked for could not be filled from the page, nothing read
 answers what the task asks, or a step the task asks for was not carried out because the site does not allow it. Treat the result as unconfirmed.
 
 **Common causes.**
 
 - A field of the requested data was not backed by the page.
-- The task asks to be told something and nothing the run read answers it. Jev's DONE is refused first, so the run
+- The task asks to be told something and nothing the run read answers it. The driver's done is refused first, so the run
   goes back to read; when it still finds no answer it ends here, and the error says nothing read so far answers the
   task.
 - The output schema has a field the run cannot fill. A run fills a flat object of required string, number,
@@ -383,17 +377,18 @@ answers what the task asks, or a step the task asks for was not carried out beca
 
 ## observation_limit (exit 11)
 
-**What it means.** The page cannot fit the configured prompt budget.
+**What it means.** The page cannot fit a model's prompt budget.
 
 **Common causes.**
 
-- A page whose state exceeds Jev's input limits even with no controls offered:
-  `the state on <url> exceeds Jev's input limits with no controls`.
+- The page in view is longer than the driver model's context even after older pages are dropped from the
+  conversation and what lies outside the viewport is left out: stop `Chat/context`, error `the page in view is longer
+  than the driver model's context`.
 
 **Next step.**
 
 - Try a `--start` URL closer to the goal, or a narrower task that needs fewer facts in one answer.
-- To raise the budgets, set `observation` and `tokens` in `Config` in the embedding API.
+- The driver model's context is the model's own, so use a model with a longer one.
 
 ## cancelled (exit 12)
 

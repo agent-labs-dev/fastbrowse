@@ -26,6 +26,9 @@ ARMS = {
     "browser-use": ArmSpec("browser-use-sdk==3.12.1 API v4; model bu-4.0, reported per row", "hosted"),
     "browser-use-ultrafast": ArmSpec("browser-use-sdk==3.12.1 API v4; model bu-ultrafast, reported per row", "hosted"),
     "browser-use-oss": ArmSpec("browser-use==1.0.6; model bu-4.0, its default", "A", False),
+    "browser-use-1-luna": ArmSpec(
+        "browser-use==1.0.8 accessibility-tree mode; openai/gpt-6-luna via OpenRouter, low reasoning", "A", False
+    ),
     "cua-codex": ArmSpec("cua-driver==0.47.19; codex-cli==0.169.0 on openai/gpt-6-luna", "local", False),
     "browser-harness": ArmSpec(
         "browser-harness==0.1.13; codex-cli==0.169.0 on openai/gpt-6-luna; cli+skill", "A", False
@@ -41,7 +44,7 @@ RETIRED = (
     },
 )
 SUITES: dict[str, tuple[TaskSpec, ...]] = {
-    name: tuple(spec for spec in specs() if spec.suite == name) for name in ("core", "dev", "stretch-dev")
+    name: tuple(spec for spec in specs() if spec.suite == name) for name in ("core", "dev", "stretch-dev", "heldout")
 }
 
 
@@ -76,3 +79,9 @@ def export(path: Path, *, check: bool = False) -> None:
             raise ValueError("public benchmark metadata differs from the canonical Parallax task source")
     else:
         path.write_text(content)
+
+
+def excluded_ids(arm: str) -> set[str]:
+    """The tasks the catalog says `arm` cannot attempt; campaign execution skips them whatever the arm advertises."""
+    catalog = json.loads(PATH.read_text())
+    return {task["id"] for tasks in catalog["suites"].values() for task in tasks if arm in task["excluded"]}

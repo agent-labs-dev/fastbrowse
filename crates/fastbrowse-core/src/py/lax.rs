@@ -165,9 +165,6 @@ pub fn int_ge0<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
 pub fn int_gt0<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
     de_int(d, Bound::Gt(0))
 }
-pub fn int_gt1<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
-    de_int(d, Bound::Gt(1))
-}
 pub fn opt_int<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
     de_opt_int(d, Bound::None)
 }

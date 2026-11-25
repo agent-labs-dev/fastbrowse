@@ -96,11 +96,6 @@ AGENT_ENV_DROPPED = (
 
 PLACEHOLDER_KEY = "bench-placeholder-key"
 
-LLM = "google/gemini-3.8-flash"
-REASONING = "low"
-"""The model and reasoning effort the cassettes were recorded with, for every purpose. Pinned here, since a replay
-asking another model misses."""
-
 
 def default_agent() -> str:
     """The `fastbrowse` script of the interpreter running the harness, without `uv run` in front of it."""
@@ -110,10 +105,9 @@ def default_agent() -> str:
 def agent_environment(proxy: str) -> dict[str, str]:
     """The agent's environment: the caller's, minus every model key and fastbrowse setting, plus the proxy routes.
 
-    The models are named explicitly because a custom LLM endpoint has no defaults, and they are the models the
-    cassettes were recorded with, which the product's default LLM need not be: a request is filed under its body, so
-    a replay on another model would miss every LLM call. The reasoning effort is set because a custom endpoint is
-    sent one only when it is.
+    The LLM is the product's default, reached as OpenRouter is (its routing, and the Responses API for an OpenAI
+    model) at the proxy's address, so a cassette records the requests a user's run makes. A change to the default
+    model or how it is asked misses every LLM call, and the refill records the new requests.
     """
     env = {
         name: value
@@ -124,10 +118,9 @@ def agent_environment(proxy: str) -> dict[str, str]:
         "OPENROUTER_API_KEY": PLACEHOLDER_KEY,
         "FASTBROWSE_DECISION_SOURCE": "openrouter",
         "FASTBROWSE_DECISION_BASE_URL": proxy + JEV_MOUNT,
+        "FASTBROWSE_LLM_PROVIDER": "openrouter",
         "FASTBROWSE_LLM_BASE_URL": proxy + LLM_MOUNT,
         "FASTBROWSE_LLM_API_KEY": PLACEHOLDER_KEY,
-        "FASTBROWSE_LLM_MODEL": LLM,
-        "FASTBROWSE_LLM_REASONING": REASONING,
     }
 
 
@@ -622,7 +615,6 @@ async def run_suite(args: argparse.Namespace) -> int:
                 meta={
                     "recorded_at": datetime.now(UTC).date().isoformat(),
                     "agent_fastbrowse": version("fastbrowse"),
-                    "models": {"llm": LLM, "jev": "openrouter"},
                 },
             )
         elif path.exists():
@@ -644,6 +636,9 @@ async def run_suite(args: argparse.Namespace) -> int:
             if cut_short:
                 del cassette.exchanges[kept:]
             elif forward is not None and (mode == "record" or proxy.forwarded):
+                # The models the cassette answers for, read off its requests: the bench asks the product's default.
+                llm = sorted({e.model for e in cassette.exchanges if e.path.startswith(LLM_MOUNT) and e.model})
+                cassette.meta["models"] = {"llm": llm, "jev": "openrouter"}
                 cassette.save(path)
             if mode == "fill":
                 entry["fill_passes"] = done

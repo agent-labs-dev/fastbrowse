@@ -1,7 +1,7 @@
 # fastbrowse
 
-A browser agent for Node.js. It picks one of the controls a page has instead of generating an action, and each
-fact in its answer cites a quote from a page it read. This package is the TypeScript SDK. It runs the agent as
+A browser agent for Node.js. An LLM acts on the numbered controls each page has, and each fact in its answer cites
+a quote from a page it read. This package is the TypeScript SDK. It runs the agent as
 a native binary, so the machine needs no Python.
 
 ## Install
@@ -24,6 +24,8 @@ The binary brings no browser. `local: true` drives your own Chrome through the
 Chrome instead. A process inside a sandbox reaches the extension only when the sandbox lets it read the host's
 directory and connect to its sockets; otherwise the run ends `unavailable` and
 [names the refusal](../../docs/troubleshooting.md#the-extension-is-not-connected). Without either a run starts a Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
+
+`await fastbrowse.extensionStatus()` reads the extension's state without starting a run: whether this fastbrowse is registered as its host, which browsers are connected (by the label `extensionBrowser` takes) and which hosts this process could not reach. It spends nothing.
 
 ## First run
 
@@ -54,6 +56,9 @@ such as `Llm.Rejected/openrouter/action/http-401`.
 The SDK keeps no trace of a run, unlike the `fastbrowse` CLI, which keeps one for a run that ends short of `complete`.
 To write one, set `FASTBROWSE_TRACE` to a file path in the environment the SDK starts fastbrowse with.
 
+For a separate CLI run, `fastbrowse doctor` checks the local setup. `FASTBROWSE_STATS` and
+`fastbrowse stats` enable and summarise the CLI's local run log.
+
 ## Processes and errors
 
 `Fastbrowse.start` starts one fastbrowse process and `run` sends it a task. The process serves one run at a time:
@@ -71,7 +76,7 @@ finished but its data fails the `output` schema. A run that fails after it start
 callback throws, resolves with status `error`.
 
 Jev cost lines include `decision_purpose` when the agent named the decision: `action`, `authorization`,
-`relevance`, `read`, `verify` or `locate`. LLM lines keep their existing `purpose`. An unscoped decision
+`read`, `verify` or `locate`; receipts from older builds may also carry `relevance`. LLM lines keep their existing `purpose`. An unscoped decision
 client call omits the optional field, and older receipts remain readable.
 
 Cost lines also include `model`, the model that served the call, when one is known.

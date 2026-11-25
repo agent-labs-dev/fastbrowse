@@ -54,9 +54,9 @@ export type Operation =
   | 'navigate'
   | 'search';
 /**
- * Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
+ * Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
  */
-export type Decider = 'jev' | 'code' | 'recipe';
+export type Decider = 'llm' | 'jev' | 'code' | 'recipe';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
 /**
  * A closed reason for a failed browser step; ``note`` remains diagnostic text.
@@ -68,7 +68,7 @@ export type StepFailure =
   | 'navigation_failed'
   | 'dialog_interrupted'
   | 'browser_error';
-export type FactReader = 'jev_choice' | 'llm_image';
+export type FactReader = 'jev_choice' | 'llm_image' | 'llm_quote';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy' | 'search';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
 export type LLMPurpose =
@@ -208,7 +208,7 @@ export interface StepResult {
   page_changed: boolean | null;
   duration_ms: number;
   /**
-   * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+   * The controls the driver was shown for this step's action, when `Config.step_choices` asked for them.
    */
   choices?: StepChoice[];
 }
@@ -226,16 +226,16 @@ export interface StepChoice {
   id: string;
   role: string;
   /**
-   * The label as Jev read it, with resolved secrets masked.
+   * The label as the driver read it, with resolved secrets masked.
    */
   label: string;
   /**
-   * The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+   * The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.
    */
   context: string | null;
   operations: Operation[];
   /**
-   * Whether Jev chose this control: the target, and for a drag the destination too.
+   * Whether the driver acted on this control: the target, and for a drag the destination too.
    */
   chosen: boolean;
 }

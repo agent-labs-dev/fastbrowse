@@ -16,7 +16,7 @@ When the next action is classified as irreversible, an unauthorized run ends wit
 
 | Status | Exit | What it means |
 |:--|--:|:--|
-| `complete` | 0 | Jev judged the task done |
+| `complete` | 0 | every claim is backed by a quote and every requested change is confirmed on the page |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
 | `blocked` | 6 | a bot check that did not clear |

@@ -9,8 +9,7 @@
 //! PERPLEXITY_API_KEY; ollama and custom read FASTBROWSE_DECISION_API_KEY, which is optional.
 //! FASTBROWSE_DECISION_BASE_URL points any source at a proxy or another host serving the same API, and custom requires
 //! it. FASTBROWSE_DECISION_MODEL pins the model of any source but the gateway, and ollama and custom require it. A
-//! custom endpoint or model disables automatic failover. FASTBROWSE_ACTION_PICKER=llm has the LLM pick each browser
-//! action instead of Jev, an ablation; every other decision stays with Jev ([`crate::action_picker`]).
+//! custom endpoint or model disables automatic failover.
 //!
 //! LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
 //! Gateway's OpenAI-compatible chat completions, and when both are set the gateway takes over a run whose OpenRouter
@@ -23,7 +22,8 @@
 //!
 //! FASTBROWSE_LLM_PROVIDER names the LLM provider outright instead: openrouter, gateway, openai, anthropic, gemini,
 //! groq, together, mistral, deepseek, xai, fireworks, azure, ollama, lmstudio, vllm or custom. Each reads its own key
-//! variable and sends it to its own host only; [`crate::providers`] holds what each one takes.
+//! variable and sends it to its own host only; [`crate::providers`] holds what each one takes. openrouter with
+//! FASTBROWSE_LLM_BASE_URL speaks OpenRouter's API to a proxy at that address, with FASTBROWSE_LLM_API_KEY.
 //!
 //! Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_CHROME names the Chrome binary; FASTBROWSE_HEADED=1 shows its window
 //! and FASTBROWSE_PROFILE keeps its profile between runs. A real environment variable beats `.env`.
@@ -41,7 +41,6 @@ use fastbrowse_core::py::lax::bool_of;
 use fastbrowse_core::safety::{Redactor, mask_address};
 use serde_json::{Map, Value};
 
-use crate::action_picker::{ActionPicker, LlmDecisionClient};
 use crate::anthropic::AnthropicLLM;
 use crate::failover::{FailoverDecisionClient, FailoverLLMClient};
 use crate::http::Http;
@@ -153,25 +152,6 @@ impl std::fmt::Display for DecisionSource {
     }
 }
 
-/// Who picks each browser action. Every other decision stays with the decision model either way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActionPickerSource {
-    /// The decision model, as every other decision.
-    Jev,
-    /// The run's LLM, the ablation that measures what picking with Jev is worth.
-    Llm,
-}
-
-impl ActionPickerSource {
-    pub fn parse(value: &str) -> Option<ActionPickerSource> {
-        match value {
-            "jev" => Some(ActionPickerSource::Jev),
-            "llm" => Some(ActionPickerSource::Llm),
-            _ => None,
-        }
-    }
-}
-
 /// A missing key or an invalid setting in the environment, reported without a traceback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigurationError(pub String);
@@ -227,8 +207,6 @@ pub struct Settings {
     pub decision_model: Option<String>,
     /// Bearer token for the `ollama` and `custom` sources. Optional: a local server usually takes none.
     pub decision_api_key: Option<Secret>,
-    /// FASTBROWSE_ACTION_PICKER: who picks each browser action.
-    pub action_picker: ActionPickerSource,
     pub telnyx_api_key: Option<Secret>,
     pub openai_api_key: Option<Secret>,
     pub aimlapi_api_key: Option<Secret>,
@@ -275,7 +253,6 @@ impl std::fmt::Debug for Settings {
             decision_base_url,
             decision_model,
             decision_api_key,
-            action_picker,
             telnyx_api_key,
             openai_api_key,
             aimlapi_api_key,
@@ -304,7 +281,6 @@ impl std::fmt::Debug for Settings {
             .field("decision_base_url", &decision_base_url.as_deref().map(mask_address))
             .field("decision_model", decision_model)
             .field("decision_api_key", decision_api_key)
-            .field("action_picker", action_picker)
             .field("telnyx_api_key", telnyx_api_key)
             .field("openai_api_key", openai_api_key)
             .field("aimlapi_api_key", aimlapi_api_key)
@@ -338,7 +314,6 @@ impl Default for Settings {
             decision_base_url: None,
             decision_model: None,
             decision_api_key: None,
-            action_picker: ActionPickerSource::Jev,
             telnyx_api_key: None,
             openai_api_key: None,
             aimlapi_api_key: None,
@@ -360,7 +335,7 @@ impl Default for Settings {
 }
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-pub const FIELDS: [(&str, &str); 25] = [
+pub const FIELDS: [(&str, &str); 24] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -371,7 +346,6 @@ pub const FIELDS: [(&str, &str); 25] = [
     ("decision_base_url", "fastbrowse_decision_base_url"),
     ("decision_model", "fastbrowse_decision_model"),
     ("decision_api_key", "fastbrowse_decision_api_key"),
-    ("action_picker", "fastbrowse_action_picker"),
     ("TELNYX_API_KEY", "telnyx_api_key"),
     ("OPENAI_API_KEY", "openai_api_key"),
     ("AIMLAPI_API_KEY", "aimlapi_api_key"),
@@ -490,7 +464,6 @@ impl Settings {
             decision_base_url,
             decision_model,
             decision_api_key: _,
-            action_picker: _,
             telnyx_api_key: _,
             openai_api_key: _,
             aimlapi_api_key: _,
@@ -557,7 +530,6 @@ impl Settings {
             "decision_base_url" => self.decision_base_url = text(),
             "decision_model" => self.decision_model = text(),
             "decision_api_key" => self.decision_api_key = secret(),
-            "action_picker" => self.action_picker = ActionPickerSource::parse(value).ok_or(())?,
             "TELNYX_API_KEY" => self.telnyx_api_key = secret(),
             "OPENAI_API_KEY" => self.openai_api_key = secret(),
             "AIMLAPI_API_KEY" => self.aimlapi_api_key = secret(),
@@ -689,14 +661,7 @@ impl Settings {
         http: &Http,
         catalog: Option<&OpenRouterDecisionCatalog>,
     ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
-        let jev = self.jev(http, catalog)?;
-        match self.action_picker {
-            ActionPickerSource::Jev => Ok(jev),
-            ActionPickerSource::Llm => {
-                let picker = LlmDecisionClient::new(self.llm(http)?, self.model());
-                Ok(Box::new(ActionPicker::new(jev, Box::new(picker))))
-            }
-        }
+        self.jev(http, catalog)
     }
 
     fn jev(
@@ -951,6 +916,8 @@ impl Settings {
             cache_breakpoints: false,
             extra_body: self.extra_body()?,
             provider: preset.provider,
+            wire: preset.wire,
+            responses_for_openai: false,
         };
         OpenAICompatibleLLM::new(key, http.clone(), &base_url, self.preset_models(&preset)?, options)
             .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
@@ -969,22 +936,27 @@ impl Settings {
     pub fn llm(&self, http: &Http) -> Result<Box<dyn LLMClient>, ConfigurationError> {
         self.validate_client_credentials(http)?;
         let source = self.llm_source();
-        if matches!(source, LLMProvider::OpenRouter | LLMProvider::Gateway)
-            && self.llm_provider.is_some()
-            && self.llm_base_url().is_some()
-        {
-            return Err(ConfigurationError(format!(
-                "FASTBROWSE_LLM_BASE_URL cannot be used with FASTBROWSE_LLM_PROVIDER={source}, whose key goes to its own \
+        if source == LLMProvider::Gateway && self.llm_provider.is_some() && self.llm_base_url().is_some() {
+            return Err(ConfigurationError(
+                "FASTBROWSE_LLM_BASE_URL cannot be used with FASTBROWSE_LLM_PROVIDER=gateway, whose key goes to its own \
                  host only; use FASTBROWSE_LLM_PROVIDER=custom for another endpoint"
-            )));
+                    .into(),
+            ));
+        }
+        if let (LLMProvider::OpenRouter, Some(base_url)) = (source, self.llm_base_url()) {
+            // A proxy in front of OpenRouter is spoken to as OpenRouter is, routing and the Responses wire for OpenAI's
+            // models included, so a run through it makes the requests a direct run makes. It gets
+            // FASTBROWSE_LLM_API_KEY, never OPENROUTER_API_KEY, which goes to OpenRouter alone.
+            let key = self.llm_api_key.as_ref().map(|key| key.expose().trim()).unwrap_or_default();
+            return self.routed_llm(source, key, base_url, openrouter_provider_routing(), http);
         }
         let (key, base_url, routing) = match source {
             LLMProvider::OpenRouter => match &self.openrouter_api_key {
-                Some(key) if key.is_set() => (key, LLM_OPENROUTER_URL, openrouter_provider_routing()),
+                Some(key) if key.is_set() => (key.expose(), LLM_OPENROUTER_URL, openrouter_provider_routing()),
                 _ => return Err(ConfigurationError("set OPENROUTER_API_KEY or AI_GATEWAY_API_KEY for the LLM".into())),
             },
             LLMProvider::Gateway => match &self.ai_gateway_api_key {
-                Some(key) if key.is_set() => (key, LLM_GATEWAY_URL, gateway_provider_routing()),
+                Some(key) if key.is_set() => (key.expose(), LLM_GATEWAY_URL, gateway_provider_routing()),
                 _ => return Err(ConfigurationError("set AI_GATEWAY_API_KEY or OPENROUTER_API_KEY for the LLM".into())),
             },
             provider => return self.preset_llm(provider.preset(), http),
@@ -995,7 +967,13 @@ impl Settings {
         match (source, self.llm_provider, gateway) {
             (LLMProvider::OpenRouter, None, Some(gateway)) => Ok(Box::new(FailoverLLMClient::new(
                 primary,
-                self.routed_llm(LLMProvider::Gateway, gateway, LLM_GATEWAY_URL, gateway_provider_routing(), http)?,
+                self.routed_llm(
+                    LLMProvider::Gateway,
+                    gateway.expose(),
+                    LLM_GATEWAY_URL,
+                    gateway_provider_routing(),
+                    http,
+                )?,
                 http.clone(),
             ))),
             _ => Ok(primary),
@@ -1005,7 +983,7 @@ impl Settings {
     fn routed_llm(
         &self,
         provider: LLMProvider,
-        key: &Secret,
+        key: &str,
         base_url: &str,
         routing: Value,
         http: &Http,
@@ -1015,9 +993,11 @@ impl Settings {
             reasoning_default: default_reasoning(&self.model()),
             provider_routing: Some(routing),
             provider,
+            // The gateway's chat completions endpoint is the one it documents, so only OpenRouter's OpenAI models move.
+            responses_for_openai: provider == LLMProvider::OpenRouter,
             ..LLMOptions::default()
         };
-        OpenAICompatibleLLM::new(key.expose(), http.clone(), base_url, self.models(), options)
+        OpenAICompatibleLLM::new(key, http.clone(), base_url, self.models(), options)
             .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
             .map_err(ConfigurationError)
     }

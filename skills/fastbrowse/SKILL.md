@@ -53,6 +53,9 @@ can exceed that limit. For a strict total-spend ceiling, use the default browser
 otherwise explain that fastbrowse cannot enforce that ceiling for cloud runs and establish an
 acceptable budget before starting one. Count earlier run costs against the user's total budget across retries.
 
+For CLI setup failures, run `fastbrowse doctor`. To summarise a user's opt-in CLI log, run
+`fastbrowse stats` with the log path configured in `FASTBROWSE_STATS`.
+
 ## Set the task boundary
 
 Include the goal, starting address when known, required output, relevant constraints, and supplied field values.
@@ -92,7 +95,7 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 | `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. Present any answer as partial, whether or not it starts with `Partial evidence only.`. |
 
 A result short of `complete` also has `failure_kind`, the cause without page text or secrets (`Budget/dollars`,
-`Wall/sign-in`, `Llm.Rejected/openrouter/action/http-401`). Quote it when reporting a failure, and read `error`
+`Chat/give-up`, `Llm.Rejected/openrouter/action/http-401`). Quote it when reporting a failure, and read `error`
 for the detail.
 
 A CLI or MCP result short of `complete` also names `trace`, a file of the run's model requests, replies and steps.

@@ -28,8 +28,9 @@ pub enum BrowserError {
     PageUnresponsive(Failure),
     /// A document outside `allowed_origins`. The message never names it: an address can carry a credential.
     OriginNotAllowed,
-    /// A script this layer evaluated threw in the page.
-    Script,
+    /// A script this layer evaluated threw in the page. Holds where it threw (the script's line and column), never the
+    /// exception's message, which a page can write: the failure says which branch threw.
+    Script(String),
 }
 
 impl BrowserError {
@@ -58,7 +59,7 @@ impl BrowserError {
             Self::BrowserUnresponsive(_) => "BrowserUnresponsive",
             Self::PageUnresponsive(_) => "PageUnresponsive",
             Self::OriginNotAllowed => "OriginNotAllowed",
-            Self::Script => "_ScriptError",
+            Self::Script(_) => "_ScriptError",
         }
     }
 }
@@ -75,7 +76,7 @@ impl fmt::Display for BrowserError {
             | Self::ScreenshotsUnavailable(m)
             | Self::BrowserUnresponsive(m) => f.write_str(m),
             Self::OriginNotAllowed => f.write_str("the page is outside allowed_origins"),
-            Self::Script => f.write_str("Runtime.evaluate failed (JavaScriptError)"),
+            Self::Script(detail) => write!(f, "Runtime.evaluate failed (JavaScriptError): {detail}"),
         }
     }
 }
@@ -87,7 +88,7 @@ impl FailureKind for BrowserError {
         match self {
             Self::BrowserUnresponsive(_) => "BrowserUnresponsive".into(),
             Self::OriginNotAllowed => "OriginNotAllowed".into(),
-            Self::Script => "Script".into(),
+            Self::Script(_) => "Script".into(),
             other => PageError::from(other.clone()).failure_kind(),
         }
     }
@@ -113,7 +114,7 @@ impl From<BrowserError> for PageError {
             BrowserError::SiteUnreachable(failure) => PageError::SiteUnreachable(failure),
             BrowserError::Failed(failure) => PageError::Failed(failure),
             BrowserError::OriginNotAllowed => PageError::failed("OriginNotAllowed", message),
-            BrowserError::Script => PageError::failed("Runtime.evaluate/JavaScriptError", message),
+            BrowserError::Script(_) => PageError::failed("Runtime.evaluate/JavaScriptError", message),
         }
     }
 }
@@ -137,6 +138,13 @@ mod tests {
                 PageError::failed("OriginNotAllowed", "the page is outside allowed_origins"),
             ),
             (BrowserError::SiteUnreachable(Failure::new("r", "s")), PageError::SiteUnreachable(Failure::new("r", "s"))),
+            (
+                BrowserError::Script("thrown at line 3, column 7".into()),
+                PageError::failed(
+                    "Runtime.evaluate/JavaScriptError",
+                    "Runtime.evaluate failed (JavaScriptError): thrown at line 3, column 7",
+                ),
+            ),
         ];
         for (error, expected) in cases {
             assert_eq!(PageError::from(error), expected);

@@ -216,6 +216,14 @@ struct Element {
     control_role: bool,
     /// Inside `svg` or `math`, where a self-closing tag ends its element.
     foreign: bool,
+    /// Under a `disabled` fieldset and outside that fieldset's first `legend`, which disables a form control in it.
+    in_disabled_fieldset: bool,
+    /// `aria-disabled="true"` on it or an element around it, which disables any control.
+    aria_disabled: bool,
+    /// Disabled as a control: by `aria-disabled`, or as a form control by its own `disabled` or its fieldset's.
+    disabled: bool,
+    /// `inert` on it or an element around it, which leaves out every control inside.
+    inert: bool,
     /// Whether it shows any text.
     text: bool,
     /// The tag tokens that opened and closed it.
@@ -252,6 +260,10 @@ impl Tree {
             aria_hidden: false,
             control_role: false,
             foreign: false,
+            in_disabled_fieldset: false,
+            aria_disabled: false,
+            disabled: false,
+            inert: false,
             text: false,
             start: usize::MAX,
             close: usize::MAX,
@@ -397,6 +409,24 @@ impl Tags for Tree {
         let nonempty = |value: Option<String>| value.filter(|value| !value.is_empty());
         let i = self.elements.len();
         let foreign = foreign || matches!(name, "svg" | "math");
+        // A disabled fieldset disables the form controls inside it, except those in its first legend, which stay as
+        // enabled as the fieldset's own surroundings leave them.
+        let around = &self.elements[parent];
+        let first_legend = name == "legend"
+            && around.tag == "fieldset"
+            && !around.children.iter().any(|&child| self.elements[child].tag == "legend");
+        let in_disabled_fieldset = if name == "fieldset" && get("disabled").is_some() {
+            true
+        } else if first_legend {
+            self.elements[around.parent].in_disabled_fieldset
+        } else {
+            around.in_disabled_fieldset
+        };
+        let aria_disabled =
+            around.aria_disabled || get("aria-disabled").is_some_and(|value| value.trim().eq_ignore_ascii_case("true"));
+        let form_control = matches!(name, "button" | "input" | "select" | "textarea");
+        let disabled = aria_disabled || (form_control && (in_disabled_fieldset || get("disabled").is_some()));
+        let inert = around.inert || get("inert").is_some();
         self.elements.push(Element {
             tag: name.to_string(),
             parent,
@@ -415,6 +445,10 @@ impl Tags for Tree {
             aria_hidden: self.elements[parent].aria_hidden || get("aria-hidden").as_deref() == Some("true"),
             control_role: get("role").is_some_and(|role| CONTROL_ROLES.contains(&role.as_str())),
             foreign,
+            in_disabled_fieldset,
+            aria_disabled,
+            disabled,
+            inert,
             text: false,
             start: at,
             close: usize::MAX,
@@ -720,6 +754,13 @@ struct Reader<'a> {
     controls: Vec<Control>,
     /// The control whose element is open, which its text labels.
     labelling: Option<(usize, String, String)>,
+    /// The open `<label>`: its `for`, its text so far, and the controls opened inside it, which it names.
+    label: Option<(Option<String>, String, Vec<usize>)>,
+    /// Each closed `<label for>`'s target id and text, applied once every control is read, since a label may come
+    /// before or after its control.
+    labels_for: Vec<(String, String)>,
+    /// Each control's element id, and whether an `aria-label` named it, which a `<label>` does not override.
+    control_ids: Vec<(Option<String>, bool)>,
     /// An open `<li class="next">`, the pager markup most sites use instead of `rel="next"`; its link is the next page.
     pager_item: bool,
     /// Open pagination containers, by tag: a `nav`, or an element whose class or label names paging. A `next` class
@@ -747,6 +788,10 @@ struct Reader<'a> {
     /// The links of the open table row, and of each row read so far, which each row's block holds.
     row_links: Vec<(String, String)>,
     rows_links: Vec<Vec<(String, String)>>,
+    /// The tag tokens opening disabled controls, and inert elements, which the first read found from what is around
+    /// them: a `<fieldset disabled>` or an `aria-disabled` container disables the controls inside it.
+    disabled: HashSet<usize>,
+    inert: HashSet<usize>,
 }
 
 impl Tags for Reader<'_> {
@@ -785,6 +830,9 @@ impl Tags for Reader<'_> {
             return;
         }
         if let Some((_, _, text)) = &mut self.labelling {
+            text.push_str(data);
+        }
+        if let Some((_, text, _)) = &mut self.label {
             text.push_str(data);
         }
         for (_, _, text) in &mut self.stamps {
@@ -831,6 +879,9 @@ impl<'a> Reader<'a> {
             hidden: Vec::new(),
             controls: Vec::new(),
             labelling: None,
+            label: None,
+            labels_for: Vec::new(),
+            control_ids: Vec::new(),
             pager_item: false,
             paging: Vec::new(),
             stamps: Vec::new(),
@@ -844,11 +895,13 @@ impl<'a> Reader<'a> {
             links: Vec::new(),
             row_links: Vec::new(),
             rows_links: Vec::new(),
+            disabled: HashSet::new(),
+            inert: HashSet::new(),
         }
     }
 
     /// The control a start tag makes, as the served markup describes it.
-    fn control(&mut self, tag: &str, attrs: &[Attribute]) {
+    fn control(&mut self, tag: &str, attrs: &[Attribute], at: usize) {
         let get = |name: &str| attrs.iter().find(|a| &*a.name.local == name).map(|a| a.value.to_string());
         let kind = get("type").unwrap_or_default().to_ascii_lowercase();
         let (role, operations): (&str, &[Operation]) = match tag {
@@ -865,15 +918,15 @@ impl<'a> Reader<'a> {
             },
             _ => return,
         };
-        // A browser offers no disabled control, as the snapshot leaves out `:disabled`, `aria-disabled="true"` and
-        // `inert`. A disabled next link is no next page: the last page of GitHub's issue list keeps one pointing a page
-        // past the end, and each page past it does the same.
-        let disabled = get("aria-disabled").is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
-            || get("inert").is_some()
-            || (tag != "a" && get("disabled").is_some());
-        if disabled {
+        // As a browser capture does, a control in an `inert` element is left out and a disabled one is kept, marked
+        // and offering nothing, so a Save that stays disabled is not read as no Save (#1415). Both come from what is
+        // around the control too: a Save in a `<fieldset disabled>` was offered as clickable over HTTP. A disabled next
+        // link is no next page: the last page of GitHub's issue list keeps one pointing a page past the end, and each
+        // page past it does the same.
+        if self.inert.contains(&at) {
             return;
         }
+        let disabled = self.disabled.contains(&at);
         let named = ["aria-label", "placeholder", "title", "value", "name"];
         let label = named.iter().find_map(|name| get(name).filter(|value| !clean(value).is_empty()));
         let id = format!("fetched-{}", self.controls.len());
@@ -890,9 +943,17 @@ impl<'a> Reader<'a> {
         let same_origin = control.href.as_deref().is_some_and(|href| origin(href) == origin(self.url));
         control.next_page = (same_origin && (names_next(get("rel")) || pager)).then_some(true);
         control.download = get("download").map(|_| true);
+        if disabled {
+            control.disabled = Some(true);
+            control.operations.clear();
+            control.next_page = None;
+        }
         if matches!(tag, "a" | "button") {
             self.labelling = Some((self.controls.len(), tag.to_string(), String::new()));
+        } else if let Some((_, _, inside)) = &mut self.label {
+            inside.push(self.controls.len());
         }
+        self.control_ids.push((get("id"), get("aria-label").is_some_and(|value| !clean(&value).is_empty())));
         self.controls.push(control);
     }
 
@@ -958,7 +1019,10 @@ impl<'a> Reader<'a> {
                 self.headings.retain(|(higher, _)| *higher < level);
             }
         }
-        self.control(tag, attrs);
+        if tag == "label" {
+            self.label = Some((get("for").map(str::to_string), String::new(), Vec::new()));
+        }
+        self.control(tag, attrs, at);
         if tag == "a"
             && let Some(href) = get("href").filter(|href| !href.is_empty()).map(|href| join(self.url, href))
             && !href.starts_with("javascript:")
@@ -1078,9 +1142,31 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Name the control at `index` by its `<label>`, as a browser's accessible name does, unless an `aria-label`
+    /// named it. Named only by its placeholder or `name`, a comment box under `<label for>` read as a textbox with no
+    /// label, so the driver and Jev could not tell it was the box the task's comment was for (#1112).
+    fn name_by_label(&mut self, index: usize, text: &str) {
+        if !self.control_ids[index].1 {
+            self.controls[index].label = text.to_string();
+        }
+    }
+
     fn close(&mut self, tag: &str) {
         if tag == "li" {
             self.pager_item = false;
+        }
+        if tag == "label"
+            && let Some((target, text, inside)) = self.label.take()
+        {
+            let text = clean(&text);
+            if !text.is_empty() {
+                for index in inside {
+                    self.name_by_label(index, &text);
+                }
+                if let Some(target) = target {
+                    self.labels_for.push((target, text));
+                }
+            }
         }
         if let Some((open, nested)) = self.paging.last_mut()
             && open == tag
@@ -1389,10 +1475,19 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
         })
         .map(|element| element.start)
         .collect();
-    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends, empty))).into_inner();
+    let held = |is: fn(&Element) -> bool| tree.elements.iter().skip(1).filter(|e| is(e)).map(|e| e.start).collect();
+    let (disabled, inert) = (held(|e| e.disabled), held(|e| e.inert));
+    let mut reader = Reader::new(url, tree.records(), notes, ends, empty);
+    (reader.disabled, reader.inert) = (disabled, inert);
+    let mut reader = tokenize(html, Sink::new(reader)).into_inner();
     reader.emit_titles(usize::MAX);
     reader.close_record();
     reader.flush(None, None, false);
+    for (target, text) in std::mem::take(&mut reader.labels_for) {
+        if let Some(index) = reader.control_ids.iter().position(|(id, _)| id.as_deref() == Some(target.as_str())) {
+            reader.name_by_label(index, &text);
+        }
+    }
     (clean(&reader.title), reader.blocks, reader.controls, reader.frames)
 }
 
@@ -1862,7 +1957,7 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_control_is_not_offered_and_a_disabled_next_link_is_no_next_page() {
+    fn a_disabled_control_is_shown_offering_nothing_and_a_disabled_next_link_is_no_next_page() {
         // The last page of GitHub's issue list, as served: its Next link is disabled but still points one page past
         // the end, and every page past it does the same (#863).
         let (_, _, controls, _) = read(
@@ -1872,8 +1967,31 @@ mod tests {
              <a href='/x' inert>Inert</a><a href='/y' aria-disabled='false'>Enabled</a></form>",
             "https://a.example/issues?page=2",
         );
-        let shown: Vec<&str> = controls.iter().map(|c| c.label.as_str()).collect();
-        assert_eq!(shown, ["Previous", "Go", "Enabled"]);
+        let offered: Vec<&str> = controls.iter().filter(|c| c.actionable()).map(|c| c.label.as_str()).collect();
+        assert_eq!(offered, ["Previous", "Go", "Enabled"]);
+        let disabled: Vec<&str> =
+            controls.iter().filter(|c| c.disabled == Some(true)).map(|c| c.label.as_str()).collect();
+        assert_eq!(disabled, ["Next", "Send", "q"]);
+        assert!(controls.iter().all(|c| c.next_page.is_none()), "{controls:?}");
+    }
+
+    #[test]
+    fn a_control_is_disabled_by_what_is_around_it_as_a_browser_disables_it() {
+        // A fieldset disables the form controls inside it but not a link, and not what its first legend holds; an
+        // aria-disabled container disables every control in it, a pager link included.
+        let (_, _, controls, _) = read(
+            "<fieldset disabled><legend><input name=agree type=checkbox></legend><legend><button>Late</button>\
+             </legend><button>Save</button><a href='/help'>Help</a>\
+             <fieldset><legend><button>Inner</button></legend></fieldset></fieldset><button>Cancel</button>\
+             <nav aria-label='Pagination' aria-disabled='true'><span><a rel='next' href='/p/2'>Next</a></span></nav>\
+             <div inert><span><button>Hidden</button></span></div>",
+            "https://a.example/p/1",
+        );
+        let offered: Vec<&str> = controls.iter().filter(|c| c.actionable()).map(|c| c.label.as_str()).collect();
+        assert_eq!(offered, ["agree", "Help", "Cancel"]);
+        let disabled: Vec<&str> =
+            controls.iter().filter(|c| c.disabled == Some(true)).map(|c| c.label.as_str()).collect();
+        assert_eq!(disabled, ["Late", "Save", "Inner", "Next"]);
         assert!(controls.iter().all(|c| c.next_page.is_none()), "{controls:?}");
     }
 
@@ -1937,6 +2055,21 @@ mod tests {
         assert_eq!(found[0].kind, BlockKind::Link);
         assert_eq!(found[0].text, "5 days ago (2026-11-01)");
         assert_eq!(controls[0].label, "5 days ago");
+    }
+
+    /// A control is named by its `<label>`, before or after it or wrapping it, as a browser names it; an `aria-label`
+    /// still wins. Unnamed, a comment box read as a textbox with no label (#1112).
+    #[test]
+    fn a_label_names_its_control() {
+        let (_, _, controls, _) = read(
+            "<label for=\"c\">Comment text area</label><textarea id=\"c\"></textarea>\
+             <input id=\"q\" placeholder=\"Search\"><label for=\"q\">Find</label>\
+             <label><input type=\"checkbox\"> Remember me</label>\
+             <label for=\"n\">Name</label><input id=\"n\" aria-label=\"Full name\">",
+            "https://a.example/",
+        );
+        let labels: Vec<&str> = controls.iter().map(|control| control.label.as_str()).collect();
+        assert_eq!(labels, ["Comment text area", "Find", "Remember me", "Full name"]);
     }
 
     fn kinds_and_texts(html: &str) -> Vec<(BlockKind, String)> {

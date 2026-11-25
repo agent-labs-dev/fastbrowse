@@ -12,9 +12,9 @@ establish cause.
 ## Where the published campaign stands against the release
 
 The page publishes `release-0.10.0`: fastbrowse-evals at commit `2e94d24`, run 2026-11-09, judged by
-anthropic/claude-opus-5.5 through OpenRouter. 0.10.0, tagged 2026-11-10, is the current release, so the
-published campaign measures the build that ships rather than lagging a release behind it. No campaign measured
-on a 0.10.1 build has been published, so no figure here describes 0.10.1.
+anthropic/claude-opus-5.5 through OpenRouter. It measures 0.10.0, whose agent had Jev pick each step. The agent in
+the current release is driven by one LLM conversation, and no published campaign has measured it, so no figure
+here describes it.
 
 A campaign becomes published only when its groups have run and its candidate export has been verified and
 merged, and since `bd02773b` a release does not wait on an eval run for its build, so a later tag can again run
@@ -66,11 +66,15 @@ answer, so every task that asks a question fails, which is most of what is left 
 pause tasks it cannot attempt. Its 4.6% is a fact about a product that is not built to answer, not a like for
 like result against the other three arms.
 
-Timing is not like for like across arms. fastbrowse's and Jev Ultrafast's times run from the moment the browser
-session is ready to the final answer; the Browser Use agent's and Browser Harness's also include connecting to
-the browser and opening the first page, which our harness cannot separate from their runs. Median session
-opening and closing, as the page reports them: fastbrowse 3.0s and 0.2s, Browser Use agent 2.0s and 0.1s, Jev
-Ultrafast 2.7s and 0.2s, Browser Harness 0.5s and 0.2s.
+Timing is not like for like across arms, and the page's figures predate this harness. In the harness now, every
+arm's time ends when its agent returns the answer, so reading the final page, retaining artifacts and stopping the
+browser are not charged. Where it starts differs. fastbrowse (local), Jev Ultrafast and Browser Harness start once
+the browser session is ready, and end when the run or worker returns. The hosted Browser Use agent starts at the
+cloud's browser-ready event and ends at the poll that first sees a finished task, so it can include up to one
+poll interval. hosted fastbrowse reports the worker's own duration from the API, which leaves out queueing, boot
+and our 2s poll; only a run without that figure falls back to wall time from submit, marked as session-included.
+Median session opening and closing, as the page reports them: fastbrowse 3.0s and 0.2s, Browser Use agent 2.0s and
+0.1s, Jev Ultrafast 2.7s and 0.2s, Browser Harness 0.5s and 0.2s.
 
 The page's other live-suite card measures fastbrowse alone on all 53 tasks: 90.5% (144 of 159) at $0.0149 a
 run, against 0.7.1's 99.3% (158 of 159) at $0.0268. The two cards publish different fastbrowse numerators for

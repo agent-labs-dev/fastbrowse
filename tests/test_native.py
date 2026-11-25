@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,8 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from fastbrowse import native, run_task
 from fastbrowse.config import Config
 from fastbrowse.evals.harness import providers, transient_seconds
-from fastbrowse.jev import Evaluation, NoulAnswer, Question
+from fastbrowse.jev import Evaluation, Question
+from fastbrowse.llm import Generation, Message
 from fastbrowse.models import (
     Attachment,
     BrowserEvent,
@@ -42,7 +43,7 @@ from fastbrowse.models import (
     Status,
     StepEvent,
 )
-from fastbrowse.telemetry import BudgetExceeded, traced
+from fastbrowse.telemetry import BudgetExceeded, Ledger, traced
 from tests.scripted import ScriptedJev, ScriptedLLM, steps
 
 
@@ -761,11 +762,19 @@ async def test_a_transient_model_failure_reaches_traced_on_its_clock(
         if request.url.host == "pypi.example":
             return httpx.Response(200, text=PAGE, headers={"content-type": "text/html; charset=utf-8"})
         asked.append(request.url.path)
-        if asked.count("/api/v1/chat/completions") == 1:
+        if len(asked) == 1:
             return httpx.Response(503, json={"error": "busy"})
-        # The known pages are asked beside the start page, each for its own schema.
-        known = "urls" in request.content.decode()
-        proposal = json.dumps({"urls": []} if known else {"url": "https://pypi.example/httpx"})
+        # Each purpose is asked for its own schema: the driver's turn calls the run done.
+        body = request.content.decode()
+        if "BrowserActions" in body:
+            proposal = json.dumps({"next": "", "actions": [{"tool": "done", "answer": [], "numbered": False}]})
+        else:
+            proposal = json.dumps({"urls": []} if "urls" in body else {"url": "https://pypi.example/httpx"})
+        # An OpenAI model is asked over the Responses API, every other model over chat completions.
+        if request.url.path.endswith("/responses"):
+            message = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": proposal}]}
+            usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+            return httpx.Response(200, json={"id": "x", "model": "m", "output": [message], "usage": usage})
         choice = {"index": 0, "message": {"role": "assistant", "content": proposal}, "finish_reason": "stop"}
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         return httpx.Response(200, json={"id": "x", "model": "m", "choices": [choice], "usage": usage})
@@ -851,18 +860,15 @@ def test_the_helper_script_reads_a_pdf_on_the_base_interpreter_without_site() ->
 
 @pytest.mark.usefixtures("rust_core")
 async def test_a_missing_browser_key_after_a_paid_fetch_keeps_the_configuration_receipt() -> None:
-    class PaidBotCheck(ScriptedJev):
-        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-            evaluation = await super().evaluate(state, questions)
-            answers = dict(evaluation.answers)
-            if "bot_check" in answers:
-                answers["bot_check"] = NoulAnswer(probability=1.0)
-            return evaluation.model_copy(
-                update={
-                    "answers": answers,
-                    "cost": CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.01),
-                }
-            )
+    class PaidWait(ScriptedLLM):
+        """Waits on the fetched check page, which sends the run to a browser, and is billed for the turn."""
+
+        async def generate[T: BaseModel](
+            self, purpose: LLMPurpose, messages: Sequence[Message], schema: type[T], *, ledger: Ledger | None = None
+        ) -> Generation[T]:
+            generation = await super().generate(purpose, messages, schema, ledger=ledger)
+            cost = CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.01, purpose=purpose)
+            return generation.model_copy(update={"cost": cost})
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(
@@ -878,8 +884,8 @@ async def test_a_missing_browser_key_after_a_paid_fetch_keeps_the_configuration_
                 "Read the release",
                 start="https://docs.example.test/value",
                 settings={},
-                jev=PaidBotCheck([]),
-                llm=ScriptedLLM("https://docs.example.test/value"),
+                jev=ScriptedJev([]),
+                llm=PaidWait("https://docs.example.test/value", script=steps("wait")),
                 http=http,
             )
     receipt = caught.value.receipt

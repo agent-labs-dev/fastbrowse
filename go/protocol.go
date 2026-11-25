@@ -183,10 +183,11 @@ type CostLine struct {
 	Model *string `json:"model,omitempty"`
 }
 
-// Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
+// Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
 type Decider string
 
 const (
+	DeciderLLM    Decider = "llm"
 	DeciderJev    Decider = "jev"
 	DeciderCode   Decider = "code"
 	DeciderRecipe Decider = "recipe"
@@ -246,6 +247,7 @@ type FactReader string
 const (
 	FactReaderJevChoice FactReader = "jev_choice"
 	FactReaderLLMImage  FactReader = "llm_image"
+	FactReaderLLMQuote  FactReader = "llm_quote"
 )
 
 // The client's side of the handshake.
@@ -532,12 +534,12 @@ const (
 type StepChoice struct {
 	ID   string `json:"id"`
 	Role string `json:"role"`
-	// The label as Jev read it, with resolved secrets masked.
+	// The label as the driver read it, with resolved secrets masked.
 	Label string `json:"label"`
-	// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+	// The card or row that tells this control from its twins, as the driver read it, with resolved secrets masked.
 	Context    *string     `json:"context"`
 	Operations []Operation `json:"operations"`
-	// Whether Jev chose this control: the target, and for a drag the destination too.
+	// Whether the driver acted on this control: the target, and for a drag the destination too.
 	Chosen bool `json:"chosen"`
 }
 
@@ -596,7 +598,7 @@ type StepResult struct {
 	// Whether the page's fingerprint changed; None for steps that do not act (read).
 	PageChanged *bool `json:"page_changed"`
 	DurationMs  int64 `json:"duration_ms"`
-	// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+	// The controls the driver was shown for this step's action, when `Config.step_choices` asked for them.
 	Choices []StepChoice `json:"choices,omitempty"`
 }
 

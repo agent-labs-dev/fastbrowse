@@ -1,8 +1,8 @@
 # fastbrowse for Java and Kotlin
 
-A browser agent that picks instead of generating. Every page is indexed into the controls it actually has, and a
-choice model picks one of them. An LLM plans, reads and writes prose. Code owns authorization gates, secret
-resolution and cost limits, and reports an answer it cannot verify as unverified.
+A browser agent that picks from the controls a page has. Every page is indexed into the controls it has, and
+one LLM conversation names the actions to take. Code owns authorization gates, secret resolution and cost limits, and
+reports an answer it cannot verify as unverified.
 
 The client is not on Maven Central yet, so the coordinates below do not resolve from a public repository. Until
 it is, install it from a checkout with `mvn -f java/pom.xml install` and run a fastbrowse binary of your own through

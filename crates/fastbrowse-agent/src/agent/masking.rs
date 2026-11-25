@@ -20,7 +20,7 @@ pub(super) fn keep_code_made(redactor: &mut Redactor, observation: &Observation)
     for control in &observation.controls {
         kept.push(&control.id);
         kept.extend(
-            [&control.frame_id, &control.frame_document_key, &control.form_id, &control.shown_by, &control.input_type]
+            [&control.frame_id, &control.frame_document_key, &control.form_id, &control.input_type]
                 .into_iter()
                 .flatten(),
         );
@@ -117,7 +117,10 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         expanded,
         sensitive,
         offscreen,
+        disabled,
         required,
+        read_only,
+        layer,
         invalid,
         validation_message,
         next_page,
@@ -125,7 +128,6 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         drawn,
         pictured,
         already_read,
-        shown_by,
         role_description,
         description,
         item_position,
@@ -160,7 +162,10 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         expanded: *expanded,
         sensitive: *sensitive,
         offscreen: *offscreen,
+        disabled: *disabled,
         required: *required,
+        read_only: *read_only,
+        layer: *layer,
         invalid: *invalid,
         validation_message: mask_opt(validation_message),
         next_page: *next_page,
@@ -168,7 +173,6 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         drawn: *drawn,
         pictured: *pictured,
         already_read: *already_read,
-        shown_by: shown_by.clone(),
         role_description: mask_opt(role_description),
         description: mask_opt(description),
         item_position: *item_position,
@@ -330,7 +334,7 @@ mod tests {
                 "input_name": "n", "max_length": 9, "autocomplete": "a", "submit_semantics": "s", "checked": false,
                 "selected": false, "expanded": false, "sensitive": false, "offscreen": false, "required": false,
                 "invalid": true, "validation_message": "vm", "next_page": false, "download": false, "drawn": false,
-                "pictured": false, "already_read": false, "shown_by": "e0"});
+                "pictured": false, "already_read": false, "read_only": true, "layer": 1});
         let mut full = json!({
             "url": "https://shop.test/", "title": "t", "page_key": "k", "captured_at": "2026-01-01T00:00:00Z",
             "response_status": 200, "document_key": "d", "viewport_text": "v", "offscreen_text": "o",
@@ -369,7 +373,6 @@ mod tests {
             ".controls[0].frame_id",
             ".controls[0].form_id",
             ".controls[0].input_type",
-            ".controls[0].shown_by",
         ];
         assert_eq!(kept, code_made);
     }

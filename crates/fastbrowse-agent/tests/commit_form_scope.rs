@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::agent::{Agent, RunOptions};
-use fastbrowse_agent::scripted::{ScriptedJev, ScriptedLLM, steps};
+use fastbrowse_agent::scripted::{ScriptedDriver, ScriptedJev, steps};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, DecisionProfile, Evaluation, Question};
 use fastbrowse_core::models::{Authorization, Limits, Operation, Status};
@@ -66,7 +66,7 @@ async fn a_commit_does_not_consume_a_draft_in_another_frames_same_numbered_form(
     let agent = Agent::new(
         Arc::new(FormPage { page: Mutex::new(page), confirms_post: false }),
         Arc::new(jev),
-        Arc::new(ScriptedLLM),
+        Arc::new(ScriptedDriver::new(steps("click Draft; click Post").unwrap())),
     );
     let result = agent
         .run(
@@ -106,7 +106,7 @@ async fn a_commit_does_not_consume_a_draft_in_a_previous_documents_same_numbered
     let agent = Agent::new(
         Arc::new(FormPage { page: Mutex::new(page), confirms_post: false }),
         Arc::new(jev),
-        Arc::new(ScriptedLLM),
+        Arc::new(ScriptedDriver::new(steps("click Draft; click Next page; click Post").unwrap())),
     );
     let result = agent
         .run(
@@ -151,7 +151,7 @@ async fn accepting_a_confirmation_reports_the_submitted_fields_with_the_commit()
     let agent = Agent::new(
         Arc::new(FormPage { page: Mutex::new(page), confirms_post: true }),
         Arc::new(jev),
-        Arc::new(ScriptedLLM),
+        Arc::new(ScriptedDriver::new(steps("click Draft; click Post; dialog").unwrap())),
     );
     let result = agent
         .run(
@@ -192,7 +192,7 @@ async fn a_portalled_option_reports_the_field_it_sets_as_part_of_the_submitted_f
     let agent = Agent::new(
         Arc::new(FormPage { page: Mutex::new(page), confirms_post: false }),
         Arc::new(jev),
-        Arc::new(ScriptedLLM),
+        Arc::new(ScriptedDriver::new(steps("click One way; click Post").unwrap())),
     );
     let result = agent
         .run(
@@ -238,7 +238,7 @@ async fn a_commit_keeps_fields_prefilled_in_another_form_among_unsent_changes() 
         let agent = Agent::new(
             Arc::new(FormPage { page: Mutex::new(page), confirms_post: false }),
             Arc::new(jev),
-            Arc::new(ScriptedLLM),
+            Arc::new(ScriptedDriver::new(steps("click Publish article").unwrap())),
         );
         let result = agent
             .run(

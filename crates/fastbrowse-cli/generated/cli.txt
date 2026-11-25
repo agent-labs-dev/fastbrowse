@@ -21,8 +21,9 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
-  --start START         URL to open before the task starts; worked out from
-                        the task if omitted
+  --start START         URL to open before the task starts; a missing scheme
+                        gets https (http for localhost); worked out from the
+                        task if omitted
   --context CONTEXT     background the run may use but never treats as part of
                         the task, such as where the request came from
   --cloud               use Browser Use Cloud instead of the extension
@@ -67,8 +68,9 @@ options:
   --downloads DOWNLOADS
                         directory for downloaded files
   --json                print the full result as JSON
-  --recipe FILE         replay a saved run: Jev is offered each saved action
-                        alone where its page and control match
+  --recipe FILE         replay a saved run: each saved step runs through the
+                        gates where its page and control match, then the
+                        driver carries on
   --save-recipe FILE    save the steps of a completed run as recipe JSON
   --record FILE         save a captioned video of the run, ending on its
                         answer, and an uncaptioned copy beside it with .plain

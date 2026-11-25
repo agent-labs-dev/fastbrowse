@@ -14,16 +14,20 @@ Jev still needs its own key ([jev.md](jev.md)); the provider choice is the LLM's
 
 ## What each preset sends
 
-Every preset but `anthropic` speaks the provider's OpenAI-compatible chat completions API; `anthropic` speaks the
-Messages API ([below](#claude-through-the-messages-api)). A preset fixes the address, the variable its key is read
+Every preset but `openai` and `anthropic` speaks the provider's OpenAI-compatible chat completions API; `anthropic`
+speaks the Messages API ([below](#claude-through-the-messages-api)). `openai`, and a model named `openai/...` through
+`openrouter`, speak the Responses API: a newer OpenAI model writes commentary and its final answer as separate messages,
+only the final answer follows the schema, and chat completions joins their text into one string that is not JSON. The
+Responses reply keeps them apart, so the final answer is what is read, and the answers replayed in later turns carry
+their `final_answer` phase. A preset fixes the address, the variable its key is read
 from, how the schema is asked for and where a reasoning effort goes. The table is
 [providers.rs](../crates/fastbrowse-clients/src/providers.rs).
 
 | `FASTBROWSE_LLM_PROVIDER` | Address | Key | Schema | Reasoning effort | Default model |
 |:--|:--|:--|:--|:--|:--|
-| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for GPT-6 Luna and Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `openai/gpt-6-luna` |
+| `openrouter` | `https://openrouter.ai/api/v1` (`/responses` for an `openai/...` model), or a proxy in front of it in `FASTBROWSE_LLM_BASE_URL` | `OPENROUTER_API_KEY`; `FASTBROWSE_LLM_API_KEY` for a proxy | strict `json_schema` | `reasoning.effort`: `low` for GPT-6 Luna and Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `openai/gpt-6-luna` |
 | `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for GPT-6 Luna and Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `openai/gpt-6-luna` |
-| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
+| `openai` | `https://api.openai.com/v1 (`/responses`)` | `OPENAI_API_KEY` | strict `json_schema` (`text.format`) | `reasoning.effort` | none |
 | `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, only when set | `claude-haiku-5-5`, `claude-haiku-5-5` for field text and shortcuts |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
 | `groq` | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` | strict `json_schema` | `reasoning_effort` | `openai/gpt-oss-120b` |
@@ -43,7 +47,9 @@ Rules that hold across the table:
 - **A key goes to its own provider's host and nowhere else.** A hosted preset reads only its own variable, so
   `OPENAI_API_KEY` is never sent to Groq, and `OPENROUTER_API_KEY` never leaves OpenRouter. A hosted preset refuses
   `FASTBROWSE_LLM_BASE_URL`, since that would carry its key to another address; use `custom` for a proxy, with
-  `FASTBROWSE_LLM_API_KEY`. `azure` takes an address only on `.openai.azure.com` or `.services.ai.azure.com` over
+  `FASTBROWSE_LLM_API_KEY`. `openrouter` takes one for a proxy in front of OpenRouter: requests go there as they go
+  to OpenRouter, provider routing and the Responses API for OpenAI models included, with `FASTBROWSE_LLM_API_KEY` as
+  the key. `azure` takes an address only on `.openai.azure.com` or `.services.ai.azure.com` over
   https.
 - **A model is named, or the run does not start.** Without a default, the run stops before its first request and
   asks for `FASTBROWSE_LLM_MODEL`: an OpenRouter id sent elsewhere would fail as a 404 on its first call instead.
@@ -54,7 +60,8 @@ Rules that hold across the table:
 - **`FASTBROWSE_LLM_STRICT` overrides the preset's strictness, and `FASTBROWSE_LLM_EXTRA_BODY` applies to every
   preset but OpenRouter and the gateway.** The extra body may not set a field fastbrowse sends itself, such as
   `reasoning_effort` where the preset sends it, or an output cap: `max_tokens` and `max_completion_tokens` are never
-  sent, so no reply is cut short of the model's own maximum.
+  sent, so no reply is cut short of the model's own maximum. An OpenAI model on the `openai` preset is asked over the
+  Responses API, so its extra body takes Responses fields: a Chat Completions field such as `logit_bias` is refused there.
 - **Where the schema is in the prompt, it is not enforced.** fastbrowse validates every reply against the schema
   and asks once for a correction, as it does everywhere, so a reply that drifts costs a second call.
 - **The gateway does not hold every provider to the schema.** It has no counterpart to OpenRouter's
@@ -103,10 +110,12 @@ holds the AWS credentials, or use `anthropic`.
 
 Each preset was checked against the provider's own documentation on 2026-10-28.
 
-- **OpenAI.** [Chat completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create):
-  `https://api.openai.com/v1/chat/completions` with `Authorization: Bearer`, `response_format` of type
-  `json_schema` with `strict`, `reasoning_effort` from `none` to `max`, and `max_tokens` deprecated in favour of
-  `max_completion_tokens`, which o-series models require.
+- **OpenAI.** [Responses reference](https://developers.openai.com/api/reference/resources/responses/methods/create):
+  `https://api.openai.com/v1/responses` with `Authorization: Bearer`, `text.format` of type `json_schema` with
+  `strict`, `reasoning.effort`, `store: false`, and `phase` on each assistant input item. The reply's `output` holds
+  one message per phase; the `final_answer` message is the answer. OpenRouter's
+  [Responses API](https://openrouter.ai/docs/api/api-reference/responses/create-a-response) takes the same fields
+  plus `provider` and reports `usage.cost`.
 - **Anthropic.** [OpenAI SDK compatibility](https://platform.claude.com/docs/en/api/openai-sdk): base URL
   `https://api.anthropic.com/v1/`, `response_format` and `reasoning_effort` are ignored, and the page points to the
   native API's structured outputs for guaranteed schema conformance.

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from fastbrowse_evals.catalog import export
+from fastbrowse_evals.versions import relock
 
 FORWARDED = {
     "publish-candidate": "publication",
@@ -30,6 +31,7 @@ def parser() -> argparse.ArgumentParser:
     catalog = actions.add_parser("catalog", help="export or verify the public task metadata")
     catalog.add_argument("path", type=Path)
     catalog.add_argument("--check", action="store_true")
+    actions.add_parser("relock", help="recompute every task's lock fingerprint from its Parallax record")
     for name in FORWARDED:
         actions.add_parser(name, add_help=False, help=f"{name} benchmark command; use --help for its options")
     return root
@@ -41,5 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     if len(arguments) >= 2 and arguments[0] == "browser" and arguments[1] in FORWARDED:
         return run(arguments[1], arguments[2:])
     args = parser().parse_args(arguments)
+    if args.action == "relock":
+        relock()
+        return 0
     export(args.path, check=args.check)
     return 0

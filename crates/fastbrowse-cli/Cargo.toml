@@ -28,7 +28,7 @@ log = "0.4.35"
 serde = { version = "1.0.229", features = ["derive"] }
 # float_roundtrip: a cost read one unit off is written back as another number.
 serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
-tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net", "signal"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net", "signal", "process", "io-util"] }
 url = "2.5.9"
 mime_guess = "2.0.5"
 # The MCP server's streamable HTTP transport: a server, HTTP/1.1 only, as uvicorn serves it.
@@ -39,6 +39,13 @@ bytes = "1.12.1"
 sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.1", default-features = false }
 serde_path_to_error = "0.1.20"
+tempfile = "3.27.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Pipes"] }
 
 [dev-dependencies]
 # The crate itself with its stand-ins, for the tests that start the binary with them.

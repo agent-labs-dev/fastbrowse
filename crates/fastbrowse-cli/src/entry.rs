@@ -164,6 +164,31 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
             eprint!("{text}");
         }
         code
+    } else if args.first().is_some_and(|arg| arg == "doctor") {
+        let settings = match serve::load_settings()() {
+            Ok(settings) => settings,
+            Err(error) => {
+                eprintln!("{}", invocation.mask(&format!("fastbrowse doctor: {}", error.0)));
+                return 1;
+            }
+        };
+        let (text, code) = runtime().block_on(crate::doctor::command(&build, &settings, &identity));
+        let text = invocation.mask(&text);
+        if code == 0 {
+            print!("{text}");
+        } else {
+            eprint!("{text}");
+        }
+        code
+    } else if args.first().is_some_and(|arg| arg == "stats") {
+        let (text, code) = crate::stats::command(&args[1..], &options::environ());
+        let text = invocation.mask(&text);
+        if code == 0 {
+            print!("{text}");
+        } else {
+            eprint!("{text}");
+        }
+        code
     } else if args.first().is_some_and(|arg| arg == "self-update") {
         let (text, code) = crate::update::command(&args[1..], &build);
         let text = invocation.mask(&text);
@@ -187,12 +212,12 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
             build,
             kept_at: crate::kept_trace::KeptAt::default(),
         };
-        runtime().block_on(until_interrupted(
-            cli::main(args, &context),
-            interrupted(),
-            INTERRUPT_SETTLE,
-            &context.kept_at,
-        ))
+        runtime().block_on(async {
+            // Installed before the run is polled: a signal that arrives once the run has started must not find the
+            // default handler, which ends the process without the exit code or the stats record.
+            let interrupt = interrupted();
+            until_interrupted(cli::main(args, &context), interrupt, INTERRUPT_SETTLE, &context.kept_at).await
+        })
     }
 }
 
@@ -234,32 +259,39 @@ fn interrupted_notice(kept_at: &crate::kept_trace::KeptAt) -> String {
     }
 }
 
-/// The exit code of the first Ctrl-C or SIGTERM: 130 or 143, as a shell reports a process those signals ended.
-async fn interrupted() -> i32 {
-    let ctrl_c = async {
-        // A handler that cannot be installed leaves the signal to end the process as it always did.
-        if tokio::signal::ctrl_c().await.is_err() {
-            std::future::pending::<()>().await;
-        }
-    };
+/// The exit code of the first Ctrl-C or SIGTERM: 130 or 143, as a shell reports a process those signals ended. The
+/// handlers are installed when this is called, not when the future is first polled, so a caller that calls it before
+/// starting the run knows the signals are caught from then on.
+fn interrupted() -> impl std::future::Future<Output = i32> {
+    // A handler that cannot be installed leaves the signal to end the process as it always did.
     #[cfg(unix)]
     {
-        let terminate = async {
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(mut terminate) => {
-                    terminate.recv().await;
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut interrupt = signal(SignalKind::interrupt()).ok();
+        let mut terminate = signal(SignalKind::terminate()).ok();
+        async move {
+            let wait = |stream: &mut Option<tokio::signal::unix::Signal>| {
+                let stream = stream.take();
+                async move {
+                    match stream {
+                        Some(mut stream) => {
+                            stream.recv().await;
+                        }
+                        None => std::future::pending::<()>().await,
+                    }
                 }
-                Err(_) => std::future::pending::<()>().await,
+            };
+            tokio::select! {
+                () = wait(&mut interrupt) => 130,
+                () = wait(&mut terminate) => 143,
             }
-        };
-        tokio::select! {
-            () = ctrl_c => 130,
-            () = terminate => 143,
         }
     }
     #[cfg(not(unix))]
-    {
-        ctrl_c.await;
+    async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
         130
     }
 }

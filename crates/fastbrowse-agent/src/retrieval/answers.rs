@@ -113,6 +113,7 @@ pub fn assemble_answer(claims: &[Claim], notes: &Notes, steps: &[Value]) -> Comp
                 notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)),
                 |id: &String| fact_evidence(notes, id).cloned(),
                 &known,
+                |e| notes.record_of(e).map(str::to_owned),
             )
         })
         .collect();
@@ -831,8 +832,19 @@ fn estimated_context_bytes(messages: &[Message]) -> usize {
     request_bytes(messages, &Typed::<AnswerDraft>::default())
 }
 
-/// The bytes of a request for `schema`, envelope included, as `estimated_context_bytes` counts them.
-pub(super) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -> usize {
+/// The bytes of a request for `schema`, envelope included, as `estimated_context_bytes` counts them. An image counts as
+/// the base64 data URL a client sends it in, apart from the rest: serialized as it is held, PNG bytes are not UTF-8,
+/// and the driver's context check panicked on the turn after a screenshot.
+pub(crate) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -> usize {
+    // `{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,"}},` around each image's payload.
+    const IMAGE_PART: usize = 67;
+    let images: usize = messages
+        .iter()
+        .flat_map(|message| &message.images)
+        .map(|image| IMAGE_PART + image.0.len().div_ceil(3) * 4)
+        .sum();
+    let messages: Vec<Message> =
+        messages.iter().map(|message| Message { images: Vec::new(), ..message.clone() }).collect();
     let schema_json = schema.json_schema();
     let envelope = json!({
         "model": "",
@@ -842,10 +854,10 @@ pub(super) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -
             "json_schema": {"name": schema.name(), "schema": schema_json, "strict": true},
         },
     });
-    serde_json::to_vec(&envelope).expect("a request is serializable").len()
+    serde_json::to_vec(&envelope).expect("a request is serializable").len() + images
 }
 
-pub(super) fn context_limit(context: i64) -> Result<usize> {
+pub(crate) fn context_limit(context: i64) -> Result<usize> {
     usize::try_from(context).map_err(|_| {
         AgentError::Llm(LLMError::failed(
             fastbrowse_core::llm::FaultClass::Request,
@@ -1204,6 +1216,167 @@ pub(crate) async fn compose_reviewed(
         _ => (compose_part(llm, &writing(&items), &items, ledger).await?, true),
     };
     let claims = distinct_claims(kept.into_iter().chain(claims));
+    let answer = Composed { columns, numbered: numbers, claims, reduced };
+    reviewed_answer(jev, llm, task, answer, notes, ledger, reports, screenshot, steps, committed).await
+}
+
+/// A claim the run's driver wrote when it ended: its text, the passages it rests on and, for a value worked out across
+/// records, the tally code works it out by. Written by the model that walked the pages, the answer needs no second
+/// model call: a separate composer, sent every quote again outside the driver's cached conversation, was the costliest
+/// call of a counting run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WrittenClaim {
+    text: String,
+    quotes: Vec<String>,
+    /// For a claim worked out across records, the addresses of the pages its records are on, which code reads whole.
+    /// With only quotes to name them, the driver copied all 26 quotes of a site's top three authors into one reply, and
+    /// the provider's filter stopped it.
+    #[serde(default)]
+    pages: Vec<String>,
+    #[serde(default)]
+    tally: Option<Tally>,
+    #[serde(default)]
+    within: Option<Within>,
+}
+
+impl Schema for WrittenClaim {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "WrittenClaim",
+            vec![
+                Field::required("text", Ty::Str),
+                Field::required("quotes", Ty::list(Ty::Str)),
+                Field::default("pages", Ty::list(Ty::Str), Value::Array(Vec::new())),
+                Field::default("tally", Ty::optional(Tally::ty()), Value::Null),
+                Field::default("within", Ty::optional(Within::ty()), Value::Null),
+            ],
+        )
+        .ty()
+    }
+}
+
+impl WrittenClaim {
+    pub(crate) fn quotes(&self) -> &[String] {
+        &self.quotes
+    }
+
+    /// The pages a claim worked out across records ranges over, by address; none for any other claim.
+    pub(crate) fn pages(&self) -> &[String] {
+        if self.ranges() { &self.pages } else { &[] }
+    }
+
+    /// Whether code works the claim out across records: a count, total or extreme, or a selection within groups.
+    pub(crate) fn ranges(&self) -> bool {
+        self.tally.is_some() || self.within.is_some()
+    }
+
+    /// The claim as a draft citing `evidence_ids`, its quotes' notes. A tally's value is the one place its text writes
+    /// `tally.written`, which code replaces with the value it works out; text that writes it nowhere, or twice, cannot
+    /// say which is the value, and the reason goes back to the driver.
+    fn draft(&self, evidence_ids: Vec<String>) -> std::result::Result<DraftClaim, String> {
+        let prose = |text: &str| DraftPart::Prose(ProsePart { prose: text.to_string() });
+        let text = match &self.tally {
+            None => vec![prose(&self.text)],
+            Some(tally) => {
+                let at: Vec<usize> = self.text.match_indices(tally.written.as_str()).map(|(at, _)| at).collect();
+                let [at] = at[..] else {
+                    return Err(format!(
+                        "the claim {:?} has a tally whose written value {:?} must appear exactly once in its text, as \
+                         the part code works out; it appears {} times",
+                        self.text,
+                        tally.written,
+                        at.len()
+                    ));
+                };
+                let end = at + tally.written.len();
+                [
+                    (at > 0).then(|| prose(&self.text[..at])),
+                    Some(DraftPart::Computed(ComputedPart { computed: true, field: None })),
+                    (end < self.text.len()).then(|| prose(&self.text[end..])),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+        };
+        let draft =
+            DraftClaim { evidence_ids, tally: self.tally.clone(), within: self.within.clone(), cells: None, text };
+        // Bound now, so a claim code cannot work out is told to the driver while it can still rewrite it.
+        draft.clone().bind(&[]).map(|_| draft)
+    }
+}
+
+/// The driver's answer: its claims, each citing the notes its quotes were read into, and whether the task asks for a
+/// numbered list.
+#[derive(Debug, Clone)]
+pub(crate) struct WrittenAnswer {
+    claims: Vec<DraftClaim>,
+    numbered: bool,
+}
+
+impl WrittenAnswer {
+    /// `claims` pairs each claim with the notes its quotes were read into, in order.
+    pub(crate) fn new(
+        claims: Vec<(WrittenClaim, Vec<String>)>,
+        numbered: bool,
+    ) -> std::result::Result<Self, Vec<String>> {
+        let (drafts, errors): (Vec<_>, Vec<_>) =
+            claims.into_iter().map(|(claim, ids)| claim.draft(ids)).partition(std::result::Result::is_ok);
+        if !errors.is_empty() {
+            return Err(errors.into_iter().filter_map(std::result::Result::err).collect());
+        }
+        Ok(Self { claims: drafts.into_iter().filter_map(std::result::Result::ok).collect(), numbered })
+    }
+}
+
+/// The answer the driver wrote, reviewed as a composed one is: tallies worked out by code, then Jev's support, coverage
+/// and action checks.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn review_written(
+    jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
+    task: &str,
+    written: &WrittenAnswer,
+    notes: &Notes,
+    ledger: Option<&Ledger>,
+    reports: bool,
+    screenshot: Screenshot,
+    steps: &[Value],
+    committed: &[Value],
+) -> Result<ReviewedComposition> {
+    let claims = written
+        .claims
+        .iter()
+        .map(|claim| claim.clone().bind(&[]))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(LLMError::schema)?;
+    let answer = Composed { columns: None, numbered: written.numbered, claims: distinct_claims(claims), reduced: true };
+    reviewed_answer(jev, llm, task, answer, notes, ledger, reports, screenshot, steps, committed).await
+}
+
+/// Claims ready for review: the table's columns, whether the list is numbered, and whether one request saw every note.
+struct Composed {
+    columns: Option<Vec<String>>,
+    numbered: bool,
+    claims: Vec<BoundClaim>,
+    reduced: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reviewed_answer(
+    jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
+    task: &str,
+    answer: Composed,
+    notes: &Notes,
+    ledger: Option<&Ledger>,
+    reports: bool,
+    screenshot: Screenshot,
+    steps: &[Value],
+    committed: &[Value],
+) -> Result<ReviewedComposition> {
+    let Composed { columns, numbered: numbers, claims, reduced } = answer;
     // A composed answer is held to what the task asks to be told as a pick is: a source part inserts its note's
     // entire text, and unchecked, a whole release record of 16 fields stood in for "httpx", and a rewrite repeated
     // "The site received the file Received stocktake.txt (34 bytes)." after that check rejected it.
@@ -2378,7 +2551,13 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
     claims
         .into_iter()
         .map(|(text, keys)| {
-            Claim::new(&text, latest_reads(keys, |id: &String| fact_evidence(notes, id).cloned(), &known))
+            let reads = latest_reads(
+                keys,
+                |id: &String| fact_evidence(notes, id).cloned(),
+                &known,
+                |e| notes.record_of(e).map(str::to_owned),
+            );
+            Claim::new(&text, reads)
         })
         .collect()
 }
@@ -2389,9 +2568,20 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
 /// words one record's provenance. The same quote under another heading, control, page location or link destination is
 /// another record, so it is kept whatever its capture time, as are reads whose records the page does not tell apart. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
 ///
+/// `record` names the record a read belongs to by its text in the capture it was cut from. Reads in different captures
+/// are one record only when it agrees: a filtered or virtualized list shows one record per capture, so two records
+/// quoting the same words share every other field, and the older was dropped as a stale read of the newer (#1509). A
+/// read of the same record before and after an edit elsewhere on the page keeps its record text, so the newer stands
+/// (#1436). A capture the run did not remember names no record, and its reads are told apart by the other fields.
+///
 /// `known` is every read the run holds, not only the cited ones: a sibling the claim does not cite still makes two reads
 /// ambiguous.
-pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evidence>, known: &[Evidence]) -> Vec<T> {
+pub(crate) fn latest_reads<T>(
+    items: Vec<T>,
+    evidence: impl Fn(&T) -> Option<Evidence>,
+    known: &[Evidence],
+    record: impl Fn(&Evidence) -> Option<String>,
+) -> Vec<T> {
     let alike = |a: &Evidence, b: &Evidence| {
         a.url == b.url
             && a.quote == b.quote
@@ -2410,7 +2600,14 @@ pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evi
             .chain(known)
             .any(|o| o.capture_sha256 == e.capture_sha256 && (o.start, o.end) != (e.start, e.end) && alike(e, o))
     };
-    let same_record = |a: &Evidence, b: &Evidence| alike(a, b) && !ambiguous(a) && !ambiguous(b);
+    let same_record = |a: &Evidence, b: &Evidence| {
+        // Alike first: the record lookups and the sibling scan only matter for reads that quote the same thing.
+        alike(a, b) && {
+            let distinct =
+                a.capture_sha256 != b.capture_sha256 && record(a).zip(record(b)).is_some_and(|(a, b)| a != b);
+            !distinct && !ambiguous(a) && !ambiguous(b)
+        }
+    };
     let newest = |e: &Evidence| {
         let mut newest = e.captured_at.timestamp();
         for other in reads.iter().flatten().filter(|other| same_record(e, other)) {
@@ -2627,6 +2824,48 @@ mod tests {
     use crate::memory::Fact;
     use crate::policy::HistoryEntry;
     use fastbrowse_core::models::{Operation, StepOutcome};
+
+    /// A claim the driver wrote with a count in it, the count written as `written` once.
+    fn written(text: &str, written: &str) -> WrittenClaim {
+        let tally = Tally {
+            op: Op::Count,
+            of: "quote".into(),
+            scope: None,
+            field: None,
+            rank: None,
+            by: None,
+            group: None,
+            written: written.into(),
+        };
+        WrittenClaim {
+            text: text.into(),
+            quotes: vec!["a quote".into()],
+            pages: Vec::new(),
+            tally: Some(tally),
+            within: None,
+        }
+    }
+
+    #[test]
+    fn test_a_written_claims_tally_value_is_the_part_code_works_out_and_its_quotes_notes_are_cited() {
+        let draft = written("There are 3 quotes on the page.", "3").draft(vec!["f1".into()]).unwrap();
+        assert_eq!(draft.evidence_ids, ["f1"]);
+        assert!(
+            matches!(
+                &draft.text[..],
+                [DraftPart::Prose(before), DraftPart::Computed(_), DraftPart::Prose(after)]
+                    if before.prose == "There are " && after.prose == " quotes on the page."
+            ),
+            "{:?}",
+            draft.text
+        );
+    }
+
+    #[test]
+    fn test_a_written_claim_that_writes_its_tally_value_twice_is_refused() {
+        let refused = written("3 of 3 quotes.", "3").draft(vec!["f1".into()]).unwrap_err();
+        assert!(refused.contains("appears 2 times"), "{refused}");
+    }
 
     /// One row of a table, as the composer writes it.
     fn row(cells: &[&str], evidence_ids: Vec<String>) -> Claim {
@@ -3057,6 +3296,77 @@ mod tests {
         .unwrap();
         let quote = evidence.quote.clone();
         Fact::read(&quote, evidence, FactReader::JevChoice)
+    }
+
+    /// Cites `quote` where it first occurs in block `index` of `captured`, remembered by `notes`.
+    fn read_in(notes: &mut Notes, captured: &fastbrowse_core::page::Capture, index: usize, quote: &str) -> Fact {
+        let block = &captured.blocks[index];
+        let within = captured.text.chars().skip(block.start as usize).collect::<String>();
+        let start = block.start + within[..within.find(quote).unwrap()].chars().count() as i64;
+        let evidence = Evidence {
+            source_id: block.source_id.clone(),
+            url: captured.url.clone(),
+            frame_id: None,
+            captured_at: captured.captured_at,
+            capture_sha256: captured.sha256.clone(),
+            start,
+            end: start + quote.chars().count() as i64,
+            quote: quote.into(),
+            complete_source: false,
+            control_context: None,
+            rendered_text: true,
+            heading_path: vec!["Reports".into()],
+            capture_artifact: None,
+            links: Vec::new(),
+        };
+        let fact =
+            Fact::read(&format!("{} {quote}", captured.text.lines().next().unwrap()), evidence, FactReader::JevChoice);
+        notes.remember_capture(captured, 0);
+        fact
+    }
+
+    fn at(captured: fastbrowse_core::page::Capture, second: u8) -> fastbrowse_core::page::Capture {
+        let mut captured = captured;
+        captured.captured_at = DateTime::new(2026, 1, 1, 0, 0, second).utc();
+        captured
+    }
+
+    /// #1509: a filtered list shows one record per capture, so two records quoting the same words share every field
+    /// but their own text, and the later capture's read must not retire the earlier record's citation.
+    #[test]
+    fn records_with_one_quote_in_separate_captures_keep_both_citations() {
+        use crate::retrieval::testing::capture;
+        for whole_record in [false, true] {
+            let mut first = at(capture(&[(BlockKind::ListItem, "Report A: Available")]), 1);
+            let mut second = at(capture(&[(BlockKind::ListItem, "Report B: Available")]), 2);
+            first.blocks[0].whole_record = whole_record;
+            second.blocks[0].whole_record = whole_record;
+            let mut notes = Notes::default();
+            let (a, b) = (read_in(&mut notes, &first, 0, "Available"), read_in(&mut notes, &second, 0, "Available"));
+            let ids = vec![crate::memory::fact_id(&a), crate::memory::fact_id(&b)];
+            notes.add(a);
+            notes.add(b);
+            let answer = assemble_answer(&[Claim::new("Both reports are available", ids)], &notes, &[]);
+            assert_eq!(answer.citations.len(), 2, "{:?}", answer.citations);
+        }
+    }
+
+    /// #1436: the same record read before and after an edit elsewhere on the page is one citation, the newer.
+    #[test]
+    fn a_record_read_again_after_an_edit_elsewhere_keeps_the_newer_citation() {
+        use crate::retrieval::testing::capture;
+        let first = at(capture(&[(BlockKind::Paragraph, "Draft"), (BlockKind::ListItem, "Report A: Available")]), 1);
+        let second =
+            at(capture(&[(BlockKind::Paragraph, "Draft saved"), (BlockKind::ListItem, "Report A: Available")]), 2);
+        let mut notes = Notes::default();
+        let old = read_in(&mut notes, &first, 1, "Available");
+        let new = read_in(&mut notes, &second, 1, "Available");
+        let ids = vec![crate::memory::fact_id(&old), crate::memory::fact_id(&new)];
+        notes.add(old);
+        notes.add(new);
+        let answer = assemble_answer(&[Claim::new("Report A is available", ids)], &notes, &[]);
+        assert_eq!(answer.citations.len(), 1, "{:?}", answer.citations);
+        assert_eq!(answer.citations[0].text, "Draft saved Available");
     }
 
     #[test]
@@ -4278,7 +4588,7 @@ mod tests {
         // Each note is judged beside a record the claim cites, so a passage that quotes one is told from a record.
         let Question::Noul(member) = &asked["t0/n2"] else { panic!("membership is a noul") };
         assert!(
-            member.instructions.contains(r#"such as this one: {"quote": "\u201cOne\u201d by Ada""#),
+            member.instructions.contains(r#"such as this one: {"text": "\u201cOne\u201d by Ada""#),
             "{}",
             member.instructions
         );

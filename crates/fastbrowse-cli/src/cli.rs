@@ -234,7 +234,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
     let path = |flag: &str| parsed.value(flag).map(PathBuf::from);
     Ok(Args {
         task: parsed.positional.clone().unwrap_or_default(),
-        start: text("--start"),
+        start: text("--start").map(|value| options::start_url(&value)).filter(|value| !value.is_empty()),
         context: text("--context"),
         cloud: parsed.flag("--cloud"),
         local: parsed.flag("--local"),
@@ -434,9 +434,10 @@ fn limits(args: &Args) -> Result<Limits, ConfigurationError> {
     Ok(Limits { max_steps: args.max_steps, max_dollars: args.max_dollars, ..Limits::default() })
 }
 
-fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
+fn progress(streams: Streams, steps: Arc<std::sync::atomic::AtomicUsize>) -> fastbrowse_core::models::EventHandler {
     Arc::new(move |event: Event| {
         let streams = streams.clone();
+        let steps = steps.clone();
         Box::pin(async move {
             match event {
                 Event::Browser(browser) => {
@@ -445,6 +446,7 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
                     }
                 }
                 Event::Step(event) => {
+                    steps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let step = &event.step;
                     let label = options::step_label(step);
                     streams.eprint(&format!("  {:>2} {label} -> {}", step.index, step.outcome.as_str()));
@@ -531,16 +533,18 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         kept.trace().event("build", || context.build.fields());
         *context.kept_at.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(kept.path().to_owned());
     }
+    let mut pending = crate::stats::Pending::start(&context.environ);
     let host = Host {
         recipe_sink: recipe_sink.clone(),
         browser_api_key,
         settings: Some(settings),
         secrets: secrets.map(|secrets| Arc::new(secrets) as _),
-        on_event: Some(progress(context.streams.clone())),
+        on_event: Some(progress(context.streams.clone(), pending.steps())),
         http: kept.as_ref().map(|kept| fastbrowse_clients::http::Http::hyper().with_trace(kept.trace())),
         ..Host::default()
     };
     let outcome = context.runner.run(task, host).await;
+    pending.stop();
     let status = outcome.as_ref().ok().map(|result| result.status);
     let trace = kept.and_then(|kept| kept.finish(status));
     *context.kept_at.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
@@ -556,8 +560,15 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
             options::cancelled_result(error.failure_kind(), error.to_string(), receipt)
         }
         // Reported here rather than through `main`, which no longer has the kept trace's path to name.
-        Err(error) => return Ok(fail(args, context, &error.to_string(), trace.as_deref())),
+        Err(error) => {
+            let message = error.to_string();
+            let result = options::error_result(error.failure_kind(), &message);
+            pending.record(&result);
+            return Ok(fail(args, context, &message, trace.as_deref()));
+        }
     };
+    // The opt-in local log, appended before anything is printed so a crash in reporting still leaves the run counted.
+    pending.record(&result);
     // Replay accounting only for a run that replayed: a run that only saved one printed "0 actions reused" (#1342).
     if args.recipe.is_some()
         && let Some(sink) = recipe_sink

@@ -17,6 +17,7 @@ use tokio::time::Instant;
 use crate::anthropic::{self, ANTHROPIC_VERSION};
 use crate::http::{Http, Response, scrub};
 use crate::providers::LLMProvider;
+use crate::responses;
 use crate::validation::{
     Attempts, LLM_ATTEMPT_SECONDS, RetryStop, Usage, body_excerpt, describe, dollars, errors_json, json_invalid,
     json_object, known_total, object_value, post_with_retry, retryable, token_count, with_discarded,
@@ -29,25 +30,23 @@ pub fn openrouter_provider_routing() -> Value {
     json!({"require_parameters": true, "sort": "latency"})
 }
 
-/// The OpenRouter routing a request for `model` sends: [`openrouter_provider_routing`], with the endpoints a model was
-/// measured on pinned. The eval record proxy sends this too, through `fastbrowse.routing`, so a cassette holds answers
-/// from the endpoints a run is routed to.
-pub fn openrouter_routing_for(model: &str) -> Value {
-    let mut routing = openrouter_provider_routing();
-    pin_endpoints(&mut routing, model);
-    routing
-}
-
 /// Sorting by latency sent DeepSeek V4.1 Flash composes to whichever of about 50 endpoints was fastest, and Together,
 /// the one it chose most, changed words the model copied: the same compose request at temperature 0 named "Clerkwell
 /// Coffee" or "GBP 9.99" in 3 to 6 of 100 replays there. Parasail, DeepInfra and InferenceNet wrote it correctly 100 of
 /// 100 times each, Parasail at Together's 1.2 s median, so they are tried in that order, and Together is never a
 /// fallback. OpenRouter tries an `order` before its `sort`. Another model keeps the latency sort: a pin is a
 /// measurement of that model's endpoints, and each response names the provider that served it.
+///
+/// GPT-6 Luna's latency sort chose Amazon Bedrock, which lists structured outputs but does not hold a reply to them:
+/// one captured driver request came back as prose before the JSON in 2 of 30 replays there and 7 of 30 on Azure,
+/// against 0 of 30 on OpenAI, whose cache hits matched. OpenAI is tried first; the others stay fallbacks for an
+/// OpenAI error, and code still validates what they return.
 fn pin_endpoints(routing: &mut Value, model: &str) {
     if deepseek(model) {
         routing["order"] = json!(["parasail", "deepinfra", "inference-net"]);
         routing["ignore"] = json!(["together"]);
+    } else if model.starts_with("openai/gpt-6-luna") {
+        routing["order"] = json!(["openai"]);
     }
 }
 
@@ -76,8 +75,19 @@ pub const ROUTED_OUTPUT_TOKENS: i64 = 32_768;
 
 /// Request fields fastbrowse sets itself, and the output caps. An extra body that named one would replace the schema or
 /// the messages, or change where a reply is cut, so the run would fail far from the setting that caused it.
-pub const RESERVED_BODY_KEYS: [&str; 7] =
-    ["max_completion_tokens", "max_tokens", "messages", "model", "provider", "reasoning", "response_format"];
+pub const RESERVED_BODY_KEYS: [&str; 11] = [
+    "input",
+    "max_completion_tokens",
+    "max_output_tokens",
+    "max_tokens",
+    "messages",
+    "model",
+    "provider",
+    "reasoning",
+    "response_format",
+    "store",
+    "text",
+];
 
 /// The reserved keys `extra` names, sorted.
 pub fn reserved_clashes(extra: &Map<String, Value>) -> Vec<&'static str> {
@@ -136,6 +146,13 @@ fn first_choice(payload: &Map<String, Value>) -> Result<Option<&Map<String, Valu
 }
 
 fn content(payload: &Map<String, Value>) -> Result<String, String> {
+    // A provider can answer 200 with an error in place of the reply, as a Responses reply whose status is `failed`
+    // does: read only as a missing answer, its `server_error` was reported as a possible refusal.
+    if let Some(error) = payload.get("error").filter(|error| !error.is_null()) {
+        let code = error.get("code").and_then(Value::as_str).unwrap_or("error");
+        let message = error.get("message").and_then(Value::as_str).unwrap_or_default();
+        return Err(format!("the provider reported {code}: {message}"));
+    }
     let choice = first_choice(payload)?.ok_or("missing completion choices")?;
     let message = object_value(choice.get("message"))?;
     match message.get("content") {
@@ -144,10 +161,9 @@ fn content(payload: &Map<String, Value>) -> Result<String, String> {
     }
 }
 
-/// The model ran out of output tokens: what it wrote is cut off mid-value and says nothing of its schema.
-fn truncated(payload: &Map<String, Value>) -> Result<bool, String> {
-    Ok(first_choice(payload)?
-        .is_some_and(|choice| choice.get("finish_reason").and_then(Value::as_str) == Some("length")))
+/// Why the model stopped writing, as the provider reports it.
+fn finish_reason(payload: &Map<String, Value>) -> Result<Option<&str>, String> {
+    Ok(first_choice(payload)?.and_then(|choice| choice.get("finish_reason")).and_then(Value::as_str))
 }
 
 /// A response the model or provider cut off, named as truncation so it is never read as a bad answer.
@@ -164,7 +180,11 @@ fn cost(payload: &Map<String, Value>, purpose: LLMPurpose) -> CostLine {
     let read = || -> Result<CostLine, String> {
         let empty = Value::Object(Map::new());
         let usage = object_value(Some(payload.get("usage").unwrap_or(&empty)))?;
-        let cost = usage.get("cost").filter(|cost| !cost.is_null());
+        // A bring-your-own-key reply's inline cost is the gateway's fee alone, the inference billed outside it: read as
+        // the charge, it passed a dollar cap twenty times over. Left unknown, the receipt settles it with the upstream
+        // cost, as it does any reply without one.
+        let byok = usage.get("is_byok").is_some_and(|byok| byok != &Value::Bool(false));
+        let cost = usage.get("cost").filter(|cost| !cost.is_null() && !byok);
         let zero = Value::from(0);
         Ok(CostLine {
             component: CostComponent::Llm,
@@ -312,12 +332,12 @@ fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
 }
 
 fn images(body: &Map<String, Value>) -> usize {
-    let Some(messages) = body.get("messages").and_then(Value::as_array) else { return 0 };
+    let Some(messages) = ["messages", "input"].iter().find_map(|key| body.get(*key)?.as_array()) else { return 0 };
     messages
         .iter()
         .filter_map(|message| message.get("content").and_then(Value::as_array))
         .flatten()
-        .filter(|part| part.get("type").and_then(Value::as_str) == Some("image_url"))
+        .filter(|part| matches!(part.get("type").and_then(Value::as_str), Some("image_url" | "input_image")))
         .count()
 }
 
@@ -343,7 +363,9 @@ fn text_bytes(body: &Map<String, Value>) -> i64 {
 
 /// The output tokens the request let the model bill, hidden reasoning included, when it set a cap.
 fn output_cap(body: &Map<String, Value>) -> Option<i64> {
-    ["max_tokens", "max_completion_tokens"].iter().find_map(|key| body.get(*key).and_then(Value::as_i64))
+    ["max_tokens", "max_completion_tokens", "max_output_tokens"]
+        .iter()
+        .find_map(|key| body.get(*key).and_then(Value::as_i64))
 }
 
 /// How much hidden reasoning a model may spend before it answers, in OpenRouter's normalized terms.
@@ -406,6 +428,8 @@ pub enum Wire {
     ChatCompletions,
     /// Anthropic's Messages API ([`crate::anthropic`]).
     AnthropicMessages,
+    /// The Responses API ([`crate::responses`]), which keeps an OpenAI model's commentary apart from its answer.
+    Responses,
 }
 
 /// How a request asks for output that matches the schema.
@@ -440,6 +464,7 @@ pub struct OpenAICompatibleLLM {
     cache_breakpoints: bool,
     ceilings: Mutex<HashMap<String, Ceiling>>,
     provider: LLMProvider,
+    responses_for_openai: bool,
 }
 
 /// Options past the endpoint and its models, defaulting as Python's keyword arguments do.
@@ -461,6 +486,11 @@ pub struct LLMOptions {
     pub extra_body: Map<String, Value>,
     /// The provider this endpoint is, named in each failure's cause.
     pub provider: LLMProvider,
+    /// The wire every model is spoken to on.
+    pub wire: Wire,
+    /// Whether a model named `openai/...` goes over the Responses API while the rest stay on `wire`. OpenRouter serves
+    /// every provider's models on Chat Completions, which only an OpenAI model's phases cannot cross.
+    pub responses_for_openai: bool,
 }
 
 impl Default for LLMOptions {
@@ -476,6 +506,8 @@ impl Default for LLMOptions {
             cache_breakpoints: true,
             extra_body: Map::new(),
             provider: LLMProvider::OpenRouter,
+            wire: Wire::ChatCompletions,
+            responses_for_openai: false,
         }
     }
 }
@@ -562,6 +594,7 @@ impl OpenAICompatibleLLM {
         options: LLMOptions,
     ) -> Result<OpenAICompatibleLLM, String> {
         let mut clashes = reserved_clashes(&options.extra_body);
+        // The Responses API takes the effort as `reasoning`, which is reserved, so the chat field is the one to name.
         let key = options.reasoning_field.key();
         if options.extra_body.contains_key(key) && !clashes.contains(&key) {
             clashes.push(key);
@@ -570,7 +603,17 @@ impl OpenAICompatibleLLM {
             return Err(format!("extra request fields replace ones fastbrowse sets: {}", clashes.join(", ")));
         }
         let extra_body = options.extra_body.clone();
-        OpenAICompatibleLLM::with_wire(api_key, http, base_url, models, options, Wire::ChatCompletions, extra_body)
+        let wire = options.wire;
+        OpenAICompatibleLLM::with_wire(api_key, http, base_url, models, options, wire, extra_body)
+    }
+
+    /// The wire a request for `model` goes over.
+    fn wire_for(&self, model: &str) -> Wire {
+        if self.wire == Wire::ChatCompletions && self.responses_for_openai && model.starts_with("openai/") {
+            Wire::Responses
+        } else {
+            self.wire
+        }
     }
 
     /// A client on another wire, whose caller has checked the extra body against that wire's own fields.
@@ -600,6 +643,7 @@ impl OpenAICompatibleLLM {
             cache_breakpoints: options.cache_breakpoints,
             ceilings: Mutex::new(HashMap::new()),
             provider: options.provider,
+            responses_for_openai: options.responses_for_openai,
         })
     }
 
@@ -629,6 +673,7 @@ impl OpenAICompatibleLLM {
     async fn request(
         &self,
         body: &Value,
+        wire: Wire,
         ledger: Option<&Ledger>,
         usage: &Usage,
     ) -> Result<Map<String, Value>, LLMError> {
@@ -641,9 +686,10 @@ impl OpenAICompatibleLLM {
             start_attempt: 0,
             split_batch: false,
         };
-        let path = match self.wire {
+        let path = match wire {
             Wire::ChatCompletions => "chat/completions",
             Wire::AnthropicMessages => "messages",
+            Wire::Responses => "responses",
         };
         let url = format!("{}/{path}", self.base_url);
         let response = match post_with_retry(&self.http, &url, body, &self.headers(), &attempts, usage).await {
@@ -686,9 +732,10 @@ impl OpenAICompatibleLLM {
                 format!("Invalid LLM response; HTTP {}: {}", response.status, body_excerpt(&response)),
             )
         })?;
-        Ok(match self.wire {
+        Ok(match wire {
             Wire::ChatCompletions => payload,
             Wire::AnthropicMessages => anthropic::as_chat_completion(payload),
+            Wire::Responses => responses::as_chat_completion(payload),
         })
     }
 
@@ -777,6 +824,34 @@ impl OpenAICompatibleLLM {
         None
     }
 
+    /// Provider routing and the output cap that goes with it. Only OpenRouter and the gateway route, and each takes the
+    /// cap under the name its wire gives it.
+    fn route(&self, body: &mut Map<String, Value>, model: &str, cap: &str) {
+        let Some(routing) = &self.provider_routing else { return };
+        let mut routing = routing.clone();
+        // Only OpenRouter's routing takes `require_parameters`, and the pins name OpenRouter's providers, so the
+        // gateway's is left as it is.
+        if routing.get("require_parameters").is_some() {
+            pin_endpoints(&mut routing, model);
+        }
+        body.insert("provider".into(), routing);
+        body.insert(cap.into(), ROUTED_OUTPUT_TOKENS.into());
+    }
+
+    /// The effort a purpose runs at.
+    ///
+    /// Reading a field's value off a record is a judgment whether the text holds it, and at `low` GPT-6 Luna
+    /// answered null for a title that was there in 14% of 80 replays of one captured request, against 0 of 80 at
+    /// `medium`. Every other purpose passes at `low`, so only this one's default is raised; an effort the user
+    /// set is theirs.
+    fn effort_for(&self, purpose: LLMPurpose) -> Option<ReasoningEffort> {
+        let default = match (purpose, self.reasoning_default) {
+            (LLMPurpose::Groups, Some(ReasoningEffort::Low)) => Some(ReasoningEffort::Medium),
+            (_, default) => default,
+        };
+        self.reasoning_effort.or(default)
+    }
+
     async fn generate(
         &self,
         purpose: LLMPurpose,
@@ -803,6 +878,19 @@ impl OpenAICompatibleLLM {
             let body = anthropic::body(&self.extra_body, model, messages, &json_schema, self.reasoning_effort)?;
             return self.billed(body, purpose, schema, ledger, model).await;
         }
+        if self.wire_for(model) == Wire::Responses {
+            let mut body = responses::body(
+                &self.extra_body,
+                model,
+                messages,
+                &schema.name(),
+                &json_schema,
+                self.strict,
+                self.effort_for(purpose),
+            )?;
+            self.route(&mut body, model, "max_output_tokens");
+            return self.billed(body, purpose, schema, ledger, model).await;
+        }
         let json_schema = if deepseek(model) { flat_optional_objects(&json_schema) } else { json_schema };
         let response_format = match self.output_format {
             OutputFormat::JsonSchema => {
@@ -823,29 +911,11 @@ impl OpenAICompatibleLLM {
         body.insert("model".into(), model.clone().into());
         body.insert("messages".into(), wire_messages.into());
         body.insert("response_format".into(), response_format);
-        // Only OpenRouter and the gateway route, and both take `max_tokens`.
-        if let Some(routing) = &self.provider_routing {
-            let mut routing = routing.clone();
-            // Only OpenRouter's routing takes `require_parameters`, and the pins name OpenRouter's providers, so the
-            // gateway's is left as it is.
-            if routing.get("require_parameters").is_some() {
-                pin_endpoints(&mut routing, model);
-            }
-            body.insert("provider".into(), routing);
-            body.insert("max_tokens".into(), ROUTED_OUTPUT_TOKENS.into());
-        }
+        self.route(&mut body, model, "max_tokens");
         if deepseek(model) {
             body.entry("temperature").or_insert(0.0.into());
         }
-        // Reading a field's value off a record is a judgment whether the text holds it, and at `low` GPT-6 Luna
-        // answered null for a title that was there in 14% of 80 replays of one captured request, against 0 of 80 at
-        // `medium`. Every other purpose passes at `low`, so only this one's default is raised; an effort the user
-        // set is theirs.
-        let default = match (purpose, self.reasoning_default) {
-            (LLMPurpose::Groups, Some(ReasoningEffort::Low)) => Some(ReasoningEffort::Medium),
-            (_, default) => default,
-        };
-        if let Some(effort) = self.reasoning_effort.or(default) {
+        if let Some(effort) = self.effort_for(purpose) {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
         self.billed(body, purpose, schema, ledger, model).await
@@ -907,7 +977,7 @@ impl OpenAICompatibleLLM {
             billing.in_flight = Some(usage.clone());
             billing.sent = Some(body.clone());
             let sent = Value::Object(body.clone());
-            let payload = match self.request(&sent, ledger, &usage).await {
+            let payload = match self.request(&sent, self.wire_for(&billing.model), ledger, &usage).await {
                 Ok(payload) => payload,
                 Err(error) => {
                     let offset = billing.charge_unanswered(&usage);
@@ -932,11 +1002,19 @@ impl OpenAICompatibleLLM {
             billing.costs.push(with_discarded(unsettled, &usage));
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
-            if truncated(&payload).map_err(|error| LLMError::failed(FaultClass::Envelope, error))? {
-                if attempt == 0 {
-                    continue;
+            match finish_reason(&payload).map_err(|error| LLMError::failed(FaultClass::Envelope, error))? {
+                // The model ran out of output tokens: what it wrote is cut off mid-value and says nothing of its schema.
+                Some("length") if attempt == 0 => continue,
+                Some("length") => return Err(truncation(purpose)),
+                // A reply the provider's filter stopped also ends mid-JSON, and was reported as cut off by an output
+                // cap: a driver quoting ten Einstein quotes in full to back a count read as a runaway at 32768 tokens.
+                Some("content_filter") => {
+                    return Err(LLMError::failed(
+                        FaultClass::Filtered,
+                        format!("the provider's content filter stopped the LLM response ({purpose})"),
+                    ));
                 }
-                return Err(truncation(purpose));
+                _ => {}
             }
             let content = match content(&payload) {
                 Ok(content) if self.output_format == OutputFormat::JsonObject => unfenced(&content).to_string(),
@@ -995,12 +1073,13 @@ impl OpenAICompatibleLLM {
                     format!("LLM schema validation failed after one retry: {detail}"),
                 ));
             }
-            if let Some(Value::Array(messages)) = body.get_mut("messages") {
+            let correction = format!("Correct the JSON to match the schema. Validation errors:\n{detail}");
+            if let Some(Value::Array(input)) = body.get_mut("input") {
+                input.push(responses::assistant_item(&content));
+                input.push(responses::user_item(&correction));
+            } else if let Some(Value::Array(messages)) = body.get_mut("messages") {
                 messages.push(json!({"role": "assistant", "content": content}));
-                messages.push(json!({
-                    "role": "user",
-                    "content": format!("Correct the JSON to match the schema. Validation errors:\n{detail}"),
-                }));
+                messages.push(json!({"role": "user", "content": correction}));
             }
         }
         Err(LLMError::failed(FaultClass::Schema, "unreachable"))

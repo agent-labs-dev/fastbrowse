@@ -67,6 +67,47 @@ impl LLMClient for Silent {
     }
 }
 
+/// The chat driver as the script `driver` plays it, keeping the page each turn was shown. Once `turns` turns have
+/// been taken, the next is recorded and refused, so a test reads that page without the run acting on it.
+struct Shown {
+    driver: fastbrowse_agent::scripted::ScriptedDriver,
+    turns: usize,
+    prompts: Arc<Mutex<Vec<String>>>,
+}
+
+impl Shown {
+    fn new(script: &str, turns: usize) -> (Arc<Shown>, Arc<Mutex<Vec<String>>>) {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let script = fastbrowse_agent::scripted::steps(script).unwrap();
+        let driver = fastbrowse_agent::scripted::ScriptedDriver::new(script);
+        (Arc::new(Shown { driver, turns, prompts: prompts.clone() }), prompts)
+    }
+}
+
+impl LLMClient for Shown {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        if purpose == LLMPurpose::Action {
+            let taken = {
+                let mut prompts = self.prompts.lock().unwrap();
+                prompts.push(messages.last().map(|message| message.content.clone()).unwrap_or_default());
+                prompts.len() > self.turns
+            };
+            if taken {
+                return Box::pin(async {
+                    Err(LLMError::failed(fastbrowse_core::llm::FaultClass::Client, "observation recorded"))
+                });
+            }
+        }
+        self.driver.generate_value(purpose, messages, schema, ledger)
+    }
+}
+
 /// "read the page", run with clients that answer nothing and settings from nowhere, as `change` alters them.
 fn task(change: impl FnOnce(&mut RunTask, &mut Host)) -> (RunTask, Host) {
     let mut task = RunTask { task: "read the page".into(), ..RunTask::default() };
@@ -91,10 +132,10 @@ async fn an_owned_local_run_applies_viewport_before_its_first_decision() {
     }
     let start = "data:text/html,<body><script>document.body.textContent=innerWidth+'x'+innerHeight</script>";
     for (width, height) in [(640, 480), (1024, 700)] {
-        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (driver, seen) = Shown::new("", 0);
         let host = Host {
-            jev: Some(Arc::new(RecordingDecision(seen.clone()))),
-            llm: Some(Arc::new(Silent)),
+            jev: Some(Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new()))),
+            llm: Some(driver),
             settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
             ..Host::default()
         };
@@ -108,16 +149,14 @@ async fn an_owned_local_run_applies_viewport_before_its_first_decision() {
         };
         let result = run_task(task, host).await.expect("run returns a result");
         assert_eq!(result.status, Status::Error);
-        let states = seen.lock().unwrap();
-        let text = states.iter().find_map(|state| state.pointer("/page/text").and_then(Value::as_str));
-        assert_eq!(text, Some(format!("{width}x{height}").as_str()), "states: {states:?}");
+        let prompts = seen.lock().unwrap();
+        assert!(prompts.iter().any(|prompt| prompt.contains(&format!("{width}x{height}"))), "shown: {prompts:?}");
     }
 }
 
-/// Records task-only startup calls, then stops once the rendered browser page reaches a decision.
+/// Records task-only startup calls, answering the rest as the script does.
 struct HandoffDecision {
     startup: Arc<AtomicUsize>,
-    seen: Arc<Mutex<Vec<Value>>>,
     scripted: fastbrowse_agent::scripted::ScriptedJev,
 }
 
@@ -135,13 +174,9 @@ impl DecisionClient for HandoffDecision {
             self.startup.fetch_add(1, Ordering::SeqCst);
             let task = state["task"].as_str().unwrap();
             let Question::Choice(output) = &questions["pick"] else { panic!("output choice is present") };
-            assert!(task.contains("input format (a screenshot)"));
+            assert!(task.contains("Inputs the user gave, by name: format = 'a screenshot'"));
             // The state carries the task with its inputs once; the questions name it rather than restating it.
             assert!(output.instructions.contains("`task`") && !output.instructions.contains(task));
-        }
-        if state.get("page").is_some() {
-            self.seen.lock().unwrap().push(state.clone());
-            return Box::pin(async { Err(DecisionError::failed("stop on the rendered page")) });
         }
         self.scripted.evaluate(state, questions)
     }
@@ -167,7 +202,9 @@ async fn an_initial_http_failure_keeps_task_judgments_when_the_browser_opens() {
         }
     });
     let startup = Arc::new(AtomicUsize::new(0));
-    let seen = Arc::new(Mutex::new(Vec::new()));
+    // The fetched shell has run none of its scripts, so the driver waits there, which opens the browser. A wait the run
+    // sets no time limit on lasts as long as it asks, so it asks for a short one on a page that may not change.
+    let (driver, seen) = Shown::new("wait=2", 1);
     let options = task(|o, h| {
         o.start = Some(start.clone());
         o.task = "Report the value in input format.".into();
@@ -176,10 +213,9 @@ async fn an_initial_http_failure_keeps_task_judgments_when_the_browser_opens() {
         o.launch = true;
         h.jev = Some(Arc::new(HandoffDecision {
             startup: startup.clone(),
-            seen: seen.clone(),
             scripted: fastbrowse_agent::scripted::ScriptedJev::new(Vec::new()),
         }));
-        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.llm = Some(driver.clone());
         h.http = Some(Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
             Box::pin(async {
                 Ok(Response::new(200, "<body><script src='/app.js'></script>").with_header("content-type", "text/html"))
@@ -193,20 +229,16 @@ async fn an_initial_http_failure_keeps_task_judgments_when_the_browser_opens() {
     assert_eq!(result.status, Status::Error);
     assert_eq!(startup.load(Ordering::SeqCst), 1, "task judgments must survive a failed first fetch");
     let seen = seen.lock().unwrap();
-    assert!(
-        seen.iter()
-            .any(|state| state.pointer("/page/text").and_then(Value::as_str) == Some("The rendered value is 34.")),
-        "states: {seen:?}"
-    );
+    assert!(seen.iter().any(|prompt| prompt.contains("The rendered value is 34.")), "shown: {seen:?}");
 }
 
 /// Answers whether the task answers a consent banner itself with the given probability, and everything else as the
-/// script `wait` says until the post-refusal page is recorded.
-struct ConsentDecision(f64, Arc<Mutex<Vec<Value>>>, fastbrowse_agent::scripted::ScriptedJev);
+/// script says.
+struct ConsentDecision(f64, fastbrowse_agent::scripted::ScriptedJev);
 
 impl DecisionClient for ConsentDecision {
     fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
-        self.2.profile()
+        self.1.profile()
     }
 
     fn evaluate<'a>(
@@ -214,24 +246,11 @@ impl DecisionClient for ConsentDecision {
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if !questions.contains_key("consent") {
+            return self.1.evaluate(state, questions);
+        }
+        let answer = fastbrowse_core::decision::NoulAnswer { kind: Default::default(), probability: self.0 };
         Box::pin(async move {
-            if !questions.contains_key("consent") {
-                let (first, recorded) = {
-                    let mut seen = self.1.lock().unwrap();
-                    seen.push(state.clone());
-                    (seen.len() == 1, seen.iter().filter(|state| state.pointer("/page/text").is_some()).count() == 2)
-                };
-                // The assertion needs this observation, not an unlimited wait on the static banner that follows it.
-                if recorded {
-                    return Err(DecisionError::failed("consent observation recorded"));
-                }
-                if first {
-                    // Time for the browser to refuse the banner before the next page is read.
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                }
-                return self.2.evaluate(state, questions).await;
-            }
-            let answer = fastbrowse_core::decision::NoulAnswer { kind: Default::default(), probability: self.0 };
             Ok(Evaluation {
                 model: "jev".into(),
                 answers: IndexMap::from([("consent".to_string(), Answer::Noul(answer))]),
@@ -297,17 +316,13 @@ async fn serve_banner(buttons: &'static str) -> String {
     start
 }
 
-/// The page text read after the first decision, once the browser has had time to refuse the banner and before the
-/// script goes on to act, with Jev answering whether the task answers the banner itself at `answers_it`.
+/// The page the driver is shown after its first step, a wait that gives the browser time to refuse the banner, with
+/// Jev answering whether the task answers the banner itself at `answers_it`.
 async fn page_after_refusal(start: &str, task: &str, answers_it: f64) -> String {
-    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (driver, seen) = Shown::new("wait=2", 1);
     let host = Host {
-        jev: Some(Arc::new(ConsentDecision(
-            answers_it,
-            seen.clone(),
-            fastbrowse_agent::scripted::ScriptedJev::new(fastbrowse_agent::scripted::steps("wait").unwrap()),
-        ))),
-        llm: Some(Arc::new(Silent)),
+        jev: Some(Arc::new(ConsentDecision(answers_it, fastbrowse_agent::scripted::ScriptedJev::new(Vec::new())))),
+        llm: Some(driver),
         settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
         ..Host::default()
     };
@@ -315,10 +330,10 @@ async fn page_after_refusal(start: &str, task: &str, answers_it: f64) -> String 
         RunTask { task: task.into(), start: Some(start.into()), launch: true, browser: true, ..RunTask::default() };
     let result = run_task(task, host).await.expect("run returns a result");
     assert_eq!(result.status, Status::Error);
-    assert!(result.error.as_deref().is_some_and(|error| error.contains("consent observation recorded")), "{result:?}");
-    let states = seen.lock().unwrap();
-    let pages: Vec<&str> = states.iter().filter_map(|state| state.pointer("/page/text")?.as_str()).collect();
-    pages.get(1).copied().unwrap_or_default().to_string()
+    assert!(result.error.as_deref().is_some_and(|error| error.contains("observation recorded")), "{result:?}");
+    // The page itself, not what the turn says the wait removed from it.
+    let shown = seen.lock().unwrap().get(1).cloned().unwrap_or_default();
+    shown.split_once("\nPage: ").map(|(_, page)| page.to_string()).unwrap_or_default()
 }
 
 /// Asked while the browser starts whether the task answers a consent banner itself, Jev was shown the task as the
@@ -810,30 +825,10 @@ async fn test_a_run_goes_to_the_browser_when_the_read_needs_one() {
     assert!(result.error.as_deref().is_some_and(|error| error.contains("no browser here")), "{:?}", result.error);
 }
 
-/// Jev as `0` answers it, keeping the state of each step it is asked to choose.
-struct StepStates<J>(J, Arc<Mutex<Vec<Value>>>);
-
-impl<J: DecisionClient> DecisionClient for StepStates<J> {
-    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
-        self.0.profile()
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        state: &'a Value,
-        questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        if questions.contains_key("operation") {
-            self.1.lock().unwrap().push(state.clone());
-        }
-        self.0.evaluate(state, questions)
-    }
-}
-
 /// example.com's served page is a paragraph and a script that builds its heading and its one link. Read over HTTP,
 /// it offered no controls, Jev was told nothing on it led anywhere else, and a run asked to follow its link ended
 /// `complete` without following it (#1380). A page whose markup carries scripts is stated as read without running
-/// them, and the wait Jev picks there takes the run to a browser; a run limited to fetching is told no browser opens.
+/// them, and a wait there takes the run to a browser; a run limited to fetching is told no browser opens.
 /// A page with no scripts still leads nowhere.
 #[tokio::test]
 async fn test_a_fetched_page_whose_links_a_script_builds_is_not_said_to_lead_nowhere() {
@@ -849,13 +844,7 @@ async fn test_a_fetched_page_whose_links_a_script_builds_is_not_said_to_lead_now
     let nowhere = "This page offers no links or controls: nothing on it leads anywhere else.";
     for (markup, fetch, stated) in [(script_built, false, opens), (script_built, true, cannot), (plain, false, nowhere)]
     {
-        let asked = Arc::new(Mutex::new(Vec::new()));
-        let wait = fastbrowse_agent::scripted::Step {
-            operation: fastbrowse_core::models::Operation::Wait,
-            label: String::new(),
-            pick: None,
-        };
-        let jev = StepStates(fastbrowse_agent::scripted::ScriptedJev::new(vec![wait]), asked.clone());
+        let (driver, asked) = Shown::new("wait=2", 1);
         let options = task(|o, h| {
             o.fetch = fetch;
             o.task = "Open https://docs.example.test/, follow the link on that page, and report the main heading of \
@@ -872,12 +861,12 @@ async fn test_a_fetched_page_whose_links_a_script_builds_is_not_said_to_lead_now
                     Box::pin(async move { Ok(response) })
                 },
             )));
-            h.jev = Some(Arc::new(jev));
-            h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+            h.jev = Some(Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new())));
+            h.llm = Some(driver);
             h.open_browser = Some(no_browser());
         });
         let result = run(options).await.unwrap();
-        let facts = asked.lock().unwrap()[0]["page_facts"].to_string();
+        let facts = asked.lock().unwrap()[0].clone();
         for fact in [opens, cannot, nowhere] {
             assert_eq!(facts.contains(fact), fact == stated, "{facts}");
         }
@@ -895,31 +884,14 @@ async fn test_a_fetched_page_whose_links_a_script_builds_is_not_said_to_lead_now
     }
 }
 
-/// Jev as the scripted client answers, except that every page is a bot check.
-struct SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev);
-
-impl DecisionClient for SeesBotCheck {
-    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
-        self.0.profile()
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        state: &'a Value,
-        questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        Box::pin(async move {
-            let mut evaluation = self.0.evaluate(state, questions).await?;
-            if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut("bot_check") {
-                answer.probability = 1.0;
-            }
-            Ok(evaluation)
-        })
-    }
+/// The chat driver waiting on a fetched page, as one shown a bot check does: a page fetched over HTTP has not run the
+/// scripts that clear it.
+fn waits() -> Arc<dyn LLMClient> {
+    Arc::new(fastbrowse_agent::scripted::ScriptedDriver::new(fastbrowse_agent::scripted::steps("wait").unwrap()))
 }
 
 #[tokio::test]
-async fn test_a_run_takes_a_bot_check_jev_saw_in_the_document_to_the_browser() {
+async fn test_a_run_takes_a_fetched_bot_check_the_driver_waits_on_to_the_browser() {
     let http = Http::new(Arc::new(move |request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
         let response = if request.url.contains("/json/version") {
             Response::new(404, Vec::new())
@@ -930,8 +902,8 @@ async fn test_a_run_takes_a_bot_check_jev_saw_in_the_document_to_the_browser() {
         Box::pin(async move { Ok(response) })
     }));
     let options = task(|o, h| {
-        h.jev = Some(Arc::new(SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new()))));
-        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.jev = Some(Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new())));
+        h.llm = Some(waits());
         o.start = Some("https://shop.example/app".into());
         h.http = Some(http);
         h.open_browser = Some(no_browser());
@@ -1107,8 +1079,8 @@ async fn a_run_cancelled_while_its_browser_opens_keeps_what_the_fetched_read_spe
     let asked = opening.clone();
     let cancel = Cancel::default();
     let options = task(|o, h| {
-        h.jev = Some(Arc::new(Priced(SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new())))));
-        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.jev = Some(priced(Vec::new()));
+        h.llm = Some(waits());
         o.start = Some("https://shop.example/app".into());
         h.http = Some(http);
         h.cancel = cancel.clone();
@@ -1262,8 +1234,8 @@ async fn a_missing_browser_key_after_a_paid_fetch_preserves_its_receipt() {
     let options = task(|o, h| {
         o.start = Some("https://docs.example.test/value".into());
         h.http = Some(http);
-        h.jev = Some(Arc::new(Priced(SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new())))));
-        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.jev = Some(priced(Vec::new()));
+        h.llm = Some(waits());
     });
     let error = run(options).await.unwrap_err();
     assert!(error.to_string().contains("BROWSER_USE_API_KEY"));
@@ -1497,17 +1469,7 @@ impl DecisionClient for SaveJudge {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         let Some(Question::Noul(requested)) = questions.get("requested") else {
-            // The value to type is written by the model, which `Typist` plays.
-            let script = self.script.evaluate(state, questions);
-            return Box::pin(async move {
-                let mut evaluation = script.await?;
-                for (key, answer) in evaluation.answers.iter_mut() {
-                    if let (true, Answer::Choice(source)) = (key.ends_with(":source"), answer) {
-                        source.choice = "write".into();
-                    }
-                }
-                Ok(evaluation)
-            });
+            return self.script.evaluate(state, questions);
         };
         self.asked.lock().unwrap().extend(questions.values().filter_map(|question| match question {
             Question::Noul(question) => Some(question.instructions.clone()),
@@ -1538,31 +1500,6 @@ impl DecisionClient for SaveJudge {
                 cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
                 requests: 1,
             })
-        })
-    }
-}
-
-/// Fills with the value the task gives, as a model asked for it would.
-struct Typist;
-
-impl LLMClient for Typist {
-    fn generate_value<'a>(
-        &'a self,
-        purpose: LLMPurpose,
-        messages: &'a [Message],
-        schema: &'a dyn ResponseSchema,
-        ledger: Option<&'a Ledger>,
-    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
-        if purpose != LLMPurpose::Fill {
-            return fastbrowse_agent::scripted::ScriptedLLM.generate_value(purpose, messages, schema, ledger);
-        }
-        Box::pin(async move {
-            let data = schema.validate_json(r#"{"value": "Retitled card"}"#).map_err(LLMError::schema)?;
-            let cost = CostLine {
-                purpose: Some(purpose),
-                ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
-            };
-            Ok(Generation { data, cost })
         })
     }
 }
@@ -1599,9 +1536,9 @@ async fn test_a_save_over_another_cards_caption_is_not_taken() {
         }
     });
     let asked = Arc::new(Mutex::new(Vec::new()));
-    // The first looks are at the fetched page, whose Edit the browser has to be opened for, before the dialog it opens.
+    // The first click is on the fetched page, whose Edit the browser has to be opened for, before the dialog it opens.
     let script =
-        fastbrowse_agent::scripted::steps("read page; click Edit; click Edit; fill Title; click Apply").unwrap();
+        fastbrowse_agent::scripted::steps("click Edit; click Edit; fill Title = Retitled card; click Apply").unwrap();
     let options = task(|o, h| {
         o.start = Some(start.clone());
         o.task = "Retitle the first card to Retitled card, and change no other card.".into();
@@ -1609,10 +1546,10 @@ async fn test_a_save_over_another_cards_caption_is_not_taken() {
         o.launch = true;
         o.authorization = Some(Authorization { irreversible_actions: true });
         h.jev = Some(Arc::new(SaveJudge {
-            script: fastbrowse_agent::scripted::ScriptedJev::new(script),
+            script: fastbrowse_agent::scripted::ScriptedJev::new(script.clone()),
             asked: asked.clone(),
         }));
-        h.llm = Some(Arc::new(Typist));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedDriver::new(script)));
     });
     let result = run(options).await;
     server.abort();
@@ -1688,12 +1625,15 @@ struct Handed {
 }
 
 impl Handed {
-    /// A host whose Jev follows `script` and sees images, with step frames asking for a PNG with every step event and
-    /// a final frame on the result.
+    /// A host whose driver follows `script` and whose Jev and LLM see images, with step frames asking for a PNG with
+    /// every step event and a final frame on the result.
     fn host(&self, script: &str, trace: &fastbrowse_core::telemetry::Trace) -> Host {
         let jev: Arc<dyn DecisionClient> =
             Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(fastbrowse_agent::scripted::steps(script).unwrap()));
-        let llm: Arc<dyn LLMClient> = Arc::new(fastbrowse_agent::scripted::ScriptedLLM);
+        // The driver LLM takes the steps; Jev answers the questions code still gates on.
+        let llm: Arc<dyn LLMClient> = Arc::new(fastbrowse_agent::scripted::ScriptedDriver::new(
+            fastbrowse_agent::scripted::steps(script).unwrap(),
+        ));
         let (frames, events, checked) = (self.frames.clone(), self.events.clone(), self.checked.clone());
         Host {
             jev: Some(Arc::new(Recorded(jev, self.asked.clone(), self.images.clone()))),
@@ -1821,8 +1761,10 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
         "test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_frames needs ffmpeg on PATH"
     );
     let trace = fastbrowse_core::telemetry::Trace::collecting();
-    // The input is offered to Jev under a handle, so the script picks it by the handle and never by its name.
-    let host = handed.host("fill Code = input:0; read", &trace);
+    // The driver reads the input's value masked, as the task writes it, and types it as it was shown; code types it as
+    // the caller wrote it.
+    let shown_value = fastbrowse_core::safety::mask_userinfo(&format!("http://ops:{value_pw}@127.0.0.1:{port}/vault"));
+    let host = handed.host(&format!("fill Code = {shown_value}; enter Code"), &trace);
     // The browser strips the tab, so it opens with the password as written without it.
     let encoded = encode(start_pw);
     let (head, tail) = encoded.split_at(4);
@@ -1877,7 +1819,7 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
             browser: true,
             ..RunTask::default()
         },
-        handed.host("read", &trace),
+        handed.host("", &trace),
     )
     .await
     .unwrap();
@@ -1918,7 +1860,7 @@ async fn test_no_credential_of_a_run_reaches_a_model_its_events_trace_result_or_
     sinks.extend(handed.written.lock().unwrap().iter().map(|text| ("llm", text.clone())));
     sinks.extend(handed.events.lock().unwrap().iter().map(|text| ("event", text.clone())));
     sinks.extend(trace.events().iter().map(|record| ("trace", record.to_string())));
-    assert!(sinks.iter().any(|(sink, text)| *sink == "jev" && text.contains("Orders")), "the page was not read");
+    assert!(sinks.iter().any(|(sink, text)| *sink == "llm" && text.contains("Orders")), "the page was not read");
     assert!(!handed.checked.lock().unwrap().is_empty(), "until was not asked");
     // Every frame of the run is held, so its recording has no clean frame to keep and is not written.
     assert!(result.recordings.is_empty() && !recording.exists(), "a recording was written");
@@ -2022,7 +1964,7 @@ async fn test_a_declared_secret_in_the_start_query_reaches_no_model_or_exit() {
     };
     let handed = Handed::default();
     let trace = fastbrowse_core::telemetry::Trace::collecting();
-    let mut host = handed.host("read", &trace);
+    let mut host = handed.host("", &trace);
     host.secrets = Some(declared());
     let result = run_task(
         RunTask {
@@ -2049,7 +1991,7 @@ async fn test_a_declared_secret_in_the_start_query_reaches_no_model_or_exit() {
     sinks.extend(handed.events.lock().unwrap().iter().map(|text| ("event", text.clone())));
     sinks.extend(handed.checked.lock().unwrap().iter().map(|url| ("until", url.clone())));
     sinks.extend(trace.events().iter().map(|record| ("trace", record.to_string())));
-    assert!(sinks.iter().any(|(sink, text)| *sink == "jev" && text.contains("Shop")), "the page was not read");
+    assert!(sinks.iter().any(|(sink, text)| *sink == "llm" && text.contains("Shop")), "the page was not read");
     let mut leaks: Vec<String> = sinks
         .iter()
         .filter(|(_, text)| text.contains(token))

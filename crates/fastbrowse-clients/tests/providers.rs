@@ -11,11 +11,14 @@ use fastbrowse_core::models::{CostBasis, LLMPurpose};
 use serde_json::{Value, json};
 
 fn completion(content: &str, finish_reason: &str) -> Step {
+    // One reply both wires read: OpenAI's own endpoint is the Responses API, which takes `output`.
     Step::Reply(Response::json(
         200,
         &json!({
             "choices": [{"message": {"content": content}, "finish_reason": finish_reason}],
-            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            "output": [{"type": "message", "role": "assistant", "phase": "final_answer",
+                "content": [{"type": "output_text", "text": content}]}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "input_tokens": 3, "output_tokens": 2},
         }),
     ))
 }
@@ -61,7 +64,7 @@ struct Hosted {
 const HOSTED: [Hosted; 9] = [
     Hosted {
         provider: "openai",
-        url: "https://api.openai.com/v1/chat/completions",
+        url: "https://api.openai.com/v1/responses",
         key: "openai-secret",
         format: "json_schema",
         strict: true,
@@ -145,6 +148,18 @@ async fn test_each_hosted_preset_sends_its_own_key_to_its_own_host_only() {
             assert_eq!(request.header("authorization"), Some(format!("Bearer {}", case.key).as_str()));
         }
         let sent = body(&request);
+        if case.provider == "openai" {
+            // The Responses API: the schema is `text.format` and the turns are `input`.
+            assert_eq!(sent["text"]["format"]["type"], case.format);
+            assert_eq!(sent["text"]["format"]["strict"], case.strict);
+            assert_eq!(sent["input"][0], json!({"role": "user", "content": "?"}));
+            for absent in
+                ["messages", "response_format", "provider", "reasoning", "reasoning_effort", "max_output_tokens"]
+            {
+                assert!(sent.get(absent).is_none(), "openai sent {absent}");
+            }
+            continue;
+        }
         assert_eq!(sent["response_format"]["type"], case.format, "{}", case.provider);
         if case.format == "json_schema" {
             assert_eq!(sent["response_format"]["json_schema"]["strict"], case.strict, "{}", case.provider);
@@ -172,7 +187,7 @@ fn test_a_preset_keeps_no_other_providers_key() {
 
 #[test]
 fn test_a_hosted_preset_refuses_another_address() {
-    for provider in ["openai", "anthropic", "openrouter", "gateway"] {
+    for provider in ["openai", "anthropic", "gateway"] {
         let loaded = settings(&[
             ("FASTBROWSE_LLM_PROVIDER", provider),
             ("FASTBROWSE_LLM_BASE_URL", "https://proxy.example/v1"),
@@ -184,6 +199,21 @@ fn test_a_hosted_preset_refuses_another_address() {
         let error = config_error(loaded.llm(&Script::default().http()));
         assert!(error.contains("FASTBROWSE_LLM_PROVIDER=custom"), "{provider}: {error}");
     }
+}
+
+#[tokio::test]
+async fn test_openrouter_at_another_address_is_spoken_to_as_openrouter_with_its_own_key() {
+    let mut env = EVERY_KEY.to_vec();
+    env.extend([("FASTBROWSE_LLM_PROVIDER", "openrouter"), ("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:9000/llm")]);
+    let request = one(&env).await;
+    // The default OpenAI model goes over the Responses API with OpenRouter's routing, as it does on OpenRouter.
+    assert_eq!(request.url, "http://127.0.0.1:9000/llm/responses");
+    assert!(body(&request).get("provider").is_some(), "{:?}", body(&request));
+    assert_eq!(request.header("authorization"), Some("Bearer local-secret"));
+    let sent = format!("{:?}{}", request.headers, String::from_utf8_lossy(&request.body));
+    let foreign: Vec<_> =
+        EVERY_KEY.iter().map(|(_, key)| *key).filter(|key| *key != "local-secret" && sent.contains(key)).collect();
+    assert!(foreign.is_empty(), "the proxy was sent {foreign:?}");
 }
 
 #[test]
@@ -224,9 +254,10 @@ async fn test_presets_with_defaults_use_them_and_a_pin_wins() {
 async fn test_reasoning_effort_goes_in_the_field_the_preset_documents() {
     let env = [("FASTBROWSE_LLM_PROVIDER", "openai"), ("OPENAI_API_KEY", "k"), ("FASTBROWSE_LLM_MODEL", "m")];
     let asked = [env.as_slice(), &[("FASTBROWSE_LLM_REASONING", "none")]].concat();
+    // OpenAI's own endpoint is the Responses API, whose effort is `reasoning.effort`.
     let sent = body(&one(&asked).await);
-    assert_eq!(sent["reasoning_effort"], "none");
-    assert!(sent.get("reasoning").is_none());
+    assert_eq!(sent["reasoning"], json!({"effort": "none"}));
+    assert!(sent.get("reasoning_effort").is_none());
     let ollama =
         [("FASTBROWSE_LLM_PROVIDER", "ollama"), ("FASTBROWSE_LLM_MODEL", "m"), ("FASTBROWSE_LLM_REASONING", "high")];
     assert_eq!(body(&one(&ollama).await)["reasoning_effort"], "high");
