@@ -57,7 +57,7 @@ export type Operation =
  * Who chose a step: the model (llm), a rule in code, or a saved recipe action. A run never writes jev.
  */
 export type Decider = 'llm' | 'jev' | 'code' | 'recipe';
-export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
+export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed' | 'refused';
 /**
  * A closed reason for a failed browser step; ``note`` remains diagnostic text.
  */

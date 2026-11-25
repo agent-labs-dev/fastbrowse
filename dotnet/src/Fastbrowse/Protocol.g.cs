@@ -1010,6 +1010,8 @@ public enum StepOutcome
     Stale,
     [JsonStringEnumMemberName("failed")]
     Failed,
+    [JsonStringEnumMemberName("refused")]
+    Refused,
 }
 
 public sealed record StepResult

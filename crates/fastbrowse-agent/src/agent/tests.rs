@@ -29,7 +29,7 @@ use super::state::Written;
 use super::state::{Edits, Extent, FailureCause, Flow, RunState, SiteFailure};
 use super::{Agent, Outcome};
 use crate::memory::{Fact, Notes};
-use crate::policy::{Decision, HistoryEntry};
+use crate::policy::{Commit, Decision, HistoryEntry};
 use crate::retrieval::testing::capture;
 use crate::scripted::{ScriptedJev, ScriptedLLM};
 
@@ -1391,9 +1391,14 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         assert_eq!(gates[0]["step"], 0);
         assert!(gates[0].get("target").is_none());
         assert!(gates[0].get("task").is_none());
-        // A refusal stops the run for confirmation rather than going round recovery.
+        // A refusal stops the run for confirmation rather than going round recovery, and says which step waits and how
+        // to let the run take it: told only that it "needs confirmation", a caller asked a person to post (#1413).
         if let Err(flow) = gated {
-            assert!(matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation), "{case}");
+            let Flow::Stop(stop) = flow else { panic!("{case}: not stopped") };
+            assert_eq!(stop.status, Status::NeedsConfirmation, "{case}");
+            let said = if authorized { super::acting::NOT_ASKED } else { super::acting::NOT_AUTHORIZED };
+            assert_eq!(stop.error.as_deref(), Some(format!("click 'Finish' {said}").as_str()), "{case}");
+            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused), "{case}");
         }
     }
 }
@@ -1673,7 +1678,7 @@ async fn test_a_commit_the_task_makes_conditional_proceeds_only_when_the_page_sh
         if let Err(flow) = gated {
             let Flow::Unsure(unsure) = flow else { panic!("{case}: refused for another step, not stopped") };
             assert!(unsure.reason.contains("depends on a condition the task sets"), "{case}: {}", unsure.reason);
-            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Failed), "{case}");
+            assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused), "{case}");
         }
     }
 }
@@ -1698,6 +1703,18 @@ async fn test_a_commit_after_the_runs_first_is_checked_against_the_steps_already
             assert!(unsure.reason.contains("already been done by this run"), "{case}: {}", unsure.reason);
         }
     }
+}
+
+/// A step held for confirmation says which step waits and how to let the run take it, and is recorded as refused, not
+/// failed with no failure named: a caller told only that a Post "needs confirmation" asked a person to post (#1413).
+#[tokio::test]
+async fn test_a_step_held_for_confirmation_says_why_and_is_recorded_as_refused() {
+    let held = [("requested", 0.1), ("conditional", 0.1), ("carried", 0.9), ("refused", 0.0)];
+    let (gated, _, state) = gate_post_after_commits(0, &held, &[]).await;
+    let Err(Flow::Stop(stop)) = gated else { panic!("a held step before any commit did not stop: {gated:?}") };
+    assert_eq!(stop.status, Status::NeedsConfirmation);
+    assert!(stop.error.as_deref().is_some_and(|error| error.contains(super::acting::NOT_ASKED)), "{stop:?}");
+    assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Refused));
 }
 
 /// A task can give values to use at first and others only once the site does something ("if the site rejects
@@ -2528,6 +2545,41 @@ async fn test_the_done_check_masks_a_secret_typed_after_the_opening_in_the_opene
     let opened = &sent[0]["recent_actions"][0];
     assert_eq!(opened["operation"], "navigate");
     assert!(opened["target"].as_str().is_some_and(|target| target.starts_with("https://example.test/reset?token=")));
+}
+
+/// A reply posted on a signed-in page was missing after a reload, because the site served the copy from before the
+/// post for a minute, and the carried-out check scored the step 0.22. It is told each commit the run sent and the text
+/// the page showed in answer to it, which moved its score where a claim about the site did not; with no commit, nothing.
+#[tokio::test]
+async fn test_the_done_check_is_told_each_commit_the_run_sent_and_what_the_page_then_showed() {
+    let post = |put: &[&str]| HistoryEntry {
+        put: put.iter().map(|piece| piece.to_string()).collect(),
+        commit: Some(Commit::Taken),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Post (cjber / Author)"), StepOutcome::Executed, true)
+    };
+    for (history, expected) in [
+        (
+            vec![post(&["Your reply was posted."])],
+            vec![
+                "The run's click 'Post (cjber / Author)' was sent, and the page then showed the text 'Your reply was posted.'.",
+            ],
+        ),
+        (vec![post(&[])], vec!["The run's click 'Post (cjber / Author)' was sent."]),
+        (vec![HistoryEntry { commit: None, ..post(&["Your reply was posted."]) }], Vec::new()),
+    ] {
+        let mut state = run_state();
+        state.raw_task = "Reply to the comment with: Glad it helps!".into();
+        state.history = history;
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+        agent.actions_done(&mut state, &observation(&[])).await.expect("the done check answers");
+        let sent = jev.3.lock().unwrap();
+        let told: Vec<&str> = sent[0]["page_facts"]
+            .as_array()
+            .map(|facts| facts.iter().filter_map(|fact| fact.as_str()).filter(|f| f.contains("was sent")).collect())
+            .unwrap_or_default();
+        assert_eq!(told, expected, "{}", sent[0]);
+    }
 }
 
 /// Asked to add a variant the page showed out of stock, the done check rightly found the step undone, and every DONE
