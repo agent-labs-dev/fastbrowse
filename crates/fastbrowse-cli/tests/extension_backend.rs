@@ -78,47 +78,56 @@ fn serve_console() -> (u16, Arc<AtomicUsize>) {
     let sites = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/browser/sites/main");
     std::thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
-            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-            let mut request = String::new();
-            let _ = reader.read_line(&mut request);
-            let (mut signed_in, mut length) = (false, 0usize);
-            let mut line = String::new();
-            while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
-                if let Some((name, value)) = line.split_once(':') {
-                    let name = name.trim().to_ascii_lowercase();
-                    signed_in |= name == "cookie" && value.split(';').any(|c| c.trim() == "session=signed-in");
-                    if name == "content-length" {
-                        length = value.trim().parse().unwrap_or(0);
+            let (counted, sites) = (counted.clone(), sites.clone());
+            // One thread per connection: a socket Chrome opens and never sends on must not hold up the page loads
+            // and the Save behind it.
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut request = String::new();
+                let _ = reader.read_line(&mut request);
+                let (mut signed_in, mut length) = (false, 0usize);
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    if let Some((name, value)) = line.split_once(':') {
+                        let name = name.trim().to_ascii_lowercase();
+                        signed_in |= name == "cookie" && value.split(';').any(|c| c.trim() == "session=signed-in");
+                        if name == "content-length" {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
                     }
+                    line.clear();
                 }
-                line.clear();
-            }
-            let mut body = vec![0; length];
-            let _ = std::io::Read::read_exact(&mut reader, &mut body);
-            let mut parts = request.split_whitespace();
-            let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
-            let path = path.split(['?', '#']).next().unwrap_or("/");
-            let reply = |status: &str, headers: &str, body: &[u8]| {
-                let head = format!(
-                    "HTTP/1.1 {status}\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n",
-                    body.len()
-                );
-                [head.as_bytes(), body].concat()
-            };
-            let response = if path == "/login" {
-                reply("200 OK", "set-cookie: session=signed-in; Path=/\r\ncontent-type: text/html\r\n", b"Signed in")
-            } else if !signed_in && path != "/signin.html" {
-                counted.fetch_add(1, Ordering::SeqCst);
-                reply("302 Found", "location: /signin.html\r\n", b"")
-            } else if method == "POST" {
-                reply("204 No Content", "", b"")
-            } else {
-                match std::fs::read(sites.join(path.trim_start_matches('/'))) {
-                    Ok(page) => reply("200 OK", "content-type: text/html\r\n", &page),
-                    Err(_) => reply("404 Not Found", "", b""),
-                }
-            };
-            let _ = stream.write_all(&response);
+                let mut body = vec![0; length];
+                let _ = std::io::Read::read_exact(&mut reader, &mut body);
+                let mut parts = request.split_whitespace();
+                let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
+                let path = path.split(['?', '#']).next().unwrap_or("/");
+                let reply = |status: &str, headers: &str, body: &[u8]| {
+                    let head = format!(
+                        "HTTP/1.1 {status}\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    [head.as_bytes(), body].concat()
+                };
+                let response = if path == "/login" {
+                    reply(
+                        "200 OK",
+                        "set-cookie: session=signed-in; Path=/\r\ncontent-type: text/html\r\n",
+                        b"<title>Signed in</title>Signed in",
+                    )
+                } else if !signed_in && path != "/signin.html" {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    reply("302 Found", "location: /signin.html\r\n", b"")
+                } else if method == "POST" {
+                    reply("204 No Content", "", b"")
+                } else {
+                    match std::fs::read(sites.join(path.trim_start_matches('/'))) {
+                        Ok(page) => reply("200 OK", "content-type: text/html\r\n", &page),
+                        Err(_) => reply("404 Not Found", "", b""),
+                    }
+                };
+                let _ = stream.write_all(&response);
+            });
         }
     });
     (port, refused)
@@ -205,6 +214,18 @@ impl Browser {
             .map(|t| {
                 (t["id"].as_str().unwrap_or_default().to_owned(), t["url"].as_str().unwrap_or_default().to_owned())
             })
+            .collect()
+    }
+
+    /// The titles of the pages open in the browser.
+    fn titles(&self) -> Vec<String> {
+        let listed: serde_json::Value = serde_json::from_str(&self.devtools("/json/list")).expect("target list");
+        listed
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|t| t["type"] == "page")
+            .map(|t| t["title"].as_str().unwrap_or_default().to_owned())
             .collect()
     }
 
@@ -445,8 +466,9 @@ async fn the_author_console_journeys_run_signed_in_through_the_extension() {
     // The user signs in in a tab of their own before the run, which then finds the session in their profile.
     browser.devtools_with("PUT", &format!("/json/new?{base}/login"));
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !browser.pages().iter().any(|(_, url)| url.ends_with("/login")) {
-        assert!(Instant::now() < deadline, "the sign-in tab never opened");
+    // The title shows only once the page has committed, after the cookie it set is stored.
+    while !browser.titles().iter().any(|title| title == "Signed in") {
+        assert!(Instant::now() < deadline, "the sign-in never finished");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
