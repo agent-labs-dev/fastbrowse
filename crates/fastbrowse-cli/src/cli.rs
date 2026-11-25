@@ -460,7 +460,6 @@ fn progress(streams: Streams, steps: Arc<std::sync::atomic::AtomicUsize>) -> fas
 
 /// The exit code of a run that got as far as starting, or the configuration error that stopped it.
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
-    let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let explicit_extension = args.extension || args.extension_browser.is_some();
     let extension = explicit_extension || (!args.cloud && !args.fetch);
     if args.cloud {
