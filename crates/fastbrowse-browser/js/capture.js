@@ -714,25 +714,26 @@
   const ITEM = 'li,[role="listitem"]';
   // What has a place of its own, which no block may share with another.
   const PLACED = `${ITEM},[aria-posinset]`;
-  // The DOM's tree walks stop at a shadow root: `closest` and `parentElement` end at it, and `querySelectorAll` does not
-  // enter one. A shadow tree is rendered as part of its host, so where an item sits is read through each: a card's
-  // shadow paragraph is in the item around the card, and the items hosts render are items of the list around them.
-  const composedParent = n => n.parentElement ?? n.parentNode?.host ?? null;
-  const composedClosest = (e, selector) => {
-    for (let at = e; at; at = at.getRootNode().host) {
-      const found = at.closest(selector);
-      if (found) return found;
-    }
+  // The DOM's tree walks follow the light DOM: `closest` and `parentElement` end at a shadow root, `querySelectorAll`
+  // does not enter one, and neither follows a slot. Where an item sits is where it renders, so it is read on the
+  // flattened tree: a host's children are its shadow root's, a slot's are the nodes assigned to it (or its fallback
+  // content), and a slotted node's parent is its slot. A card's shadow paragraph is then in the item around the card,
+  // and slotted items belong to the list their slots render them in, in the slots' order.
+  const flatParent = n => n.assignedSlot ?? n.parentElement ?? n.parentNode?.host ?? null;
+  const flatChildren = n => {
+    if (n.shadowRoot) return [...n.shadowRoot.childNodes];
+    const assigned = n.localName === 'slot' ? n.assignedNodes({ flatten: true }) : [];
+    return [...(assigned.length ? assigned : n.childNodes)];
+  };
+  const flatClosest = (n, selector) => {
+    for (let at = n; at; at = flatParent(at)) if (at.nodeType === 1 && at.matches(selector)) return at;
     return null;
   };
-  const composedAll = (root, selector) =>
-    [...root.querySelectorAll('*')].flatMap(e => [
-      ...(e.matches(selector) ? [e] : []),
-      ...(e.shadowRoot ? composedAll(e.shadowRoot, selector) : []),
-    ]);
-  const holdsPlaced = e => [e, e.shadowRoot].some(root => root && composedAll(root, PLACED).length > 0);
+  const flatAll = (root, selector) =>
+    flatChildren(root).flatMap(n => (n.nodeType === 1 ? [...(n.matches(selector) ? [n] : []), ...flatAll(n, selector)] : []));
+  const holdsPlaced = e => flatAll(e, PLACED).length > 0;
   function itemPlace(node) {
-    const el = node && composedClosest(node.nodeType === 1 ? node : composedParent(node), PLACED);
+    const el = node && flatClosest(node, PLACED);
     if (!el) return {};
     const declared = Number.parseInt(el.getAttribute('aria-posinset'), 10);
     // The page says it does not know its list's size, so no count is stated for the item.
@@ -744,15 +745,15 @@
       count = Number.parseInt(el.getAttribute('aria-setsize'), 10);
     } else {
       // The items its nearest list owns, through any layout wrappers between them, but not those of a list nested in it.
-      const list = composedClosest(composedParent(el), LIST);
-      const siblings = list ? composedAll(list, ITEM).filter(c => {
-        if (composedClosest(composedParent(c), LIST) !== list || hidden(c)) return false;
+      const list = flatClosest(flatParent(el), LIST);
+      const siblings = list ? flatAll(list, ITEM).filter(c => {
+        if (flatClosest(flatParent(c), LIST) !== list || hidden(c)) return false;
         if (visible(c)) return true;
         // The capture also reads display:contents items, which have children on screen but no box of their own.
         const style = getComputedStyle(c);
         if (!(style.display === 'contents' && style.visibility === 'visible')) return false;
         // A box-less item still renders only when no ancestor between it and its list is removed from the page.
-        for (let a = composedParent(c); a && a !== list; a = composedParent(a)) if (hidden(a)) return false;
+        for (let a = flatParent(c); a && a !== list; a = flatParent(a)) if (hidden(a)) return false;
         return true;
       }) : [];
       position = siblings.indexOf(el) + 1;

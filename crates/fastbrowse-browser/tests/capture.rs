@@ -708,6 +708,38 @@ async fn test_shadow_content_keeps_item_places() {
     h.close().await;
 }
 
+/// Slotted items sit where their slots render them: their list, their order and their count are the rendered tree's,
+/// not the light DOM's, and their text is kept. Each layout puts the items in the light DOM in the opposite order.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_slotted_items_keep_their_rendered_places() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    let host = "<span id='host'><a href='/two' role='listitem' slot='two'>Two</a>\
+                <a href='/one' role='listitem' slot='one'>One</a></span>";
+    let slots = "<slot name=one></slot><slot name=two></slot>";
+    let shadow_list = format!("<span role=list>{slots}</span>");
+    for (layout, body, shadow) in [
+        ("shadow list", host.to_string(), shadow_list.clone()),
+        ("host list", host.replace("<span id='host'>", "<span id='host' role='list'>"), slots.to_string()),
+        ("inline host", format!("<ul><li>Outer first</li><li>{host}</li></ul>"), shadow_list.clone()),
+    ] {
+        set_body(&h.session, &body).await;
+        eval_active(&h.session, &format!("document.querySelector('#host').attachShadow({{mode:'open'}}).innerHTML = '{shadow}'"))
+            .await;
+        let capture = content_capture(&h.page).await;
+        let place = |text: &str| {
+            let block = capture.blocks.iter().find(|b| text_of(&capture, b) == text);
+            block.map(|block| block.item_place.map(|place| (place.position, place.count)))
+        };
+        assert_eq!(place("One"), Some(Some((1, 2))), "{layout}");
+        assert_eq!(place("Two"), Some(Some((2, 2))), "{layout}");
+        if layout == "inline host" {
+            assert_eq!(place("Outer first"), Some(Some((1, 2))), "{layout}");
+        }
+    }
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_quote_cards_are_whole_records_with_local_titles() {
     let Some(h) = harness().await else { return };
