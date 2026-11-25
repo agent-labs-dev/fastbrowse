@@ -3872,6 +3872,8 @@ async fn test_requested_final_screenshot_is_captured_with_default_config() {
 struct IntentJev {
     choice: &'static str,
     dates: bool,
+    /// Whether the task forbids an action, as the startup request's prohibition question is answered.
+    prohibits: bool,
     /// The answer to any other choice asked beside the output, where it is offered.
     evidence: &'static str,
     calls: std::sync::atomic::AtomicUsize,
@@ -3883,6 +3885,7 @@ impl IntentJev {
         Self {
             choice,
             dates: false,
+            prohibits: false,
             evidence: "page_text",
             calls: Default::default(),
             fallback: ScriptedJev::new(Vec::new()),
@@ -3938,6 +3941,15 @@ impl DecisionClient for IntentJev {
                 Answer::Noul(NoulAnswer {
                     kind: fastbrowse_core::decision::NoulTag,
                     probability: if self.dates { 1.0 } else { 0.0 },
+                }),
+            );
+        }
+        if questions.contains_key("prohibits") {
+            answers.insert(
+                "prohibits".into(),
+                Answer::Noul(NoulAnswer {
+                    kind: fastbrowse_core::decision::NoulTag,
+                    probability: if self.prohibits { 1.0 } else { 0.0 },
                 }),
             );
         }
@@ -10388,4 +10400,59 @@ async fn test_a_click_inside_a_drawn_surface_is_authorized_for_the_thing_it_land
         asked.push(questions);
     }
     assert_ne!(asked[0], asked[1]);
+}
+
+/// The prohibition question reads the task alone, so startup asks it in the task-judgment request while the start page
+/// opens, and the first gated action finds it answered: it never costs that action a request of its own.
+#[tokio::test]
+async fn test_the_prohibition_question_is_answered_at_startup_and_never_asked_at_the_gate() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([
+            ("prohibits", 0.99),
+            ("irreversible", 0.1),
+            ("forbidden", 0.98),
+            ("conditional", 0.01),
+        ]),
+        chosen: IndexMap::new(),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.prohibits = None;
+    state.raw_task = "Open the form. Do not click Upload.".into();
+    let judgments = agent.task_judgments(&state.raw_task, &state.ledger).await.unwrap();
+    assert_eq!(judgments.prohibits, Some(true));
+    state.prohibits = judgments.prohibits;
+    let upload = button("Upload");
+    let page = observation(std::slice::from_ref(&upload));
+    let decision = code_decision(Operation::Click, Some(upload));
+    for _ in 0..2 {
+        assert!(agent.gate_irreversible(&mut state, &page, &decision).await.is_err(), "forbidden click is refused");
+    }
+    let requests = jev.asked.lock().unwrap();
+    let keys: Vec<Vec<&str>> = requests.iter().map(|(_, q)| q.keys().map(String::as_str).collect()).collect();
+    assert!(keys[0].contains(&"prohibits") && keys[0].contains(&"dates"), "asked with the other task judgments");
+    assert_eq!(keys.iter().filter(|keys| keys.contains(&"prohibits")).count(), 1, "asked once for the run: {keys:?}");
+}
+
+/// A next page code chose from the list's own pager is opened to be read, and no model wrote its address: it makes no
+/// authorization request. The driver's goto of the same address still asks.
+#[tokio::test]
+async fn test_a_page_opened_by_code_makes_no_authorization_request() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([("irreversible", 0.1)]),
+        chosen: IndexMap::new(),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let page = observation(&[]);
+    let next = "https://list.test/page/2/".to_string();
+    let by_code = Decision { url: Some(next.clone()), by_code: true, ..code_decision(Operation::Navigate, None) };
+    state.pager_followed.insert(next.clone());
+    agent.action(&mut state, &page, &by_code).await.expect("opened");
+    assert!(jev.asked.lock().unwrap().is_empty());
+    let asked = Decision { by_code: false, ..by_code };
+    agent.action(&mut state, &page, &asked).await.expect("opened");
+    assert_eq!(jev.asked.lock().unwrap().len(), 1, "the driver's own goto is classified");
 }

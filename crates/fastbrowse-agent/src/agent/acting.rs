@@ -280,9 +280,14 @@ impl Agent {
                 // Jev classifies the address as the task shows it, credentials masked (#1381).
                 let shown = self.mask(&url);
                 self.gate_download(state, observation, decision, &caller_link(&shown)).await?;
-                let irreversible = navigation_question(&shown);
-                let action = format!("open the address {shown}.\n");
-                self.gate_question(state, observation, decision, &shown, Some(irreversible), &action, None).await?;
+                // An address code chose is the next page of a list the task reads, taken from the page's own pager
+                // (`open_unread_page`): no model proposed it, and the run opens it only to read, so there is no
+                // task-to-address judgment for Jev to make. The driver's goto and a caller's address still ask.
+                if !decision.by_code {
+                    let irreversible = navigation_question(&shown);
+                    let action = format!("open the address {shown}.\n");
+                    self.gate_question(state, observation, decision, &shown, Some(irreversible), &action, None).await?;
+                }
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
             Operation::Click | Operation::Enter => {
@@ -717,7 +722,7 @@ impl Agent {
         if let Some(prohibits) = state.prohibits {
             return Ok(prohibits);
         }
-        let prohibits = self.task_rules_out(state, "prohibits", prohibits_question()).await?;
+        let prohibits = self.task_rules_out(state, super::driving::PROHIBITS, prohibits_question()).await?;
         state.prohibits = prohibits;
         Ok(prohibits.unwrap_or(true))
     }

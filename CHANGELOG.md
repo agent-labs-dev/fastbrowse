@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run no longer waits on Jev for whether the task forbids any action before its first click: the question reads the task alone, so it is asked in the startup request beside the dates and output form while the start page opens. The next page of a list that the run's code opens from the page's own pager is no longer sent to the authorization check, as the stated rule for code-selected pagination always said; the driver's own addresses and every click are still classified.
 - Two records that quote the same words keep both citations when a run reads them in separate captures ([#1509](https://github.com/agent-labs-dev/fastbrowse/issues/1509)). A filtered or virtualized list shows one record per capture, so the later read was taken for a newer read of the first and the earlier citation was dropped. The capture now carries the text of the record each quote sits in, and a newer read replaces an older one only when the record text agrees, so a read before and after an edit elsewhere on the page still cites the newer capture.
 - `fastbrowse extension status --json` and the TypeScript SDK's `extensionStatus()` report the extension's state without starting a run: whether this fastbrowse is registered as its native host, which browsers are connected (by the label `--extension-browser` takes), and which hosts could not be reached from this process, such as one behind a sandbox. It spends nothing and may be polled.
 

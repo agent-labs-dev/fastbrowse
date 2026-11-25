@@ -584,6 +584,7 @@ impl Agent {
             );
             state.dates = judgments.dates;
             state.output_answers = judgments.output;
+            state.prohibits = judgments.prohibits;
             state.replay = options.recipe.clone().map(replay::Replay::new);
             state.raw_context = options.context.clone();
             state.caller_start = start.map(String::from);

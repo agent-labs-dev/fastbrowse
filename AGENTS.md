@@ -83,7 +83,7 @@ A reviewer rejects a change that breaks one.
   its limits are listed there.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code refuses an
   irreversible one unless the run is authorized and Jev judges the task asked for it, and tells the driver why. Only
-  code-selected pagination skips classification.
+  code-selected pagination skips classification: the next page of a list, opened by code from the page's own pager.
 - **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE, a return to a seen page
   state with nothing read since, and any return after the first since the last new evidence are each no progress;
   `unchanged_actions` of them in a row tell the driver so it plans another way. An unseen page state or new evidence
