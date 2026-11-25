@@ -1129,6 +1129,30 @@
     return labels;
   };
   const referencedNode = (root, id) => root.getElementById ? root.getElementById(id) : document.getElementById(id);
+  // An image's alt text and the words beside it often say the same thing: a card holds a picture whose alt is its title
+  // and a span showing that title. Accname would name the card with both, so every label read "Test image Test image"
+  // (#1457). The alt text only stands in for the picture, so it is left out when a sibling already shows it.
+  const namedByContent = (e, seen) => {
+    const flat = text => text.replace(/\s+/g, ' ').trim();
+    const parts = [...e.childNodes].map(n => ({
+      image: n.nodeType === 1 && n.tagName === 'IMG',
+      text:
+        n.nodeType === 3
+          ? n.textContent
+          : n.nodeType === 1 &&
+              !CODE.has(n.tagName) &&
+              n.getAttribute('aria-hidden') !== 'true' &&
+              (shown(n) || !shown(e))
+            ? labelFrom(n, seen)
+            : '',
+    }));
+    const shownText = new Set(parts.filter(part => !part.image).map(part => flat(part.text)));
+    return parts
+      .filter(part => !part.image || !shownText.has(flat(part.text)))
+      .map(part => part.text)
+      .join(' ')
+      .trim();
+  };
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -1163,19 +1187,7 @@
       // the gate read that text as what a click on the field would do (#885).
       (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName) || FIELD_CONTAINERS.has(e.getAttribute('role'))
         ? ''
-        : [...e.childNodes]
-            .map(n =>
-              n.nodeType === 3
-                ? n.textContent
-                : n.nodeType === 1 &&
-                    !CODE.has(n.tagName) &&
-                    n.getAttribute('aria-hidden') !== 'true' &&
-                    (shown(n) || !shown(e))
-                  ? labelFrom(n, seen)
-                  : '',
-            )
-            .join(' ')
-            .trim()) ||
+        : namedByContent(e, seen)) ||
       e.getAttribute('title') ||
       e.getAttribute('placeholder') ||
       ''
