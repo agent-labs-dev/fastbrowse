@@ -66,6 +66,12 @@ pub(super) struct Chat {
     /// read of the page done was called on stood beside it, and saucedemo's emptied cart, "$0.00", replaced the order
     /// total the driver quoted from the page before.
     pub(super) answer: Option<WrittenAnswer>,
+    /// The screenshot the model took, sent with its next turn. Without one the driver read only text, and gave up stuck
+    /// on a shop whose products were drawn as images with no alt text, a chart drawn on a canvas and an icon toolbar.
+    image: Option<Vec<u8>>,
+    /// Each screenshot the model was shown, by the page state it shows: a quote no page text holds is read off the
+    /// latest of the page done is called on, and a second one of the same state counts as no progress.
+    pictures: Vec<((String, String, String), Vec<u8>)>,
 }
 
 impl Chat {
@@ -102,6 +108,10 @@ impl Chat {
 pub(super) enum Act {
     Click {
         id: String,
+        /// What to click inside a drawn control, as the model saw it in a screenshot: a map's pin has no element, and
+        /// pressed as one element the canvas took a click at its centre, which selected nothing.
+        #[serde(default)]
+        on: Option<String>,
     },
     Type {
         id: String,
@@ -147,6 +157,8 @@ pub(super) enum Act {
         tab: String,
     },
     Back,
+    /// Shows the model the viewport as an image in its next turn.
+    Screenshot,
     /// Waits until the page changes, for at most `seconds`: a page that never changes would otherwise hold the run
     /// until its deadline, with the model never told that nothing happened (a "Loading" page the site serves until
     /// it is reloaded).
@@ -231,7 +243,8 @@ the same controls; once an action opens, closes or loads something, the rest are
 Act only on ids listed in the current page. Check what the actions did in the next turn before relying on them.
 
 Tools:
-- click(id); type(id, text) replaces the field's text; select(id, option) picks one of the listed options exactly.
+- click(id, on); on is null, except on a control marked drawn, such as a map or canvas, where it names the thing to \
+click inside it as your screenshot shows it, such as \"the blue square labelled Depot\". type(id, text) replaces the field's text; select(id, option) picks one of the listed options exactly.
 - type_secret(id, name) types the secret with that name; you never see its value. Use only the secret names given.
 - key(id, key) presses a key or chord in the control, such as Enter, Escape, Tab or ArrowDown.
 - drag(id, to) drags a control that can drag and drops it on the control `to`; on a control marked drawn, such as a \
@@ -241,6 +254,8 @@ canvas, give to as null and the path is drawn from a screenshot.
 - switch_tab(tab) shows the open tab with that id from the Tabs list.
 - scroll(id, down) scrolls the control, or the page when id is null; goto(url) opens an address; \
 back() goes back.
+- screenshot() shows you the viewport as an image in your next turn, for what the text does not give: pictures, \
+colours, icons, charts, a canvas, or where things sit. Actions after it in the same turn are not run.
 - wait(seconds) waits until the page changes, for at most that many seconds, for a page that is still loading or \
 checking the browser. The next turn tells you whether it changed.
 - dialog() answers the open dialog: it is accepted when it goes ahead with what the task asks, dismissed otherwise.
@@ -249,7 +264,8 @@ answer is the answer to what the task asks to be told, as claims in reading orde
 within}; for a task that asks only for something to be done, the claims state what the page shows of it done. \
 text is one self-contained sentence, checked alone against its own quotes, so it names the record its values belong \
 to; write every value in it, numbers in digits. quotes are the passages of text it rests on, from the current page \
-or any page shown to you before, each copied exactly, one per passage. A heading's `# ` is not page text, and nor is \
+or any page shown to you before, each copied exactly, one per passage. What only a screenshot you took of this page shows, such as a chart's \
+bar, is quoted as one passage you read off it that names what the value belongs to, such as \"Week 3: 12 kg\". A heading's `# ` is not page text, and nor is \
 a control line: quote a field's value alone, as its value, without the id, role, label or quotation marks around it. Give an empty answer \
 when the task asks to be told nothing, or to have the current page read for you. Set numbered when the task asks for a numbered list, and \
 write no numbers before the claims.
@@ -310,7 +326,7 @@ impl ResponseSchema for Actions {
         let mut claim = fastbrowse_core::schema::json_schema(&WrittenClaim::ty());
         let defs = claim.as_object_mut().and_then(|claim| claim.remove("$defs")).unwrap_or_else(|| json!({}));
         let tools = [
-            Actions::tool("click", &[("id", string.clone())]),
+            Actions::tool("click", &[("id", string.clone()), ("on", nullable.clone())]),
             Actions::tool("type", &[("id", string.clone()), ("text", string.clone())]),
             Actions::tool("type_secret", &[("id", string.clone()), ("name", string.clone())]),
             Actions::tool("select", &[("id", string.clone()), ("option", string.clone())]),
@@ -322,6 +338,7 @@ impl ResponseSchema for Actions {
             Actions::tool("scroll", &[("id", nullable), ("down", json!({"type": "boolean"}))]),
             Actions::tool("goto", &[("url", string.clone())]),
             Actions::tool("back", &[]),
+            Actions::tool("screenshot", &[]),
             Actions::tool("wait", &[("seconds", json!({"type": "number"}))]),
             Actions::tool("dialog", &[]),
             Actions::tool(
@@ -424,10 +441,24 @@ fn read_key(observation: &Observation) -> (String, String, String) {
     (observation.url.clone(), observation.document_key.clone(), observation.page_key.clone())
 }
 
+/// The screenshots a conversation keeps, as browser-use keeps its last two: each one is sent again on every later
+/// turn, and an older one shows a page the model has moved on from.
+const KEPT_IMAGES: usize = 2;
+
+/// Attaches `png` to the latest message and drops the images of earlier ones past `KEPT_IMAGES`, saying so where each was.
+fn attach(messages: &mut [Message], png: Vec<u8>) {
+    let Some(last) = messages.last_mut() else { return };
+    last.images = vec![fastbrowse_core::models::Bytes(png)];
+    for message in messages.iter_mut().rev().filter(|message| !message.images.is_empty()).skip(KEPT_IMAGES) {
+        message.images.clear();
+        message.content += "\n(the screenshot sent with this turn was removed)";
+    }
+}
+
 /// What the action acts on, for a refusal that names it.
 fn target_of(act: &Act) -> Option<&str> {
     match act {
-        Act::Click { id }
+        Act::Click { id, .. }
         | Act::Type { id, .. }
         | Act::TypeSecret { id, .. }
         | Act::Select { id, .. }
@@ -439,6 +470,7 @@ fn target_of(act: &Act) -> Option<&str> {
         Act::Goto { .. }
         | Act::SwitchTab { .. }
         | Act::Back
+        | Act::Screenshot
         | Act::Wait { .. }
         | Act::Dialog
         | Act::Done { .. }
@@ -610,12 +642,14 @@ impl Agent {
         let mut content = String::new();
         if state.chat.messages.is_empty() {
             state.chat.messages.push(Message::system(SYSTEM).cached());
-            content += &format!("Task: {}\n", self.model_task(state));
+            // The task is fenced and the date labelled: written bare after a task ending in markdown to copy exactly,
+            // the date read as the markdown's last line and was typed into the field with it.
+            content += &format!("The task, between <task> and </task>:\n<task>\n{}\n</task>\n", self.model_task(state));
             if let Some(context) = self.model_context(state) {
                 content += &format!("Background from the user, not part of the task: {context}\n");
             }
-            content += &crate::dates::dated(observation.captured_at, &state.dates);
-            content.push('\n');
+            let today = crate::dates::dated(observation.captured_at, &state.dates);
+            content += &format!("Today, not part of the task: {today}\n");
             if !state.attachments.is_empty() {
                 let names: Vec<String> =
                     state.attachments.iter().map(|file| fastbrowse_core::py::text::repr(&file.name)).collect();
@@ -697,6 +731,9 @@ impl Agent {
         };
         if whole {
             state.read_urls.insert(observation.url.clone());
+        }
+        if let Some(png) = state.chat.image.take() {
+            attach(&mut state.chat.messages, png);
         }
         if !state.chat.shown.iter().any(|shown| shown.sha256 == capture.sha256) {
             state.chat.shown.push(capture);
@@ -853,12 +890,19 @@ impl Agent {
                     );
                     let pages: Vec<String> =
                         crate::memory::unique(answer.iter().flat_map(|claim| claim.pages().iter().cloned()));
+                    let pictured = state.chat.pictures.iter().rev().find(|((url, _, _), _)| *url == observation.url);
+                    let pictured = pictured.map(|(_, png)| png.clone());
                     let read = self.read_quoted(
                         state,
                         capture,
                         &earlier,
                         observation,
-                        super::reading::Cited { quotes: &quotes, ranging: &ranging, pages: &pages },
+                        super::reading::Cited {
+                            quotes: &quotes,
+                            ranging: &ranging,
+                            pages: &pages,
+                            pictured: pictured.as_deref(),
+                        },
                     );
                     state.chat.shown = earlier;
                     let ids = match read {
@@ -953,6 +997,34 @@ impl Agent {
                 let wall = (status == Status::Blocked).then_some(fastbrowse_core::models::WallKind::BotCheck);
                 return Err(Stop { wall, ..Stop::new(status, "Chat/give-up", self.redact(reason)) }.into());
             }
+            // A page fetched over HTTP was never drawn: a browser opens it to show it.
+            Act::Screenshot if self.page.over_http() => {
+                return Err(self.page.needs_browser("the model asked to see the page as drawn".into()).into());
+            }
+            // Actions planned behind it were planned without the image, which is what the model asked to see first.
+            Act::Screenshot => {
+                state.chat.queue.clear();
+                let pictured = match self.screenshots().await?.pop() {
+                    Some(png) => {
+                        let key = read_key(observation);
+                        let new = !state.chat.pictures.iter().any(|(pictured, _)| *pictured == key);
+                        state.chat.image = Some(png.clone());
+                        state.chat.pictures.push((key, png));
+                        state.chat.notices.push("The screenshot you took of the viewport is attached.".into());
+                        new
+                    }
+                    // A run that holds an address credential was told so once (`IMAGES_WITHHELD`).
+                    None if self.images_withheld() => false,
+                    None => {
+                        state.chat.notices.push(
+                            "No screenshot was taken: a secret shows on the page, and pixels cannot be masked.".into(),
+                        );
+                        false
+                    }
+                };
+                self.count_progress(state, pictured, observation, None.into(), Status::Stuck).await?;
+                return Ok(None);
+            }
             Act::Back => Some(decision(Operation::Back, None, None, None)),
             Act::Wait { seconds } => Some(decision(Operation::Wait, None, None, Some(Given::Seconds(*seconds)))),
             Act::Dialog => Some(decision(Operation::Dialog, None, None, None)),
@@ -965,7 +1037,9 @@ impl Agent {
                     .unwrap_or_else(|_| url.clone());
                 Some(decision(Operation::Navigate, None, Some(url), None))
             }
-            Act::Click { id } => control(id).map(|target| decision(Operation::Click, Some(target), None, None)),
+            Act::Click { id, on } => {
+                control(id).map(|target| decision(Operation::Click, Some(target), None, on.clone().map(Given::Text)))
+            }
             Act::Hover { id } => control(id).map(|target| decision(Operation::Hover, Some(target), None, None)),
             Act::Upload { id, file } => control(id)
                 .map(|target| decision(Operation::Upload, Some(target), None, Some(Given::Text(file.clone())))),
@@ -1057,6 +1131,11 @@ impl Agent {
         if self.config.step_choices {
             state.choices = self.offered(observation, &decision);
         }
+        // A pictured control is named only by its place, so its card goes into the step's history: without it the
+        // finish check read an editor's Bold and Save as "button (2 of 5)" and "button (5 of 5)" and held a bolded,
+        // saved document undone.
+        let card = self.looks_of(&decision).await?.into_values().next();
+        state.look = card.map(|before| crate::policy::Look { before, after: None });
         let before = (state.history.len(), state.unchanged, state.recoveries, state.redecided);
         let stepped = Box::pin(self.step(state, observation, &decision)).await;
         // What the model was shown before this secret resolved may hold its value, as a page showing a demo password
@@ -1174,13 +1253,31 @@ mod tests {
     #[test]
     fn actions_parse_by_tool() {
         let text = r#"{"next":"","actions":[{"tool":"click","id":"4"},{"tool":"type","id":"5","text":"x"},
-            {"tool":"key","id":"5","key":"Enter"},{"tool":"wait","seconds":5},{"tool":"give_up","status":"needs_login","reason":"wall"}]}"#;
+            {"tool":"key","id":"5","key":"Enter"},{"tool":"wait","seconds":5},{"tool":"give_up","status":"needs_login","reason":"wall"},
+            {"tool":"click","id":"6","on":"the green circle"}]}"#;
         let value = Actions.validate_json(text).unwrap();
         let turn: Turn = serde_json::from_value(value).unwrap();
-        assert_eq!(turn.actions[0], Act::Click { id: "4".into() });
+        assert_eq!(turn.actions[0], Act::Click { id: "4".into(), on: None });
+        assert_eq!(turn.actions[5], Act::Click { id: "6".into(), on: Some("the green circle".into()) });
         assert_eq!(turn.actions[2], Act::Key { id: "5".into(), key: "Enter".into() });
         assert_eq!(turn.actions[3], Act::Wait { seconds: 5.0 });
         assert_eq!(turn.actions[4], Act::GiveUp { status: GiveUp::NeedsLogin, reason: "wall".into() });
+    }
+
+    #[test]
+    fn the_driver_can_ask_to_see_the_page_and_keeps_its_last_two_screenshots() {
+        assert!(SYSTEM.contains("screenshot() shows you the viewport as an image in your next turn"));
+        assert!(SYSTEM.contains("on a control marked drawn, such as a map or canvas, where it names the thing to"));
+        assert!(SYSTEM.contains("is quoted as one passage you read off it that names what the value belongs to"));
+        let value = Actions.validate_json(r#"{"next":"","actions":[{"tool":"screenshot"}]}"#).unwrap();
+        assert_eq!(serde_json::from_value::<Turn>(value).unwrap().actions, vec![Act::Screenshot]);
+        let mut messages = [Message::user("one"), Message::user("two"), Message::user("three")];
+        for at in 0..3 {
+            attach(&mut messages[..=at], vec![at as u8]);
+        }
+        let images: Vec<usize> = messages.iter().map(|message| message.images.len()).collect();
+        assert_eq!(images, [0, 1, 1]);
+        assert!(messages[0].content.ends_with("(the screenshot sent with this turn was removed)"));
     }
 
     #[test]

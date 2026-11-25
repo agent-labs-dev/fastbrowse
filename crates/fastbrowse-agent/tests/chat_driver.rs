@@ -337,7 +337,9 @@ async fn test_the_first_turn_states_the_task_and_the_system_prompt_is_cached() {
     let sent = driver.sent.lock().unwrap();
     assert!(sent[0][0].cache_through, "the fixed instructions mark the cached prefix");
     assert!(
-        sent[0][1].content.contains("Task: ") && sent[0][1].content.contains("next month"),
+        sent[0][1].content.contains("<task>\n")
+            && sent[0][1].content.contains("\n</task>\nToday, not part of the task: ")
+            && sent[0][1].content.contains("next month"),
         "{}",
         sent[0][1].content
     );
@@ -792,7 +794,7 @@ async fn test_the_browser_a_fetched_page_was_handed_to_is_told_the_task() {
         .await
         .expect("a result");
     let sent = driver.sent.lock().unwrap();
-    assert!(sent[0].iter().any(|message| message.content.contains("Task: ")), "{:?}", sent[0]);
+    assert!(sent[0].iter().any(|message| message.content.contains("<task>\n")), "{:?}", sent[0]);
 }
 
 #[tokio::test]

@@ -545,7 +545,7 @@ impl Agent {
 
     /// The card of a pictured target, cut from the viewport, as one image keyed by its reference. Empty for any other
     /// target, or when there is no viewport to cut it from.
-    async fn looks_of(&self, decision: &Decision) -> Step<Images> {
+    pub(super) async fn looks_of(&self, decision: &Decision) -> Step<Images> {
         let Some(target) = decision.target.as_ref().filter(|target| target.pictured == Some(true)) else {
             return Ok(Images::new());
         };
@@ -1345,15 +1345,26 @@ impl Agent {
         Ok(self.ask_choice(state, observation, question, criteria).await? == "confirm")
     }
 
+    /// The task and the steps taken, for a verdict on the page that turns on both. Sent neither, the site-failure
+    /// question, which asks about a load unfinished across steps and the content the task is about, judged a page
+    /// showing "Loading..." beside the stock count it was asked for a failure at 0.72.
+    fn verdict_context(&self, state: &RunState) -> Map<String, JsonValue> {
+        // Masked here, as the task is: a secret typed after the run opened its first page can sit in that address.
+        let mut history = JsonValue::Array(state.actions_taken().map(HistoryEntry::seen).collect());
+        self.mask_strings(&mut history);
+        Map::from_iter([("task".to_string(), self.caller_task(state).into()), ("recent_actions".to_string(), history)])
+    }
+
     /// Whether this page reports that the site failed, for a finish that asks nothing about steps.
     pub(super) async fn site_failed(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
         let questions = IndexMap::from([("site_failure".to_string(), Question::Noul(site_failure_question()))]);
+        let context = self.verdict_context(state);
         let state_json = page_verdict_state(
             observation,
             &Notes::default(),
             &self.config.tokens,
             &questions.values().map(Dump::dump_json).collect::<Vec<_>>(),
-            None,
+            Some(&context),
             &state.dates,
         )?;
         fastbrowse_core::decision::reserve(&state.ledger, self.jev.as_ref(), JevPurpose::Action, 0.0, 1)?;
@@ -1405,10 +1416,7 @@ impl Agent {
             ),
             Some("Nothing shown says the site refuses a step the task asks for."),
         );
-        // Masked here, as the task is: a secret typed after the run opened its first page can sit in that address.
-        let mut history = JsonValue::Array(state.actions_taken().map(HistoryEntry::seen).collect());
-        self.mask_strings(&mut history);
-        let mut context = Map::from_iter([("recent_actions".to_string(), history)]);
+        let mut context = self.verdict_context(state);
         // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
         // fields left empty once the run stalled on a task to carry out (#812).
         // A run that has only read can find a page already showing what the task asks to be made, such as an editor

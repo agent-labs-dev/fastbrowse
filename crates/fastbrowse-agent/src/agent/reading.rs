@@ -19,6 +19,8 @@ pub(super) struct Cited<'a> {
     pub quotes: &'a [String],
     pub ranging: &'a [String],
     pub pages: &'a [String],
+    /// The latest screenshot the driver was shown of the page in front of it, which a quote no page text holds was read off.
+    pub pictured: Option<&'a [u8]>,
 }
 
 impl Agent {
@@ -81,7 +83,7 @@ impl Agent {
         observation: &Observation,
         cited: Cited<'_>,
     ) -> std::result::Result<Vec<String>, (Vec<String>, Vec<String>)> {
-        let Cited { quotes, ranging, pages } = cited;
+        let Cited { quotes, ranging, pages, pictured } = cited;
         let mut missing = Vec::new();
         // The pages kept whole: the current one, and the earlier ones by their place in `earlier`.
         let (mut whole_current, mut whole_before) = (false, std::collections::BTreeSet::new());
@@ -122,6 +124,12 @@ impl Agent {
                     Some((_, facts)) => facts.push(fact),
                     None => before.push((at, vec![fact])),
                 }
+            } else if let Some(png) = pictured {
+                // A chart's bars and a product drawn as an image are in no text layer: the driver read the value off the
+                // screenshot it took, as the invariant allows, and the evidence says so.
+                let fact = Fact::read_from_image(&self.mask(quote), &capture.url, observation.captured_at, png);
+                ids.push(crate::memory::fact_id(&fact));
+                current.push(fact);
             } else {
                 missing.push(quote.clone());
             }

@@ -437,33 +437,63 @@ impl Agent {
             // A drawn control pressed as one element changes pixels, not elements: a canvas switch or gesture that read
             // as "nothing visible changed" was withheld as idle, and the run went looking elsewhere. Its frame before
             // the action lets the one after judge it.
+            // The driver names a thing it saw inside a drawn control: Jev places it there, as pressing the whole surface
+            // clicked its centre and selected nothing.
+            let inside = match (&decision.given, decision.target.as_ref()) {
+                (Some(crate::policy::Given::Text(on)), Some(target))
+                    if action.operation == Operation::Click && target.drawn == Some(true) =>
+                {
+                    Some((on.clone(), target.clone()))
+                }
+                _ => None,
+            };
             let drawn_before = match decision.target.as_ref() {
                 Some(target)
-                    if matches!(action.operation, Operation::Click | Operation::Drag) && target.drawn == Some(true) =>
+                    if inside.is_none()
+                        && matches!(action.operation, Operation::Click | Operation::Drag)
+                        && target.drawn == Some(true) =>
                 {
                     self.viewport().await?
                 }
                 _ => None,
             };
-            let dispatched = async {
-                if action.operation == Operation::Wait {
-                    // A WAIT lasts until the page changes, which may be later than a few seconds: a status line
-                    // rewritten every ten seconds was never seen to move. The driver says how long it will wait, as a
-                    // page that never changes held the run to its deadline with the model never told nothing happened.
-                    // The run's own deadline bounds it too, and with neither the page ends it after one armed watch.
-                    let left = browsing_deadline(&state.ledger, state.compose).map_or(f64::INFINITY, |until| {
-                        until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64()
-                    });
-                    let seconds = match decision.given {
-                        Some(crate::policy::Given::Seconds(asked)) => left.min(asked.max(0.0)),
-                        _ => left,
-                    };
-                    self.page.wait(&action, &raw, seconds).await.map_err(Flow::from)
-                } else {
-                    self.page.act(&action, &raw).await.map_err(Flow::from)
-                }
+            let acted = if let Some((on, surface)) = &inside {
+                let sighted = self.trace.phase("act", self.click_inside_drawn(state, &raw, surface, on)).await;
+                sighted.map(|clicked| {
+                    clicked.unwrap_or_else(|| ActResult {
+                        outcome: StepOutcome::Failed,
+                        failure: Some(fastbrowse_core::models::StepFailure::MissingTarget),
+                        page_changed: false,
+                        detail: Some(format!(
+                            "{} was not seen inside {}, so nothing was clicked",
+                            text::repr(on),
+                            text::repr(&describe(surface))
+                        )),
+                        moved: false,
+                        landed: None,
+                    })
+                })
+            } else {
+                let dispatched = async {
+                    if action.operation == Operation::Wait {
+                        // A WAIT lasts until the page changes, which may be later than a few seconds: a status line
+                        // rewritten every ten seconds was never seen to move. The driver says how long it will wait, as a
+                        // page that never changes held the run to its deadline with the model never told nothing happened.
+                        // The run's own deadline bounds it too, and with neither the page ends it after one armed watch.
+                        let left = browsing_deadline(&state.ledger, state.compose).map_or(f64::INFINITY, |until| {
+                            until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64()
+                        });
+                        let seconds = match decision.given {
+                            Some(crate::policy::Given::Seconds(asked)) => left.min(asked.max(0.0)),
+                            _ => left,
+                        };
+                        self.page.wait(&action, &raw, seconds).await.map_err(Flow::from)
+                    } else {
+                        self.page.act(&action, &raw).await.map_err(Flow::from)
+                    }
+                };
+                self.trace.phase("act", dispatched).await
             };
-            let acted = self.trace.phase("act", dispatched).await;
             let mut result = match acted {
                 Ok(result) => result,
                 Err(Flow::Browser(BrowserError::PageUnresponsive(_))) if Self::may_reopen(state, decision, &action) => {

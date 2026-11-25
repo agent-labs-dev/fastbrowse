@@ -9600,7 +9600,7 @@ fn test_a_tallied_claim_keeps_every_record_on_the_page_it_quotes() {
                 page,
                 &[],
                 &observation(&[]),
-                super::reading::Cited { quotes: &quotes, ranging: &ranging, pages: &[] },
+                super::reading::Cited { quotes: &quotes, ranging: &ranging, pages: &[], pictured: None },
             )
             .unwrap();
         let texts: std::collections::BTreeSet<_> = state.notes.facts().iter().map(|fact| fact.text.clone()).collect();
@@ -9633,7 +9633,7 @@ fn test_one_tallied_quote_on_a_list_page_keeps_the_list_and_its_unread_pages() {
             current,
             &earlier,
             &at(second, &[]),
-            super::reading::Cited { quotes: &quotes, ranging: &quotes, pages: &[] },
+            super::reading::Cited { quotes: &quotes, ranging: &quotes, pages: &[], pictured: None },
         )
         .unwrap();
     let texts: std::collections::BTreeSet<_> = state.notes.facts().iter().map(|fact| fact.text.clone()).collect();
@@ -9666,7 +9666,7 @@ fn test_a_claim_citing_no_page_of_a_list_leaves_that_list_out() {
             current.clone(),
             &earlier,
             &at(category, &[]),
-            super::reading::Cited { quotes: &[], ranging: &[], pages: &pages },
+            super::reading::Cited { quotes: &[], ranging: &[], pages: &pages, pictured: None },
         )
         .unwrap();
     let texts: std::collections::BTreeSet<_> = state.notes.facts().iter().map(|fact| fact.text.clone()).collect();
@@ -9680,7 +9680,7 @@ fn test_a_claim_citing_no_page_of_a_list_leaves_that_list_out() {
             current,
             &earlier,
             &at(category, &[]),
-            super::reading::Cited { quotes: &quotes, ranging: &[], pages: &pages },
+            super::reading::Cited { quotes: &quotes, ranging: &[], pages: &pages, pictured: None },
         )
         .unwrap();
     let texts: std::collections::BTreeSet<_> = state.notes.facts().iter().map(|fact| fact.text.clone()).collect();
@@ -9707,7 +9707,7 @@ fn test_a_tallied_claim_keeps_every_page_it_names_and_refuses_one_never_shown() 
             current.clone(),
             &earlier,
             &at(second, &[]),
-            super::reading::Cited { quotes: &[], ranging: &[], pages: &pages },
+            super::reading::Cited { quotes: &[], ranging: &[], pages: &pages, pictured: None },
         )
         .unwrap();
     let texts: std::collections::BTreeSet<_> = state.notes.facts().iter().map(|fact| fact.text.clone()).collect();
@@ -9720,7 +9720,7 @@ fn test_a_tallied_claim_keeps_every_page_it_names_and_refuses_one_never_shown() 
         current,
         &earlier,
         &at(second, &[]),
-        super::reading::Cited { quotes: &[], ranging: &[], pages: std::slice::from_ref(&unshown) },
+        super::reading::Cited { quotes: &[], ranging: &[], pages: std::slice::from_ref(&unshown), pictured: None },
     );
     assert_eq!(refused, Err((Vec::new(), vec![unshown])));
 }
@@ -10212,4 +10212,19 @@ fn test_an_address_the_driver_copied_masked_is_typed_and_opened_as_the_caller_wr
     // A masked address the caller never wrote is left as the driver wrote it.
     let other = agent.mask("https://ops:Other9@elsewhere.test/");
     assert_eq!(agent.as_written(&state, &other), other);
+}
+
+/// The site-failure question asks about a load unfinished across steps and the content the task is about. Sent neither,
+/// it judged a page showing "Loading..." beside the stock count the task asked for a failure, and the run gave up.
+#[tokio::test]
+async fn the_site_failure_check_is_told_the_task_and_the_steps_taken() {
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 0.0, "done"));
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.history.push(executed(Some(Operation::Click), Some("Search"), true));
+    assert!(!agent.site_failed(&mut state, &observation(&[button("Search")])).await.unwrap());
+    let sent = jev.3.lock().unwrap();
+    let sent = sent.last().expect("one request");
+    assert!(sent["task"].as_str().is_some_and(|task| task.contains("Bristol to York")), "{sent}");
+    assert!(sent["recent_actions"].as_array().is_some_and(|steps| steps.len() == 1), "{sent}");
 }
