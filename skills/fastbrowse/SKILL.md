@@ -53,6 +53,9 @@ can exceed that limit. For a strict total-spend ceiling, use the default browser
 otherwise explain that fastbrowse cannot enforce that ceiling for cloud runs and establish an
 acceptable budget before starting one. Count earlier run costs against the user's total budget across retries.
 
+For CLI setup failures, run `fastbrowse doctor`. To summarise a user's opt-in CLI log, run
+`fastbrowse stats` with the log path configured in `FASTBROWSE_STATS`.
+
 ## Set the task boundary
 
 Include the goal, starting address when known, required output, relevant constraints, and supplied field values.

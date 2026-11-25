@@ -56,6 +56,9 @@ such as `Llm.Rejected/openrouter/action/http-401`.
 The SDK keeps no trace of a run, unlike the `fastbrowse` CLI, which keeps one for a run that ends short of `complete`.
 To write one, set `FASTBROWSE_TRACE` to a file path in the environment the SDK starts fastbrowse with.
 
+For a separate CLI run, `fastbrowse doctor` checks the local setup. `FASTBROWSE_STATS` and
+`fastbrowse stats` enable and summarise the CLI's local run log.
+
 ## Processes and errors
 
 `Fastbrowse.start` starts one fastbrowse process and `run` sends it a task. The process serves one run at a time:

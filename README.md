@@ -110,6 +110,9 @@ uvx fastbrowse "Log in as standard_user with the saved password and add the back
 The [command-line reference](docs/cli.md#flags) has every flag, your own signed-in Chrome and Bitwarden logins, driving open
 windows, model and provider settings, and every status with its exit code.
 
+Run `fastbrowse doctor` to check the local setup. Set `FASTBROWSE_STATS` to a local log path
+and use `fastbrowse stats` to summarise recorded runs.
+
 ## Use your own Chrome
 
 Run fastbrowse in the Chrome you already use, where you are already signed in. You need

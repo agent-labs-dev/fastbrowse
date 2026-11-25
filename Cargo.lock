@@ -448,6 +448,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "indexmap",
+ "libc",
  "log",
  "mime_guess",
  "serde",
@@ -458,6 +459,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

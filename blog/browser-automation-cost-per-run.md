@@ -4,7 +4,7 @@ description: What a fastbrowse run reports it spent, what each charge is for, an
 topic: Results and cost
 published: 2026-10-31
 updated: 2026-11-25
-verifiedAgainst: v0.11.2
+verifiedAgainst: v0.12.0
 verifiedOn: 2026-11-25
 ---
 

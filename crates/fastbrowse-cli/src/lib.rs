@@ -9,6 +9,7 @@ pub use fastbrowse_run::helper;
 pub mod argparse;
 pub mod bitwarden;
 pub mod cli;
+pub mod doctor;
 pub mod embed;
 pub mod entry;
 pub mod extension;
@@ -19,6 +20,7 @@ pub mod runner;
 #[cfg(feature = "scripted")]
 pub mod scripted;
 pub mod serve;
+pub mod stats;
 pub mod totp;
 pub mod update;
 
