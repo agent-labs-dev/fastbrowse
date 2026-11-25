@@ -190,6 +190,26 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
             }
         }
     }
+    // A capture keeps the newlines a text node had in the page's source, where the observation reads the node as one
+    // piece, so a reply can span two lines of one block that neither holds whole: the two are one candidate.
+    for whole in [true, false] {
+        for at in 1..lines.len() {
+            let (first, second) = (&lines[at - 1], &lines[at]);
+            if matched[at - 1] || matched[at] || !std::ptr::eq(first.3, second.3) {
+                continue;
+            }
+            let joined = format!("{}{}", first.2, second.2);
+            let Some(run) = (0..pieces.len()).find_map(|from| run_in(&pieces, &used, from, &joined, whole)) else {
+                continue;
+            };
+            matched[at - 1] = true;
+            matched[at] = true;
+            used[run.clone()].fill(true);
+            if pieces[run].iter().any(|(_, added)| *added) {
+                quotes.push(evidence(&page, first.3, first.0, second.1));
+            }
+        }
+    }
     quotes.sort_by_key(|quote| quote.start);
     quotes
 }
@@ -219,21 +239,21 @@ fn aligned<'a>(pieces: &[(String, bool)], lines: impl Iterator<Item = &'a str>) 
                 .collect()
         })
         .collect();
-    // best[i][j]: the most text lines[..i] explain with pieces[..j].
+    // best[i][j]: the most text lines[..i] explain with pieces[..j]. Each line either explains nothing, or reads one
+    // run, and pieces it passes over carry the score forward, so a line costs its runs once rather than a scan of every
+    // start for every end.
     let mut best = vec![vec![0usize; m + 1]; n + 1];
     for i in 0..n {
-        for j in 0..=m {
-            let mut here = best[i][j];
-            if j > 0 {
-                here = here.max(best[i + 1][j - 1]);
+        let mut row = best[i].clone();
+        for (s, ends) in runs[i].iter().enumerate() {
+            for &(end, len) in ends {
+                row[end] = row[end].max(best[i][s] + len);
             }
-            for (s, ends) in runs[i].iter().enumerate() {
-                for &(_, len) in ends.iter().filter(|(end, _)| *end == j) {
-                    here = here.max(best[i][s] + len);
-                }
-            }
-            best[i + 1][j] = here;
         }
+        for j in 1..=m {
+            row[j] = row[j].max(row[j - 1]);
+        }
+        best[i + 1] = row;
     }
     let mut found = Vec::new();
     let (mut i, mut j) = (n, m);
