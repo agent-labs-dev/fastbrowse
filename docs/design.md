@@ -145,7 +145,8 @@ the driver reads beside the field as `refused: "..."`: a refused submit shows th
 A control the page disables (`disabled`, or inside `aria-disabled="true"`) stays in the observation with
 `disabled: true` and no operations. The driver sees it listed as `disabled`, so a Save that an edit did not enable
 reads as a disabled Save rather than no Save, and an action on it is refused with that reason. A step that enables or
-disables a control says so in its effect, and the page state counts it.
+disables a control says so in its effect, and the page state counts it. Replay counts no disabled control as a
+match for a recorded step.
 
 ## Reading and citations
 
@@ -167,8 +168,8 @@ The ledger reserves the documented search price before dispatch and records the 
 price when the receipt is unavailable. No key leaves search unavailable.
 
 Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
-offered as what it has. A disabled control (`disabled`, `aria-disabled="true"` or `inert` on the element) is not
-offered, as a browser capture leaves it out, so a disabled next link is no next page. A step only a browser can
+offered as what it has. A disabled control (`disabled` or `aria-disabled="true"` on the element) is kept offering
+nothing, as a browser capture keeps it, and an `inert` one is left out, so a disabled next link is no next page. A step only a browser can
 take starts one on the same page, and the run carries on with
 what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
 build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a

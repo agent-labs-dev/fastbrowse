@@ -38,7 +38,7 @@ use fastbrowse_core::models::{
     Evidence, FailureKind, Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact,
     StepOutcome, UntilCheck, Wall, WallKind,
 };
-use fastbrowse_core::page::{BrowserError, Observation, Page};
+use fastbrowse_core::page::{BrowserError, Control, Observation, Page};
 use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
@@ -1017,7 +1017,7 @@ impl Agent {
         // access check, and naming it `sign_in` sends a caller to a password that cannot pass it.
         let kind = match kind {
             Some(kind) => kind,
-            None if raw.as_ref().is_some_and(|raw| raw.controls.is_empty()) => WallKind::BotCheck,
+            None if raw.as_ref().is_some_and(|raw| !raw.controls.iter().any(Control::actionable)) => WallKind::BotCheck,
             None => wall_kind(&credentials),
         };
         Some(Wall { kind, origin, fields, seen_at_ms: now_ms() })
