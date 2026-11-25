@@ -177,15 +177,15 @@ pub(crate) fn sent_facts(history: &[HistoryEntry]) -> Vec<String> {
 /// do; told it as a list of steps and their text, or with "after the run's step", it did not. The same names the run's
 /// own posts, so a check whether a thread already holds a reply can tell them from the thread's.
 pub(crate) fn earlier_text_fact(history: &[HistoryEntry], observation: &Observation) -> Option<String> {
-    let (_, earlier) = history.split_last()?;
     // Each line the page shows is one step's: a notice an earlier post raised, gone and raised again by a later post,
-    // is the later post's, so the latest step to have put a line takes one of its occurrences first.
+    // is the later post's, so the latest step to have put a line takes one of its occurrences first. The latest step
+    // takes its share too, though its own effect tells of it: left out, its fresh notice was named as an earlier post's.
     let mut shown: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for line in [&observation.viewport_text, &observation.offscreen_text].into_iter().flat_map(|text| text.lines()) {
         *shown.entry(text::strip(line)).or_default() += 1;
     }
-    let mut owned: Vec<Vec<&String>> = vec![Vec::new(); earlier.len()];
-    for (at, entry) in earlier.iter().enumerate().rev().filter(|(_, entry)| entry.outcome == StepOutcome::Executed) {
+    let mut owned: Vec<Vec<&String>> = vec![Vec::new(); history.len()];
+    for (at, entry) in history.iter().enumerate().rev().filter(|(_, entry)| entry.outcome == StepOutcome::Executed) {
         let Some((_, put)) = entry.put.as_ref().filter(|(url, _)| *url == observation.url) else { continue };
         for piece in put.iter().rev() {
             if let Some(left) = shown.get_mut(piece.as_str()).filter(|left| **left > 0) {
@@ -195,7 +195,8 @@ pub(crate) fn earlier_text_fact(history: &[HistoryEntry], observation: &Observat
         }
         owned[at].reverse();
     }
-    let told: Vec<String> = earlier
+    owned.pop()?;
+    let told: Vec<String> = history
         .iter()
         .zip(owned)
         .filter(|(_, pieces)| !pieces.is_empty())

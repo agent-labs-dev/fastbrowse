@@ -611,10 +611,17 @@ fn test_text_an_earlier_commit_put_on_the_page_is_named_with_that_step() {
         put: Some((url.into(), vec!["Your reply was posted.".into()])),
         ..HistoryEntry::new(Some(Operation::Click), Some("Post (Grace)"), StepOutcome::Executed, true)
     };
-    let fact = super::helpers::earlier_text_fact(&[posted.clone(), again, reply.clone()], &page).expect("a fact");
+    let fact =
+        super::helpers::earlier_text_fact(&[posted.clone(), again.clone(), reply.clone()], &page).expect("a fact");
     assert!(fact.contains("\"Your reply was posted.\" appeared when the run clicked 'Post (Grace)'"), "{fact}");
     assert!(fact.contains("\"Thanks.\" appeared when the run clicked 'Post (Ada)'"), "{fact}");
     assert!(!fact.contains("\"Your reply was posted.\" appeared when the run clicked 'Post (Ada)'"), "{fact}");
+    // The latest post's own notice is its, though its fact is left to its effect: only Ada's other text is named.
+    let fact = super::helpers::earlier_text_fact(&[posted.clone(), again], &page).expect("a fact");
+    assert_eq!(
+        fact,
+        "The text \"Thanks.\" appeared when the run clicked 'Post (Ada)'; it tells of that step, not of any later one."
+    );
     let elsewhere = Observation { url: "https://example.test/other".into(), ..page };
     assert_eq!(super::helpers::earlier_text_fact(&[posted, reply], &elsewhere), None);
 }
