@@ -224,6 +224,60 @@ mod tests {
         assert_eq!(probe_version(&mut shell, Duration::from_secs(5)).await.unwrap(), "Chrome 123");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn chrome_probe_runtime_exits_while_helper_holds_stdout() {
+        let fixture = tempfile::tempdir().unwrap();
+        let stop = fixture.path().join("stop");
+        let done = fixture.path().join("done");
+        let fixture_path = fixture.path().to_path_buf();
+        let (send, receive) = std::sync::mpsc::channel();
+        let probe = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--ignored", "--exact", "doctor::tests::chrome_probe_windows_fixture", "--nocapture"])
+                .env("FASTBROWSE_DOCTOR_FIXTURE", &fixture_path)
+                .env_remove("FASTBROWSE_DOCTOR_HELPER");
+            let result = runtime.block_on(probe_version(&mut command, Duration::from_secs(3)));
+            drop(runtime);
+            send.send(result).unwrap();
+        });
+
+        let result = receive.recv_timeout(Duration::from_secs(5));
+        std::fs::write(&stop, "").unwrap();
+        probe.join().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !done.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(done.exists(), "the fixture helper exited");
+        assert!(result.expect("the probe and runtime exited before the helper").unwrap().contains("Chrome 123"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "launched by the Windows version-probe regression"]
+    fn chrome_probe_windows_fixture() {
+        let directory = std::path::PathBuf::from(std::env::var_os("FASTBROWSE_DOCTOR_FIXTURE").unwrap());
+        if std::env::var_os("FASTBROWSE_DOCTOR_HELPER").is_some() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !directory.join("stop").exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            std::fs::write(directory.join("done"), "").unwrap();
+        } else {
+            let helper = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--ignored", "--exact", "doctor::tests::chrome_probe_windows_fixture", "--nocapture"])
+                .env("FASTBROWSE_DOCTOR_HELPER", "1")
+                .spawn()
+                .unwrap();
+            // Simulate a wrapper exiting without closing the helper's copy of stdout.
+            drop(helper);
+            println!("Chrome 123");
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn chrome_probe_requires_output_and_success() {
