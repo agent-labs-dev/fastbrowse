@@ -295,6 +295,9 @@ struct SourceBlock {
     /// The span of each link's text inside the block.
     links: Vec<(i64, i64)>,
     fields: Vec<SourceField>,
+    /// Digest of the text of the record this block belongs to: the smallest whole-record block holding it, else the
+    /// block itself. A page that repeats one quote across records tells them apart only by this text.
+    record: String,
 }
 
 #[derive(Clone, Default)]
@@ -402,7 +405,22 @@ impl Notes {
             .entry(key.clone())
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
         let mut sources: HashMap<CaptureIdentity, Vec<SourceBlock>> = HashMap::new();
+        let offsets: Vec<usize> = capture.text.char_indices().map(|(at, _)| at).chain([capture.text.len()]).collect();
+        let slice = |start: i64, end: i64| {
+            let clamp = |at: i64| offsets[(at.max(0) as usize).min(offsets.len() - 1)];
+            &capture.text[clamp(start)..clamp(end).max(clamp(start))]
+        };
+        let records: Vec<&fastbrowse_core::page::Block> =
+            capture.blocks.iter().filter(|block| block.whole_record).collect();
         for block in &capture.blocks {
+            let holder = records
+                .iter()
+                .filter(|record| {
+                    record.source_url == block.source_url && record.start <= block.start && block.end <= record.end
+                })
+                .min_by_key(|record| record.end - record.start)
+                .copied()
+                .unwrap_or(block);
             let url = block.source_url.as_ref().unwrap_or(&capture.url);
             let identity = (capture.sha256.clone(), url.clone(), capture.captured_at);
             sources.entry(identity).or_default().push(SourceBlock {
@@ -413,6 +431,7 @@ impl Notes {
                 whole_record: block.whole_record,
                 links: block.links.iter().map(|link| (link.start, link.end)).collect(),
                 fields: block.fields.clone(),
+                record: digest16(slice(holder.start, holder.end)),
             });
         }
         for (identity, blocks) in sources {
@@ -491,6 +510,14 @@ impl Notes {
         });
         let block = matching.next()?;
         matching.next().is_none().then_some(block)
+    }
+
+    /// Which record of its page `evidence` quotes, as a digest of that record's text in the capture it was cut from; None
+    /// when the capture was not remembered. Two reads of one quote under one heading, path and destination are the same
+    /// record only when this agrees: a filtered or virtualized list shows one record per capture, so nothing else in
+    /// either capture says they differ (#1509).
+    pub fn record_of(&self, evidence: &Evidence) -> Option<&str> {
+        self.source_block(evidence).map(|block| block.record.as_str())
     }
 
     /// Only complete, unmasked fields of this exact capture can be selected without transcribing their text.

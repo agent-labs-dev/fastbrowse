@@ -828,7 +828,7 @@ pub(super) fn outcome_notes(state: &RunState) -> Notes {
 /// capture of one it did.
 pub(super) fn one_citation_per_quote(evidence: Vec<Evidence>, notes: &Notes) -> Vec<Evidence> {
     let known: Vec<Evidence> = evidence.iter().cloned().chain(crate::retrieval::noted_evidence(notes)).collect();
-    crate::retrieval::latest_reads(evidence, |e| Some(e.clone()), &known)
+    crate::retrieval::latest_reads(evidence, |e| Some(e.clone()), &known, |e| notes.record_of(e).map(str::to_owned))
 }
 
 #[cfg(test)]

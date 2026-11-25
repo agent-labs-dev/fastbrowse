@@ -113,6 +113,7 @@ pub fn assemble_answer(claims: &[Claim], notes: &Notes, steps: &[Value]) -> Comp
                 notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)),
                 |id: &String| fact_evidence(notes, id).cloned(),
                 &known,
+                |e| notes.record_of(e).map(str::to_owned),
             )
         })
         .collect();
@@ -2550,7 +2551,13 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
     claims
         .into_iter()
         .map(|(text, keys)| {
-            Claim::new(&text, latest_reads(keys, |id: &String| fact_evidence(notes, id).cloned(), &known))
+            let reads = latest_reads(
+                keys,
+                |id: &String| fact_evidence(notes, id).cloned(),
+                &known,
+                |e| notes.record_of(e).map(str::to_owned),
+            );
+            Claim::new(&text, reads)
         })
         .collect()
 }
@@ -2561,9 +2568,20 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
 /// words one record's provenance. The same quote under another heading, control, page location or link destination is
 /// another record, so it is kept whatever its capture time, as are reads whose records the page does not tell apart. An item without evidence, or a quote whose capture time is unknown, is kept as it is.
 ///
+/// `record` names the record a read belongs to by its text in the capture it was cut from. Reads in different captures
+/// are one record only when it agrees: a filtered or virtualized list shows one record per capture, so two records
+/// quoting the same words share every other field, and the older was dropped as a stale read of the newer (#1509). A
+/// read of the same record before and after an edit elsewhere on the page keeps its record text, so the newer stands
+/// (#1436). A capture the run did not remember names no record, and its reads are told apart by the other fields.
+///
 /// `known` is every read the run holds, not only the cited ones: a sibling the claim does not cite still makes two reads
 /// ambiguous.
-pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evidence>, known: &[Evidence]) -> Vec<T> {
+pub(crate) fn latest_reads<T>(
+    items: Vec<T>,
+    evidence: impl Fn(&T) -> Option<Evidence>,
+    known: &[Evidence],
+    record: impl Fn(&Evidence) -> Option<String>,
+) -> Vec<T> {
     let alike = |a: &Evidence, b: &Evidence| {
         a.url == b.url
             && a.quote == b.quote
@@ -2582,7 +2600,10 @@ pub(crate) fn latest_reads<T>(items: Vec<T>, evidence: impl Fn(&T) -> Option<Evi
             .chain(known)
             .any(|o| o.capture_sha256 == e.capture_sha256 && (o.start, o.end) != (e.start, e.end) && alike(e, o))
     };
-    let same_record = |a: &Evidence, b: &Evidence| alike(a, b) && !ambiguous(a) && !ambiguous(b);
+    let same_record = |a: &Evidence, b: &Evidence| {
+        let distinct = a.capture_sha256 != b.capture_sha256 && record(a).zip(record(b)).is_some_and(|(a, b)| a != b);
+        alike(a, b) && !distinct && !ambiguous(a) && !ambiguous(b)
+    };
     let newest = |e: &Evidence| {
         let mut newest = e.captured_at.timestamp();
         for other in reads.iter().flatten().filter(|other| same_record(e, other)) {
@@ -3271,6 +3292,77 @@ mod tests {
         .unwrap();
         let quote = evidence.quote.clone();
         Fact::read(&quote, evidence, FactReader::JevChoice)
+    }
+
+    /// Cites `quote` where it first occurs in block `index` of `captured`, remembered by `notes`.
+    fn read_in(notes: &mut Notes, captured: &fastbrowse_core::page::Capture, index: usize, quote: &str) -> Fact {
+        let block = &captured.blocks[index];
+        let within = captured.text.chars().skip(block.start as usize).collect::<String>();
+        let start = block.start + within[..within.find(quote).unwrap()].chars().count() as i64;
+        let evidence = Evidence {
+            source_id: block.source_id.clone(),
+            url: captured.url.clone(),
+            frame_id: None,
+            captured_at: captured.captured_at,
+            capture_sha256: captured.sha256.clone(),
+            start,
+            end: start + quote.chars().count() as i64,
+            quote: quote.into(),
+            complete_source: false,
+            control_context: None,
+            rendered_text: true,
+            heading_path: vec!["Reports".into()],
+            capture_artifact: None,
+            links: Vec::new(),
+        };
+        let fact =
+            Fact::read(&format!("{} {quote}", captured.text.lines().next().unwrap()), evidence, FactReader::JevChoice);
+        notes.remember_capture(captured, 0);
+        fact
+    }
+
+    fn at(captured: fastbrowse_core::page::Capture, second: u8) -> fastbrowse_core::page::Capture {
+        let mut captured = captured;
+        captured.captured_at = DateTime::new(2026, 1, 1, 0, 0, second).utc();
+        captured
+    }
+
+    /// #1509: a filtered list shows one record per capture, so two records quoting the same words share every field
+    /// but their own text, and the later capture's read must not retire the earlier record's citation.
+    #[test]
+    fn records_with_one_quote_in_separate_captures_keep_both_citations() {
+        use crate::retrieval::testing::capture;
+        for whole_record in [false, true] {
+            let mut first = at(capture(&[(BlockKind::ListItem, "Report A: Available")]), 1);
+            let mut second = at(capture(&[(BlockKind::ListItem, "Report B: Available")]), 2);
+            first.blocks[0].whole_record = whole_record;
+            second.blocks[0].whole_record = whole_record;
+            let mut notes = Notes::default();
+            let (a, b) = (read_in(&mut notes, &first, 0, "Available"), read_in(&mut notes, &second, 0, "Available"));
+            let ids = vec![crate::memory::fact_id(&a), crate::memory::fact_id(&b)];
+            notes.add(a);
+            notes.add(b);
+            let answer = assemble_answer(&[Claim::new("Both reports are available", ids)], &notes, &[]);
+            assert_eq!(answer.citations.len(), 2, "{:?}", answer.citations);
+        }
+    }
+
+    /// #1436: the same record read before and after an edit elsewhere on the page is one citation, the newer.
+    #[test]
+    fn a_record_read_again_after_an_edit_elsewhere_keeps_the_newer_citation() {
+        use crate::retrieval::testing::capture;
+        let first = at(capture(&[(BlockKind::Paragraph, "Draft"), (BlockKind::ListItem, "Report A: Available")]), 1);
+        let second =
+            at(capture(&[(BlockKind::Paragraph, "Draft saved"), (BlockKind::ListItem, "Report A: Available")]), 2);
+        let mut notes = Notes::default();
+        let old = read_in(&mut notes, &first, 1, "Available");
+        let new = read_in(&mut notes, &second, 1, "Available");
+        let ids = vec![crate::memory::fact_id(&old), crate::memory::fact_id(&new)];
+        notes.add(old);
+        notes.add(new);
+        let answer = assemble_answer(&[Claim::new("Report A is available", ids)], &notes, &[]);
+        assert_eq!(answer.citations.len(), 1, "{:?}", answer.citations);
+        assert!(answer.citations[0].quote.contains("Available"));
     }
 
     #[test]
