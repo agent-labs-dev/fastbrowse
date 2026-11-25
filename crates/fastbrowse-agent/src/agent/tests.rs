@@ -3112,6 +3112,40 @@ async fn a_reads_trace_event_rebuilds_the_notes_it_made() {
     assert_eq!(rebuilt.render(100_000, false, true).unwrap(), state.notes.render(100_000, false, true).unwrap());
 }
 
+/// The same date text sat in a release table and a file table, and a replay that had only page text could not tell
+/// which block a fact came from (#1273). The trace of both reads, written to JSON and read back in order, is all a
+/// replay needs: the notes it rebuilds render as the composer was given them, under either rendering.
+#[tokio::test]
+async fn the_trace_of_two_reads_of_one_text_rebuilds_the_notes_a_composition_saw() {
+    let field = "Released: 2026-01-01";
+    let trace = Trace::collecting();
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM))
+        .with_trace(trace.clone());
+    let mut state = run_state();
+    let releases = capture(&[(BlockKind::Heading, "Releases"), (BlockKind::Paragraph, field)]);
+    let mut files = capture(&[(BlockKind::Heading, "Download files"), (BlockKind::Paragraph, field)]);
+    files.url = "https://example.test/files".into();
+    for page in [releases, files] {
+        agent.read(&mut state, page, &observation(&[]), true).await.expect("a read");
+    }
+
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(&serde_json::to_string(&trace.events()).unwrap()).unwrap();
+    let mut rebuilt = crate::memory::Notes::default();
+    for read in events.iter().filter(|event| event["event"] == "read") {
+        let page: Capture = serde_json::from_value(read["capture"].clone()).expect("the typed capture");
+        let facts: Vec<Fact> = serde_json::from_value(read["facts"].clone()).expect("the facts with their evidence");
+        rebuilt.record(&page, read["steps_taken"].as_u64().unwrap() as usize, facts);
+    }
+    assert_eq!(rebuilt.facts(), state.notes.facts());
+    for (complete, whole) in [(false, true), (true, true), (false, false)] {
+        assert_eq!(
+            rebuilt.render(100_000, complete, whole).unwrap(),
+            state.notes.render(100_000, complete, whole).unwrap()
+        );
+    }
+}
+
 /// A page whose text is `Capture`, for a read that takes its capture the way a run does.
 struct Captured(Capture);
 
