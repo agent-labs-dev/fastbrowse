@@ -25,9 +25,10 @@ pub const BACKGROUND: &str =
 
 str_enum! {
     pub enum Status {
-        /// The driver called `done`, the finish checks accepted it, and the caller's `until` check (if any) passed.
+        /// The finish checks accepted the result, and the caller's `until` check (if any) passed. The result is the
+        /// driver's `done`, or, for a read-only run that stopped stuck, the answer composed from what it read.
         Complete = "complete",
-        /// The driver called `done`, but code could not confirm the result: for example, an answer failed its check against
+        /// The run produced a result code could not confirm: for example, an answer failed its check against
         /// the page, part of a list the task covers went unread, or the site refused a requested step.
         Unverified = "unverified",
         /// Stopped before an irreversible action the caller has not authorized, having committed nothing.

@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A document served with a CSP `sandbox` that blocks script, such as a raw file on raw.githubusercontent.com, now loads in the extension's browser: readiness also waits on the browser's own lifecycle events, so a page that cannot run script is ready when its document has loaded and is no longer waited on until the deadline. An MCP result for a run that ended `unavailable` or `error` now carries the cause in `next_step`, which a caller reads first, instead of pointing to the `error` field.
 - The docs, docstrings and benchmark notes describe the LLM-driven agent: the trace event list no longer names events a run does not write, and the benchmark notes say which build their figures measure.
 
 ## [0.12.0] - 2026-11-25
