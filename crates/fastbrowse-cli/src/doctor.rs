@@ -96,6 +96,8 @@ async fn check_chrome(binary: &Path) -> (Level, String) {
 }
 
 async fn probe_version(command: &mut Command, limit: Duration) -> Result<String, String> {
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -105,13 +107,23 @@ async fn probe_version(command: &mut Command, limit: Duration) -> Result<String,
         .map_err(|error| format!("could not run --version: {error}"))?;
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut bytes = Vec::new();
-    // A wrapper may keep stdout open after exiting, so the deadline covers reading and waiting together.
-    let result = tokio::time::timeout(limit, async { tokio::try_join!(child.wait(), stdout.read_to_end(&mut bytes)) });
+    // Read before waiting: a wrapper can leave stdout open in a helper after exiting, and reaping it first would
+    // release the PID that names the process group we need to signal if the read times out.
+    let result = tokio::time::timeout(limit, async {
+        stdout.read_to_end(&mut bytes).await?;
+        child.wait().await
+    });
     let status = match result.await {
-        Ok(Ok((status, _))) => status,
+        Ok(Ok(status)) => status,
         failure => {
             drop(stdout);
-            // Kill and reap the child even if its I/O failed before the deadline.
+            #[cfg(unix)]
+            if let Some(pid) = child.id().and_then(|id| libc::pid_t::try_from(id).ok()) {
+                // SAFETY: the unreaped child still owns this PID, and process_group(0) made it the group leader.
+                // A negative PID signals only that group, including helpers the wrapper left behind.
+                unsafe { libc::kill(-pid, libc::SIGKILL) };
+            }
+            // Reap the child after the group signal, or kill it directly where there is no group signal.
             let _ = child.kill().await;
             return Err(match failure {
                 Ok(Err(error)) => format!("could not read --version: {error}"),
@@ -183,6 +195,30 @@ mod tests {
         shell.args(["-c", "exec 1>&-; while :; do :; done"]);
         let error = probe_version(&mut shell, Duration::from_millis(50)).await.unwrap_err();
         assert_eq!(error, "--version timed out after 50 ms");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn timed_out_chrome_probe_kills_helper_after_wrapper_exits() {
+        let pid_file = std::env::temp_dir().join(format!("fastbrowse-doctor-helper-{}", std::process::id()));
+        let mut shell = Command::new("/bin/sh");
+        // The helper inherits the pipe. It exits on its own after a few seconds even if group cleanup regresses.
+        shell.args(["-c", r#"sleep 5 & printf '%s' "$!" > "$1"; exit 0"#, "wrapper"]).arg(&pid_file);
+        let error = probe_version(&mut shell, Duration::from_millis(300)).await.unwrap_err();
+        let pid = std::fs::read_to_string(&pid_file);
+        std::fs::remove_file(&pid_file).unwrap();
+        let stat = format!("/proc/{}/stat", pid.unwrap().parse::<u32>().unwrap());
+        assert_eq!(error, "--version timed out after 300 ms");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            // A killed helper may remain a zombie until its new Unix parent reaps it.
+            while std::fs::read_to_string(&stat)
+                .is_ok_and(|text| text.rsplit_once(") ").is_some_and(|(_, state)| !state.starts_with('Z')))
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the timeout kills the wrapper's helper");
     }
 
     #[test]
