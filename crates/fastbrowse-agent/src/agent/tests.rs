@@ -3138,10 +3138,19 @@ async fn the_trace_of_two_reads_of_one_text_rebuilds_the_notes_a_composition_saw
         rebuilt.record(&page, read["steps_taken"].as_u64().unwrap() as usize, facts);
     }
     assert_eq!(rebuilt.facts(), state.notes.facts());
-    for (complete, whole) in [(false, true), (true, true), (false, false)] {
+    for fact in state.notes.facts() {
+        let evidence = fact.evidence.as_ref().expect("a read fact carries its evidence");
+        assert_eq!(rebuilt.source_kind(evidence), state.notes.source_kind(evidence));
+        assert_eq!(rebuilt.whole_record(evidence), state.notes.whole_record(evidence));
+        assert_eq!(rebuilt.whole_element(evidence), state.notes.whole_element(evidence));
+        assert_eq!(rebuilt.steps_taken(evidence), state.notes.steps_taken(evidence));
+        assert_eq!(rebuilt.table_blocks(evidence), state.notes.table_blocks(evidence));
+        assert_eq!(rebuilt.source_fields(evidence).len(), state.notes.source_fields(evidence).len());
+    }
+    for (preserve_answer, json_encoded) in [(false, true), (true, true), (false, false)] {
         assert_eq!(
-            rebuilt.render(100_000, complete, whole).unwrap(),
-            state.notes.render(100_000, complete, whole).unwrap()
+            rebuilt.render(100_000, preserve_answer, json_encoded).unwrap(),
+            state.notes.render(100_000, preserve_answer, json_encoded).unwrap()
         );
     }
 }
