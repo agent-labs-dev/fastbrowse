@@ -342,11 +342,22 @@ async fn test_source_model_defaults_and_explicit_pins() {
 }
 
 fn completion(cost: Option<f64>) -> Response {
-    let mut usage = json!({"prompt_tokens": 3, "completion_tokens": 2});
+    let mut usage = json!({"prompt_tokens": 3, "completion_tokens": 2, "input_tokens": 3, "output_tokens": 2});
     if let Some(cost) = cost {
         usage["cost"] = cost.into();
     }
-    Response::json(200, &json!({"choices": [{"message": {"content": "{\"answer\":\"ok\"}"}}], "usage": usage}))
+    // One reply both wires read: Chat Completions takes `choices`, and the Responses API, which OpenRouter's OpenAI
+    // models use, takes `output`.
+    let text = "{\"answer\":\"ok\"}";
+    Response::json(
+        200,
+        &json!({
+            "choices": [{"message": {"content": text}}],
+            "output": [{"type": "message", "role": "assistant", "phase": "final_answer",
+                "content": [{"type": "output_text", "text": text}]}],
+            "usage": usage,
+        }),
+    )
 }
 
 /// One READ generation through the LLM the settings build, its requests and its result.
@@ -360,9 +371,9 @@ async fn llm_requests(env: &[(&str, &str)], cost: Option<f64>) -> (Vec<Request>,
 #[tokio::test]
 async fn test_llm_prefers_openrouter_when_its_key_is_set() {
     let (seen, result) = llm_requests(&[("OPENROUTER_API_KEY", "o"), ("AI_GATEWAY_API_KEY", "g")], Some(0.0001)).await;
-    assert_eq!(seen[0].url, "https://openrouter.ai/api/v1/chat/completions");
+    assert_eq!(seen[0].url, "https://openrouter.ai/api/v1/responses", "the default model is an OpenAI one");
     assert_eq!(seen[0].header("authorization"), Some("Bearer o"));
-    assert_eq!(body(&seen[0])["provider"], json!({"require_parameters": true, "sort": "latency"}));
+    assert_eq!(body(&seen[0])["provider"], json!({"require_parameters": true, "sort": "latency", "order": ["openai"]}));
     assert_eq!(result.cost.basis, CostBasis::Metered);
 }
 
@@ -413,8 +424,8 @@ async fn test_the_gateway_states_the_schema_a_provider_may_not_hold_the_reply_to
     let llm = settings(&[("OPENROUTER_API_KEY", "o")]).llm(&script.http()).unwrap();
     llm.generate_value(LLMPurpose::Start, &messages, &answer_model(), None).await.unwrap();
     let sent = &script.bodies()[0];
-    assert_eq!(sent["messages"].as_array().unwrap().len(), 1, "{sent}");
-    assert_eq!(sent["response_format"]["type"], "json_schema");
+    assert_eq!(sent["input"].as_array().unwrap().len(), 1, "{sent}");
+    assert_eq!(sent["text"]["format"]["type"], "json_schema");
 }
 
 #[tokio::test]
@@ -575,7 +586,7 @@ async fn test_strict_and_extra_body_do_not_reshape_openrouter_requests() {
     let (seen, _) = llm_requests(&env, Some(0.0001)).await;
     let sent = body(&seen[0]);
     assert!(sent.get("top_k").is_none());
-    assert_eq!(sent["response_format"]["json_schema"]["strict"], true);
+    assert_eq!(sent["text"]["format"]["strict"], true);
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@ mod delta;
 mod pointer;
 pub mod scripts;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -159,6 +160,9 @@ struct SnapshotControl {
     sensitive: bool,
     #[serde(default)]
     offscreen: bool,
+    #[serde(default)]
+    read_only: bool,
+    layer: Option<u32>,
     required: Option<bool>,
     invalid: Option<bool>,
     validation_message: Option<String>,
@@ -252,6 +256,40 @@ struct Snapshot {
     /// The page's number for this read when it kept it; null for a read it did not keep.
     #[serde(default)]
     read: Option<u64>,
+    /// The frame document's MIME type, sent only with `json_text`.
+    #[serde(default)]
+    content_type: String,
+    /// The served text of a JSON document, as Chrome renders it into the body's first `pre`.
+    #[serde(default)]
+    json_text: Option<String>,
+}
+
+impl Snapshot {
+    /// The frame's text in the viewport, or a JSON document's whole text as a capture of it reads: the text shown is
+    /// the text a quote of it is checked against.
+    fn viewport(&self) -> Cow<'_, str> {
+        match json_read(&self.content_type, self.json_text.as_deref()) {
+            Some(found) => found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>().join("\n\n").into(),
+            None => Cow::Borrowed(&self.viewport_text),
+        }
+    }
+
+    /// The frame's text outside the viewport; a JSON document's is all in `viewport`.
+    fn offscreen(&self) -> Cow<'_, str> {
+        match json_read(&self.content_type, self.json_text.as_deref()) {
+            Some(_) => Cow::Borrowed(""),
+            None => Cow::Borrowed(&self.offscreen_text),
+        }
+    }
+}
+
+/// A JSON document's blocks by its structure, as a browserless fetch reads it, when the document's type is JSON and all
+/// of its served text parses. Any other document is read by its rendered blocks.
+fn json_read(content_type: &str, json_text: Option<&str>) -> Option<Vec<json_document::Found>> {
+    if !json_document::is_json(content_type) {
+        return None;
+    }
+    json_document::blocks(json_text?).filter(|found| !found.is_empty())
 }
 
 impl FrameText for Snapshot {
@@ -333,13 +371,8 @@ struct CaptureSnapshot {
 }
 
 impl CaptureSnapshot {
-    /// A JSON document's blocks by its structure, as a browserless fetch reads it, when the document's type is JSON
-    /// and all of its served text parses. Any other document is read by its rendered blocks.
     fn json_blocks(&self) -> Option<Vec<json_document::Found>> {
-        if !json_document::is_json(&self.content_type) {
-            return None;
-        }
-        json_document::blocks(self.json_text.as_deref()?).filter(|found| !found.is_empty())
+        json_read(&self.content_type, self.json_text.as_deref())
     }
 }
 
@@ -371,8 +404,9 @@ struct FrameObservation<T> {
 
 /// The page's own text, then each cross-origin frame's in `frames` order under a `[Frame: origin]` line. Only the
 /// origin is named: a frame's address often carries tokens. A frame with no text adds no line.
-fn frame_text(frames: &[(String, FrameObservation<Snapshot>)], part: fn(&Snapshot) -> &str) -> String {
-    let mut text = frames.iter().find(|(key, _)| key == MAIN).map(|(_, f)| part(&f.raw).to_owned()).unwrap_or_default();
+fn frame_text(frames: &[(String, FrameObservation<Snapshot>)], part: fn(&Snapshot) -> Cow<'_, str>) -> String {
+    let mut text =
+        frames.iter().find(|(key, _)| key == MAIN).map(|(_, f)| part(&f.raw).into_owned()).unwrap_or_default();
     for (_, frame) in frames.iter().filter(|(key, _)| key != MAIN) {
         let own = part(&frame.raw);
         if own.trim().is_empty() {
@@ -539,6 +573,8 @@ fn control_from_raw(
         expanded: c.expanded,
         sensitive: c.sensitive,
         offscreen: c.offscreen,
+        read_only: c.read_only,
+        layer: c.layer,
         required: c.required,
         invalid: c.invalid,
         validation_message: c.validation_message.clone(),
@@ -553,7 +589,6 @@ fn control_from_raw(
         pictured: c.pictured,
         already_read: None,
         other_site: None,
-        shown_by: None,
     }
 }
 
@@ -785,7 +820,7 @@ impl CdpPage {
             };
             // Each frame splits its text in its own viewport's terms, like its controls' `offscreen` flag;
             // same-process frames are already inlined by snapshot.js.
-            let mut viewport_text = frame_text(&frames, |s| &s.viewport_text);
+            let mut viewport_text = frame_text(&frames, Snapshot::viewport);
             let mut notices = String::new();
             if bind {
                 for download in self.session.pending_download_texts() {
@@ -854,7 +889,7 @@ impl CdpPage {
                 controls: kept,
                 viewport_text,
                 viewport_key,
-                offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
+                offscreen_text: frame_text(&frames, Snapshot::offscreen),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 modal: main.and_then(|m| m.raw.modal.clone()),
@@ -2262,14 +2297,14 @@ mod tests {
             frame("f2", "https://ads.test/", "  \n ", ""),
             frame("f3", "about:srcdoc", "Embedded words", ""),
         ];
-        let viewport = frame_text(&frames, |s| &s.viewport_text);
+        let viewport = frame_text(&frames, Snapshot::viewport);
         assert_eq!(
             viewport,
             "Checkout\n\n[Frame: https://pay.test:8443]\nCard declined\n\n[Frame: embedded page]\nEmbedded words"
         );
         assert!(!viewport.contains("token") && !viewport.contains("/card"));
         // A page with no text of its own starts with the first frame's label.
-        assert_eq!(frame_text(&frames, |s| &s.offscreen_text), "[Frame: https://pay.test:8443]\nHelp");
+        assert_eq!(frame_text(&frames, Snapshot::offscreen), "[Frame: https://pay.test:8443]\nHelp");
     }
 
     #[test]

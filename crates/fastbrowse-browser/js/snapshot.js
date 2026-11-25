@@ -12,9 +12,15 @@
   // The run's own cursor (cursor.js) goes into the page and out again around actions and screenshots. That is the run
   // drawing, not the page changing, so its host's records are left out of every observer below.
   const cursorHost = node => node.nodeType === Node.ELEMENT_NODE && node.hasAttribute('data-fastbrowse-cursor');
+  // An attribute written with the value it already held moves nothing: `attributeOldValue` lets a record say so.
+  const rewritten = r =>
+    r.type === 'attributes' && r.oldValue !== null && r.oldValue === r.target.getAttributeNS(r.attributeNamespace, r.attributeName);
   const pageRecords = records =>
     records.filter(
-      r => !cursorHost(r.target) && !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(cursorHost)),
+      r =>
+        !cursorHost(r.target) &&
+        !rewritten(r) &&
+        !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(cursorHost)),
     );
   const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
   // Whether `read`, this document's `getEventListeners` (`listeners` below), finds a listener for one of `types` on `e`.
@@ -89,8 +95,21 @@
         return [style.writingMode, style.direction, style.display,
           style.display.includes('flex') ? style.flexDirection : null, style.overflowX, style.overflowY];
       }
+      // Both pseudo-elements in one fact: one cache entry and one recorded input per element instead of two. Their
+      // other properties matter only when `content` draws a string, so a pseudo-element without one reads no more.
+      case 'pseudo': {
+        const view = target.ownerDocument.defaultView;
+        return ['::before', '::after'].flatMap(pseudo => {
+          const style = view.getComputedStyle(target, pseudo);
+          const content = style.content;
+          return content === 'none' || content === 'normal'
+            ? [null, null, content, null, null]
+            : [style.display, style.visibility, content, style.marginInlineStart, style.marginInlineEnd];
+        });
+      }
       case 'text': return target?.innerText;
       case 'query': return target.querySelectorAll(args);
+      case 'stack': return target.elementsFromPoint(args[0], args[1]);
       case 'state': return target.matches(args);
       case 'active': return target.activeElement;
       case 'selected': return [...target.selectedOptions];
@@ -101,7 +120,7 @@
   const renderValue = (kind, value) =>
     kind === 'box' || kind === 'textBox'
       ? [value.x, value.y, value.width, value.height, value.left, value.top, value.right, value.bottom]
-      : kind === 'query' ? [...value] : value;
+      : kind === 'query' || kind === 'stack' ? [...value] : value;
   const sameRenderValue = (left, right) =>
     Array.isArray(left) ? Array.isArray(right) && left.length === right.length &&
       left.every((value, i) => Object.is(value, right[i])) : Object.is(left, right);
@@ -110,7 +129,7 @@
     if (kind === 'box' || kind === 'textBox')
       return boxFields.every(
         (field, i) => Object.is(value[i], current[field]));
-    if (kind === 'query') return value.length === current.length && value.every((node, i) => node === current[i]);
+    if (kind === 'query' || kind === 'stack') return value.length === current.length && value.every((node, i) => node === current[i]);
     return sameRenderValue(value, current);
   };
   const renderFact = (kind, target, args = null) => {
@@ -367,8 +386,16 @@
     registry.observeRoot = root => {
       if (observed.has(root)) return;
       observed.add(root);
-      new MutationObserver(records => pageRecords(records).length && bumped()).observe(root, { subtree: true, characterData: true, childList: true, attributes: true });
+      new MutationObserver(records => {
+        records = pageRecords(records);
+        if (!records.length) return;
+        bumped();
+        // A same-origin iframe moves the page as the top document does: the settle and the changed text below watch the
+        // top document only, so its frames report here.
+        if (root !== document) registry.moved?.(records);
+      }).observe(root, { subtree: true, characterData: true, childList: true, attributes: true, attributeOldValue: true });
       const target = root.nodeType === Node.DOCUMENT_NODE ? root.defaultView : root;
+      if (root.nodeType === Node.DOCUMENT_NODE && root !== document) registry.listenInput?.(target);
       // Passive, as Chrome makes a wheel listener only on a window, document or body: one on a shadow root would hold
       // every scroll inside it to the main thread.
       for (const type of events) target.addEventListener(type, bumped, { capture: true, passive: true });
@@ -523,15 +550,17 @@
       registry.lastInput = performance.now();
     };
     // Chrome can deliver release in a later task than press, after the press's input turn has ended.
-    for (const type of [
-      'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick',
-      'keydown', 'keyup', 'keypress', 'submit', 'input', 'change', 'wheel', 'scroll',
-    ]) {
-      addEventListener(type, input, true);
-    }
-    new MutationObserver(records => {
-      records = pageRecords(records);
-      if (!records.length) return;
+    // A frame's window hears its own events, so each same-origin child document asks for the same listeners.
+    registry.listenInput = target => {
+      for (const type of [
+        'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick',
+        'keydown', 'keyup', 'keypress', 'submit', 'input', 'change', 'wheel', 'scroll',
+      ]) {
+        target.addEventListener(type, input, true);
+      }
+    };
+    registry.listenInput(window);
+    registry.moved = records => {
       registry.lastMutation = performance.now();
       for (const r of records) {
         // An attribute change moves the page but rewrites no text, so it stamps the clock above and is not a changed
@@ -542,7 +571,11 @@
         const element = r.type === 'characterData' ? r.target.parentElement : r.target;
         if (textOnly && element) registry.changed.add(element);
       }
-    }).observe(document, { subtree: true, characterData: true, childList: true, attributes: true });
+    };
+    new MutationObserver(records => {
+      records = pageRecords(records);
+      if (records.length) registry.moved(records);
+    }).observe(document, { subtree: true, characterData: true, childList: true, attributes: true, attributeOldValue: true });
   }
   if (mode !== 'glance') {
     if (registry.quiet) for (const e of registry.changed) registry.selfUpdating.add(e);
@@ -1548,11 +1581,13 @@
       base.operations = ['upload'];
       base.value = null;
     } else {
-      const editable =
-        !nativeProperty(e, 'readOnly') &&
-        e.getAttribute('aria-readonly') !== 'true' &&
-        (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
-          (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
+      const fieldRole = ['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
+        (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName));
+      const readOnly = !!nativeProperty(e, 'readOnly') || e.getAttribute('aria-readonly') === 'true';
+      const editable = !readOnly && fieldRole;
+      // A readonly field still takes a click (a datepicker opens on it) but fill is refused: say so, since the
+      // click operation alone reads as an ordinary button.
+      if (readOnly && fieldRole) base.read_only = true;
       // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
       // A scripted value control announces its current value instead of exposing a field's value property.
       const announced = ['slider', 'spinbutton'].includes(rname)
@@ -2150,6 +2185,39 @@
       c.context = [c.context, `orientation: ${orientation}`].filter(Boolean).join('; ');
   }
 
+  // A popup a page appends to <body> (a datepicker, a menu, a combobox's list) is drawn beside the control that opened
+  // it but comes last in reading order, under whatever section ends the page: a driver read a datepicker popup's
+  // December as the inline calendar's below it (#1538). A layer is an element taken out of flow (absolute or fixed),
+  // positioned against the page rather than inside a component (a card's badge is positioned against its card), and
+  // drawn over something that is not its own ancestor, as a hit test at the centre of its visible part shows.
+  const drawnOver = e => {
+    const box = boxOf(e);
+    const view = e.ownerDocument.defaultView;
+    const left = Math.max(box.left, 0), right = Math.min(box.right, view.innerWidth);
+    const top = Math.max(box.top, 0), bottom = Math.min(box.bottom, view.innerHeight);
+    if (right <= left || bottom <= top) return false;
+    const stack = renderFact('stack', e.ownerDocument, [(left + right) / 2, (top + bottom) / 2]);
+    const own = stack.findIndex(hit => e.contains(hit));
+    return own >= 0 && stack.slice(own).some(hit => !e.contains(hit) && !hit.contains(e));
+  };
+  const layerOf = memo(e => {
+    if (!e || e === e.ownerDocument.body || e === e.ownerDocument.documentElement) return null;
+    const position = styleProperty(e, 'position');
+    if (position === 'absolute' || position === 'fixed') {
+      const against = nativeProperty(e, 'offsetParent');
+      if ((!against || against === e.ownerDocument.body || against === e.ownerDocument.documentElement) && drawnOver(e))
+        return e;
+    }
+    return layerOf(e.parentElement ?? e.getRootNode().host);
+  });
+  const layers = [];
+  for (const c of controls) {
+    const layer = layerOf(registry.nodes.get(c.id));
+    if (!layer) continue;
+    if (!layers.includes(layer)) layers.push(layer);
+    c.layer = layers.indexOf(layer) + 1;
+  }
+
   // "First" and "last" are places in a list, which a label does not state. The page's own `aria-posinset` and
   // `aria-setsize` say it where present; otherwise the place among the visible items of the nearest list container.
   // A custom widget's items name themselves with an `aria-roledescription` (a sortable card, a slide) and sit in a plain
@@ -2343,32 +2411,163 @@
       read(inner, dx + f.left + left, dy + f.top + top);
     }
   };
+  // The box a text node's line is laid out in: the nearest ancestor that is not inline, as capture.js splits blocks.
+  // Text nodes in one box read as one line, the way the page shows them. One line per node showed React's split
+  // `Total: $` and `43.18` on two lines, a text no capture held, and every quote of saucedemo's total was refused.
+  const lineBox = memo(e => {
+    for (let at = e; at; at = at.parentElement) {
+      const display = styleProperty(at, 'display');
+      if (!(display.startsWith('inline') || display === 'contents')) return at;
+    }
+    return null;
+  });
+  // Spaces collapse across the nodes of a line too: a card's icon button between two gaps showed one space, not two.
+  const joined = (line, value) => (line.endsWith(' ') && value.startsWith(' ') ? line + value.slice(1) : line + value);
+  // CSS strings as capture.js reads them (its `cssStrings`), so the text the driver quotes is the text its quotes are
+  // checked against: Google Flights draws "JetBlue · Tap Air Portugal" with the dot as generated content, the capture
+  // held the dot and this text did not, and each quote of "JetBlueTap Air Portugal" was refused. Counters, images and
+  // other functions are not rendered strings; an empty alternative marks the content as decoration.
+  const cssStrings = content => {
+    const strings = /"((?:[^"\\]|\\.)*)"\s*/gy;
+    let value = '';
+    while (strings.lastIndex < content.length) {
+      const at = strings.lastIndex;
+      const match = strings.exec(content);
+      if (!match) {
+        if (content[at] === '/') return cssStrings(content.slice(at + 1).trim()) ? value : null;
+        const token = /[-\w]+/y;
+        token.lastIndex = at;
+        if (!token.exec(content)) return null;
+        let end = token.lastIndex;
+        if (content[end] === '(') {
+          let depth = 0;
+          let quote = '';
+          do {
+            const char = content[end++];
+            if (char === '\\') end++;
+            else if (quote) {
+              if (char === quote) quote = '';
+            } else if (char === '"' || char === "'") quote = char;
+            else if (char === '(') depth++;
+            else if (char === ')') depth--;
+          } while (end < content.length && (depth || quote));
+          if (depth || quote) return null;
+        }
+        while (/\s/.test(content[end] ?? '') && end < content.length) end++;
+        strings.lastIndex = end;
+        continue;
+      }
+      value += match[1].replace(/\\([\da-fA-F]{1,6}[ \t\r\n\f]?|.)/g, (_, escaped) => {
+        if (!/^[\da-fA-F]/.test(escaped)) return escaped;
+        const code = parseInt(escaped.trim(), 16);
+        return String.fromCodePoint(code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ? 0xfffd : code);
+      });
+    }
+    return value;
+  };
+  // An element's ::before and ::after text as capture.js's `generatedOf` reads it: a block one is a line of its own,
+  // an inline one keeps the gap its margins or its host's margins draw. An icon font's glyph is named elsewhere.
+  const generatedOf = memo(e => {
+    const read = ([display, visibility, content, start, end]) => {
+      if (display === 'none' || visibility !== 'visible') return '';
+      const value = cssStrings(content);
+      if (!value) return '';
+      if (!(display.startsWith('inline') || display === 'contents')) return {block: value};
+      return `${parseFloat(start) > 0 ? ' ' : ''}${value}${parseFloat(end) > 0 ? ' ' : ''}`;
+    };
+    // Most elements draw none, so the pseudo-elements are read before the host's own tests.
+    const facts = renderFact('pseudo', e);
+    const found = [read(facts.slice(0, 5)), read(facts.slice(5))];
+    if (!found.some(Boolean)) return ['', ''];
+    if (e.getAttribute('aria-hidden') === 'true' || [...e.classList].some(token => {
+      const glyph = ICON_CLASS.exec(token);
+      return glyph && !ICON_STYLE.test(glyph[1]);
+    })) return ['', ''];
+    // The generated text's host can carry the gap instead, on either side of what it holds.
+    if (typeof found[0] === 'string' && parseFloat(styleProperty(e, 'marginInlineStart')) > 0) found[0] = ` ${found[0]}`;
+    if (typeof found[1] === 'string' && parseFloat(styleProperty(e, 'marginInlineEnd')) > 0) found[1] += ' ';
+    return found;
+  });
   // Size, the cheapest test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    // The line being read: its list, its box and its place in the list. A <br> ends it.
+    let run = null;
+    // Generated text joins the line it is drawn in; a block of it is a line of its own in the list being read.
+    const generate = (value, element) => {
+      if (!value) return;
+      if (typeof value !== 'string') {
+        const r = boxOf(element);
+        const list = r.top + dy + r.height > 0 && r.top + dy < innerHeight ? words : offscreen;
+        list.push(value.block);
+        run = null;
+        return;
+      }
+      const box = lineBox(element);
+      if (run && run.box === box) {
+        run.list[run.at] = joined(run.list[run.at], value);
+        return;
+      }
+      const r = boxOf(element);
+      const list = r.top + dy + r.height > 0 && r.top + dy < innerHeight && r.left + dx + r.width > 0 &&
+        r.left + dx < innerWidth ? words : offscreen;
+      run = {list, box, at: list.push(value) - 1};
+    };
+    // The ::after text of the elements the walk is inside, written once the walk leaves each one.
+    const after = [];
+    const leave = node => {
+      while (after.length && !after.at(-1)[0].contains(node)) {
+        const [element, value] = after.pop();
+        generate(value, element);
+      }
+    };
     let node;
     while ((node = walker.nextNode())) {
-      const value = node.textContent.trim(),
+      leave(node);
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.tagName === 'BR') run = null;
+        if (!CODE.has(node.tagName)) {
+          const [before, end] = generatedOf(node);
+          // Visibility is the dearer test, so only an element that draws generated text asks it.
+          if ((before || end) && visible(node)) {
+            generate(before, node);
+            if (end) after.push([node, end]);
+          }
+        }
+        continue;
+      }
+      // Whitespace collapses as CSS lays out normal text: a gap between two inline nodes is one space of the line.
+      // Visible text is read whole on every observe, as it always was; the context lines' cache counts its own
+      // `replace` normalizations of unchanged text, so this pass does not go through `replace`.
+      const value = node.textContent.split(/\s+/).join(' '),
         parent = node.parentElement;
-      if (!value || !parent) continue;
+      if (!parent) continue;
+      if (!value.trim()) {
+        if (run && lineBox(parent) === run.box) run.list[run.at] = joined(run.list[run.at], ' ');
+        continue;
+      }
       const r = textBoxOf(node);
       if (r.width <= 0 || r.height <= 0 || parent.closest('script,style,noscript,template') || !visible(parent)) {
         continue;
       }
       const top = r.top + dy,
         left = r.left + dx;
-      if (top + r.height > 0 && top < innerHeight && left + r.width > 0 && left < innerWidth) {
-        words.push(value);
+      const list =
+        top + r.height > 0 && top < innerHeight && left + r.width > 0 && left < innerWidth ? words : offscreen;
+      const box = lineBox(parent);
+      if (run && run.list === list && run.box === box) {
+        list[run.at] = joined(list[run.at], value);
       } else {
-        offscreen.push(value);
+        run = {list, box, at: list.push(value) - 1};
       }
     }
+    leave(null);
     readFrames(doc, dx, dy, readText);
   };
   readText(document, 0, 0);
-  const viewport_text = words.join('\n');
-  const offscreen_text = offscreen.join('\n');
+  const viewport_text = words.map(line => line.trim()).join('\n');
+  const offscreen_text = offscreen.map(line => line.trim()).join('\n');
 
   // Page state carried by pixels: a chart, a picture, a drawing or a video is evidence the page text and the
   // control list cannot hold, and the verifier needs the screenshot for it. Only what the viewport shows counts,
@@ -2581,6 +2780,15 @@
   };
   // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
   if (modal !== null) result.modal = modal;
+  // A JSON document is shown by its structure, as capture.js sends it to be read: shown Chrome's rendering of the
+  // served text, the driver quoted `"size": "large"` off httpbin's echo, and the check, which reads the document key by
+  // key, found no page that said it.
+  const type = document.contentType.toLowerCase();
+  const served = document.querySelector('body > pre');
+  if (served && (type === 'application/json' || (type.startsWith('application/') && type.endsWith('+json')))) {
+    result.content_type = document.contentType;
+    result.json_text = served.textContent;
+  }
   const previous = own.snapshots?.[mode];
   own.snapshots ||= {};
   own.snapshots[mode] = { read, document_key: result.document_key, controls: semantics, guards, retarget_keys };

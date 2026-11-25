@@ -9,7 +9,7 @@ import java.util.List;
  * @param target Human-readable label of the chosen element; never contains a secret value.
  * @param facts Facts added to the notes by this step, with resolved secrets redacted.
  * @param pageChanged Whether the page's fingerprint changed; None for steps that do not act (read).
- * @param choices The controls Jev was offered for this step's decision, when {@code Config.step_choices} asked for them.
+ * @param choices The controls the driver was shown for this step's action, when {@code Config.step_choices} asked for them.
  */
 public record StepResult(
     @JsonProperty("index") long index,

@@ -31,9 +31,7 @@ uv run parallax run fastbrowse \
   --retry-invalid 2 --retry-wait 60 --out runs/internal-backend
 ```
 
-The plugin registers `fastbrowse`, `fastbrowse-pool`, `fastbrowse-hosted`, and
-`fastbrowse-llm-picker`, which is `fastbrowse` with `FASTBROWSE_ACTION_PICKER=llm`: the
-run's LLM picks each action in place of Jev, so the two arms differ only in the picker. Parallax also provides `browser-use-cloud`,
+The plugin registers `fastbrowse`, `fastbrowse-pool`, and `fastbrowse-hosted`. Parallax also provides `browser-use-cloud`,
 `browser-use-oss`, `browser-harness` (Codex), `browser-harness-claude-code`, `agent-browser` (Codex), and `cua-codex`.
 
 Each task is world-less, has `Area.BROWSER`, and uses

@@ -170,7 +170,11 @@ impl LLMProvider {
         };
         match self {
             LLMProvider::OpenRouter | LLMProvider::Gateway | LLMProvider::Custom => Preset { provider: self, ..BASE },
-            LLMProvider::OpenAI => hosted("https://api.openai.com/v1", "OPENAI_API_KEY"),
+            // Chat Completions joins a newer model's commentary and final answer into one string, which the schema then
+            // fails to match; the Responses API keeps them apart.
+            LLMProvider::OpenAI => {
+                Preset { wire: Wire::Responses, ..hosted("https://api.openai.com/v1", "OPENAI_API_KEY") }
+            }
             // Anthropic's compatibility layer ignores response_format and reasoning_effort, so Claude is reached
             // through the Messages API, whose structured outputs decode against the schema and which takes an effort.
             LLMProvider::Anthropic => Preset {

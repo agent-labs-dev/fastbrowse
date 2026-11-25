@@ -380,6 +380,16 @@ fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
     ))
 }
 
+/// A fill whose click moved focus to a field elsewhere, such as one in a dialog the click opened, types nothing: the
+/// field asked for sits behind what opened, and what to do with that is the driver's to decide once it sees it.
+fn focus_moved() -> Outcome {
+    (
+        StepOutcome::Failed,
+        Some("clicking the field opened something that moved focus to another field, so nothing was typed".into()),
+        Some(StepFailure::BrowserError),
+    )
+}
+
 fn opt_i64(value: &Value) -> Result<Option<i64>, BrowserError> {
     match value {
         Value::Null => Ok(None),
@@ -743,10 +753,7 @@ impl CdpPage {
                 self.drag(target, point, action.destination_id.as_deref(), action.drag_path.as_ref()).await
             }
             Operation::Escape => self.key(None, Key::Escape, Point::Gone).await,
-            Operation::Scroll | Operation::ScrollUp => {
-                self.scroll(action.operation, target).await?;
-                Ok((StepOutcome::Executed, None, None))
-            }
+            Operation::Scroll | Operation::ScrollUp => self.scroll(action.operation, target).await,
             Operation::Back => self.back().await,
             Operation::Wait => {
                 Err(BrowserError::failed("act/wait", "wait is dispatched by act, with the run's time left"))
@@ -1108,6 +1115,7 @@ impl CdpPage {
                     }
                     let script = format!(
                         "({handed})({local_id}, {secret}).then(async id => {{ \
+                     if (id === 'elsewhere') return [id, false, null, null]; \
                      const native = {types}.includes(window.__fastbrowse?.nodes.get(id)?.type); \
                      const focused = id === null || (native && !{secret}) ? false : \
                      await ({focus})(id, false); \
@@ -1119,10 +1127,13 @@ impl CdpPage {
                         cover = *COVER_JS,
                     );
                     let raw = self.evaluate(session_id, &script).await?;
-                    let shape = "tuple[int | None, bool, bool | None, _Cover | None]";
+                    let shape = "tuple[int | str | None, bool, bool | None, _Cover | None]";
                     let Some([id, native, focused, cover]) = raw.as_array().map(Vec::as_slice) else {
                         return Err(bad(shape));
                     };
+                    if id.as_str() == Some("elsewhere") {
+                        return Ok(focus_moved());
+                    }
                     let focused = match focused {
                         Value::Null => None,
                         v => Some(v.as_bool().ok_or_else(|| bad(shape))?),
@@ -1234,7 +1245,10 @@ impl CdpPage {
             let handed = if secret || keyboard {
                 Some(local_id)
             } else {
-                opt_i64(&self.evaluate(session_id, &format!("({})({local_id}, false)", *HANDED_FOCUS_JS)).await?)?
+                match self.evaluate(session_id, &format!("({})({local_id}, false)", *HANDED_FOCUS_JS)).await? {
+                    Value::String(moved) if moved == "elsewhere" => return Ok(focus_moved()),
+                    handed => opt_i64(&handed)?,
+                }
             };
             match handed {
                 Some(handed) if attempt == 0 && handed != local_id => local_id = handed,
@@ -1446,7 +1460,11 @@ impl CdpPage {
         self.input(self.session.send("Input.dispatchKeyEvent", up, Some(session_id))).await
     }
 
-    async fn scroll(&self, operation: Operation, target: Option<&Target>) -> Result<(), BrowserError> {
+    async fn scroll(
+        &self,
+        operation: Operation,
+        target: Option<&Target>,
+    ) -> Result<(StepOutcome, Option<String>, Option<StepFailure>), BrowserError> {
         if let Some((session_id, _, local_id, ..)) = target {
             let direction = if operation == Operation::ScrollUp { -1 } else { 1 };
             let script = format!(
@@ -1455,13 +1473,16 @@ impl CdpPage {
                  e.scrollBy({{left: axis === 'x' ? e.clientWidth * {direction} : 0, \
                  top: axis === 'y' ? e.clientHeight * {direction} : 0, behavior: 'instant'}}); return true; }})()"
             );
+            // A scroll area the page redrew away is a stale target, as a disconnected click target is: raised as an
+            // error, it ended the run where a click on the same page was told back and tried again.
             if !truthy(&self.evaluate(session_id, &script).await?) {
-                return Err(BrowserError::failed(
-                    "scroll/target-gone",
-                    "scroll target is no longer an indexed scroll area",
+                return Ok((
+                    StepOutcome::Stale,
+                    Some("scroll target is no longer an indexed scroll area".into()),
+                    None,
                 ));
             }
-            return Ok(());
+            return Ok((StepOutcome::Executed, None, None));
         }
         let session_id = self.session.active_session_id()?;
         let delta = if operation == Operation::ScrollUp { -560 } else { 560 };
@@ -1469,7 +1490,8 @@ impl CdpPage {
         // pre-action measurement this action already made returned the viewport, so the centre costs no command.
         let (width, height) = self.viewport(&session_id).await?;
         let params = json!({"type": "mouseWheel", "x": width / 2.0, "y": height / 2.0, "deltaX": 0, "deltaY": delta});
-        self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await
+        self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await?;
+        Ok((StepOutcome::Executed, None, None))
     }
 
     /// Wait for the page to change by itself, for at most `seconds`: the run's remaining time, unbounded for a run
@@ -1488,8 +1510,14 @@ impl CdpPage {
         let token = NEXT_WAIT.fetch_add(1, Ordering::Relaxed);
         // A run with no time limit gives a wait no deadline. It then ends after one armed watch, so a page that never
         // changes hands the step back as unchanged: Jev can wait again, and the stall rule counts each one.
-        let seconds = if seconds.is_finite() { seconds.max(0.0) } else { WAIT_ARM_SECONDS };
-        let deadline = Instant::now() + secs(seconds);
+        // A wait too long for a deadline to hold is as unbounded as an infinite one: the driver asked for `wait(1e30)`
+        // in a run with no time limit, and the deadline overflowed and panicked.
+        let now = Instant::now();
+        let deadline = Some(seconds.max(0.0))
+            .filter(|seconds| seconds.is_finite())
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+            .and_then(|wait| now.checked_add(wait))
+            .unwrap_or_else(|| now + secs(WAIT_ARM_SECONDS));
         let finish = self.wait_finish_js(token);
         let mut cleanup = WaitCleanup { session: self.session.clone(), finish: finish.clone(), sessions: Vec::new() };
         let dialog = self.session.wait_for_dialog();

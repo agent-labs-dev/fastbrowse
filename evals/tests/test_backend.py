@@ -228,6 +228,30 @@ def test_a_page_read_over_http_is_the_evidence_its_read_step_points_at() -> None
     assert evidence.steps[0].page == 0 and seen_at[1] == 0
 
 
+def test_a_page_whose_field_values_changed_is_a_new_page() -> None:
+    """Three fills on one checkout form left its text alone, and the judge was shown only the first. A read of the
+    filled form, which carries no controls, is the page it was read from."""
+    url, text = "https://www.saucedemo.com/checkout-step-one.html", "Checkout: Your Information"
+    fields = [("Ada", "", ""), ("Ada", "Lovelace", ""), ("Ada", "Lovelace", "EC1A 1BB")]
+    events: list[object] = [
+        {
+            "event": "page",
+            "step": step,
+            "url": url,
+            "title": "Swag Labs",
+            "text": text,
+            "controls": [
+                {"label": label, "value": value} for label, value in zip(("First", "Last", "Zip"), values, strict=True)
+            ],
+        }
+        for step, values in enumerate(fields)
+    ]
+    events.append({"event": "read", "step": 3, "url": url, "title": "Swag Labs", "capture": {"text": text}})
+    pages, seen_at = backend.read_pages(events)
+    assert [page["controls"][2]["value"] for page in pages] == ["", "", "EC1A 1BB"]
+    assert seen_at == {0: 0, 1: 1, 2: 2, 3: 2}
+
+
 def test_campaign_metadata_preserves_model_requests_outside_judge_evidence() -> None:
     harness = backend.FastbrowseHarness(observer="plain-cdp")
     event = {"event": "llm_request", "messages": [{"role": "user", "content": "Captured notes"}]}

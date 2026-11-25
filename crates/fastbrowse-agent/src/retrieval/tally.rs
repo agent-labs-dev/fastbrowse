@@ -324,7 +324,7 @@ async fn distinct_winners(
             let parts: Option<Vec<_>> = ids.iter().map(|id| found.iter().find(|note| &note.id == id)).collect();
             let parts = parts?;
             Some(Candidate {
-                note: json!({"quotes": parts.iter().map(|part| &part.note).collect::<Vec<_>>()}),
+                note: json!({"parts": parts.iter().map(|part| &part.note).collect::<Vec<_>>()}),
                 ..(*parts.first()?).clone()
             })
         })
@@ -473,7 +473,9 @@ fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
 
 /// A note as a membership question shows it.
 fn shown(notes: &Notes, evidence: &fastbrowse_core::models::Evidence) -> serde_json::Value {
-    let mut note = json!({"quote": evidence.quote, "page": evidence.url, "headings": evidence.heading_path});
+    // The quoted text is "text", not "quote": asked whether a note {"quote": "Made with love by Zyte"} was one whole quote,
+    // Jev said yes at 0.55 to 0.64 in three replays, and 0.18 to 0.27 once the key no longer named the kind counted.
+    let mut note = json!({"text": evidence.quote, "page": evidence.url, "headings": evidence.heading_path});
     if let Some(step) = notes.typed_by_step(evidence) {
         note["typed_by_step"] = step.into();
     }
@@ -639,7 +641,7 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     }
     Question::Choice(ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record.{} Note: {}",
+            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the text is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this text is all text rendered for one repeated item; without that proof the text may still describe a whole record. Absence from a fragment does not prove absence from its record.{} Note: {}",
             typed_rule(note),
             dumps(note)
         ),
@@ -675,7 +677,7 @@ fn field_answer(answer: Option<&Answer>, offers: &[String]) -> FieldAnswer {
 }
 
 const RECORD: &str = "The record's id, such as r0.";
-const GROUP_TEXT: &str = "The record's value for the field named, copied character for character from its quote or a captured heading. Null only when no text in either is that field's value, however it is labelled.";
+const GROUP_TEXT: &str = "The record's value for the field named, copied character for character from its text or a captured heading. Null only when no text in either is that field's value, however it is labelled.";
 
 /// One record's group as its note writes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -710,19 +712,19 @@ impl Schema for RecordGroups {
 
 // Membership was already judged: asked to copy a selected phone's name, the copier returned null because its quote
 // named the model without repeating its brand. Copying the field must not discard that established membership.
-const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. The records have already been selected as the kind named in the field request; do not check their kind again. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, and give null only when no text in either is that field's value, however it is labelled. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\nThe field is only the claim's word for a value the record states about itself; the source may call it something else or leave it unlabelled.\n\n# Trust\n";
+const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. The records have already been selected as the kind named in the field request; do not check their kind again. For every record, copy the value of the field named from the record's text or a captured heading, exactly as the source writes it, and give null only when no text in either is that field's value, however it is labelled. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\nThe field is only the claim's word for a value the record states about itself; the source may call it something else or leave it unlabelled.\n\n# Trust\n";
 
 /// A record's captured heading can name the owner whose value its quote holds. A page address and generated
 /// metadata are not source wording, and joining separate source spans would invent a value neither states.
 fn record_contains(note: &serde_json::Value, copied: &str) -> bool {
     let holds =
         |source: &serde_json::Value| source.as_str().is_some_and(|source| text::squash(source).contains(copied));
-    note.get("quote").is_some_and(holds)
+    note.get("text").is_some_and(holds)
         || note.get("headings").and_then(serde_json::Value::as_array).is_some_and(|headings| headings.iter().any(holds))
         || note
-            .get("quotes")
+            .get("parts")
             .and_then(serde_json::Value::as_array)
-            .is_some_and(|quotes| quotes.iter().any(|quote| record_contains(quote, copied)))
+            .is_some_and(|parts| parts.iter().any(|part| record_contains(part, copied)))
 }
 
 /// The groups of a count per group: each group's text as first read, and its records in reading order, keyed by the
@@ -1165,7 +1167,7 @@ async fn select_records(
     let messages = |lines: &[String]| {
         [
             Message::system(format!(
-                "{UNTRUSTED}\nFor each record copy its {} exactly from its own quote or one of its captured headings. Set heading to null for the quote, or its zero-based heading index. Return every record once. Set text to null when no source states the field. Never invent, normalize or copy a value from another record.",
+                "{UNTRUSTED}\nFor each record copy its {} exactly from its own text or one of its captured headings. Set heading to null for the text, or its zero-based heading index. Return every record once. Set text to null when no source states the field. Never invent, normalize or copy a value from another record.",
                 text::repr(&within.by)
             )),
             Message::user(lines.join("\n")),
@@ -1818,7 +1820,7 @@ pub(super) async fn winner_fields(
         let quote = parts.iter().map(|part| part.quote.as_str()).collect::<Vec<_>>().join("\n");
         found.push(Candidate {
             quote,
-            note: json!({"quotes":parts.iter().map(|part| &part.note).collect::<Vec<_>>()}),
+            note: json!({"parts": parts.iter().map(|part| &part.note).collect::<Vec<_>>()}),
             ..(**first).clone()
         });
     }
@@ -1840,7 +1842,7 @@ pub(super) async fn winner_fields(
         for (group, (written, members)) in groups.values().enumerate() {
             for record in members {
                 questions.insert(format!("field{group}/r{record}"), Question::Noul(NoulQuestion::new(
-                    format!("{UNTRUSTED} Code selected this record by comparing {} across {}. Judge only whether the copied text states this record's requested field; whether that field alone answers task is checked separately. Does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? The record includes its captured headings as well as its quotes. A heading that names the record can state its requested field even when the quote states only a different field. Copied text: {}. Record: {}", text::repr(tally.field.as_deref().expect("a worked numeric extreme has a field")), text::repr(&tally.records()), text::repr(field), text::repr(written), dumps(&found[*record].note)),
+                    format!("{UNTRUSTED} Code selected this record by comparing {} across {}. Judge only whether the copied text states this record's requested field; whether that field alone answers task is checked separately. Does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? The record includes its captured headings as well as its text. A heading that names the record can state its requested field even when the quote states only a different field. Copied text: {}. Record: {}", text::repr(tally.field.as_deref().expect("a worked numeric extreme has a field")), text::repr(&tally.records()), text::repr(field), text::repr(written), dumps(&found[*record].note)),
                     Some("The copied text is exactly this record's requested field."),
                     Some("It is missing, ambiguous, incomplete, another field, or another record's value."),
                 )));
@@ -2021,7 +2023,7 @@ mod tests {
             group: None,
             written: "$251.00".into(),
         };
-        let row = json!({"quote": "| Smith | John | $50.00 |", "table": "table 1 of the 2 on its page"});
+        let row = json!({"text": "| Smith | John | $50.00 |", "table": "table 1 of the 2 on its page"});
         let Question::Choice(question) = field_question(&tally, &row, &["$50.00".into()], false) else { panic!() };
         let no_record = question.criteria[NO_RECORD].as_str().unwrap();
         assert!(
@@ -2046,7 +2048,7 @@ mod tests {
             group: None,
             written: "May 14, 2026".into(),
         };
-        let row = json!({"quote": "0.24.1\n\nMay 19, 2023", "headings": ["httpx 0.28.1", "Release history"]});
+        let row = json!({"text": "0.24.1\n\nMay 19, 2023", "headings": ["httpx 0.28.1", "Release history"]});
         let Question::Choice(question) = field_question(&tally, &row, &["May 19, 2023".into()], false) else {
             panic!()
         };
@@ -2069,7 +2071,7 @@ mod tests {
             written: "May 14, 2026".into(),
         };
         let note =
-            json!({"quote": "Pre-release 1.0.dev6 Aug 31, 2026", "headings": ["httpx 0.28.1", "Release history"]});
+            json!({"text": "Pre-release 1.0.dev6 Aug 31, 2026", "headings": ["httpx 0.28.1", "Release history"]});
         for grouped in [false, true] {
             let Question::Choice(question) = field_question(&tally, &note, &["Aug 31, 2026".into()], grouped) else {
                 panic!()
@@ -2093,7 +2095,7 @@ mod tests {
             group: None,
             written: "Clerkenwell Coffee".into(),
         };
-        let heading = json!({"quote": "Clerkenwell Coffee", "source_kind": "heading"});
+        let heading = json!({"text": "Clerkenwell Coffee", "source_kind": "heading"});
         let Question::Choice(question) = field_question(&tally, &heading, &["84.99".into()], false) else { panic!() };
         assert!(!question.criteria.contains_key(NO_VALUE), "{:?}", question.criteria.keys());
         let mut whole = heading.clone();
@@ -2182,7 +2184,7 @@ mod tests {
         let state = membership_state("Compare current offers", &notes, &address("https://b.test"));
         assert_eq!(state["task"], "Compare current offers");
         let context = state["labels_on_the_page"].as_array().unwrap();
-        let quotes: Vec<_> = context.iter().map(|note| note["quote"].as_str().unwrap()).collect();
+        let quotes: Vec<_> = context.iter().map(|note| note["text"].as_str().unwrap()).collect();
         assert_eq!(quotes, ["Current offer", "25"]);
         assert!(context.iter().all(|note| note["page"] == "https://b.test"));
         assert_eq!(context[1]["headings"], json!(["Product", "Offer"]));
@@ -2362,7 +2364,7 @@ mod tests {
             serde_json::from_str(question.rsplit_once(" Note: ").unwrap().1).unwrap()
         };
         let question = |quote: &str| {
-            let found = asked.iter().find(|question| note(question)["quote"] == quote);
+            let found = asked.iter().find(|question| note(question)["text"] == quote);
             found.unwrap_or_else(|| panic!("no question about {quote}: {asked:?}"))
         };
         let footer = question("Made by Zyte");
@@ -2470,7 +2472,7 @@ mod tests {
                     assert!(question.instructions.contains(state["compared_field"].as_str().unwrap()));
                     assert!(question.instructions.contains("whether that field alone answers task is checked separately"));
                     assert!(question.instructions.contains("exactly this record"));
-                    assert!(question.instructions.contains("The record includes its captured headings as well as its quotes"));
+                    assert!(question.instructions.contains("The record includes its captured headings as well as its text"));
                     assert!(question.instructions.contains("A heading that names the record can state its requested field even when the quote states only a different field"));
                     (
                         key.clone(),
@@ -2980,7 +2982,7 @@ mod tests {
     /// field, never for a value its quote does not label.
     #[test]
     fn the_reader_is_told_null_means_no_value_not_no_label() {
-        let card = json!({"quotes": [{"quote": "Agnostic: A Spirited Manifesto\n\n\u{a3}12.51\n\nIn stock", "headings": ["Nonfiction"]}]});
+        let card = json!({"parts": [{"text": "Agnostic: A Spirited Manifesto\n\n\u{a3}12.51\n\nIn stock", "headings": ["Nonfiction"]}]});
         let [system, user] = groups_messages("title", "five-star-rated book", &[format!("r0: {}", dumps(&card))]);
         let system = format!("{system:?}");
         assert!(
@@ -3547,7 +3549,7 @@ mod tests {
         let found = [Candidate {
             id: String::new(),
             quote: "One by Ada".into(),
-            note: json!({"quote": "One by Ada"}),
+            note: json!({"text": "One by Ada"}),
             span: (String::new(), 0, 0),
             literal: true,
             whole_record: false,
@@ -3654,7 +3656,7 @@ mod tests {
         let note = |quote: &str| Candidate {
             id: String::new(),
             quote: quote.into(),
-            note: json!({"quote": quote}),
+            note: json!({"text": quote}),
             span: (String::new(), 0, 0),
             literal: true,
             whole_record: false,

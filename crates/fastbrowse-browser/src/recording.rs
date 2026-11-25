@@ -593,6 +593,7 @@ async fn cast(session: &BrowserSession, frames: &Mutex<Frames>, session_id: &str
 fn describe(step: &StepResult) -> String {
     let target = step.target.as_ref().map(|t| format!(" {t}")).unwrap_or_default();
     let by = match step.decided_by {
+        Decider::Llm => "picked by the model",
         Decider::Jev => "picked by Jev",
         Decider::Code => "picked by code",
         Decider::Recipe => "recipe action confirmed by Jev",

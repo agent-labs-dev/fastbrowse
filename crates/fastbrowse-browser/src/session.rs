@@ -548,12 +548,13 @@ impl BrowserSession {
             } else {
                 // Discovery has to be on only before the tab can open a popup, which it cannot do while it is still
                 // being created, so the two are sent at once rather than paying a cloud round trip for each.
+                // Both run to the end: a failed discovery that dropped the tab's creation mid-flight left Chrome
+                // opening a tab the session never recorded as owned, so the rollback could not close it.
                 let discover = self.send("Target.setDiscoverTargets", json!({"discover": true}), None);
-                together(vec![
-                    Box::pin(async { discover.await.map(drop) }),
-                    Box::pin(self.open_owned_tab("about:blank")),
-                ])
-                .await?;
+                let (discovered, opened) =
+                    futures_util::future::join(discover, self.open_owned_tab("about:blank")).await;
+                discovered?;
+                opened?;
             }
             // A popup's first response can arrive before targetCreated adoption enables Fetch, losing inline PDFs
             // and downloads. New pages pause until their session can capture; unrelated pages resume and detach.

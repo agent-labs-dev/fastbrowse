@@ -1432,9 +1432,9 @@
  },
  "inaccessible_frames": 0,
  "media": [],
- "offscreen_text": "Product 4\n$28.99\nAdd to cart\nDetails\nOptions\nProduct 5\n$35.99\nAdd to cart\nDetails\nOptions\nProduct 6\n$42.99\nAdd to cart\nDetails\nOptions\nProduct 7\n$49.99\nAdd to cart\nDetails\nOptions",
+ "offscreen_text": "Product 4\n$28.99\nAdd to cart Details\nOptions\nProduct 5\n$35.99\nAdd to cart Details\nOptions\nProduct 6\n$42.99\nAdd to cart Details\nOptions\nProduct 7\n$49.99\nAdd to cart Details\nOptions",
  "title": "Cards",
  "url": "http://fixture/cards.html?n=8",
- "viewport_text": "Product 0\n$0.99\nAdd to cart\nDetails\nOptions\nProduct 1\n$7.99\nAdd to cart\nDetails\nOptions\nProduct 2\n$14.99\nAdd to cart\nDetails\nOptions\nProduct 3\n$21.99\nAdd to cart\nDetails\nOptions",
+ "viewport_text": "Product 0\n$0.99\nAdd to cart Details\nOptions\nProduct 1\n$7.99\nAdd to cart Details\nOptions\nProduct 2\n$14.99\nAdd to cart Details\nOptions\nProduct 3\n$21.99\nAdd to cart Details\nOptions",
  "visual_content": 1
 }

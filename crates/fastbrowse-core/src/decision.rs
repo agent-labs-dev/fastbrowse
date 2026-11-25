@@ -780,8 +780,6 @@ impl DecisionProfile {
         let mut config = config
             .unwrap_or_else(|| Config { thresholds: self.thresholds.clone().unwrap_or_default(), ..Config::default() });
         let given = config.tokens.clone();
-        let observation = &mut config.observation;
-        observation.group_size = observation.group_size.min(self.max_choice_options.max(2) as i64);
         let mut total = self.max_total_tokens;
         if let Some(bytes) = self.max_request_bytes {
             total = total.min((bytes as f64 / JSON_CHARS_PER_TOKEN) as i64);
@@ -1102,7 +1100,6 @@ mod tests {
     #[test]
     fn a_small_model_bounds_the_choices_offered_and_the_request() {
         let config = DecisionProfile::unknown().fit(None);
-        assert_eq!(config.observation.group_size, 26);
         // 64 KiB of dense JSON, counted as the request is fitted.
         assert_eq!(config.tokens.state_plus_all_questions, 43_690);
         assert_eq!(config.tokens.state_plus_largest_question, 32_000);
@@ -1111,9 +1108,8 @@ mod tests {
     #[test]
     fn a_callers_thresholds_stand_and_its_limits_are_bounded() {
         let mut given = Config::default();
-        given.thresholds.bot_check_above = 0.4;
+        given.thresholds.irreversible_above = 0.4;
         let fitted = DecisionProfile::unknown().fit(Some(given));
-        assert_eq!(fitted.thresholds.bot_check_above, 0.4);
-        assert_eq!(fitted.observation.group_size, 26);
+        assert_eq!(fitted.thresholds.irreversible_above, 0.4);
     }
 }

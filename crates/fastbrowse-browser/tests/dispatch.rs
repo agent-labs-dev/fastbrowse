@@ -498,6 +498,31 @@ async fn test_fill_follows_a_replacement_only_at_the_original_position() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_fill_types_nothing_when_its_click_moves_focus_to_a_field_elsewhere() {
+    // A date field that opens a calendar dialog with its own field at the top of the page: the original stays on the
+    // page behind the dialog, and text typed into it, focused back, broke the search the page ran afterwards.
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let script = "document.body.innerHTML = '<div style=\"height:300px\"></div><input aria-label=\"Departure\">'; \
+         window.keys = 0; document.addEventListener('keydown', () => window.keys++, true); \
+         const field = document.querySelector('input'); \
+         field.addEventListener('click', () => { const d = document.createElement('div'); d.setAttribute('role', \
+         'dialog'); d.style.cssText = 'position:fixed;top:0;left:0;background:white'; \
+         d.innerHTML = '<input aria-label=\"Departure date\">'; document.body.append(d); \
+         d.querySelector('input').focus(); }, {once: true}); true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let obs = observe_until(&h.page, "Departure").await;
+    let result = h.page.act(&fill(find(&obs, "Departure"), "2026-12-22"), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Failed, "{:?}", result.detail);
+    assert!(result.detail.as_deref().unwrap_or_default().contains("moved focus"), "{:?}", result.detail);
+    assert_eq!(
+        eval_active(&h.page, "[window.keys, ...[...document.querySelectorAll('input')].map(e => e.value)]").await,
+        json!([0, "", ""])
+    );
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_native_date_field_is_committed_through_the_value_setter() {
     // Typing into a native date input lands in whichever locale segment its own picker has focused, not the ISO
     // value a field writer produces, so the value is set the way the picker itself would commit one.

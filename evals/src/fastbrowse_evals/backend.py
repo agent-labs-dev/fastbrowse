@@ -212,17 +212,6 @@ class FastbrowseHarness(BrowserHarness):
         return details
 
 
-class FastbrowseLlmPickerHarness(FastbrowseHarness):
-    """fastbrowse with its LLM picking each browser action in place of Jev: the same-model ablation of the picker.
-
-    Every other decision, and every input the picker sees, is the `fastbrowse` arm's."""
-
-    info = FastbrowseHarness.info.model_copy(update={"name": "fastbrowse-llm-picker"})
-
-    def settings(self) -> dict[str, str]:
-        return run_settings() | {"FASTBROWSE_ACTION_PICKER": "llm"}
-
-
 async def _ready_browser(browser: Browser) -> str:
     return browser.cdp_url
 
@@ -260,7 +249,9 @@ def read_pages(events: Iterable[object]) -> tuple[list[dict[str, object]], dict[
     trace, and for each step the index of the last page it saw. Over HTTP the browser never shows these pages, so
     the trace is the only record of what the run read."""
     pages: list[dict[str, object]] = []
-    index: dict[tuple[object, object, object], int] = {}
+    index: dict[tuple[object, ...], int] = {}
+    # The latest page shown with each address, title and text, which a read of that text was made from.
+    shown: dict[tuple[object, ...], int] = {}
     seen_at: dict[int, int] = {}
     for event in events:
         if not isinstance(event, Mapping) or event.get("event") not in ("page", "read"):
@@ -275,10 +266,18 @@ def read_pages(events: Iterable[object]) -> tuple[list[dict[str, object]], dict[
             continue
         record = {key: event[key] for key in ("url", "title", "controls") if event.get(key) is not None}
         record["text"] = page["text"]
-        key = (record.get("url"), record.get("title"), record["text"])
+        # A field's value is part of the page's state: keyed by its text alone, a checkout form after its last name and
+        # postcode were typed was the same page as after the first name, and the judge saw only "Ada" filled.
+        # A read event carries no controls: keyed apart, a read of the filled form pointed the judge at a copy with none.
+        page_key = (record.get("url"), record.get("title"), record["text"])
+        if event["event"] == "read" and page_key in shown:
+            seen_at[event["step"]] = shown[page_key]
+            continue
+        key = (*page_key, json.dumps(record.get("controls"), sort_keys=True))
         if key not in index:
             index[key] = len(pages)
             pages.append(record)
+        shown[page_key] = index[key]
         seen_at[event["step"]] = index[key]
     return pages, seen_at
 

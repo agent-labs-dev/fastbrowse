@@ -720,6 +720,13 @@ struct Reader<'a> {
     controls: Vec<Control>,
     /// The control whose element is open, which its text labels.
     labelling: Option<(usize, String, String)>,
+    /// The open `<label>`: its `for`, its text so far, and the controls opened inside it, which it names.
+    label: Option<(Option<String>, String, Vec<usize>)>,
+    /// Each closed `<label for>`'s target id and text, applied once every control is read, since a label may come
+    /// before or after its control.
+    labels_for: Vec<(String, String)>,
+    /// Each control's element id, and whether an `aria-label` named it, which a `<label>` does not override.
+    control_ids: Vec<(Option<String>, bool)>,
     /// An open `<li class="next">`, the pager markup most sites use instead of `rel="next"`; its link is the next page.
     pager_item: bool,
     /// Open pagination containers, by tag: a `nav`, or an element whose class or label names paging. A `next` class
@@ -787,6 +794,9 @@ impl Tags for Reader<'_> {
         if let Some((_, _, text)) = &mut self.labelling {
             text.push_str(data);
         }
+        if let Some((_, text, _)) = &mut self.label {
+            text.push_str(data);
+        }
         for (_, _, text) in &mut self.stamps {
             text.push_str(data);
         }
@@ -831,6 +841,9 @@ impl<'a> Reader<'a> {
             hidden: Vec::new(),
             controls: Vec::new(),
             labelling: None,
+            label: None,
+            labels_for: Vec::new(),
+            control_ids: Vec::new(),
             pager_item: false,
             paging: Vec::new(),
             stamps: Vec::new(),
@@ -892,7 +905,10 @@ impl<'a> Reader<'a> {
         control.download = get("download").map(|_| true);
         if matches!(tag, "a" | "button") {
             self.labelling = Some((self.controls.len(), tag.to_string(), String::new()));
+        } else if let Some((_, _, inside)) = &mut self.label {
+            inside.push(self.controls.len());
         }
+        self.control_ids.push((get("id"), get("aria-label").is_some_and(|value| !clean(&value).is_empty())));
         self.controls.push(control);
     }
 
@@ -957,6 +973,9 @@ impl<'a> Reader<'a> {
             if let Some(level) = record.heading_level {
                 self.headings.retain(|(higher, _)| *higher < level);
             }
+        }
+        if tag == "label" {
+            self.label = Some((get("for").map(str::to_string), String::new(), Vec::new()));
         }
         self.control(tag, attrs);
         if tag == "a"
@@ -1078,9 +1097,31 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Name the control at `index` by its `<label>`, as a browser's accessible name does, unless an `aria-label`
+    /// named it. Named only by its placeholder or `name`, a comment box under `<label for>` read as a textbox with no
+    /// label, so the driver and Jev could not tell it was the box the task's comment was for (#1112).
+    fn name_by_label(&mut self, index: usize, text: &str) {
+        if !self.control_ids[index].1 {
+            self.controls[index].label = text.to_string();
+        }
+    }
+
     fn close(&mut self, tag: &str) {
         if tag == "li" {
             self.pager_item = false;
+        }
+        if tag == "label"
+            && let Some((target, text, inside)) = self.label.take()
+        {
+            let text = clean(&text);
+            if !text.is_empty() {
+                for index in inside {
+                    self.name_by_label(index, &text);
+                }
+                if let Some(target) = target {
+                    self.labels_for.push((target, text));
+                }
+            }
         }
         if let Some((open, nested)) = self.paging.last_mut()
             && open == tag
@@ -1393,6 +1434,11 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
     reader.emit_titles(usize::MAX);
     reader.close_record();
     reader.flush(None, None, false);
+    for (target, text) in std::mem::take(&mut reader.labels_for) {
+        if let Some(index) = reader.control_ids.iter().position(|(id, _)| id.as_deref() == Some(target.as_str())) {
+            reader.name_by_label(index, &text);
+        }
+    }
     (clean(&reader.title), reader.blocks, reader.controls, reader.frames)
 }
 
@@ -1937,6 +1983,21 @@ mod tests {
         assert_eq!(found[0].kind, BlockKind::Link);
         assert_eq!(found[0].text, "5 days ago (2026-11-01)");
         assert_eq!(controls[0].label, "5 days ago");
+    }
+
+    /// A control is named by its `<label>`, before or after it or wrapping it, as a browser names it; an `aria-label`
+    /// still wins. Unnamed, a comment box read as a textbox with no label (#1112).
+    #[test]
+    fn a_label_names_its_control() {
+        let (_, _, controls, _) = read(
+            "<label for=\"c\">Comment text area</label><textarea id=\"c\"></textarea>\
+             <input id=\"q\" placeholder=\"Search\"><label for=\"q\">Find</label>\
+             <label><input type=\"checkbox\"> Remember me</label>\
+             <label for=\"n\">Name</label><input id=\"n\" aria-label=\"Full name\">",
+            "https://a.example/",
+        );
+        let labels: Vec<&str> = controls.iter().map(|control| control.label.as_str()).collect();
+        assert_eq!(labels, ["Comment text area", "Find", "Remember me", "Full name"]);
     }
 
     fn kinds_and_texts(html: &str) -> Vec<(BlockKind, String)> {

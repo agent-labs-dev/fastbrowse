@@ -201,8 +201,9 @@ async fn run(name: &str, task: RunTask, host: Host, requests: Requests) -> Outco
         "fastbrowse.scripted:run_task" => {
             let script =
                 fastbrowse_agent::scripted::steps(&task.task).map_err(|error| RunError::Invalid(error.to_string()))?;
-            let jev = Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(script));
-            let host = Host { jev: Some(jev), llm: Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM)), ..host };
+            let jev = Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(script.clone()));
+            let llm = Arc::new(fastbrowse_agent::scripted::ScriptedDriver::new(script));
+            let host = Host { jev: Some(jev), llm: Some(llm), ..host };
             fastbrowse_run::run_task(task, host).await
         }
         // The events a run sends, then a cited answer with a download.

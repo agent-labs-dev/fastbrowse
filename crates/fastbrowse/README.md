@@ -1,8 +1,9 @@
 # fastbrowse
 
-A browser agent that picks instead of generating. Every page is indexed into the controls it actually has, and a
-choice model picks one of them. An LLM plans, reads and writes prose. The choice model also decides when a page is
-read and when the run is done. Code owns authorization gates, secret resolution and cost limits.
+A browser agent that picks from the controls a page has. Every page is indexed into the controls it has, and
+one LLM conversation names the actions to take. Jev, a choice model, answers the questions code gates on: whether an
+action is irreversible, whether the task's steps were carried out, and whether an answer holds against its quotes.
+Code owns authorization gates, secret resolution and cost limits.
 
 ```toml
 [dependencies]

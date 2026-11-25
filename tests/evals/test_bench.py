@@ -545,7 +545,7 @@ def test_record_forwards_the_routing_a_run_sends_for_its_model(monkeypatch: pyte
             "order": ["parasail", "deepinfra", "inference-net"],
             "ignore": ["together"],
         },
-        {"require_parameters": True, "sort": "latency"},
+        {"require_parameters": True, "sort": "latency", "order": ["openai"]},
         {"only": ["x"]},
     ]
 

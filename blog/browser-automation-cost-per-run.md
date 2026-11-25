@@ -3,9 +3,9 @@ title: Cap browser automation cost per run
 description: What a fastbrowse run reports it spent, what each charge is for, and how to cap a run with --max-dollars and --max-steps.
 topic: Results and cost
 published: 2026-10-31
-updated: 2026-11-24
+updated: 2026-11-25
 verifiedAgainst: v0.11.2
-verifiedOn: 2026-11-24
+verifiedOn: 2026-11-25
 ---
 
 Every fastbrowse run reports what it spent. `--json` breaks the total down by component, so model calls and verification calls show up as separate lines. A model line also counts the input tokens read from and written to the provider's prompt cache, when the provider reports them. A model line also names the model that served the call. Measured cost per run for benchmark tasks is on [the benchmarks page](/benchmarks/).
@@ -18,7 +18,7 @@ The result names the resource that ran out in `budget.resource` and the limit it
 
 ## Charges on a run
 
-- Model calls, which pick each action and write the answer. A stalled run can also ask for a fresh known route before stopping.
+- Model calls, which pick each action and write the answer.
 - Verification calls, which check each claim against the page text it cites.
 - Optional web search, reported as a search cost line.
 - The browser. A cloud browser is billed by time and added when the run stops.

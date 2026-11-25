@@ -71,6 +71,8 @@ pub enum FaultClass {
     Schema,
     /// The answer was cut off before its JSON ended.
     Truncated,
+    /// The provider's content filter stopped the answer.
+    Filtered,
     /// The answer held no completion the client could read.
     Envelope,
     /// The request could not be made as asked: no model for the purpose, an image type or schema the wire cannot
@@ -87,6 +89,7 @@ impl std::fmt::Display for FaultClass {
             FaultClass::Transport => f.write_str("transport"),
             FaultClass::Schema => f.write_str("schema"),
             FaultClass::Truncated => f.write_str("truncated"),
+            FaultClass::Filtered => f.write_str("filtered"),
             FaultClass::Envelope => f.write_str("envelope"),
             FaultClass::Request => f.write_str("request"),
             FaultClass::Client => f.write_str("client"),
