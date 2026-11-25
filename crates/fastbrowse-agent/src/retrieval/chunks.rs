@@ -198,8 +198,8 @@ fn aligned<'a>(pieces: &[(String, bool)], lines: impl Iterator<Item = &'a str>) 
                 .map(|from| {
                     let mut joined = String::new();
                     let mut found = Vec::new();
-                    for at in from..m {
-                        joined.push_str(&pieces[at].0);
+                    for (at, (piece, _)) in pieces.iter().enumerate().skip(from) {
+                        joined.push_str(piece);
                         if !line.contains(&joined) {
                             break;
                         }
@@ -219,9 +219,8 @@ fn aligned<'a>(pieces: &[(String, bool)], lines: impl Iterator<Item = &'a str>) 
                 here = here.max(best[i + 1][j - 1]);
             }
             for (s, ends) in runs[i].iter().enumerate() {
-                for &(end, len) in ends.iter().filter(|(end, _)| *end == j) {
+                for &(_, len) in ends.iter().filter(|(end, _)| *end == j) {
                     here = here.max(best[i][s] + len);
-                    let _ = end;
                 }
             }
             best[i + 1][j] = here;
