@@ -2222,11 +2222,26 @@
   });
   const recordCount = memo(section =>
     [...descendants(section, RECORD)].filter(r => holdingControls(r) && holdsOwnText(r)).length);
+  // Another record is a card that holds both an owner (its first line, when no control of its own says it) and
+  // controls of its own beyond that line, and that has a sibling card doing the same: replies listed under a comment
+  // each name their author and carry their own buttons, whatever their markup or classes. A layout row holds one or
+  // the other (an author row is a bare link, an actions row sits beside it, an editor row holds only its field or its
+  // Post button), so a comment's rows and a form's rows never pair up.
+  const isRecordCard = memo(card => {
+    const [first] = renderedLines(card);
+    if (!first || !isCard(card)) return false;
+    return controls.some(c => c.label !== first && card.contains(registry.nodes.get(c.id)));
+  });
+  const isListedRecord = card =>
+    isRecordCard(card) && [...card.parentElement.children].some(c => c !== card && isRecordCard(c));
   const listsRecordsOutside = (section, element) => {
     if (recordCount(section) < 2) return false;
-    for (let e = element; e && e !== section; e = e.parentElement) if (e.matches(RECORD)) return false;
-    // A class-styled comment card is a record too: its own controls are named by it, not outside every record.
-    return !section.contains(recordOf(element));
+    // A class-styled comment card is a record too: its own controls are named by it, not outside every record, and a
+    // comment whose replies are listed inside it names its own Reply. A page-level comment form laid out in repeated
+    // rows is not: those rows are cards, but no record, and counting them took the note that the form sits outside
+    // every comment off its field and its Post button.
+    for (let e = element; e; e = e === section ? null : e.parentElement) if (e.matches(RECORD) || isListedRecord(e)) return false;
+    return true;
   };
   // The section's name, and whether the control sits outside every record the section lists.
   const nearestHeading = (element, label) => {
@@ -2264,11 +2279,6 @@
     }
     return null;
   });
-  const controlCounts = new Map();
-  for (const c of controls) {
-    for (let e = registry.nodes.get(c.id)?.parentElement; e; e = e.parentElement) controlCounts.set(e, (controlCounts.get(e) || 0) + 1);
-  }
-  const controlsIn = card => controlCounts.get(card) || 0;
   // The repeating card around a record, for a record that names nothing.
   const recordAbove = card => {
     for (let e = card.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
@@ -2290,22 +2300,10 @@
     if (!record) continue;
     let context = '',
       owner = record;
-    // A card holding another card's controls is a different comment: neither the title climb nor the owner climb may
-    // step out into it, or a reply would take its parent's heading while its sibling replies share the same one.
-    // Another record is a card that holds both an owner (its first line, when no control of its own says it) and
-    // controls of its own beyond that line, and that has a sibling card doing the same: replies listed under a
-    // comment each name their author and carry their own buttons, whatever their markup or classes. A layout row holds
-    // one or the other (an author row is a bare link, an actions row sits beside it), so a comment's rows never pair up.
-    const isRecordCard = memo(card => {
-      const [first] = renderedLines(card);
-      if (!first || !isCard(card)) return false;
-      return controls.some(c => c.label !== first && card.contains(registry.nodes.get(c.id)));
-    });
+    // A card holding another listed record's controls is a different comment: neither the title climb nor the owner
+    // climb may step out into it, or a reply would take its parent's heading while its sibling replies share the same one.
     const holdsOtherCard = (above, own) => {
-      for (const card of above.querySelectorAll('*')) {
-        if (card.contains(own) || own.contains(card) || !isRecordCard(card)) continue;
-        if ([...card.parentElement.children].some(c => c !== card && isRecordCard(c))) return true;
-      }
+      for (const card of above.querySelectorAll('*')) if (!card.contains(own) && !own.contains(card) && isListedRecord(card)) return true;
       return false;
     };
     // A lone record is a record of its own (the only reply names itself, not the comment it answers); only a repeating
