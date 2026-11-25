@@ -15,7 +15,7 @@ use fastbrowse_core::models::{
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Failure, Media, Observation, Page,
-    PageResult,
+    PageResult, SourceField,
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -3122,12 +3122,29 @@ async fn the_trace_of_two_reads_of_one_text_rebuilds_the_notes_a_composition_saw
     let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM))
         .with_trace(trace.clone());
     let mut state = run_state();
-    let releases = capture(&[(BlockKind::Heading, "Releases"), (BlockKind::Paragraph, field)]);
+    // The captures carry the metadata a replay must keep: a table, a whole-record flag and a source field. Defaults
+    // alone would let a trace that dropped them pass.
+    let mut releases = capture(&[
+        (BlockKind::Heading, "Releases"),
+        (BlockKind::Paragraph, field),
+        (BlockKind::Table, "| Version | Date |\n| --- | --- |\n| 1.0 | 2026-01-01 |"),
+    ]);
+    releases.blocks[1].whole_record = true;
     let mut files = capture(&[(BlockKind::Heading, "Download files"), (BlockKind::Paragraph, field)]);
     files.url = "https://example.test/files".into();
+    let start = files.blocks[1].start;
+    files.blocks[1].fields =
+        vec![SourceField { path: vec!["released".into()], start, end: start + field.len() as i64 }];
     for page in [releases, files] {
         agent.read(&mut state, page, &observation(&[]), true).await.expect("a read");
     }
+    let evidences: Vec<_> = state.notes.facts().iter().filter_map(|fact| fact.evidence.as_ref()).collect();
+    assert!(
+        evidences.iter().any(|evidence| state.notes.whole_record(evidence)),
+        "the fixture must hold a whole record"
+    );
+    assert!(evidences.iter().any(|evidence| !state.notes.table_blocks(evidence).is_empty()), "and a table");
+    assert!(evidences.iter().any(|evidence| !state.notes.source_fields(evidence).is_empty()), "and a source field");
 
     let events: Vec<serde_json::Value> =
         serde_json::from_str(&serde_json::to_string(&trace.events()).unwrap()).unwrap();
