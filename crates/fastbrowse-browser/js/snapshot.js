@@ -1129,6 +1129,74 @@
     return labels;
   };
   const referencedNode = (root, id) => root.getElementById ? root.getElementById(id) : document.getElementById(id);
+  // An image's alt text and the words beside it often say the same thing: a card holds a picture whose alt is its title
+  // and a span showing that title. Accname would name the card with both, so every label read "Test image Test image"
+  // (#1457). The alt text only stands in for the picture, so it is left out when a sibling already shows it.
+  const namedByContent = (e, seen) => {
+    const flat = text => text.replace(/\s+/g, ' ').trim();
+    // A picture may sit in a wrapper (<picture>, a thumbnail span): the wrapper counts as the picture when it holds
+    // an image and no words of its own. A <source> beside the <img> in a <picture> shows nothing itself.
+    const isPicture = n =>
+      n.nodeType === 1 &&
+      (n.tagName === 'IMG' ||
+        (n.children.length > 0 &&
+          [...n.childNodes].every(
+            c => (c.nodeType === 3 ? !c.textContent.trim() : c.nodeType !== 1 || c.tagName === 'SOURCE' || isPicture(c)),
+          )));
+    // A wrapper that is named only by its content ("<span><span>Test image</span><span>New</span></span>") is read
+    // through, so each picture and each run of words keeps what it is: flattening the wrapper to one string lost
+    // which part was the picture's alt and left the title doubled beside a badge.
+    const namedByOwnContent = n =>
+      !n.getAttribute('aria-labelledby') &&
+      !n.getAttribute('aria-label') &&
+      !n.hasAttribute('alt') &&
+      !labelsFor(n).length &&
+      !['button', 'submit', 'reset'].includes(nativeProperty(n, 'type')) &&
+      !['INPUT', 'SELECT', 'TEXTAREA'].includes(n.tagName) &&
+      !FIELD_CONTAINERS.has(n.getAttribute('role'));
+    const contentParts = parent =>
+      [...parent.childNodes].flatMap(n => {
+        if (n.nodeType === 3) return [{ image: false, text: n.textContent }];
+        if (n.nodeType !== 1 || CODE.has(n.tagName) || n.getAttribute('aria-hidden') === 'true') return [];
+        if (!shown(n) && shown(parent)) return [];
+        // A wrapper of several images is read through, so each image stays its own part and drops its own repeated title.
+        if (isPicture(n) && (n.tagName === 'IMG' || n.querySelectorAll('img').length <= 1))
+          return [{ image: true, text: labelFrom(n, seen) }];
+        if (!seen.has(n) && namedByOwnContent(n)) {
+          seen.add(n);
+          nameReads?.nodes.add(n);
+          const inner = contentParts(n);
+          return inner.some(part => part.text.trim())
+            ? inner
+            : [{ image: false, text: n.getAttribute('title') || '' }];
+        }
+        return [{ image: false, text: labelFrom(n, seen) }];
+      });
+    const parts = contentParts(e);
+    const words = parts.filter(part => !part.image).map(part => part.text);
+    // Words split across inline nodes ("Test <b>image</b>") repeat the alt as a whole.
+    // A badge or status beside the title must not hide it, so any run of adjacent texts may match. A run is grown only
+    // while it is still the start of the alt: building every run made strings quadratic in the node count, and a
+    // control named by 1,000 spans exhausted the renderer's heap.
+    const shownBeside = alt => {
+      const target = flat(alt);
+      if (!target) return false;
+      for (let i = 0; i < words.length; i++) {
+        let run = '';
+        for (let j = i; j < words.length; j++) {
+          run = flat(`${run} ${words[j]}`);
+          if (run === target) return true;
+          if (!target.startsWith(run)) break;
+        }
+      }
+      return false;
+    };
+    return parts
+      .filter(part => !part.image || !shownBeside(part.text))
+      .map(part => part.text)
+      .join(' ')
+      .trim();
+  };
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -1163,19 +1231,7 @@
       // the gate read that text as what a click on the field would do (#885).
       (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName) || FIELD_CONTAINERS.has(e.getAttribute('role'))
         ? ''
-        : [...e.childNodes]
-            .map(n =>
-              n.nodeType === 3
-                ? n.textContent
-                : n.nodeType === 1 &&
-                    !CODE.has(n.tagName) &&
-                    n.getAttribute('aria-hidden') !== 'true' &&
-                    (shown(n) || !shown(e))
-                  ? labelFrom(n, seen)
-                  : '',
-            )
-            .join(' ')
-            .trim()) ||
+        : namedByContent(e, seen)) ||
       e.getAttribute('title') ||
       e.getAttribute('placeholder') ||
       ''
