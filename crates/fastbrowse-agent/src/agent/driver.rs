@@ -540,6 +540,13 @@ impl Agent {
             // Read before the effect is recorded, which consumes the flag: the record is what coverage is told later.
             let keeps = state.keeping;
             self.note_effect(state, &observation);
+            let shown = std::mem::take(&mut state.sent_text);
+            if shown.iter().any(|piece| piece.added) {
+                // A failed capture loses only the quotes: the step's effect still records what the page added.
+                if let Ok(capture) = self.capture().await {
+                    self.record_sent_notice(state, &capture, &shown);
+                }
+            }
             self.settle(state, &observation).await?;
             self.take_commit(state, &observation, keeps);
             self.record_page(state, &observation);

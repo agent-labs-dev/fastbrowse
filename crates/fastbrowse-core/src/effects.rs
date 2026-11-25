@@ -148,30 +148,70 @@ fn shows(control: &Control, choice: &str) -> bool {
 }
 
 /// The text the page shows after a step and did not before, each piece once per time it was added, in the order the
-/// page lists them. Of a piece the page already showed and shows once more, the last one listed is the one named.
+/// page lists them.
 ///
 /// The viewport's text and the text outside it are read together, so scrolling a piece into view adds nothing.
 pub fn added_text(before: &Observation, after: &Observation) -> Vec<String> {
-    fn pieces(observation: &Observation) -> impl Iterator<Item = &str> {
+    shown_text(before, after).into_iter().filter(|piece| piece.added).map(|piece| piece.text).collect()
+}
+
+/// One text piece of a page after a step, and whether the step added it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownPiece {
+    pub text: String,
+    pub added: bool,
+    /// Listed after the viewport's text: an observation puts the text outside the viewport last, whatever its place
+    /// in the document.
+    pub offscreen: bool,
+}
+
+/// `after`'s text pieces, in the order the page lists them, each marked added or kept.
+///
+/// Which occurrence of a repeated piece is the added one follows the pieces around it: a save that turned "Not saved"
+/// into "Changes saved successfully" above a help line already reading "Changes saved successfully" added the status,
+/// yet counting occurrences alone named the help line, and the reply quoted from it was not the site's. A piece that
+/// only moved is matched by count, so it is never added.
+pub fn shown_text(before: &Observation, after: &Observation) -> Vec<ShownPiece> {
+    fn pieces(observation: &Observation) -> Vec<&str> {
         [&observation.viewport_text, &observation.offscreen_text]
             .into_iter()
             .flat_map(|text| text.lines())
             .map(text::strip)
             .filter(|piece| !piece.is_empty())
+            .collect()
     }
-    let mut told: IndexMap<&str, usize> = IndexMap::new();
-    for piece in pieces(before) {
-        *told.entry(piece).or_default() += 1;
+    let (old, new) = (pieces(before), pieces(after));
+    let viewport = after.viewport_text.lines().map(text::strip).filter(|piece| !piece.is_empty()).count();
+    let mut surplus: IndexMap<&str, usize> = IndexMap::new();
+    for piece in &new {
+        *surplus.entry(piece).or_default() += 1;
     }
-    pieces(after)
-        .filter(|piece| match told.get_mut(piece) {
-            Some(left) if *left > 0 => {
-                *left -= 1;
-                false
-            }
-            _ => true,
-        })
-        .map(str::to_string)
+    for piece in &old {
+        if let Some(left) = surplus.get_mut(piece) {
+            *left = left.saturating_sub(1);
+        }
+    }
+    let mut kept = vec![false; new.len()];
+    for op in similar::capture_diff_slices(similar::Algorithm::Myers, &old, &new) {
+        if let similar::DiffOp::Equal { new_index, len, .. } = op {
+            kept[new_index..new_index + len].fill(true);
+        }
+    }
+    // The diff leaves at least each piece's surplus unmatched; of those, the last listed are the added ones.
+    let mut added = vec![false; new.len()];
+    for at in (0..new.len()).rev() {
+        if let Some(left) = surplus.get_mut(new[at])
+            && !kept[at]
+            && *left > 0
+        {
+            *left -= 1;
+            added[at] = true;
+        }
+    }
+    new.into_iter()
+        .zip(added)
+        .enumerate()
+        .map(|(at, (text, added))| ShownPiece { text: text.to_string(), added, offscreen: at >= viewport })
         .collect()
 }
 
@@ -467,6 +507,20 @@ mod tests {
         let mut c = c.clone();
         change(&mut c);
         c
+    }
+
+    /// A save turned "Not saved" into the notice above a help line already reading it: the status is the added piece,
+    /// not the help line, and a piece repeated after the page's own copy is the later one.
+    #[test]
+    fn test_the_added_occurrence_of_a_repeated_piece_is_the_one_that_was_not_there() {
+        let page = |text: &str| Observation { viewport_text: text.into(), ..observation(vec![]) };
+        let added = |before: &str, after: &str| -> Vec<usize> {
+            let shown = shown_text(&page(before), &page(after));
+            shown.iter().enumerate().filter(|(_, piece)| piece.added).map(|(at, _)| at).collect()
+        };
+        assert_eq!(added("Status:\nNot saved\nHelp:\nSaved", "Status:\nSaved\nHelp:\nSaved"), [1]);
+        assert_eq!(added("Saved\nEdited", "Saved\nEdited\nSaved"), [2]);
+        assert_eq!(added("A\nB", "B\nA"), Vec::<usize>::new());
     }
 
     #[test]

@@ -253,7 +253,7 @@ without a target retains viewport scrolling.
 
 The passages a `done` quotes are the answer's evidence: code finds each word for word in the capture of the page the
 driver was shown, the page `done` was called on first and then the latest earlier page that holds it, and cuts the span
-as a fact. A quote no page holds is refused back to the driver. When the driver quoted nothing and the notes hold nothing
+as a fact. A quote no page holds is refused back to the driver. After a step that sent something (a click or Enter that submits a form), the text the page added in reply, such as "Changes saved successfully", is cut from the capture the same way and kept as a note, so a claim about the site's reply can cite it. When the driver quoted nothing and the notes hold nothing
 that answers, a finishing read offers Jev one bounded choice over the page's quoted spans, with two more answers: the
 page does not hold the answer, or the answer must be composed from more than one fact. A `done` on notes that answer
 nothing is a step short of the answer. On a page with more spans than one choice can offer, a

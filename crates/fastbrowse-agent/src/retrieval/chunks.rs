@@ -1,6 +1,9 @@
 //! The spans code cuts from a capture.
 
+use std::ops::Range;
+
 use fastbrowse_core::citations::table_blocks;
+use fastbrowse_core::effects::ShownPiece;
 use fastbrowse_core::models::{Evidence, Link};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::text;
@@ -103,6 +106,251 @@ fn spans_of<'a>(text: &'a str, quote: &'a str) -> impl Iterator<Item = (usize, u
         (!(text[to..].chars().next().is_some_and(text::is_word) && last.chars().next_back().is_some_and(text::is_word)))
             .then_some((at, to))
     })
+}
+
+/// The lines of the capture's rendered text that hold text a step added, each quoted once. `shown` is the page's text
+/// after the step, piece by piece in the order the page lists them, each marked added or kept.
+///
+/// An observation lists each DOM text node on its own line while a capture joins the inline content around it, so a
+/// captured line reads as a run of consecutive pieces: "Status: <strong>Changes saved successfully</strong>" is two. A
+/// line is quoted when the run it reads as holds an added piece. Lines are matched to runs longest first, and among
+/// lines alike in the order both list them, so a line repeating the added text elsewhere takes its own kept piece:
+/// matched on text alone, a help line reading "Changes saved successfully" took the status's added piece, and the
+/// site's reply went uncited. A line found only in a typed observation, a document title or a kept download is not
+/// quoted: none of them is text the page showed.
+pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Evidence> {
+    let page = Page::new(capture);
+    let pieces: Vec<(String, bool)> =
+        shown.iter().map(|piece| (squeezed(&piece.text), piece.added)).filter(|(text, _)| !text.is_empty()).collect();
+    let viewport =
+        shown.iter().filter(|piece| !squeezed(&piece.text).is_empty()).take_while(|piece| !piece.offscreen).count();
+    // Every line takes part in the alignment, so the text around an added piece places it; only a line whose run holds
+    // an added piece is quoted.
+    let lines: Vec<(i64, i64, String, &Block)> = super::text::splitlines(&page.chars)
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let (mut start, mut end) = (start as i64, end as i64);
+            while start < end && page.chars[start as usize].is_whitespace() {
+                start += 1;
+            }
+            while end > start && page.chars[end as usize - 1].is_whitespace() {
+                end -= 1;
+            }
+            let line = squeezed(&without_advice(page.slice(start, end)));
+            if line.is_empty() {
+                return None;
+            }
+            let block = capture.blocks.iter().find(|block| {
+                block.start <= start
+                    && end <= block.end
+                    && !matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
+                    && block.source_url.is_none()
+            })?;
+            Some((start, end, line, block))
+        })
+        .collect();
+    // A capture keeps the newlines a text node had in the page's source, where the observation reads the node as one
+    // piece, so the lines of one block that hold a piece across their breaks are one more candidate beside each line,
+    // from the line the piece starts on to the line it ends on, whatever the capture appends around it (a tooltip). A
+    // piece within one line is that line's: several lines that read as several pieces are separate text nodes, and the
+    // quote stays on the line that holds the reply.
+    let longest = pieces.iter().map(|(text, _)| text.chars().count()).max().unwrap_or(0);
+    let mut spans = Vec::new();
+    for first in 0..lines.len() {
+        let mut joined = lines[first].2.clone();
+        let mut inside = 0;
+        for last in first + 1..lines.len() {
+            if !std::ptr::eq(lines[first].3, lines[last].3) || inside > longest {
+                break;
+            }
+            let before = joined.len();
+            joined.push_str(&lines[last].2);
+            let crossing = pieces.iter().any(|(text, _)| {
+                joined.match_indices(text.as_str()).any(|(at, _)| at < lines[first].2.len() && at + text.len() > before)
+            });
+            if crossing {
+                spans.push((lines[first].0, lines[last].1, joined.clone(), lines[first].3));
+                break;
+            }
+            inside += lines[last].2.chars().count();
+        }
+    }
+    let mut lines = lines;
+    lines.extend(spans);
+    lines.sort_by_key(|(start, end, _, _)| (*start, std::cmp::Reverse(*end)));
+    let mut used = vec![false; pieces.len()];
+    let mut matched = vec![false; lines.len()];
+    let mut quotes = Vec::new();
+    // The capture and the observation list the page in one order, so the lines are matched to runs of pieces in that
+    // order, for the most text the pairs explain. A capture line can hold text the observation lacks (a tooltip the
+    // capture appends), so an unchanged help line reading the added words and more fits the added piece as well as the
+    // status does; the order and the text each line explains put each line on its own piece.
+    // The viewport's pieces keep the document's order among themselves, as do the pieces outside it, but an
+    // observation lists all of the first before any of the second. So each is aligned on its own, the viewport's
+    // first, over the lines it left: a line above the viewport repeating the new text can no longer take its piece.
+    for (offset, section) in [(0, &pieces[..viewport]), (viewport, &pieces[viewport..])] {
+        let open: Vec<usize> = (0..lines.len()).filter(|at| !matched[*at]).collect();
+        for (line, run) in aligned(section, open.iter().map(|at| lines[*at].2.as_str())) {
+            let at = open[line];
+            let run = run.start + offset..run.end + offset;
+            if matched[at] {
+                continue;
+            }
+            claim(&lines, &mut matched, at);
+            used[run.clone()].fill(true);
+            if pieces[run].iter().any(|(_, added)| *added) {
+                let (start, end, _, block) = &lines[at];
+                quotes.push(evidence(&page, block, *start, *end));
+            }
+        }
+    }
+    // A line the order left unmatched takes what no other line did. A line that reads as a whole run takes it first, then
+    // the part of it a run reads as, so a short piece never claims an unrelated longer line while a line that is its
+    // own exists.
+    for whole in [true, false] {
+        for (at, (start, end, line, block)) in lines.iter().enumerate() {
+            if matched[at] {
+                continue;
+            }
+            let Some(run) = (0..pieces.len()).find_map(|from| run_in(&pieces, &used, from, line, whole)) else {
+                continue;
+            };
+            claim(&lines, &mut matched, at);
+            used[run.clone()].fill(true);
+            if pieces[run].iter().any(|(_, added)| *added) {
+                quotes.push(evidence(&page, block, *start, *end));
+            }
+        }
+    }
+    quotes.sort_by_key(|quote| quote.start);
+    quotes
+}
+
+/// Mark the candidate at `at`, and every other that overlaps it, as taken: a line and the span it is part of are one
+/// stretch of the page.
+fn claim(lines: &[(i64, i64, String, &Block)], matched: &mut [bool], at: usize) {
+    for (other, (start, end, _, _)) in lines.iter().enumerate() {
+        matched[other] |= *start < lines[at].1 && lines[at].0 < *end;
+    }
+}
+
+/// The runs of consecutive pieces the lines read as, one per line at most, both in order, chosen for the most text
+/// explained: a run is a line's when the line holds all of it.
+fn aligned<'a>(pieces: &[(String, bool)], lines: impl Iterator<Item = &'a str>) -> Vec<(usize, Range<usize>)> {
+    let lines: Vec<&str> = lines.collect();
+    let (n, m) = (lines.len(), pieces.len());
+    // runs[i][s] lists the ends e with pieces[s..e] a part of lines[i], and the length of what they read.
+    let runs: Vec<Vec<Vec<(usize, usize)>>> = lines
+        .iter()
+        .map(|line| {
+            (0..m)
+                .map(|from| {
+                    let mut joined = String::new();
+                    let mut found = Vec::new();
+                    for (at, (piece, _)) in pieces.iter().enumerate().skip(from) {
+                        joined.push_str(piece);
+                        if !line.contains(&joined) {
+                            break;
+                        }
+                        found.push((at + 1, joined.chars().count()));
+                    }
+                    found
+                })
+                .collect()
+        })
+        .collect();
+    // best[i][j]: the most text lines[..i] explain with pieces[..j]. Each line either explains nothing, or reads one
+    // run, and pieces it passes over carry the score forward, so a line costs its runs once rather than a scan of every
+    // start for every end.
+    let mut best = vec![vec![0usize; m + 1]; n + 1];
+    for i in 0..n {
+        let mut row = best[i].clone();
+        for (s, ends) in runs[i].iter().enumerate() {
+            for &(end, len) in ends {
+                row[end] = row[end].max(best[i][s] + len);
+            }
+        }
+        for j in 1..=m {
+            row[j] = row[j].max(row[j - 1]);
+        }
+        best[i + 1] = row;
+    }
+    let mut found = Vec::new();
+    let (mut i, mut j) = (n, m);
+    while i > 0 {
+        if best[i][j] == best[i - 1][j] {
+            i -= 1;
+        } else if j > 0 && best[i][j] == best[i][j - 1] {
+            j -= 1;
+        } else {
+            let (s, _) = runs[i - 1]
+                .iter()
+                .enumerate()
+                .find_map(|(s, ends)| {
+                    ends.iter().find(|&&(end, len)| end == j && best[i - 1][s] + len == best[i][j]).map(|_| (s, ()))
+                })
+                .expect("a best score is reached by some run");
+            found.push((i - 1, s..j));
+            i -= 1;
+            j = s;
+        }
+    }
+    found.reverse();
+    found
+}
+
+/// `text` without the " (title: ...)" advice the capture inserts beside a tooltip's host, wherever in the line it
+/// sits: the observation reads the host's words joined, so a notice with a tooltip in its middle matches only once the
+/// advice is out. This is the capture's own syntax, parsed by balanced parentheses; the quote is still cut from the
+/// capture, advice included.
+fn without_advice(text: &str) -> String {
+    const OPEN: &str = " (title: ";
+    let mut plain = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(OPEN) {
+        let after = at + OPEN.len();
+        let mut depth = 1;
+        let close = rest[after..].char_indices().find_map(|(i, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(after + i + 1)
+        });
+        let Some(close) = close else { break };
+        plain.push_str(&rest[..at]);
+        rest = &rest[close..];
+    }
+    plain.push_str(rest);
+    plain
+}
+
+fn squeezed(text: &str) -> String {
+    text.split_whitespace().collect()
+}
+
+/// The run of unused pieces from `from` that reads as `line` once whitespace is left out, or with `whole` unset the
+/// longest such run that reads as a part of it and holds an added piece.
+fn run_in(pieces: &[(String, bool)], used: &[bool], from: usize, line: &str, whole: bool) -> Option<Range<usize>> {
+    let mut joined = String::new();
+    let mut found = None;
+    for at in from..pieces.len() {
+        if used[at] {
+            break;
+        }
+        joined.push_str(&pieces[at].0);
+        if whole && joined == line {
+            return Some(from..at + 1);
+        }
+        if !(if whole { line.starts_with(&joined) } else { line.contains(&joined) }) {
+            break;
+        }
+        if !whole && pieces[from..=at].iter().any(|(_, added)| *added) {
+            found = Some(from..at + 1);
+        }
+    }
+    found
 }
 
 /// The page's rendered text, quoted block by block, for a page the run stops on without reading.

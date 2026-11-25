@@ -356,6 +356,11 @@ pub(crate) struct RunState {
     /// control told apart by its pixels is answered the same way: Leaflet's triangle swapped one popup for another, and
     /// its "I am a polygon." alone was the progress.
     pub replied: bool,
+    /// The page's text after a sent commit, piece by piece, with the pieces its reply added (such as "Changes saved
+    /// successfully") marked, for the loop to cut as quotes from a capture of that page. Held only in the step's effect,
+    /// a CurseForge save's own notice could not be cited, and the true answer "the site said the changes were saved"
+    /// failed its citation check at 0.23 (#1483).
+    pub sent_text: Vec<fastbrowse_core::effects::ShownPiece>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
     /// Jev's word that the task tells the agent not to take some action, asked once the gate first asks about one.
@@ -517,6 +522,22 @@ impl RunState {
             self.read_whole.push(capture.clone());
         }
         steps_taken
+    }
+
+    /// The site's reply to a sent commit, quoted from the capture it shows on: notes a claim can cite, kept as context
+    /// rather than as a read of the page, so it neither supersedes nor keeps whole what was read there.
+    pub fn record_sent_notice(&mut self, capture: &Capture, shown: &[fastbrowse_core::effects::ShownPiece]) -> bool {
+        let quotes = crate::retrieval::line_quotes(capture, shown);
+        if quotes.is_empty() {
+            return false;
+        }
+        let steps_taken = self.history.iter().filter(|entry| entry.changed_site()).count();
+        self.notes.remember_capture(capture, steps_taken);
+        for quote in quotes {
+            let text = quote.quote.clone();
+            self.notes.add(Fact::read(&text, quote, fastbrowse_core::models::FactReader::JevChoice));
+        }
+        true
     }
 
     /// The notes with the pages read for one fact whole. A task over some pages of a list leaves out what was read on
@@ -789,6 +810,7 @@ impl RunState {
             keeping: false,
             look: None,
             replied: false,
+            sent_text: Vec::new(),
             downloads_forbidden: None,
             prohibits: None,
             edits: None,
