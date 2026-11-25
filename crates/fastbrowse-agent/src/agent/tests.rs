@@ -2467,6 +2467,43 @@ async fn test_a_done_after_a_step_that_was_not_carried_out_checks_the_task_steps
     );
 }
 
+/// The page facts a done check is given on the page a step landed on, the step having been recorded as the history
+/// holds it and its effect noted as a run notes it.
+async fn page_facts_after(operation: Operation, target: Option<&str>) -> String {
+    let page = capture(&[(BlockKind::Paragraph, "Example Domains")]);
+    let fact = Fact::read("Example Domains", block_evidence(&page, "s0"), FactReader::JevChoice);
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.raw_task = "Open the first link on the page and report its title.".into();
+    state.notes = Notes::new([fact.answering()]);
+    let landed = observation(&[]);
+    let source = Observation { url: "https://example.com/".into(), ..observation(&[]) };
+    state.acted_from = Some(source);
+    state.history.push(crate::policy::HistoryEntry::new(Some(operation), target, StepOutcome::Executed, true));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
+    let agent = Agent::new(Arc::new(FinishPage(landed.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    state.recoveries = agent.config.stall.max_recoveries;
+    agent.note_effect(&mut state, &landed);
+    let _ = agent.finish(&mut state, &landed, None, None).await;
+    jev.3.lock().unwrap()[0]["page_facts"].to_string()
+}
+
+/// #1174: on the page a click opened, the done check is told the run's own action opened it, so "open the first link"
+/// is not judged an undone step.
+#[tokio::test]
+async fn test_the_done_check_is_told_which_action_opened_the_page() {
+    let facts = page_facts_after(Operation::Click, Some("Learn more")).await;
+    assert!(facts.contains("opened by the run's own action: click 'Learn more' on https://example.com/"), "{facts}");
+}
+
+/// A wait that ends on another address did not open it: the page changed by itself, and the done check is not told
+/// the run's action did.
+#[tokio::test]
+async fn test_the_done_check_is_not_told_a_wait_opened_the_page() {
+    let facts = page_facts_after(Operation::Wait, None).await;
+    assert!(!facts.contains("opened by the run's own action"), "{facts}");
+}
+
 /// The opening of the first page is recorded before any secret is typed, so a value typed as a secret later, such as a
 /// reset token the start address carries, was not yet known to be one when it was recorded. The done check masks it.
 #[tokio::test]
@@ -9094,6 +9131,45 @@ fn a_form_opened_in_another_frame_is_recorded_though_one_with_its_id_exists_else
 
     let entry = state.history.last().expect("the click history");
     assert_eq!(entry.opened_forms, vec![(Some("second".to_string()), "form".to_string())]);
+}
+
+/// #1462: opening a gallery card's editor and cancelling it over and over never stalled. Each cycle is a stale
+/// card click that shows its controls, a click on the revealed edit control, and Cancel back to the first page state.
+#[tokio::test]
+async fn test_opening_an_editor_and_cancelling_it_again_and_again_stalls() {
+    let gallery = || buttons_at("https://authors.test/media", &["Dungeon boss drops", "Gallery"]);
+    let hovered = || buttons_at("https://authors.test/media", &["Dungeon boss drops", "Gallery", "Edit", "Delete"]);
+    let drawer = || buttons_at("https://authors.test/media", &["Cancel", "Save"]);
+    let mut turns = Vec::new();
+    for _ in 0..3 {
+        turns.push((Operation::Click, StepOutcome::Stale, hovered()));
+        turns.push((Operation::Click, StepOutcome::Executed, drawer()));
+        turns.push((Operation::Click, StepOutcome::Executed, gallery()));
+    }
+    let agent = Agent::new(
+        Arc::new(Scripted::new(gallery(), turns)),
+        Arc::new(ScriptedJev::new(Vec::new())),
+        Arc::new(ScriptedLLM),
+    );
+    let mut state = run_state();
+    agent.settle(&mut state, &gallery()).await.expect("settled");
+    // The first read of the gallery found its text.
+    state.evidence_reads += 1;
+    state.reached.insert(state_key(&gallery()), state.evidence_reads);
+    let mut counted = Vec::new();
+    for cycle in 0..2 {
+        for (label, drawn) in [("Dungeon boss drops", false), ("Edit", false), ("Cancel", true)] {
+            if drawn && cycle == 0 {
+                // The drawer's text is new evidence the first time it is read.
+                state.evidence_reads += 1;
+                state.reached.insert(state_key(&drawer()), state.evidence_reads);
+            }
+            take(&agent, &mut state, Operation::Click, Some(label)).await;
+            counted.push((state.unchanged, state.recoveries));
+        }
+    }
+    // Cycle one is new evidence; the second cycle repeats it, and its third no-progress step asks Jev again.
+    assert_eq!(counted, [(1, 0), (0, 0), (0, 0), (1, 0), (2, 0), (0, 1)]);
 }
 
 /// The chat driver playing `script`, as the run's LLM.
