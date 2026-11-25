@@ -94,10 +94,10 @@ pub struct HistoryEntry {
     /// Form instances that appeared after this action, kept private so an unrelated click is not called the opener.
     #[serde(skip)]
     pub opened_forms: Vec<(Option<String>, String)>,
-    /// The text the page added after the step, as the effect quotes it, kept apart so a fact about it is not read back
-    /// out of `effect`'s wording.
+    /// The address a commit stayed on and the text it added there, such as a posted reply and the "Your reply was
+    /// posted." notice. Kept out of what models are shown: it states which text on a later page this step put there.
     #[serde(skip)]
-    pub put: Vec<String>,
+    pub put: Option<(String, Vec<String>)>,
 }
 
 /// The scope of a form or field group. A local form id can be reused in other frames or documents.
@@ -254,7 +254,7 @@ impl HistoryEntry {
             form_id: None,
             frame_id: None,
             opened_forms: Vec::new(),
-            put: Vec::new(),
+            put: None,
         }
     }
 

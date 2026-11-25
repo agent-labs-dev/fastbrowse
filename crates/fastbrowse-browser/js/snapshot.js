@@ -1737,15 +1737,19 @@
   // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
   // Each parent's children counted by tag and class once: asking every child about all its siblings is quadratic
   // in a list of thousands, and every element of the page is asked whether it is a card.
+  // Siblings are read off the parent node: an element directly in a shadow root has no parent element, so its
+  // siblings went uncounted and reading them through one threw and lost the whole snapshot.
   const twinKey = e => `${e.localName} ${e.getAttribute('class')}`;
   const twinCounts = memo(parent => {
     const counts = new Map();
     for (const child of parent?.children || []) counts.set(twinKey(child), (counts.get(twinKey(child)) || 0) + 1);
     return counts;
   });
+  const CARD_RECORDS = 'article,li,[role="listitem"],tr,[role="row"]';
   const isCard = memo(e =>
-    e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
-    (!!e.getAttribute('class') && twinCounts(e.parentElement).get(twinKey(e)) > 1));
+    e.matches(CARD_RECORDS) ||
+    (!!e.getAttribute('class') && twinCounts(e.parentNode).get(twinKey(e)) > 1));
+  const cardCount = memo(parent => [...(parent?.children || [])].filter(isCard).length);
   // A landmark or section owns its headings. A weather panel beside a search form must not name the search
   // field just because both sit in the same app shell.
   const isolatesTitle = memo(e =>
@@ -2088,11 +2092,10 @@
   // guessing which image it removes. It is named by the card that holds it, or failing one by the nearest ancestor
   // that says anything besides it.
   // An unnamed select or combobox shows its value, and its chips name no section it sits in.
+  const fieldLines = element =>
+    element.tagName === 'SELECT' || FIELD_CONTAINERS.has(element.getAttribute('role')) ? new Set(renderedLines(element)) : null;
   const nearestName = (element, label) => {
-    const own =
-      element.tagName === 'SELECT' || FIELD_CONTAINERS.has(element.getAttribute('role'))
-        ? new Set(renderedLines(element))
-        : null;
+    const own = fieldLines(element);
     let first = '';
     for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {
       first ||= nameOf(e, element, label, true, own);
@@ -2221,10 +2224,28 @@
   });
   const recordCount = memo(section =>
     [...descendants(section, RECORD)].filter(r => holdingControls(r) && holdsOwnText(r)).length);
+  // Another record is a card that holds both an owner (its first line, when no control of its own says it) and
+  // controls of its own beyond that line, and that has a sibling card doing the same: replies listed under a comment
+  // each name their author and carry their own buttons, whatever their markup or classes. A layout row holds one or
+  // the other (an author row is a bare link, an actions row sits beside it, an editor row holds only its field or its
+  // Post button), so a comment's rows and a form's rows never pair up.
+  const isRecordCard = memo(card => {
+    const [first] = renderedLines(card);
+    if (!first || !isCard(card)) return false;
+    return controls.some(c => c.label !== first && card.contains(registry.nodes.get(c.id)));
+  });
+  const isListedRecord = card =>
+    isRecordCard(card) && [...card.parentNode.children].some(c => c !== card && isRecordCard(c));
   const listsRecordsOutside = (section, element) => {
     if (recordCount(section) < 2) return false;
-    for (let e = element; e && e !== section; e = e.parentElement) if (e.matches(RECORD)) return false;
-    return true;
+    // A class-styled comment card is a record too: its own controls are named by it, not outside every record. A
+    // page-level comment form laid out in repeated rows is not: those rows are cards, but no record, and counting them
+    // took the note that the form sits outside every comment off its field and its Post button.
+    for (let e = element; e !== section; e = e.parentElement) if (e.matches(RECORD) || isListedRecord(e)) return false;
+    // The section is the control's own record only when it is one of a list: a comment whose replies are listed inside
+    // it names its own Reply plainly, while a lone post that holds its comments form and comments list is the page's
+    // article, and its form sits outside every comment listed in it.
+    return !isListedRecord(section);
   };
   // The section's name, and whether the control sits outside every record the section lists.
   const nearestHeading = (element, label) => {
@@ -2245,6 +2266,66 @@
     }
     return { name: '' };
   };
+  // A control whose label is its own can still belong to one record of several: a comment's "Hide 3 Replies" sits in
+  // its list item beside the comment card, so it never met a twin, took the section heading "Comments" from the
+  // fallback below, and a run read another comment's counter as the count of the replies it asked about (#1467). Such
+  // a control is named by the nearest card that repeats among its siblings (a list item, a row, or a class-styled
+  // card), even when it is the card's only control. Card counts are kept per parent: a sibling scan per control was
+  // quadratic on a long list.
+  const recordOf = memo(element => {
+    // A lone card inside a repeating one is still a record of its own: the only reply under a comment is named by
+    // that reply, not by the comment it answers, so it is kept while the climb looks for the repeating card around it.
+    let lone = null;
+    for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+      if (!isCard(e)) continue;
+      if (cardCount(e.parentNode) > 1) return lone || e;
+      lone ||= e;
+    }
+    return null;
+  });
+  // The repeating card around a record, for a record that names nothing.
+  const recordAbove = card => {
+    for (let e = card.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+      if (isCard(e) && cardCount(e.parentNode) > 1) return e;
+    }
+    return null;
+  };
+  // A card names a control by a title of its own. A comment's layout rows repeat their class inside every comment and
+  // hold a bare line ("Actions") where the comment holds its author's heading, so a card with no title leaves the name
+  // to the repeating record around it; only when none has a title does the innermost record's first line name it.
+  const titleOf = (card, element, label) => {
+    const aria = (card.getAttribute('aria-label') || '').trim();
+    return aria && aria !== label ? aria : sectionOf(card, element, label, true);
+  };
+  for (const c of controls) {
+    if (c.context) continue;
+    const element = registry.nodes.get(c.id);
+    const record = recordOf(element);
+    if (!record) continue;
+    let context = '',
+      owner = record;
+    // A card holding another listed record's controls is a different comment: neither the title climb nor the owner
+    // climb may step out into it, or a reply would take its parent's heading while its sibling replies share the same one.
+    const holdsOtherCard = (above, own) => {
+      for (const card of above.querySelectorAll('*')) if (!card.contains(own) && !own.contains(card) && isListedRecord(card)) return true;
+      return false;
+    };
+    // A lone record is a record of its own (the only reply names itself, not the comment it answers); only a repeating
+    // card can be a layout row that defers to the record around it.
+    const above = card => (cardCount(card.parentNode) > 1 ? recordAbove(card) : null);
+    for (let card = record; card && !context; ) {
+      context = titleOf(card, element, c.label);
+      const next = above(card);
+      card = next && !holdsOtherCard(next, card) ? next : null;
+    }
+    // No card has a title, so a first line names it. A comment that names its author in bold or by a link has no
+    // heading: its counter read the layout row's "Actions" while the Reply beside it read the author. The record is
+    // the widest card around the counter that holds no other card with controls, the card the twin path reaches for a
+    // Reply: the author's own link or text sits in the comment beside its rows.
+    for (let next = cardCount(record.parentNode) > 1 ? recordAbove(owner) : null; next && !holdsOtherCard(next, owner); next = recordAbove(next)) owner = next;
+    context ||= nameOf(owner, element, c.label, true, fieldLines(element));
+    if (context) c.context = context;
+  }
   // A twin already has a context that tells it from its twins, but a reply editor opening beside the page's own box
   // made both labels twins and the box lost the note that it sits outside the comments, so it keeps that note too.
   for (const c of controls) {
