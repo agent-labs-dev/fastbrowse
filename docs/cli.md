@@ -92,7 +92,9 @@ Install extension **0.1.2 or later** for the full command set. Extension **0.1.1
    for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows. Every fastbrowse
    that runs `install`, such as an app's bundled copy and your own, stays registered: the extension starts the
    newest one still present, judged by the version each reports now, and `fastbrowse extension status` lists them in that
-   order.
+   order. `fastbrowse extension status --json` prints the same installs with the browsers whose extension is connected (by
+   the label `--extension-browser` takes) and the hosts it could not reach, and the TypeScript SDK's
+   `extensionStatus()` returns that without starting a run.
 3. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
    Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
 4. Run a task that reads a public page:

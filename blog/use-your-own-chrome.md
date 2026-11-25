@@ -4,7 +4,7 @@ description: "Install the fastbrowse extension, check it is connected, run a rea
 topic: Browsers and logins
 published: 2026-11-12
 updated: 2026-11-25
-verifiedAgainst: v0.11.0
+verifiedAgainst: v0.12.0
 verifiedOn: 2026-11-25
 ---
 
@@ -20,7 +20,7 @@ export OPENROUTER_API_KEY=...
 fastbrowse extension install
 ```
 
-`fastbrowse extension install` registers fastbrowse with every Chromium browser it finds for your user, then prints the store link. It writes a small launcher and a native-messaging manifest into your user folders, and needs no admin rights. Run it again if you move or reinstall fastbrowse. Each fastbrowse that runs it stays registered, and the extension starts the newest one still present, by the version each reports when Chrome starts it; `fastbrowse extension status` lists them.
+`fastbrowse extension install` registers fastbrowse with every Chromium browser it finds for your user, then prints the store link. It writes a small launcher and a native-messaging manifest into your user folders, and needs no admin rights. Run it again if you move or reinstall fastbrowse. Each fastbrowse that runs it stays registered, and the extension starts the newest one still present, by the version each reports when Chrome starts it; `fastbrowse extension status` lists them, and `fastbrowse extension status --json` adds the browsers whose extension is connected, by the label `--extension-browser` takes.
 
 Next, add the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), then restart Chrome or turn the extension off and on at `chrome://extensions` so it connects. The first task below is the check: with no browser connected, the run ends `unavailable`. Open fastbrowse from Chrome's Extensions menu to see active runs and their **Stop** buttons.
 

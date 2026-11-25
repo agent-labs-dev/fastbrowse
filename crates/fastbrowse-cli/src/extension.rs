@@ -1,4 +1,4 @@
-//! `fastbrowse native-host` and `fastbrowse extension install | uninstall | status | path`.
+//! `fastbrowse native-host` and `fastbrowse extension install | uninstall | status [--json] | path`.
 //!
 //! `install` registers this fastbrowse as the extension's native-messaging host for every Chromium browser it finds:
 //! a host manifest per browser, at user level, pointing at a small launcher that runs `<a fastbrowse> native-host`.
@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 
 // The extension's files are built into the binary, so `path` works offline and always matches this version.
 use fastbrowse_browser::extension::FILES;
-use fastbrowse_browser::extension::protocol::{EXTENSION_IDS, HOST_NAME};
+use fastbrowse_browser::extension::protocol::{EXTENSION_IDS, HOST_NAME, HostScan, connected_hosts};
 use serde_json::json;
 
 const STORE_URL: &str = "https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop";
 
-const USAGE: &str = "usage: fastbrowse extension install [--policy] | uninstall | status | path";
+const USAGE: &str = "usage: fastbrowse extension install [--policy] | uninstall | status [--json] | path";
 
 /// The file in [`data_dir`] that lists every fastbrowse registered as the host, newest first.
 const INSTALLS: &str = "installs.json";
@@ -275,6 +275,28 @@ fn with_install(mut installs: Vec<Install>, this: Install) -> Vec<Install> {
 /// The registered installs, one per line, in the order the host tries them.
 fn describe(installs: &[Install]) -> String {
     installs.iter().map(|install| format!("  {} (fastbrowse {})\n", install.path.display(), install.version)).collect()
+}
+
+/// What `status --json` prints: the registered installs (the first is the one the host runs), the browsers whose
+/// extension is connected to a running host, and the hosts this process could not read or reach, such as one behind
+/// a sandbox (#1344). It reads the same records a run does, and spends nothing.
+fn status_json(installs: &[Install], scan: &HostScan, directory: &Path) -> serde_json::Value {
+    json!({
+        "registered": !installs.is_empty(),
+        "installs": installs,
+        "hostDirectory": directory.to_string_lossy(),
+        "connected": scan.connected.iter().map(|(_, host)| json!({
+            "label": host.label,
+            "browser": host.browser,
+            "browserId": host.browser_id,
+            "version": host.version,
+        })).collect::<Vec<_>>(),
+        "unreachable": scan.unreachable.iter().map(|(host, reason)| json!({
+            "label": host.as_ref().map(|host| &host.label),
+            "browser": host.as_ref().map(|host| &host.browser),
+            "reason": reason,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// Write `bytes` to `path` as one rename, so a reader or a crash never sees half a file.
@@ -758,6 +780,15 @@ pub fn command(program: &str, args: &[String]) -> (String, i32) {
                 (format!("The extension's host runs the first of these still installed:\n{}", describe(&installs)), 0)
             }
         }
+        ["status", "--json"] => {
+            let installs = match present_installs(&data_dir(), &reported_version) {
+                Ok(installs) => installs,
+                Err(error) => return (format!("fastbrowse: {error}\n"), 1),
+            };
+            let directory = fastbrowse_browser::extension::protocol::host_dir();
+            let status = status_json(&installs, &connected_hosts(&directory), &directory);
+            (format!("{}\n", serde_json::to_string_pretty(&status).unwrap_or_default()), 0)
+        }
         ["path"] => match unpacked() {
             Ok(dir) => (format!("{}\n", dir.display()), 0),
             Err(error) => (format!("fastbrowse: {error}\n"), 1),
@@ -777,6 +808,42 @@ mod tests {
         assert_eq!(manifest["type"], "stdio");
         assert_eq!(manifest["path"], "/x/native-host");
         assert_eq!(manifest["allowed_origins"], json!([format!("chrome-extension://{}/", EXTENSION_IDS[0])]));
+    }
+
+    #[test]
+    fn status_json_reports_installs_connected_browsers_and_unreachable_hosts() {
+        use fastbrowse_browser::extension::protocol::HostRecord;
+        let host = HostRecord {
+            browser_id: "b1".into(),
+            label: "Work".into(),
+            browser: "Chrome".into(),
+            version: "150.0".into(),
+            protocol: 1,
+            pid: 7,
+            socket: PathBuf::from("/run/user/1/fastbrowse/b1.sock"),
+        };
+        let scan = HostScan {
+            connected: vec![(PathBuf::from("/d/b1.json"), host.clone())],
+            unreachable: vec![
+                (Some(host), "cannot connect to /x.sock: denied".into()),
+                (None, "cannot read /d: denied".into()),
+            ],
+        };
+        let install = Install { path: PathBuf::from("/bin/fastbrowse"), version: "0.13.0".into() };
+        let status = status_json(&[install], &scan, Path::new("/d"));
+        assert_eq!(status["registered"], true);
+        assert_eq!(status["installs"][0]["version"], "0.13.0");
+        assert_eq!(
+            status["connected"],
+            json!([{"label": "Work", "browser": "Chrome", "browserId": "b1", "version": "150.0"}])
+        );
+        assert_eq!(status["unreachable"][0]["label"], "Work");
+        assert_eq!(status["unreachable"][1]["label"], serde_json::Value::Null);
+        assert_eq!(status["unreachable"][1]["reason"], "cannot read /d: denied");
+
+        let empty = status_json(&[], &HostScan::default(), Path::new("/d"));
+        assert_eq!(empty["registered"], false);
+        assert_eq!(empty["connected"], json!([]));
     }
 
     #[test]

@@ -25,6 +25,8 @@ Chrome instead. A process inside a sandbox reaches the extension only when the s
 directory and connect to its sockets; otherwise the run ends `unavailable` and
 [names the refusal](../../docs/troubleshooting.md#the-extension-is-not-connected). Without either a run starts a Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
 
+`await fastbrowse.extensionStatus()` reads the extension's state without starting a run: whether this fastbrowse is registered as its host, which browsers are connected (by the label `extensionBrowser` takes) and which hosts this process could not reach. It spends nothing.
+
 ## First run
 
 ```ts

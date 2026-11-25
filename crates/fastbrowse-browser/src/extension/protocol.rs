@@ -144,16 +144,16 @@ pub fn frames_for_extension(message: &str, chunk_id: u64) -> Vec<String> {
 
 /// The browsers a run can reach, read from the host records in a directory.
 #[derive(Debug, Default)]
-struct HostScan {
+pub struct HostScan {
     /// Every browser whose extension is connected to a running host, by label.
-    connected: Vec<(PathBuf, HostRecord)>,
+    pub connected: Vec<(PathBuf, HostRecord)>,
     /// Why the directory, a record, or a record's host could not be read or reached from this process, other than
     /// its host being gone. A record's entry keeps it, so a run that names that browser is told why it cannot use it.
-    unreachable: Vec<(Option<HostRecord>, String)>,
+    pub unreachable: Vec<(Option<HostRecord>, String)>,
 }
 
 /// Every browser whose extension is connected to a running host, read from the records in `dir`.
-fn connected_hosts(dir: &Path) -> HostScan {
+pub fn connected_hosts(dir: &Path) -> HostScan {
     let mut scan = HostScan::default();
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
