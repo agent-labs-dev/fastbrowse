@@ -939,6 +939,19 @@ impl Agent {
         Ok(())
     }
 
+    /// A sent notice's capture is kept as a read's is: cited but never kept, a result quoting the notice carried no
+    /// capture artifact to verify the quote against.
+    pub(super) fn record_sent_notice(
+        &self,
+        state: &mut RunState,
+        capture: &Capture,
+        shown: &[fastbrowse_core::effects::ShownPiece],
+    ) {
+        if state.record_sent_notice(capture, shown) {
+            self.seen().read_captures.entry(capture.sha256.clone()).or_insert_with(|| capture.text.clone());
+        }
+    }
+
     /// Record on the last action what it did, which the next choice and recovery both read.
     pub(super) fn note_effect(&self, state: &mut RunState, observation: &Observation) {
         if let Some(status) = observation.response_status {
@@ -974,6 +987,7 @@ impl Agent {
         {
             last.for_step = sighted.clone();
         }
+        state.sent_text.clear();
         let Some(before) = state.acted_from.take() else { return };
         state.settle_change(observation);
         let landed = read_key(observation);
@@ -1029,8 +1043,12 @@ impl Agent {
             // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
             // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
             // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
-            state.replied = (state.committing || keeping || last.look.is_some())
-                && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
+            let shown = fastbrowse_core::effects::shown_text(&before, observation);
+            state.replied =
+                (state.committing || keeping || last.look.is_some()) && shown.iter().any(|piece| piece.added);
+            if state.committing || keeping {
+                state.sent_text = shown;
+            }
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)

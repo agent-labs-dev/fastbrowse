@@ -23,6 +23,7 @@ pub use answers::{Claim, ComposedAnswer, assemble_answer, compose, draft_answer,
 pub(crate) use answers::{cited_quote, context_limit, latest_reads, noted_evidence, request_bytes};
 pub use choices::read_candidates;
 pub(crate) use choices::{PageRead, read_page, whole_page_facts};
+pub(crate) use chunks::line_quotes;
 pub use chunks::page_quotes;
 pub(crate) use chunks::quoted;
 pub use fields::{
