@@ -144,39 +144,64 @@ async fn probe_version(command: &mut Command, limit: Duration) -> Result<String,
 #[cfg(windows)]
 async fn probe_version(command: &mut Command, limit: Duration) -> Result<String, String> {
     use std::io::Read;
+    use std::os::windows::io::AsRawHandle;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::{Foundation::ERROR_BROKEN_PIPE, System::Pipes::PeekNamedPipe};
 
-    // A wrapper's helper can keep a stdout pipe open after the wrapper exits. Tokio's Windows pipe reader waits
-    // on a blocking thread, so cancelling that read would still leave the CLI waiting during runtime shutdown.
-    let output = tempfile::NamedTempFile::new().map_err(|error| format!("could not capture --version: {error}"))?;
-    let writer = output.reopen().map_err(|error| format!("could not capture --version: {error}"))?;
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(writer))
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| format!("could not run --version: {error}"))?;
-    let status = match tokio::time::timeout(limit, child.wait()).await {
-        Ok(Ok(status)) => status,
-        failure => {
-            let _ = child.kill().await;
-            return Err(match failure {
-                Ok(Err(error)) => format!("could not wait for --version: {error}"),
-                _ => format!("--version timed out after {} ms", limit.as_millis()),
-            });
+    let (mut reader, writer) = std::io::pipe().map_err(|error| format!("could not capture --version: {error}"))?;
+    let spawned =
+        command.stdin(Stdio::null()).stdout(Stdio::from(writer)).stderr(Stdio::null()).kill_on_drop(true).spawn();
+    command.stdout(Stdio::null());
+    let mut child = spawned.map_err(|error| format!("could not run --version: {error}"))?;
+
+    let mut bytes = [0; VERSION_OUTPUT_LIMIT + 1];
+    let mut length = 0;
+    // The launcher may exit while its helper holds the writer. Read only bytes already in the pipe, so no
+    // blocking background read can keep the runtime alive after the timeout or the launcher exits.
+    let result = tokio::time::timeout(limit, async {
+        loop {
+            let status = child.try_wait()?;
+            let mut available = 0;
+            // SAFETY: the pipe reader owns a valid handle and available is a writable DWORD.
+            let peeked =
+                unsafe { PeekNamedPipe(reader.as_raw_handle(), null_mut(), 0, null_mut(), &mut available, null_mut()) };
+            if peeked == 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(ERROR_BROKEN_PIPE as i32) {
+                    return Err(error);
+                }
+            }
+            let count = (available as usize).min(bytes.len() - length);
+            if count > 0 {
+                // No other reader can consume these bytes between the peek and read.
+                reader.read_exact(&mut bytes[length..length + count])?;
+                length += count;
+                if length > VERSION_OUTPUT_LIMIT {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "--version output exceeds 4096 bytes",
+                    ));
+                }
+            }
+            if let Some(status) = status {
+                return Ok(status);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    };
-    // Reopen an independent file cursor. A helper still holding the inherited handle can change its cursor and
-    // append data, so read only the bytes present when the wrapper exited.
-    let bytes = (|| {
-        let reader = output.reopen()?;
-        let length = reader.metadata()?.len();
-        let mut bytes = Vec::new();
-        reader.take(length).read_to_end(&mut bytes)?;
-        Ok::<_, std::io::Error>(bytes)
-    })()
-    .map_err(|error| format!("could not read --version: {error}"))?;
-    version_text(status, &bytes)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(status)) => version_text(status, &bytes[..length]),
+        failure => {
+            drop(reader);
+            let _ = child.kill().await;
+            Err(match failure {
+                Ok(Err(error)) => format!("could not read --version: {error}"),
+                _ => format!("--version timed out after {} ms", limit.as_millis()),
+            })
+        }
+    }
 }
 
 fn version_text(status: std::process::ExitStatus, bytes: &[u8]) -> Result<String, String> {
@@ -217,6 +242,20 @@ fn memory() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn chrome_probe_rejects_oversized_output() {
+        let mut fixture = Command::new(std::env::current_exe().unwrap());
+        fixture.args(["--ignored", "--exact", "doctor::tests::chrome_probe_oversized_fixture", "--nocapture"]);
+        let error = probe_version(&mut fixture, Duration::from_secs(5)).await.unwrap_err();
+        assert!(error.contains("--version output exceeds"), "{error}");
+    }
+
+    #[test]
+    #[ignore = "launched by the version-probe output regression"]
+    fn chrome_probe_oversized_fixture() {
+        print!("{}", "x".repeat(VERSION_OUTPUT_LIMIT + 1));
+    }
 
     #[cfg(windows)]
     #[tokio::test]

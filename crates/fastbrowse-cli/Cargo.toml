@@ -44,6 +44,9 @@ tempfile = "3.27.0"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Pipes"] }
+
 [dev-dependencies]
 # The crate itself with its stand-ins, for the tests that start the binary with them.
 fastbrowse-cli = { path = ".", features = ["scripted"] }
