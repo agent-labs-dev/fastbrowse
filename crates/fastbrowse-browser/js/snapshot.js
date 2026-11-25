@@ -2293,7 +2293,7 @@
     // A card holding another card's controls is a different comment: neither the title climb nor the owner climb may
     // step out into it, or a reply would take its parent's heading while its sibling replies share the same one.
     // Another record is a card that holds both an owner (its first line, when no control of its own says it) and
-    // controls of its own beyond that line, and that has a sibling of the same tag doing the same: replies listed under a
+    // controls of its own beyond that line, and that has a sibling card doing the same: replies listed under a
     // comment each name their author and carry their own buttons, whatever their markup or classes. A layout row holds
     // one or the other (an author row is a bare link, an actions row sits beside it), so a comment's rows never pair up.
     const isRecordCard = memo(card => {
@@ -2304,7 +2304,7 @@
     const holdsOtherCard = (above, own) => {
       for (const card of above.querySelectorAll('*')) {
         if (card.contains(own) || own.contains(card) || !isRecordCard(card)) continue;
-        if ([...card.parentElement.children].some(c => c !== card && c.localName === card.localName && isRecordCard(c))) return true;
+        if ([...card.parentElement.children].some(c => c !== card && isRecordCard(c))) return true;
       }
       return false;
     };
