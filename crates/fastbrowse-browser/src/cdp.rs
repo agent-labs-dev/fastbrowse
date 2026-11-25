@@ -634,21 +634,23 @@ impl Inner {
             return;
         }
         let Some(method) = message.method else { return };
-        // Chrome drops the replies a detached session still owed, while a command sent after the detach is refused at
-        // once. A wait's hold on a frame removed from its page therefore ended or hung for good depending on which
-        // came first: both now get the refusal.
-        if method == "Target.detachedFromTarget"
-            && let Some(child) = message.params["sessionId"].as_str()
-        {
-            let mut state = self.state.lock().unwrap();
-            for (_, Pending { tx, .. }) in state.pending.extract_if(|_, p| p.session.as_deref() == Some(child)) {
-                let _ = tx.send(Err(CdpError::Protocol { code: SESSION_NOT_FOUND, failure: None, reason: None }));
-            }
-        }
         let event = Event { method, session: message.session_id, params: message.params };
         let handlers = self.handlers.lock().unwrap().clone();
         for handler in handlers {
             handler(&event);
+        }
+        // Chrome drops the replies a detached session still owed, while a command sent after the detach is refused at
+        // once. A wait's hold on a frame removed from its page therefore ended or hung for good depending on which
+        // came first: both now get the refusal. Sent after the handlers, so a caller it wakes finds the session gone.
+        if event.method == "Target.detachedFromTarget"
+            && let Some(child) = event.params["sessionId"].as_str()
+        {
+            // A session id that came back would otherwise inherit the deadlines its last target met.
+            self.deadlines.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(child);
+            let mut state = self.state.lock().unwrap();
+            for (_, Pending { tx, .. }) in state.pending.extract_if(|_, p| p.session.as_deref() == Some(child)) {
+                let _ = tx.send(Err(CdpError::Protocol { code: SESSION_NOT_FOUND, failure: None, reason: None }));
+            }
         }
     }
 
@@ -720,9 +722,21 @@ mod tests {
             deadlines: Default::default(),
             pong: false.into(),
         };
+        inner.deadlines.lock().unwrap().extend([("frame".to_owned(), 2), ("tab".to_owned(), 1)]);
+        // Handlers clear what they keep of the session first: a caller woken before them would find it still there.
+        let owed = Arc::new(Mutex::new(owed));
+        let seen = Arc::new(Mutex::new(None));
+        let (reply, handled) = (owed.clone(), seen.clone());
+        inner.handlers.lock().unwrap().push(Arc::new(Box::new(move |_: &Event| {
+            *handled.lock().unwrap() = Some(reply.lock().unwrap().try_recv().is_err());
+        })));
         inner.dispatch(Incoming::event("Target.detachedFromTarget", serde_json::json!({"sessionId": "frame"})));
-        assert!(matches!(owed.await.unwrap(), Err(CdpError::Protocol { code: SESSION_NOT_FOUND, .. })));
+        assert_eq!(*seen.lock().unwrap(), Some(true), "a caller was woken before the handlers ran");
+        let refused = owed.lock().unwrap().try_recv().unwrap();
+        assert!(matches!(refused, Err(CdpError::Protocol { code: SESSION_NOT_FOUND, .. })));
         assert_eq!(inner.state.lock().unwrap().pending.keys().collect::<Vec<_>>(), vec![&8]);
+        // Deadlines met on a session that is gone say nothing about one that reuses its id.
+        assert_eq!(*inner.deadlines.lock().unwrap(), HashMap::from([("tab".to_owned(), 1)]));
         drop(other);
     }
 

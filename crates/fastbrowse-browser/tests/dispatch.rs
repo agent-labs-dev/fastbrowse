@@ -1984,6 +1984,38 @@ async fn test_a_wait_ends_when_a_watched_cross_origin_frame_is_replaced() {
     h.close().await;
 }
 
+// A frame removed while the wait installs its watch there refuses the install rather than a hold: the wait treated
+// that as a frame it could not watch and went on without one, so the removal never ended it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ends_when_a_cross_origin_frame_is_replaced_while_its_watch_installs() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let session = frame_session(&h).await;
+    let before = h.observe().await;
+    // The frame's thread is busy when the watch is sent, so the install is still owed when the frame goes.
+    eval_value(
+        &h.session,
+        &session,
+        "setTimeout(() => { const t = Date.now(); while (Date.now() - t < 6000); }, 200); true",
+    )
+    .await;
+    eval_active(
+        &h.page,
+        "setTimeout(() => document.querySelector('#cross-frame').replaceWith(document.createElement('iframe')), 1200); \
+         true",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let wait = Action::new(Operation::Wait);
+    let result = tokio::time::timeout(Duration::from_secs(3), h.page.wait(&wait, &before, f64::INFINITY))
+        .await
+        .expect("the frame's replacement never ended the wait")
+        .expect("wait");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
 // A player's paused, ended or muted state is in the observation but not in the fingerprint the settle compares, so a
 // wait it ends is progress that only the wait itself knows. Only a moving clock is not.
 #[tokio::test(flavor = "multi_thread")]
