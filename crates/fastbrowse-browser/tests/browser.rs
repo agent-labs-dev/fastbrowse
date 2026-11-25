@@ -3244,6 +3244,25 @@ async fn test_a_reply_box_is_named_by_its_commenter_whose_name_shows_twice() {
     h.close().await;
 }
 
+/// A section's field beside a list whose items hold only a link each, such as a help list, is not outside a list of
+/// records: those items are not records, so the field keeps the section's heading alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_list_of_bare_links_is_not_a_list_of_records() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<section><h2>Account</h2><label>Name <input aria-label=\"Display name\"></label>\
+         <ul><li><a href=\"#faq\">FAQ</a></li><li><a href=\"#terms\">Terms</a></li></ul></section>'",
+    )
+    .await;
+    let obs = observe_until(&h.page, "Display name").await;
+    let field = obs.controls.iter().find(|c| c.label == "Display name").expect("field");
+    assert_eq!(field.context.as_deref(), Some("Account"), "{field:?}");
+    h.close().await;
+}
+
 /// A section's new-comment box sits before the list of comments and inside none of them, yet got only the section's
 /// heading, the context every comment's own Reply has, so a task to reply to one comment filled the box (#1476).
 #[tokio::test(flavor = "multi_thread")]
