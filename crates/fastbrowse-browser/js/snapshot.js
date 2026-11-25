@@ -1737,6 +1737,8 @@
   // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
   // Each parent's children counted by tag and class once: asking every child about all its siblings is quadratic
   // in a list of thousands, and every element of the page is asked whether it is a card.
+  // Siblings are read off the parent node: an element directly in a shadow root has no parent element, so its
+  // siblings went uncounted and reading them through one threw and lost the whole snapshot.
   const twinKey = e => `${e.localName} ${e.getAttribute('class')}`;
   const twinCounts = memo(parent => {
     const counts = new Map();
@@ -1746,7 +1748,7 @@
   const CARD_RECORDS = 'article,li,[role="listitem"],tr,[role="row"]';
   const isCard = memo(e =>
     e.matches(CARD_RECORDS) ||
-    (!!e.getAttribute('class') && twinCounts(e.parentElement).get(twinKey(e)) > 1));
+    (!!e.getAttribute('class') && twinCounts(e.parentNode).get(twinKey(e)) > 1));
   const cardCount = memo(parent => [...(parent?.children || [])].filter(isCard).length);
   // A landmark or section owns its headings. A weather panel beside a search form must not name the search
   // field just because both sit in the same app shell.
@@ -2233,7 +2235,7 @@
     return controls.some(c => c.label !== first && card.contains(registry.nodes.get(c.id)));
   });
   const isListedRecord = card =>
-    isRecordCard(card) && [...card.parentElement.children].some(c => c !== card && isRecordCard(c));
+    isRecordCard(card) && [...card.parentNode.children].some(c => c !== card && isRecordCard(c));
   const listsRecordsOutside = (section, element) => {
     if (recordCount(section) < 2) return false;
     // A class-styled comment card is a record too: its own controls are named by it, not outside every record. A
@@ -2276,7 +2278,7 @@
     let lone = null;
     for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
       if (!isCard(e)) continue;
-      if (cardCount(e.parentElement) > 1) return lone || e;
+      if (cardCount(e.parentNode) > 1) return lone || e;
       lone ||= e;
     }
     return null;
@@ -2284,7 +2286,7 @@
   // The repeating card around a record, for a record that names nothing.
   const recordAbove = card => {
     for (let e = card.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
-      if (isCard(e) && cardCount(e.parentElement) > 1) return e;
+      if (isCard(e) && cardCount(e.parentNode) > 1) return e;
     }
     return null;
   };
@@ -2310,7 +2312,7 @@
     };
     // A lone record is a record of its own (the only reply names itself, not the comment it answers); only a repeating
     // card can be a layout row that defers to the record around it.
-    const above = card => (cardCount(card.parentElement) > 1 ? recordAbove(card) : null);
+    const above = card => (cardCount(card.parentNode) > 1 ? recordAbove(card) : null);
     for (let card = record; card && !context; ) {
       context = titleOf(card, element, c.label);
       const next = above(card);
@@ -2320,7 +2322,7 @@
     // heading: its counter read the layout row's "Actions" while the Reply beside it read the author. The record is
     // the widest card around the counter that holds no other card with controls, the card the twin path reaches for a
     // Reply: the author's own link or text sits in the comment beside its rows.
-    for (let next = cardCount(record.parentElement) > 1 ? recordAbove(owner) : null; next && !holdsOtherCard(next, owner); next = recordAbove(next)) owner = next;
+    for (let next = cardCount(record.parentNode) > 1 ? recordAbove(owner) : null; next && !holdsOtherCard(next, owner); next = recordAbove(next)) owner = next;
     context ||= nameOf(owner, element, c.label, true, fieldLines(element));
     if (context) c.context = context;
   }
