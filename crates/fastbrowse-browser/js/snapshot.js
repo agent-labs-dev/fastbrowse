@@ -2084,11 +2084,10 @@
   // guessing which image it removes. It is named by the card that holds it, or failing one by the nearest ancestor
   // that says anything besides it.
   // An unnamed select or combobox shows its value, and its chips name no section it sits in.
+  const fieldLines = element =>
+    element.tagName === 'SELECT' || FIELD_CONTAINERS.has(element.getAttribute('role')) ? new Set(renderedLines(element)) : null;
   const nearestName = (element, label) => {
-    const own =
-      element.tagName === 'SELECT' || FIELD_CONTAINERS.has(element.getAttribute('role'))
-        ? new Set(renderedLines(element))
-        : null;
+    const own = fieldLines(element);
     let first = '';
     for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {
       first ||= nameOf(e, element, label, true, own);
@@ -2249,8 +2248,10 @@
       owner = record;
     // A card holding another card's controls is a different comment: neither the title climb nor the owner climb may
     // step out into it, or a reply would take its parent's heading while its sibling replies share the same one.
+    // Layout rows that are siblings of the card under test, children of the same parent, are parts of one record.
     const holdsOtherCard = (above, own) => {
       for (const card of above.querySelectorAll('*')) {
+        if (card.parentElement === above && own.parentElement === above) continue;
         if (isCard(card) && !card.contains(own) && !own.contains(card) && controlsIn(card)) return true;
       }
       return false;
@@ -2268,7 +2269,7 @@
     // the widest card around the counter that holds no other card with controls, the card the twin path reaches for a
     // Reply: the author's own link or text sits in the comment beside its rows.
     for (let next = cardCount(record.parentElement) > 1 ? recordAbove(owner) : null; next && !holdsOtherCard(next, owner); next = recordAbove(next)) owner = next;
-    context ||= nameOf(owner, element, c.label, true);
+    context ||= nameOf(owner, element, c.label, true, fieldLines(element));
     if (context) c.context = context;
   }
   for (const c of controls) {
