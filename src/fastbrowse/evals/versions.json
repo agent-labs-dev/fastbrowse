@@ -1,19 +1,19 @@
 {
   "arxiv-open": {
-    "fingerprint": "a71d20f3e584ddce",
-    "version": 14
+    "version": 14,
+    "fingerprint": "45f515db12e31d0f"
   },
   "arxiv-title": {
-    "fingerprint": "8e1b6993a5e1f2b5",
-    "version": 10
+    "version": 10,
+    "fingerprint": "f946e3c9f0392d08"
   },
   "books-mystery-cheapest": {
-    "fingerprint": "bdc43c83b654a006",
-    "version": 10
+    "version": 11,
+    "fingerprint": "90f041c1e984f16b"
   },
   "books-travel-priciest": {
-    "fingerprint": "25f52f7eb9ef134c",
-    "version": 10
+    "version": 11,
+    "fingerprint": "45fb50503242d785"
   },
   "confirm-dialog": {
     "version": 2,
@@ -28,64 +28,88 @@
     "fingerprint": "c3a88aaae3563fe8"
   },
   "countries-mongolia": {
-    "fingerprint": "43594f984e1dd9a8",
-    "version": 10
+    "version": 10,
+    "fingerprint": "c04caaf0b95833b1"
   },
   "countries-namibia-area": {
-    "fingerprint": "6da27160f5c3a11c",
-    "version": 6
+    "version": 6,
+    "fingerprint": "c70e894d54ac373f"
   },
   "crates-serde": {
-    "fingerprint": "b5f4f93b20e013aa",
-    "version": 10
+    "version": 10,
+    "fingerprint": "8984956996d852b0"
   },
   "dynamic-loading": {
-    "fingerprint": "dad9f143af6ae41f",
-    "version": 11
+    "version": 11,
+    "fingerprint": "1083e572d5332729"
   },
   "expandtesting-login": {
-    "fingerprint": "b4aedb1d23513f73",
-    "version": 10
+    "version": 10,
+    "fingerprint": "b06c887b5d683a5b"
   },
   "flights-search": {
-    "fingerprint": "e6dcafad28325340",
-    "version": 14
+    "version": 15,
+    "fingerprint": "ed06035fc664049d"
   },
   "frame-heading": {
-    "fingerprint": "f4099478c3952efe",
-    "version": 7
+    "version": 7,
+    "fingerprint": "c3747e9242203cbe"
   },
   "github-license": {
-    "fingerprint": "beed2cca0721b8b8",
-    "version": 10
+    "version": 10,
+    "fingerprint": "d9a17cd4673ca67b"
   },
   "github-open": {
-    "fingerprint": "ccaa29a377c3a175",
-    "version": 14
+    "version": 14,
+    "fingerprint": "16ccda62a51e94ea"
   },
   "google-flights": {
-    "fingerprint": "eeb127e8b43f7ce9",
-    "version": 10
+    "version": 11,
+    "fingerprint": "f85f3daf6919665f"
+  },
+  "heldout-laptops-priciest": {
+    "version": 1,
+    "fingerprint": "18f094888fb1dbe4"
+  },
+  "heldout-python-bit-count": {
+    "version": 1,
+    "fingerprint": "457d6cd452715b44"
+  },
+  "heldout-rfc-421": {
+    "version": 1,
+    "fingerprint": "feb03b512d88cd12"
+  },
+  "heldout-tables-username": {
+    "version": 1,
+    "fingerprint": "5eff646604c9c8ba"
+  },
+  "heldout-tablets-cheapest": {
+    "version": 1,
+    "fingerprint": "29b92a3b654f0b33"
+  },
+  "heldout-turtles-discoverer": {
+    "version": 1,
+    "fingerprint": "0e99071d281d100f"
   },
   "hn-comments": {
-    "fingerprint": "66058d4b62d2865d",
-    "version": 14
+    "version": 14,
+    "fingerprint": "e30692b292707370"
   },
   "hn-top": {
-    "fingerprint": "8028cdf726e805de",
-    "version": 10
+    "version": 10,
+    "fingerprint": "d429fba4e4a692a2"
   },
   "hockey-bruins-1990": {
-    "fingerprint": "4d4345174c603089",
-    "version": 11
+    "version": 11,
+    "fingerprint": "000fb15cc68e5cfe"
   },
   "hover-profile": {
-    "fingerprint": "4463ee2f969c950c",
-    "version": 11
+    "version": 11,
+    "fingerprint": "912086bade78d513"
   },
   "httpx-requires-python": {
-    "fingerprint": "73b7938d8fbd4f60",
-    "version": 11
+    "version": 12,
+    "fingerprint": "e6a9fb4aca9468bc"
   },
   "login-wall": {
     "version": 2,
@@ -256,147 +280,147 @@
     "version": 3
   },
   "new-tab-page": {
-    "fingerprint": "d7d9dd333a7fecb6",
-    "version": 6
+    "version": 6,
+    "fingerprint": "bba6ffdcf209dc10"
   },
   "new-window": {
-    "fingerprint": "5e2812a58c9889c2",
-    "version": 11
+    "version": 11,
+    "fingerprint": "aaffe169106f4ee3"
   },
   "oscars-2012": {
-    "fingerprint": "567d61e630ce037b",
-    "version": 10
+    "version": 10,
+    "fingerprint": "ef4160b44f455db6"
   },
   "pizza-order": {
-    "fingerprint": "cef9be2de85f599f",
-    "version": 10
+    "version": 10,
+    "fingerprint": "466dc01b7ce0f311"
   },
   "practice-login": {
-    "fingerprint": "1c634035bdaa0109",
-    "version": 10
+    "version": 10,
+    "fingerprint": "6a98aba0ec9cc8fa"
   },
   "pypi-newer": {
-    "fingerprint": "c15c138c3458eabb",
-    "version": 10
+    "version": 11,
+    "fingerprint": "f9df42e7dfdb2a51"
   },
   "pypi-open": {
-    "fingerprint": "f065e2f3c74bfac9",
-    "version": 14
+    "version": 14,
+    "fingerprint": "79674a9127e29d27"
   },
   "pypi-structured": {
-    "fingerprint": "21c68d38638e3d4b",
-    "version": 11
+    "version": 12,
+    "fingerprint": "8218ec8fe80e8d82"
   },
   "pypi-version": {
-    "fingerprint": "ec87fb1a5e24afd4",
-    "version": 11
+    "version": 12,
+    "fingerprint": "a6627d67addc5d32"
   },
   "quotes-einstein-count": {
-    "fingerprint": "cccb50e638ade584",
-    "version": 11
+    "version": 12,
+    "fingerprint": "9f07027682d8b581"
   },
   "quotes-js-page2": {
-    "fingerprint": "df5e7ecf160b970f",
-    "version": 10
+    "version": 10,
+    "fingerprint": "9129ac035e6aac45"
   },
   "quotes-rowling-count": {
-    "fingerprint": "ac864e3ec29072ad",
-    "version": 7
+    "version": 8,
+    "fingerprint": "50f1c6c0050b3f9d"
   },
   "quotes-search": {
-    "fingerprint": "7d898e311b35b57d",
-    "version": 10
+    "version": 10,
+    "fingerprint": "aa89cd2740d4e89d"
   },
   "quotes-search-lewis": {
-    "fingerprint": "79b99c4f2eb749b8",
-    "version": 6
+    "version": 6,
+    "fingerprint": "e68cec6b54dcb58e"
   },
   "ruff-release": {
-    "fingerprint": "3ddbad90ed98e3a0",
-    "version": 10
+    "version": 10,
+    "fingerprint": "d9910f1f12cbcdf6"
   },
   "saucedemo-cart": {
-    "fingerprint": "2903df9452e2234b",
-    "version": 10
+    "version": 10,
+    "fingerprint": "7a1bc3b81f4ef9d6"
   },
   "saucedemo-checkout": {
-    "fingerprint": "ec2e03349b4bb8ce",
-    "version": 10
+    "version": 10,
+    "fingerprint": "6605335ab4ef0697"
   },
   "saucedemo-locked-out": {
-    "fingerprint": "5d5437871a94202d",
-    "version": 10
+    "version": 10,
+    "fingerprint": "156cab977ebf6845"
   },
   "saucedemo-pause": {
-    "fingerprint": "8640701afacac716",
-    "version": 9
+    "version": 10,
+    "fingerprint": "6317aca38d903937"
   },
   "search-price": {
     "version": 3,
     "fingerprint": "21d92ec8e4c9f7a3"
   },
   "stretch-books-nonfiction-five-star": {
-    "fingerprint": "1db23544f2d56b46",
-    "version": 12
+    "version": 13,
+    "fingerprint": "644bf7a56074e2f8"
   },
   "stretch-books-sequential-art-one-star": {
-    "fingerprint": "4983bc3f1ad0d14b",
-    "version": 6
+    "version": 7,
+    "fingerprint": "d30d65bacb16356d"
   },
   "stretch-books-young-adult-one-star": {
-    "fingerprint": "8207847c2bab2231",
-    "version": 6
+    "version": 7,
+    "fingerprint": "145ceb89e11e91c5"
   },
   "stretch-bstack-apple-google": {
-    "fingerprint": "1c06317cbe1508d8",
-    "version": 11
+    "version": 12,
+    "fingerprint": "d0c463c8ef135b9c"
   },
   "stretch-bstack-apple-samsung": {
-    "fingerprint": "8ab46bdc538a22b1",
-    "version": 11
+    "version": 12,
+    "fingerprint": "6e2271aab0dcfc84"
   },
   "stretch-calendar-first-friday": {
-    "fingerprint": "3c3c65271976bb50",
-    "version": 13
+    "version": 14,
+    "fingerprint": "7cf8409311c264f2"
   },
   "stretch-date-range-monday": {
-    "fingerprint": "32e2e96c6d07dfc6",
-    "version": 11
+    "version": 13,
+    "fingerprint": "3661881ad56a1846"
   },
   "stretch-datepicker-last-saturday": {
-    "fingerprint": "c3d735b1c5b9208f",
-    "version": 6
+    "version": 7,
+    "fingerprint": "e0c2741bf44197eb"
   },
   "stretch-datepicker-last-sunday": {
-    "fingerprint": "52664367c9f57543",
-    "version": 6
+    "version": 7,
+    "fingerprint": "7671a0cf4240f818"
   },
   "stretch-quotes-top-authors": {
-    "fingerprint": "cb4cf3c1f073fcda",
-    "version": 11
+    "version": 12,
+    "fingerprint": "b880fdea72d5f824"
   },
   "stretch-wizard-review": {
-    "fingerprint": "c3aadbebc89458ce",
-    "version": 10
+    "version": 10,
+    "fingerprint": "5a97d90a6b0afd97"
   },
   "table-extract": {
     "version": 3,
     "fingerprint": "c2867e2f8cf7e8aa"
   },
   "table-largest-due": {
-    "fingerprint": "b344c8d6b3a8e250",
-    "version": 11
+    "version": 12,
+    "fingerprint": "f9ec438b44323fb1"
   },
   "table-total-due": {
-    "fingerprint": "a2bf16aa87d7b172",
-    "version": 6
+    "version": 7,
+    "fingerprint": "6c343e0697c2acc3"
   },
   "wiki-godel": {
-    "fingerprint": "f2917ea4fb0bef54",
-    "version": 10
+    "version": 10,
+    "fingerprint": "613526868276aa4d"
   },
   "wiki-open": {
-    "fingerprint": "285490e1a815cc74",
-    "version": 14
+    "version": 14,
+    "fingerprint": "fac1901debfe8cd8"
   }
 }

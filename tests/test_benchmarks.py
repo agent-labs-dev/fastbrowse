@@ -928,7 +928,7 @@ def test_internal_fastbrowse_both_retired_and_uncapped_publishes_only_as_a_proto
     [change] = json.loads(record.read_text())["groups"]
     assert change["id"] == "internal-fastbrowse" and change["limits"] == ["No arm capped"]
     assert RETIRED in change["previous_task_ids"] and RETIRED not in change["task_ids"]
-    assert len(change["previous_task_ids"]) == 54 and len(change["task_ids"]) == 53
+    assert len(change["previous_task_ids"]) == 60 and len(change["task_ids"]) == 59
 
 
 def test_check_diff_refuses_a_receipt_edited_after_the_owner_run(candidate, tmp_path, monkeypatch):
@@ -1275,7 +1275,7 @@ def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, task_
         with pytest.raises(ValueError, match="pair browser-use-ultrafast"):
             check_catalog(parsed, CATALOG)
     else:
-        assert len(parsed.groups[0].task_ids) == 52
+        assert len(parsed.groups[0].task_ids) == 58
         check_catalog(parsed, CATALOG)
 
 
@@ -1359,7 +1359,7 @@ def test_the_head_to_head_publishes_whichever_of_its_arms_ran(candidate, arms):
     check_catalog(parsed, CATALOG)
     group = parsed.groups[0]
     assert group.measured_arms(benchmarks.HEAD_TO_HEAD) == arms
-    assert len(group.task_ids) == 53
+    assert len(group.task_ids) == 59
 
 
 def test_an_arm_without_a_cost_has_none_on_every_row(candidate):

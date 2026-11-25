@@ -148,8 +148,8 @@ def test_a_campaign_takes_only_a_json_boolean_for_smoke(payload: str, passes: bo
     [
         ("core dev stretch-dev", True),
         ("stretch-dev", True),
-        # A suite the catalog no longer carries, because Parallax moved its tasks into dev.
-        ("core dev heldout", False),
+        ("core dev heldout", True),
+        ("sweep", False),
         ("   ", False),
         ("core --output /tmp/elsewhere", False),
         ("core,dev", False),
@@ -210,7 +210,14 @@ def test_campaign_admits_positive_concurrency_without_extra_arms(concurrency: st
 
 
 @pytest.mark.parametrize(
-    "arm,passes", [("agent-browser", True), ("browser-harness", True), ("cua-codex", False), ("nonesuch", False)]
+    "arm,passes",
+    [
+        ("agent-browser", True),
+        ("browser-use-1-luna", True),
+        ("browser-harness", True),
+        ("cua-codex", False),
+        ("nonesuch", False),
+    ],
 )
 def test_campaign_head_to_head_arms_admit_only_competitor_arms(arm: str, passes: bool) -> None:
     result = _require_protocol(GROUPS_CHOSEN="head-to-head", HEAD_TO_HEAD_ARMS=arm)

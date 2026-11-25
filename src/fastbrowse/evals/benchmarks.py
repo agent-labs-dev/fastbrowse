@@ -254,9 +254,9 @@ HEAD_TO_HEAD: tuple[Arm, ...] = (
 )
 OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use")
 COVERAGE: dict[GroupId, Coverage] = {
-    "internal-fastbrowse": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse",)),
+    "internal-fastbrowse": Coverage(frozenset({53, 54, 59, 60}), 3, "task-success", ("fastbrowse",)),
     "internal-hosted": Coverage(
-        frozenset({46, 47, 52, 53}),
+        frozenset({46, 47, 52, 53, 59}),
         3,
         "task-success",
         HEAD_TO_HEAD,
@@ -265,9 +265,9 @@ COVERAGE: dict[GroupId, Coverage] = {
         ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness", "browser-use-oss"),
     ),
     "internal-ultrafast": Coverage(
-        frozenset({6, 47, 52}), 3, "task-success", ("fastbrowse-pool", "browser-use-ultrafast")
+        frozenset({6, 47, 52, 58}), 3, "task-success", ("fastbrowse-pool", "browser-use-ultrafast")
     ),
-    "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
+    "internal-backend": Coverage(frozenset({53, 54, 59, 60}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
     "bu-bench": Coverage(frozenset({200}), None, "weighted-rubric", OFFICIAL, ("fastbrowse",)),
     "online-mind2web": Coverage(frozenset({300}), None, "full-task-success", OFFICIAL, ("fastbrowse",)),
 }

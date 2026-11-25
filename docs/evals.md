@@ -32,7 +32,7 @@ uv run parallax run fastbrowse \
 ```
 
 The plugin registers `fastbrowse`, `fastbrowse-pool`, and `fastbrowse-hosted`. Parallax also provides `browser-use-cloud`,
-`browser-use-oss`, `browser-harness` (Codex), `browser-harness-claude-code`, `agent-browser` (Codex), and `cua-codex`.
+`browser-use-oss`, `browser-use-1-luna` (browser-use 1.0.8 on `openai/gpt-6-luna`), `browser-harness` (Codex), `browser-harness-claude-code`, `agent-browser` (Codex), and `cua-codex`.
 
 Each task is world-less, has `Area.BROWSER`, and uses
 `browser-evidence-v2`. A browser harness stores the final page under trial

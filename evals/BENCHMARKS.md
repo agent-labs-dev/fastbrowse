@@ -11,7 +11,7 @@ The package registers these entry points:
 - `fastbrowse`: the fastbrowse agent on a Browser Use Cloud browser.
 - `fastbrowse-pool`: the same agent on a browser leased from the fastbrowse pool.
 - `fastbrowse-hosted`: the fastbrowse hosted API, kept as a diagnostic product arm.
-- `fastbrowse`: one `parallax.task_sources` source containing the core, dev, stretch-dev, and sweep task records.
+- `fastbrowse`: one `parallax.task_sources` source containing the core, dev, stretch-dev, heldout, and sweep task records.
 
 Every task is world-less, uses `Area.BROWSER`, and names Parallax's
 `browser-evidence-v2` policy. The task record carries the start URL, task
@@ -22,6 +22,16 @@ Parallax supplies the browser harnesses `browser-use-cloud`, `browser-use-oss`,
 `browser-harness` (Codex), `browser-harness-claude-code`, and `cua-codex`. New campaign figures use Parallax's final
 page observer, retry rules, judging identity, typed timing, component costs,
 details, and run artifacts.
+
+## Development and held-out suites
+
+`core`, `dev` and `stretch-dev` are development sets: fastbrowse has been iterated against their tasks, so their
+scores are development-set results. `heldout` holds tasks the agent has never been tuned on; run it before and after
+a change, and never debug against it. It runs on the same arms as the other suites, so a comparison gets a held-out signal by naming `heldout` in the
+campaign's suites. A task in it moves to a development suite as soon as a fix is shaped by it.
+
+Every static-site task records `data.intended_outcome`, which the judge reads beside the run's evidence. A task whose
+answer moves with its site (the PyPI tasks) records the rule that finds the answer instead of a value.
 
 ## Running a campaign
 

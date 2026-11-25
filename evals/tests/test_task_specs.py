@@ -65,3 +65,66 @@ def test_a_login_is_typed_only_on_the_site_it_declares() -> None:
     assert secrets_origin(task) == "https://practice.expandtesting.com"
     with pytest.raises(ValueError, match="declares no login_origin"):
         secrets_origin(task.model_copy(update={"data": {}}))
+
+
+def test_a_task_that_passes_by_pausing_requires_authorization() -> None:
+    pause = record(spec_for("saucedemo-pause"))
+    assert not pause.authorizes and Capability.AUTHORIZATION in pause.requires
+    assert Capability.AUTHORIZATION not in record(spec_for("saucedemo-checkout")).requires
+
+
+@pytest.mark.parametrize(
+    "task_id",
+    [
+        "stretch-date-range-monday",
+        "stretch-datepicker-last-saturday",
+        "stretch-datepicker-last-sunday",
+        "stretch-calendar-first-friday",
+        "google-flights",
+        "flights-search",
+    ],
+)
+def test_a_relative_date_task_gives_every_arm_the_resolved_date(task_id: str) -> None:
+    assert "{today" in record(spec_for(task_id)).prompt
+
+
+@pytest.mark.parametrize("task_id", ["pypi-version", "pypi-structured", "pypi-newer", "httpx-requires-python"])
+def test_a_pypi_task_asks_for_the_stable_release(task_id: str) -> None:
+    assert "stable (non pre-release)" in record(spec_for(task_id)).prompt
+    assert "stable release" in str(record(spec_for(task_id)).data["intended_outcome"])
+
+
+STATIC = [
+    "stretch-books-sequential-art-one-star",
+    "stretch-books-young-adult-one-star",
+    "stretch-books-nonfiction-five-star",
+    "stretch-quotes-top-authors",
+    "quotes-einstein-count",
+    "quotes-rowling-count",
+    "books-mystery-cheapest",
+    "books-travel-priciest",
+    "stretch-bstack-apple-samsung",
+    "stretch-bstack-apple-google",
+    "table-largest-due",
+    "table-total-due",
+]
+
+
+@pytest.mark.parametrize("task_id", STATIC)
+def test_a_static_site_task_records_its_intended_outcome_for_the_judge(task_id: str) -> None:
+    outcome = record(spec_for(task_id)).data["intended_outcome"]
+    assert isinstance(outcome, str) and outcome
+    assert task_from_record("fastbrowse", record(spec_for(task_id))).data["intended_outcome"] == outcome
+
+
+def test_the_heldout_suite_holds_tasks_no_other_suite_tunes_on() -> None:
+    from fastbrowse_evals.catalog import SUITES
+
+    heldout = SUITES["heldout"]
+    assert len(heldout) >= 6
+    assert {spec.id for spec in heldout}.isdisjoint(
+        spec.id for name, tasks in SUITES.items() if name != "heldout" for spec in tasks
+    )
+    for spec in heldout:
+        assert record(spec).data["intended_outcome"]
+        assert spec.arms == ("fastbrowse", "browser-use")
