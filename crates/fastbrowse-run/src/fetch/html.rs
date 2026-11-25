@@ -905,6 +905,10 @@ impl Tags for Reader<'_> {
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
         }
+        // An inline item ends with no block break after it: its text is flushed while its place still holds.
+        if self.places.iter().any(|open| open.close == at) {
+            self.flush(None, None, false);
+        }
         while self.places.pop_if(|open| open.close == at).is_some() {}
     }
 
@@ -2471,6 +2475,9 @@ mod tests {
                        <div><div role='listitem'><p>Second</p></div></div></div>";
         assert_eq!(place(wrapped, "First"), Some((1, 2)));
         assert_eq!(place(wrapped, "Second"), Some((2, 2)));
+        let inline = "<div role='list'><span role='listitem'>First</span> <span role='listitem'>Second</span></div>";
+        assert_eq!(place(inline, "First"), Some((1, 2)));
+        assert_eq!(place(inline, "Second"), Some((2, 2)));
         for inner in [
             "<ul><li><a href='/only'>Only inner link</a></li></ul>",
             "<ul><li aria-posinset='41' aria-setsize='-1'><a href='/only'>Only inner link</a></li></ul>",

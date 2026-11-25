@@ -670,7 +670,11 @@
         continue;
       }
       if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
+        // An inline ARIA item has no line break around it, yet it is one place of its list: its text is its own block.
+        const inlineItem = node.matches('[role="listitem"]');
+        if (inlineItem) flushRun(false);
         run.push(node);
+        if (inlineItem) flushRun(false);
         continue;
       }
       flushRun(false);
@@ -813,8 +817,8 @@
       if (CONTROLS.has(e.tagName) && !e.labels?.length && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;
       const name = nameOf(e) || clean(e.innerText ?? '');
       if (!name || e.dataset?.fastbrowseSecret === '1') continue;
-      if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) push('observation', `${name}: [empty]`);
-      if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
+      if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) push('observation', `${name}: [empty]`, { at: e });
+      if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`, { at: e });
     }
     // Which option is chosen is element state no text node carries, and a page often shows what follows from it in
     // place: a checkout re-rendered one order total per shipping method, and the read could not say which method the
@@ -825,7 +829,7 @@
       if (!(native ? e.checked : e.getAttribute('aria-checked') === 'true')) continue;
       if (!visible(e) && ![...(e.labels || [])].some(visible)) continue;
       const name = nameOf(e);
-      if (name) push('observation', `${name}: checked`);
+      if (name) push('observation', `${name}: checked`, { at: e });
     }
     // The text of the nearest enclosing element that has any, naming the row a textless link sits in, since its
     // observation is not read where the link stands. An empty image paragraph must not borrow another paragraph's text
@@ -858,7 +862,7 @@
       const metadata = { alt: image.getAttribute('alt') ?? null,
         src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false,
         near: item(image) };
-      push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}`);
+      push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}`, { at: image });
     }
     // A player's clock and whether it plays are element state, drawn by native controls the text never holds. Each
     // read records them, so two reads of a playing player are two citable times. Hidden players count: they can play.
@@ -881,7 +885,7 @@
         duration_seconds: seconds(player.duration),
       };
       const kind = player.tagName === 'AUDIO' ? 'Audio' : 'Video';
-      push('observation', `${kind} element state: ${JSON.stringify(state)}`);
+      push('observation', `${kind} element state: ${JSON.stringify(state)}`, { at: player });
     }
     // A link drawn only as an icon has no text, so its destination, the one thing it says, was nowhere a reader
     // could quote: asked for a release's download URL beside an icon-only download link, a run read every other
@@ -903,7 +907,7 @@
       if (target.protocol === 'javascript:' || fragment) continue;
       const metadata = { label: nameOf(link) || drawn(link) || null, href: imageSource(link.href), near: near(link) };
       // choices.rs (LINK_METADATA) keeps `near` out of a read's answer candidates by the line's opening words.
-      push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
+      push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`, { at: link });
     }
     if (root === document.body) {
       const doc = document.documentElement;
