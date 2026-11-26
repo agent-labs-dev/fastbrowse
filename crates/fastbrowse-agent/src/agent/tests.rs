@@ -524,6 +524,66 @@ async fn test_http_error_visit_cannot_evidence_navigation_completion() {
     assert!(state.site_failure.is_none());
 }
 
+/// A reload of the form a message was posted from loads it afresh with HTTP 200, and says nothing of whether the post
+/// that got HTTP 503 went through: cleared by it, the run stalled on the form and ended stuck instead of unavailable.
+#[tokio::test]
+async fn test_a_failed_reply_to_a_commit_stands_until_a_later_commit_succeeds() {
+    let agent = agent();
+    let mut state = run_state();
+    let form = Observation {
+        url: "https://example.test/message".into(),
+        document_key: "form".into(),
+        ..observation(&[button("Send")])
+    };
+    let replied = |key: &str, url: &str, status: i64| Observation {
+        url: url.into(),
+        document_key: key.into(),
+        response_status: Some(status),
+        ..form.clone()
+    };
+    let send = |state: &mut RunState, outcome: StepOutcome| {
+        state.history.push(HistoryEntry::new(Some(Operation::Click), Some("Send"), outcome, true));
+        state.acted_from = Some(form.clone());
+        state.committing = true;
+    };
+    // A 4xx refuses the request, so nothing went through and correcting it and sending again is safe.
+    send(&mut state, StepOutcome::Executed);
+    agent.note_effect(&mut state, &replied("refused", &form.url, 400));
+    assert!(state.site_failure.as_ref().is_some_and(|failure| !failure.sent), "a 400 was taken as a failed send");
+    state.site_failure = None;
+    send(&mut state, StepOutcome::Executed);
+    agent.note_effect(&mut state, &replied("reply", &form.url, 503));
+    assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent));
+    let effect = state.history.last().unwrap().effect.clone().unwrap_or_default();
+    assert!(effect.contains("the site's reply to what this step sent"), "{effect}");
+    state.committing = false;
+    let reloaded = replied("reloaded", &form.url, 200);
+    agent.note_effect(&mut state, &reloaded);
+    assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent), "a reload cleared the failed send");
+    agent.settle(&mut state, &reloaded).await.unwrap();
+    assert!(state.site_failure.is_some(), "the reloaded form, a page state not seen before, cleared the failed send");
+    // A commit that was not dispatched, or that loaded no document, is no reply: the page's status is the reload's.
+    send(&mut state, StepOutcome::Covered);
+    agent.note_effect(&mut state, &reloaded);
+    assert!(state.site_failure.is_some(), "a covered click on the reloaded form cleared the failed send");
+    send(&mut state, StepOutcome::Executed);
+    agent.note_effect(&mut state, &Observation { document_key: "form".into(), ..reloaded.clone() });
+    assert!(state.site_failure.is_some(), "a commit that loaded no document cleared the failed send");
+    state.committing = false;
+    agent.note_effect(&mut state, &replied("missing", "https://example.test/sent", 404));
+    assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent), "a later 404 replaced the failed send");
+    let elsewhere = replied("sent", "https://example.test/sent", 200);
+    agent.note_effect(&mut state, &elsewhere);
+    agent.settle(&mut state, &elsewhere).await.unwrap();
+    assert!(state.site_failure.is_some(), "leaving the page cleared the failed send");
+    // Sent from the start address, the failure is kept for it too, and recovery ends the run on that copy.
+    state.start_failure.clone_from(&state.site_failure);
+    send(&mut state, StepOutcome::Executed);
+    agent.note_effect(&mut state, &replied("confirmed", "https://example.test/sent", 200));
+    assert!(state.site_failure.is_none(), "a later commit's reply, wherever it lands, clears it");
+    assert!(state.start_failure.is_none(), "the start address kept the failed send a later commit cleared");
+}
+
 fn capacities() -> (Fact, Fact) {
     let page = capture(&[(BlockKind::Paragraph, "Pine capacity 10"), (BlockKind::Paragraph, "Oak capacity 7")]);
     let pine = Fact::read("Pine capacity 10", block_evidence(&page, "s0"), FactReader::JevChoice);
@@ -2528,6 +2588,42 @@ async fn test_a_done_answers_from_the_notes_once_jev_finds_them_covering_the_tas
     // task; nothing is composed.
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("The answer is 42")));
+}
+
+/// A message form answered its send with a "Thank you, your message has been sent" page served as HTTP 503. Jev, asked
+/// whether that page reports a failure, answered 0.50, and the run completed claiming the message sent.
+#[tokio::test]
+async fn test_done_on_a_5xx_reply_to_a_send_is_refused_as_the_site_failure() {
+    let page = capture(&[(BlockKind::Paragraph, "Your message has been sent.")]);
+    let fact = Fact::read("Your message has been sent.", block_evidence(&page, "s0"), FactReader::JevChoice);
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.notes = Notes::new([fact.answering()]);
+    state.history.push(executed(Some(Operation::Click), Some("Send"), true));
+    let reply =
+        Observation { url: "https://example.test/message".into(), response_status: Some(503), ..observation(&[]) };
+    state.site_failure = Some(SiteFailure { sent: true, ..SiteFailure::http(&reply.url, 503, 0) });
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(reply.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    state.recoveries = agent.config.stall.max_recoveries;
+
+    let result = agent.finish(&mut state, &reply, None, None).await;
+    assert!(matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Unavailable), "{result:?}");
+}
+
+/// A send met a 503, and the page holding its result asked for a sign-in: giving up there as needs_login told the
+/// caller to sign in and send again, though the send may have gone through.
+#[tokio::test]
+async fn test_a_give_up_after_a_failed_send_reports_the_send_failure() {
+    let mut state = run_state();
+    let page = Observation { url: "https://example.test/login".into(), ..observation(&[]) };
+    state.site_failure = Some(SiteFailure { sent: true, ..SiteFailure::http("https://example.test/message", 503, 0) });
+    let agent =
+        Agent::new(Arc::new(FinishPage(page.clone())), Arc::new(ScriptedJev::new(vec![])), Arc::new(ScriptedLLM));
+    let give_up = super::driver::Act::GiveUp { status: super::driver::GiveUp::NeedsLogin, reason: "sign-in".into() };
+
+    let result = agent.dispatch(&mut state, &page, give_up, None, None).await;
+    assert!(matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Unavailable), "{result:?}");
 }
 
 /// Asked to sign in and then report the account's email, a run filled the form, met the sign-in code, opened the page
@@ -4802,7 +4898,8 @@ async fn test_a_page_that_reports_a_failure_ends_as_it() {
     state.recoveries = agent.config.stall.max_recoveries;
     let apply = field("Apply");
     let page = observation(&[apply.clone(), button("Next")]);
-    state.site_failure = Some(SiteFailure { url: page.url.clone(), cause: FailureCause::Reported, since: 0 });
+    state.site_failure =
+        Some(SiteFailure { url: page.url.clone(), cause: FailureCause::Reported, since: 0, sent: false });
     let error = agent.recover(&mut state, &page, "nothing changed", Status::NeedsInput).await.err();
     assert!(matches!(error, Some(Flow::Stop(ref stop)) if stop.status == Status::Unavailable), "{error:?}");
 }
@@ -7579,10 +7676,11 @@ fn a_site_failure_stop_names_its_rule_and_not_its_address() {
                 url: url.into(),
                 cause: FailureCause::Navigation("net::ERR_ABORTED at shop.test".into()),
                 since: 0,
+                sent: false,
             },
             "SiteFailure/navigation",
         ),
-        (SiteFailure { url: url.into(), cause: FailureCause::Reported, since: 0 }, "SiteFailure/reported"),
+        (SiteFailure { url: url.into(), cause: FailureCause::Reported, since: 0, sent: false }, "SiteFailure/reported"),
     ];
     for (failure, rule) in cases {
         assert_eq!(failure.stop().rule, rule);

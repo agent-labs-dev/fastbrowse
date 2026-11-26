@@ -200,11 +200,16 @@ pub(crate) struct SiteFailure {
     pub cause: FailureCause,
     /// The run's step count when the failure was first seen, so how long it has stood is stated in steps.
     pub since: usize,
+    /// The failure is the site's reply to a commit the run sent. Loading the address again shows the page afresh, not
+    /// whether what was sent went through, so only a later commit's reply clears it, wherever it lands: cleared by a
+    /// reload of the form a message was posted from, a run that got HTTP 503 for its send ended stuck instead of
+    /// unavailable. It stands when the run leaves the address too, since the driver is sent to look for the result.
+    pub sent: bool,
 }
 
 impl SiteFailure {
     pub fn http(url: &str, status: i64, since: usize) -> SiteFailure {
-        SiteFailure { url: url.to_string(), cause: FailureCause::Http(status), since }
+        SiteFailure { url: url.to_string(), cause: FailureCause::Http(status), since, sent: false }
     }
 
     pub fn message(&self) -> String {

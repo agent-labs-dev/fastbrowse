@@ -386,7 +386,10 @@ not exist), stuck (nothing left to try).
 A page that reports the site failed, such as an error message shown where the results or page an action should have \
 brought, is not the outcome of that action, and the run is not done on it: the site's failure can clear, so open the \
 page again with goto(its address), which loads it afresh, or repeat the action that led to it, and give_up as \
-unavailable once retrying has not cleared it.
+unavailable once retrying has not cleared it. When an action's effect says the failure is the site's reply to what it \
+sent, whether it went through is unknown and sending it again can make it twice: look for its result where the site \
+shows it, or give_up as unavailable. That failure is what stopped the task, so unavailable stays the status when the \
+way to its result is barred too, such as by a sign-in.
 
 An action the task did not ask for that cannot be undone (buying, sending, deleting, submitting) is refused unless the \
 user authorized it; you are told when an action was refused and why. Do not repeat a refused action, or a failed one \
@@ -1065,7 +1068,7 @@ impl Agent {
     }
 
     /// Carry out `act`, which returns a result only once the run ends.
-    async fn dispatch(
+    pub(super) async fn dispatch(
         &self,
         state: &mut RunState,
         observation: &Observation,
@@ -1199,6 +1202,11 @@ impl Agent {
             }
             Act::Wait { .. } if self.page.over_http() => {
                 return Err(self.page.needs_browser("the page needs its scripts run to finish loading".into()).into());
+            }
+            // A send the site failed is what stopped the task, as the driver is told: a run that met a sign-in on the way
+            // to its result and gave up needs_login sent its caller to sign in and send it again, maybe twice.
+            Act::GiveUp { .. } if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.sent) => {
+                return Err(failure.stop().into());
             }
             Act::GiveUp { status, reason } => {
                 let status = status.status();
@@ -1586,6 +1594,9 @@ mod tests {
         assert!(SYSTEM.contains("the run is not done on it"));
         assert!(SYSTEM.contains("page again with goto(its address), which loads it afresh, or repeat the action"));
         assert!(SYSTEM.contains("unavailable once retrying has not cleared it"));
+        assert!(SYSTEM.contains("effect says the failure is the site's reply to what it"));
+        assert!(SYSTEM.contains("sending it again can make it twice"));
+        assert!(SYSTEM.contains("unavailable stays the status when the way to its result is barred too"));
     }
 
     #[test]
