@@ -289,7 +289,8 @@ def test_a_fill_pass_a_provider_refused_leaves_the_cassette_as_it_was(
             "result": {"status": "error", "grade": {"passed": False, "failure": "refused"}},
             "misses": [miss.to_json() for miss in proxy.misses],
             "forwarded": proxy.forwarded,
-            "upstream_errors": [error.to_json() for error in proxy.upstream_errors],
+            "upstream_errors": [error.status for error in proxy.upstream_errors],
+            "upstream_messages": [error.message for error in proxy.upstream_errors],
             "budget_refusals": proxy.budget_refusals,
         }
 
@@ -298,7 +299,7 @@ def test_a_fill_pass_a_provider_refused_leaves_the_cassette_as_it_was(
     assert bench.main(["fill", "--only", "mock-basket", "--cassettes", str(tmp_path), "--out", str(out)]) == 0
     assert path.read_bytes() == before
     [entry] = json.loads(out.read_text())["tasks"]
-    assert entry["upstream_errors"] == [{"status": 429, "message": "refused"}] and entry["fill_passes"] == 1
+    assert entry["upstream_errors"] == [429] and entry["upstream_messages"] == ["refused"] and entry["fill_passes"] == 1
     assert entry["recorded_cost_usd"] == 0 and entry["spent_usd"] == pytest.approx(0.1)
 
 

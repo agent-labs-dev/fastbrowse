@@ -217,8 +217,13 @@ def fill_verdict(report: Mapping[str, Any] | None, tasks: Sequence[str], budget:
         if entry["misses"]:
             reasons.append(f"{len(entry['misses'])} replay misses remained")
         if entry.get("upstream_errors"):
-            refused = "; ".join(f"{e['status']} {e['message']}".strip() for e in entry["upstream_errors"])
-            reasons.append(f"upstream refused {len(entry['upstream_errors'])} requests: {refused}")
+            # `upstream_messages` joined the entry after `upstream_errors`, and publish judges a fill that an older
+            # branch made, so it may be absent.
+            said = "; ".join(entry.get("upstream_messages", []))
+            reasons.append(
+                f"upstream refused {len(entry['upstream_errors'])} requests {entry['upstream_errors']}"
+                + (f": {said}" if said else "")
+            )
         if entry.get("budget_refusals"):
             reasons.append(f"the budget stopped {entry['budget_refusals']} requests before they were sent")
         if entry.get("unpriced_exchanges"):

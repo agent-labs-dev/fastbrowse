@@ -456,6 +456,7 @@ def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
     response carries its cost; the key is computed from the body the agent sent.
     """
     client = httpx.Client(timeout=timeout)
+    api_key = api_key.strip()  # an HTTP server sees the key without its padding, so that is what it can echo back
 
     def forward(path: str, body: bytes) -> tuple[int, str, str]:
         mount = next(m for m in UPSTREAMS if path.startswith(m + "/"))
@@ -501,13 +502,10 @@ class UpstreamError:
             message = message[:UPSTREAM_MESSAGE_REPORT_CHARS] + "..."
         return cls(status, message)
 
-    def to_json(self) -> dict[str, Any]:
-        return {"status": self.status, "message": self.message}
 
-
-def upstream_errors_line(errors: list[dict[str, Any]]) -> str:
-    """The refusals a report entry holds (`UpstreamError.to_json`), one `status message` each."""
-    return "; ".join(f"{e['status']} {e['message']}".strip() for e in errors)
+def upstream_refusals(entry: dict[str, Any]) -> str:
+    """What a report entry says upstream refused: its statuses, then the providers' messages."""
+    return f"{entry['upstream_errors']}: {'; '.join(entry['upstream_messages'])}"
 
 
 class Proxy:

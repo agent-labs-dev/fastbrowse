@@ -143,9 +143,10 @@ def test_a_clean_fill_within_budget_is_accepted() -> None:
         ({"result": {"grade": {"passed": False, "failure": "wrong total"}}}, "grade failed: wrong total"),
         ({"misses": [{"purpose": "p"}]}, "1 replay misses remained"),
         (
-            {"upstream_errors": [{"status": 403, "message": "Key limit exceeded"}]},
-            "upstream refused 1 requests: 403 Key limit exceeded",
+            {"upstream_errors": [403], "upstream_messages": ["Key limit exceeded"]},
+            "upstream refused 1 requests [403]: Key limit exceeded",
         ),
+        ({"upstream_errors": [429]}, "upstream refused 1 requests [429]"),
         ({"budget_refusals": 3}, "the budget stopped 3 requests before they were sent"),
         ({"unpriced_exchanges": 2}, "2 exchanges have no price"),
     ],
