@@ -530,26 +530,54 @@ async fn test_http_error_visit_cannot_evidence_navigation_completion() {
 async fn test_a_failed_reply_to_a_commit_stands_until_a_later_commit_succeeds() {
     let agent = agent();
     let mut state = run_state();
-    let form = Observation { url: "https://example.test/message".into(), ..observation(&[button("Send")]) };
-    let reply = Observation { response_status: Some(503), ..form.clone() };
-    state.history.push(executed(Some(Operation::Click), Some("Send"), true));
-    state.acted_from = Some(form.clone());
-    state.committing = true;
-    agent.note_effect(&mut state, &reply);
+    let form = Observation {
+        url: "https://example.test/message".into(),
+        document_key: "form".into(),
+        ..observation(&[button("Send")])
+    };
+    let replied = |key: &str, url: &str, status: i64| Observation {
+        url: url.into(),
+        document_key: key.into(),
+        response_status: Some(status),
+        ..form.clone()
+    };
+    let send = |state: &mut RunState, outcome: StepOutcome| {
+        state.history.push(HistoryEntry::new(Some(Operation::Click), Some("Send"), outcome, true));
+        state.acted_from = Some(form.clone());
+        state.committing = true;
+    };
+    // A 4xx refuses the request, so nothing went through and correcting it and sending again is safe.
+    send(&mut state, StepOutcome::Executed);
+    agent.note_effect(&mut state, &replied("refused", &form.url, 400));
+    assert!(state.site_failure.as_ref().is_some_and(|failure| !failure.sent), "a 400 was taken as a failed send");
+    state.site_failure = None;
+    send(&mut state, StepOutcome::Executed);
+    agent.note_effect(&mut state, &replied("reply", &form.url, 503));
     assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent));
     let effect = state.history.last().unwrap().effect.clone().unwrap_or_default();
     assert!(effect.contains("the site's reply to what this step sent"), "{effect}");
     state.committing = false;
-    agent.note_effect(&mut state, &Observation { response_status: Some(200), ..form.clone() });
+    let reloaded = replied("reloaded", &form.url, 200);
+    agent.note_effect(&mut state, &reloaded);
     assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent), "a reload cleared the failed send");
-    agent.settle(&mut state, &Observation { response_status: Some(200), ..form.clone() }).await.unwrap();
+    agent.settle(&mut state, &reloaded).await.unwrap();
     assert!(state.site_failure.is_some(), "the reloaded form, a page state not seen before, cleared the failed send");
-    let elsewhere = Observation { url: "https://example.test/sent".into(), response_status: Some(200), ..form };
+    // A commit that was not dispatched, or that loaded no document, is no reply: the page's status is the reload's.
+    send(&mut state, StepOutcome::Covered);
+    agent.note_effect(&mut state, &reloaded);
+    assert!(state.site_failure.is_some(), "a covered click on the reloaded form cleared the failed send");
+    send(&mut state, StepOutcome::Executed);
+    agent.note_effect(&mut state, &Observation { document_key: "form".into(), ..reloaded.clone() });
+    assert!(state.site_failure.is_some(), "a commit that loaded no document cleared the failed send");
+    state.committing = false;
+    agent.note_effect(&mut state, &replied("missing", "https://example.test/sent", 404));
+    assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent), "a later 404 replaced the failed send");
+    let elsewhere = replied("sent", "https://example.test/sent", 200);
     agent.note_effect(&mut state, &elsewhere);
     agent.settle(&mut state, &elsewhere).await.unwrap();
     assert!(state.site_failure.is_some(), "leaving the page cleared the failed send");
-    state.committing = true;
-    agent.note_effect(&mut state, &elsewhere);
+    send(&mut state, StepOutcome::Executed);
+    agent.note_effect(&mut state, &replied("confirmed", "https://example.test/sent", 200));
     assert!(state.site_failure.is_none(), "a later commit's reply, wherever it lands, clears it");
 }
 

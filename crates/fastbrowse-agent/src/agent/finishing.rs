@@ -108,8 +108,10 @@ impl Agent {
         // error panel.
         let here = state.site_failure.as_ref().filter(|failure| failure.url == observation.url);
         if carried == Some(Carried::SiteFailed) {
-            let sent = here.is_some_and(|failure| failure.sent);
-            if here.is_none_or(|failure| failure.cause == FailureCause::Reported) {
+            // A failed send stands wherever the run is now: looking for its result elsewhere and finding another failure
+            // does not make sending it again safe.
+            let sent = state.site_failure.as_ref().is_some_and(|failure| failure.sent);
+            if !sent && here.is_none_or(|failure| failure.cause == FailureCause::Reported) {
                 let since = here.map_or(state.steps.len(), |failure| failure.since);
                 state.site_failure = Some(SiteFailure {
                     url: observation.url.clone(),
