@@ -117,6 +117,7 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         expanded,
         sensitive,
         offscreen,
+        screen,
         disabled,
         required,
         read_only,
@@ -162,6 +163,7 @@ fn control(redactor: &Redactor, control: &Control) -> Control {
         expanded: *expanded,
         sensitive: *sensitive,
         offscreen: *offscreen,
+        screen: *screen,
         disabled: *disabled,
         required: *required,
         read_only: *read_only,
@@ -217,7 +219,7 @@ fn dialog(redactor: &Redactor, dialog: &Dialog) -> Dialog {
 
 /// The capture's text masked, with its masked spans counted in the raw text and its digest taken over what is shown.
 pub(super) fn capture(redactor: &Redactor, capture: &Capture) -> Capture {
-    let Capture { url, title, captured_at, sha256: _, text, blocks, inaccessible_frames, masked: _ } = capture;
+    let Capture { url, title, captured_at, sha256: _, text, blocks, inaccessible_frames, masked: _, advice } = capture;
     let shown = redactor.mask(text);
     Capture {
         url: redactor.mask(url),
@@ -228,6 +230,8 @@ pub(super) fn capture(redactor: &Redactor, capture: &Capture) -> Capture {
         blocks: blocks.iter().map(|item| block(redactor, item)).collect(),
         inaccessible_frames: *inaccessible_frames,
         masked: redactor.masked_spans(text),
+        // A mask keeps every code point in place, so the advice stays where it was.
+        advice: advice.clone(),
     }
 }
 
@@ -247,6 +251,7 @@ fn block(redactor: &Redactor, block: &Block) -> Block {
         links,
         whole_record,
         item_place,
+        in_viewport,
         fields,
     } = block;
     Block {
@@ -282,6 +287,7 @@ fn block(redactor: &Redactor, block: &Block) -> Block {
             .collect(),
         whole_record: *whole_record,
         item_place: *item_place,
+        in_viewport: *in_viewport,
         fields: fields
             .iter()
             .map(|SourceField { path, start, end }| SourceField {

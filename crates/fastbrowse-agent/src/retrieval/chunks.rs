@@ -47,13 +47,17 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
 ///
 /// A quote of a table row's cells starts at its block, which the capture opens with the table's header: cut alone,
 /// `| Boston Bruins | 1990 | 44 | 24 |` said nothing of which number is wins, and the answer gave the losses.
+///
+/// A quote may leave out the advice code wrote into the text, such as a link's title beside its label: those are not
+/// the page's words. A quote of "Boulenger, 1887" from a row reading "Boulenger (title: George Albert Boulenger), 1887"
+/// was refused, and the run answered with another page's date. The evidence still cuts the capture's own text.
 pub(crate) fn quoted(capture: &Capture, quote: &str) -> Option<Evidence> {
     if text::strip(quote).is_empty() {
         return None;
     }
     let page = Page::new(capture);
     let tables = table_blocks(capture);
-    spans_of(&capture.text, quote).find_map(|(at, to)| {
+    let cite = |at: usize, to: usize| {
         let start = capture.text[..at].chars().count() as i64;
         let end = start + capture.text[at..to].chars().count() as i64;
         // A quote may run across blocks of one document, its frame and address: saucedemo draws "Total: $" and "43.18"
@@ -75,7 +79,39 @@ pub(crate) fn quoted(capture: &Capture, quote: &str) -> Option<Evidence> {
             .find(|table| table.start == block.start && table.start < table.row && table.row <= start)
             .map_or(start, |table| table.start);
         Some(evidence(&page, block, start, end))
+    };
+    spans_of(&capture.text, quote).find_map(|(at, to)| cite(at, to)).or_else(|| {
+        let (plain, bytes) = without_advice(capture)?;
+        spans_of(&plain, quote).find_map(|(at, to)| cite(bytes[at], bytes[to - 1] + 1))
     })
+}
+
+/// The capture's text without the advice code wrote into it, with each of its bytes' place in the text; None when
+/// code wrote none.
+fn without_advice(capture: &Capture) -> Option<(String, Vec<usize>)> {
+    if capture.advice.is_empty() {
+        return None;
+    }
+    let mut plain = String::with_capacity(capture.text.len());
+    let mut bytes = Vec::with_capacity(capture.text.len());
+    for ((at, c), advice) in capture.text.char_indices().zip(advised(capture)) {
+        if !advice {
+            plain.push(c);
+            bytes.extend(at..at + c.len_utf8());
+        }
+    }
+    Some((plain, bytes))
+}
+
+/// For each code point of the capture's text, whether it is advice code wrote there (`Capture::advice`) rather than
+/// page text.
+fn advised(capture: &Capture) -> Vec<bool> {
+    let mut advised = vec![false; capture.text.chars().count()];
+    for &(start, end) in &capture.advice {
+        let (start, end) = (start.clamp(0, advised.len() as i64) as usize, end.clamp(0, advised.len() as i64) as usize);
+        advised[start..end.max(start)].fill(true);
+    }
+    advised
 }
 
 /// The byte spans of `text` that hold `quote`'s words in order, each gap between them any run of whitespace. The
@@ -120,6 +156,7 @@ fn spans_of<'a>(text: &'a str, quote: &'a str) -> impl Iterator<Item = (usize, u
 /// quoted: none of them is text the page showed.
 pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Evidence> {
     let page = Page::new(capture);
+    let advised = advised(capture);
     let pieces: Vec<(String, bool)> =
         shown.iter().map(|piece| (squeezed(&piece.text), piece.added)).filter(|(text, _)| !text.is_empty()).collect();
     let viewport =
@@ -136,7 +173,11 @@ pub(crate) fn line_quotes(capture: &Capture, shown: &[ShownPiece]) -> Vec<Eviden
             while end > start && page.chars[end as usize - 1].is_whitespace() {
                 end -= 1;
             }
-            let line = squeezed(&without_advice(page.slice(start, end)));
+            // The observation reads a tooltip's host as its words joined, so a notice with the capture's advice in
+            // its middle matches only once the advice is out; the quote is still cut from the capture, advice included.
+            let line: String =
+                (start..end).filter(|&at| !advised[at as usize]).map(|at| page.chars[at as usize]).collect();
+            let line = squeezed(&line);
             if line.is_empty() {
                 return None;
             }
@@ -299,33 +340,6 @@ fn aligned<'a>(pieces: &[(String, bool)], lines: impl Iterator<Item = &'a str>) 
     found
 }
 
-/// `text` without the " (title: ...)" advice the capture inserts beside a tooltip's host, wherever in the line it
-/// sits: the observation reads the host's words joined, so a notice with a tooltip in its middle matches only once the
-/// advice is out. This is the capture's own syntax, parsed by balanced parentheses; the quote is still cut from the
-/// capture, advice included.
-fn without_advice(text: &str) -> String {
-    const OPEN: &str = " (title: ";
-    let mut plain = String::new();
-    let mut rest = text;
-    while let Some(at) = rest.find(OPEN) {
-        let after = at + OPEN.len();
-        let mut depth = 1;
-        let close = rest[after..].char_indices().find_map(|(i, c)| {
-            match c {
-                '(' => depth += 1,
-                ')' => depth -= 1,
-                _ => {}
-            }
-            (depth == 0).then_some(after + i + 1)
-        });
-        let Some(close) = close else { break };
-        plain.push_str(&rest[..at]);
-        rest = &rest[close..];
-    }
-    plain.push_str(rest);
-    plain
-}
-
 fn squeezed(text: &str) -> String {
     text.split_whitespace().collect()
 }
@@ -405,6 +419,23 @@ mod tests {
         let page = capture("Date: 12/04/2026\n\nDay: Friday", &[(0, 16), (18, 29)]);
         assert!(quoted(&page, "Day: Monday").is_none());
         assert!(quoted(&page, "  ").is_none());
+    }
+
+    /// A row read "Boulenger (title: George Albert Boulenger), 1887", the title being code's advice, and the driver's
+    /// quote of "Boulenger, 1887" was refused, so the run answered with another page's date.
+    #[test]
+    fn a_quote_that_leaves_out_code_advice_is_cut_with_it() {
+        let (text, advice) = fastbrowse_core::page::unmark_advice(
+            "| Carettochelyidae\nBoulenger\u{FDD0} (title: George Albert Boulenger)\u{FDD1}, 1887 | Pig-nosed turtle |",
+            |_| true,
+        );
+        let mut page = capture(&text, &[(0, text.chars().count() as i64)]);
+        assert!(quoted(&page, "Carettochelyidae\nBoulenger, 1887").is_none(), "advice code did not mark is page text");
+        page.advice = advice;
+        let cited = quoted(&page, "Carettochelyidae\nBoulenger, 1887").expect("the page's own words");
+        assert_eq!(cited.quote, "Carettochelyidae\nBoulenger (title: George Albert Boulenger), 1887");
+        assert!(quoted(&page, "Boulenger (title: George Albert Boulenger), 1887").is_some(), "quoted with the advice");
+        assert!(quoted(&page, "Boulenger, 1888").is_none());
     }
 
     #[test]

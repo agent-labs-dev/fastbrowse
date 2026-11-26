@@ -18,6 +18,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -40,6 +41,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -63,6 +65,7 @@
    ],
    "pictured": true,
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -85,6 +88,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -107,6 +111,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -130,6 +135,7 @@
    ],
    "pictured": true,
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -152,6 +158,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -174,6 +181,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -197,6 +205,7 @@
    ],
    "pictured": true,
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -219,6 +228,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -241,6 +251,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -264,6 +275,7 @@
    ],
    "pictured": true,
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -279,6 +291,7 @@
     "hover"
    ],
    "role": "group",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -294,6 +307,7 @@
     "hover"
    ],
    "role": "group",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -309,6 +323,7 @@
     "hover"
    ],
    "role": "group",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -324,6 +339,7 @@
     "hover"
    ],
    "role": "group",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -337,7 +353,8 @@
    "operations": [
     "scroll"
    ],
-   "role": "region"
+   "role": "region",
+   "screen": 0
   },
   {
    "autocomplete": null,
@@ -358,6 +375,7 @@
    ],
    "pictured": true,
    "role": "link",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -381,6 +399,7 @@
    ],
    "pictured": true,
    "role": "link",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -404,6 +423,7 @@
    ],
    "pictured": true,
    "role": "link",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -427,6 +447,7 @@
    ],
    "pictured": true,
    "role": "link",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -449,6 +470,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -471,6 +493,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -493,6 +516,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -515,6 +539,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -537,6 +562,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -559,6 +585,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -581,6 +608,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -603,6 +631,7 @@
    ],
    "pictured": true,
    "role": "button",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -618,6 +647,7 @@
     "hover"
    ],
    "role": "group",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -633,6 +663,7 @@
     "hover"
    ],
    "role": "group",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -648,6 +679,7 @@
     "hover"
    ],
    "role": "group",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -663,6 +695,7 @@
     "hover"
    ],
    "role": "group",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": null

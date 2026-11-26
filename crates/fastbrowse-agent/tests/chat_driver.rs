@@ -24,6 +24,8 @@ struct DatePage {
     http: bool,
     /// The page's text below the viewport.
     offscreen: String,
+    /// The snapshot gave no viewport text, so the page has no place in its text to window around and goes whole.
+    unplaced: bool,
     /// How many "reply" links the page has below the viewport.
     replies: usize,
     /// The CAPTCHA vendor the browser's solver is working on, on this page.
@@ -39,6 +41,8 @@ struct DatePage {
     next_record: std::sync::atomic::AtomicBool,
     /// A real PNG for a screenshot, in place of none.
     png: bool,
+    /// The text the Date field holds, shown as its value as a browser reads it.
+    dated: Mutex<Option<String>>,
     acted: Mutex<Vec<Action>>,
 }
 
@@ -52,6 +56,9 @@ impl DatePage {
             json!({"id": "main:note", "frame_id": null, "frame_origin": "https://example.test", "role": "textbox", "label": "Note", "operations": ["fill", "drag"],
                    "sensitive": false, "offscreen": false}),
         ];
+        if let Some(dated) = self.dated.lock().unwrap().clone() {
+            controls[0]["value"] = json!(dated);
+        }
         if self.records {
             let next = self.next_record.load(std::sync::atomic::Ordering::SeqCst);
             controls[2]["context"] = json!(if next { "Customer Bob" } else { "Customer Alice" });
@@ -92,13 +99,14 @@ impl Page for DatePage {
         let open = self.open.load(std::sync::atomic::Ordering::SeqCst);
         let controls = self.controls();
         let offscreen = self.offscreen.clone();
+        let viewport = if self.unplaced { "" } else { "Pick a date" };
         let modal = self.modal.clone();
         Box::pin(async move {
             Ok(serde_json::from_value(json!({
                 "modal": modal,
                 "url": "https://example.test/", "title": "Pick a date",
                 "page_key": if open { "open" } else { "closed" }, "document_key": "doc",
-                "captured_at": "2026-11-18T00:00:00Z", "viewport_text": "Pick a date", "offscreen_text": offscreen, "tabs": [],
+                "captured_at": "2026-11-18T00:00:00Z", "viewport_text": viewport, "offscreen_text": offscreen, "tabs": [],
                 "controls": controls
             }))
             .unwrap())
@@ -132,6 +140,11 @@ impl Page for DatePage {
 
     fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         self.acted.lock().unwrap().push(action.clone());
+        if action.target_id.as_deref() == Some("main:date")
+            && let Some(text) = &action.text
+        {
+            *self.dated.lock().unwrap() = Some(text.clone());
+        }
         let opens = action.target_id.as_deref() == Some("main:date")
             && !self.open.swap(true, std::sync::atomic::Ordering::SeqCst);
         let paged = self.records && action.target_id.as_deref() == Some("main:inline-next");
@@ -605,6 +618,38 @@ async fn test_a_plan_keeps_running_while_a_field_takes_text_and_no_control_appea
     assert_eq!(driver.sent.lock().unwrap().len(), 2, "both actions ran from one turn");
 }
 
+/// Progress and effect are two things: a password typed again into a form already submitted once returned the page to
+/// a state seen before, which is no progress, and the Submit planned after it was dropped as if the typing had changed
+/// nothing, costing the sign-in two turns.
+#[tokio::test]
+async fn test_a_plan_keeps_running_after_a_fill_that_changed_a_value_but_no_control() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "type", "id": "1", "text": "1 Dec"}]}),
+        json!({"next": "", "actions": [
+            {"tool": "type", "id": "1", "text": "2 Dec"}, {"tool": "click", "id": "2"}
+        ]}),
+        give_up(),
+    ]);
+    run(page.clone(), driver.clone()).await;
+    let acted: Vec<_> = page.acted.lock().unwrap().iter().map(|action| action.target_id.clone()).collect();
+    assert_eq!(acted, [Some("main:date".into()), Some("main:date".into()), Some("main:inline-next".into())]);
+    assert!(!driver.told(2).contains("were not run"), "{}", driver.told(2));
+}
+
+/// A note names an action as the driver writes one, not in Rust's debug form.
+#[tokio::test]
+async fn test_a_dropped_plan_names_the_action_as_the_driver_wrote_it() {
+    let page = Arc::new(DatePage::default());
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "click", "id": "2"}, {"tool": "type", "id": "3", "text": "x"}]}),
+        give_up(),
+    ]);
+    run(page, driver.clone()).await;
+    let told = driver.told(1);
+    assert!(told.contains(r#"because {"tool":"click","id":"2","on":null} changed nothing"#), "{told}");
+}
+
 #[tokio::test]
 async fn test_a_done_cites_its_quotes_and_each_found_on_the_page_is_evidence() {
     let page = Arc::new(DatePage::default());
@@ -747,10 +792,11 @@ async fn test_a_screenshot_kept_in_the_conversation_is_counted_against_the_model
 #[tokio::test]
 async fn test_a_conversation_past_the_models_context_drops_the_pages_it_moved_on_from() {
     let offscreen = "comment ".repeat(4000);
-    let first = first_request_bytes(DatePage { offscreen: offscreen.clone(), ..DatePage::default() }).await;
-    let page = Arc::new(DatePage { offscreen: offscreen.clone(), ..DatePage::default() });
+    let first =
+        first_request_bytes(DatePage { offscreen: offscreen.clone(), unplaced: true, ..DatePage::default() }).await;
+    let page = Arc::new(DatePage { offscreen: offscreen.clone(), unplaced: true, ..DatePage::default() });
     let turns = [json!({"next": "", "actions": [{"tool": "click", "id": "1"}]}), give_up()];
-    let driver = Arc::new(Driver { context: Some(first + 25_000), ..Arc::into_inner(Driver::new(turns)).unwrap() });
+    let driver = Arc::new(Driver { context: Some(first + 12_000), ..Arc::into_inner(Driver::new(turns)).unwrap() });
     run(page, driver.clone()).await;
     let sent = driver.sent.lock().unwrap();
     assert!(sent[0][1].content.contains(&offscreen), "the first page fits in full");
@@ -763,8 +809,9 @@ async fn test_a_conversation_past_the_models_context_drops_the_pages_it_moved_on
 #[tokio::test]
 async fn test_a_page_longer_than_the_models_context_is_shown_without_its_text_outside_the_viewport() {
     let offscreen = "comment ".repeat(4000);
-    let first = first_request_bytes(DatePage { offscreen: offscreen.clone(), ..DatePage::default() }).await;
-    let page = Arc::new(DatePage { offscreen, ..DatePage::default() });
+    let first =
+        first_request_bytes(DatePage { offscreen: offscreen.clone(), unplaced: true, ..DatePage::default() }).await;
+    let page = Arc::new(DatePage { offscreen, unplaced: true, ..DatePage::default() });
     let driver =
         Arc::new(Driver { context: Some(first - 20_000), ..Arc::into_inner(Driver::new([give_up()])).unwrap() });
     run(page, driver.clone()).await;
@@ -1130,7 +1177,7 @@ async fn test_an_action_planned_with_the_secret_value_is_not_taken() {
 #[tokio::test]
 async fn test_a_value_shown_before_its_secret_resolved_is_not_sent_again() {
     // Turns are sent whole each time, so a page that showed the value before the run typed it carried it on.
-    let page = Arc::new(DatePage { offscreen: "Demo password: hunter2".into(), ..Default::default() });
+    let page = Arc::new(DatePage { offscreen: "Demo password: hunter2".into(), unplaced: true, ..Default::default() });
     let driver =
         Driver::new([json!({"next": "", "actions": [{"tool": "type_secret", "id": "1", "name": "pw"}]}), give_up()]);
     Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), driver.clone())
@@ -1199,4 +1246,355 @@ async fn test_close_with_no_modal_open_is_told_back() {
     run(page.clone(), driver.clone()).await;
     assert!(page.acted.lock().unwrap().is_empty());
     assert!(driver.told(1).contains("close() was refused: no modal is open."), "{}", driver.told(1));
+}
+
+/// A list of quotes over three pages, each with its own next-page link, and a page-per-url capture.
+struct QuotesPage {
+    at: std::sync::atomic::AtomicUsize,
+    /// Lines of text each page holds, so a long page can be windowed.
+    filler: usize,
+}
+
+impl QuotesPage {
+    fn new(filler: usize) -> Arc<QuotesPage> {
+        Arc::new(QuotesPage { at: std::sync::atomic::AtomicUsize::new(1), filler })
+    }
+
+    fn page(&self) -> usize {
+        self.at.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn text(&self) -> String {
+        let n = self.page();
+        let mut lines = vec![format!("Quote {n}a by Ann"), format!("Quote {n}b by Bob")];
+        lines.extend((0..self.filler).map(|line| format!("Filler line {line} of page {n}")));
+        lines.join("\n")
+    }
+}
+
+impl Page for QuotesPage {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let n = self.page();
+        let mut controls = vec![json!({"id": "main:about", "frame_id": null, "role": "link", "label": "about",
+            "operations": ["click"], "sensitive": false, "offscreen": false, "href": "/about/"})];
+        if n < 3 {
+            controls.push(json!({"id": "main:next", "frame_id": null, "role": "link", "label": "Next",
+                "operations": ["click"], "sensitive": false, "offscreen": false, "next_page": true,
+                "href": format!("/page/{}/", n + 1)}));
+        }
+        controls.push(json!({"id": "main:footer", "frame_id": null, "role": "link", "label": "Terms",
+            "operations": ["click"], "sensitive": false, "offscreen": self.filler > 0, "screen": if self.filler > 0 { 60 } else { 0 },
+            "href": "/terms/"}));
+        let text = self.text();
+        let viewport = text.lines().take(3).collect::<Vec<_>>().join("\n");
+        let rest = text.lines().skip(3).collect::<Vec<_>>().join("\n");
+        Box::pin(async move {
+            Ok(serde_json::from_value(json!({
+                "url": format!("https://quotes.test/page/{n}/"), "title": "Quotes",
+                "page_key": format!("k{n}"), "document_key": format!("d{n}"),
+                "captured_at": "2026-11-18T00:00:00Z", "viewport_text": viewport, "offscreen_text": rest,
+                "tabs": [], "controls": controls
+            }))
+            .unwrap())
+        })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, url: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        let n: usize = url.trim_end_matches('/').rsplit('/').next().and_then(|n| n.parse().ok()).unwrap_or(1);
+        self.at.store(n, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        let (n, text) = (self.page(), self.text());
+        // The first three lines are the viewport's, as the observation's `viewport_text` is; the rest is one block.
+        let viewport = text.lines().take(3).collect::<Vec<_>>().join("\n").chars().count();
+        let total = text.chars().count();
+        let mut blocks = vec![json!({"source_id": "p", "frame_id": null, "kind": "paragraph", "start": 0,
+            "end": viewport, "in_viewport": true})];
+        if total > viewport {
+            blocks.push(json!({"source_id": "q", "frame_id": null, "kind": "paragraph", "start": viewport + 1,
+                "end": total}));
+        }
+        Box::pin(async move {
+            Ok(serde_json::from_value(json!({
+                "url": format!("https://quotes.test/page/{n}/"), "title": "Quotes", "captured_at": "2026-11-18T00:00:00Z",
+                "sha256": fastbrowse_core::py::sha256_hex(text.as_bytes()), "text": text,
+                "blocks": blocks
+            }))
+            .unwrap())
+        })
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        let to = action.url.as_deref().and_then(|url| url.trim_end_matches('/').rsplit('/').next()?.parse().ok());
+        if let Some(n) = to {
+            self.at.store(n, std::sync::atomic::Ordering::SeqCst);
+        }
+        Box::pin(async move {
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: to.is_some(),
+                detail: None,
+                moved: false,
+                landed: None,
+            })
+        })
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        let n = self.page();
+        Box::pin(async move { Ok(format!("https://quotes.test/page/{n}/")) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(Some(200)) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+/// The supporting Jev, which also answers a count's questions yes: each quote line is one whole quote, and the task
+/// asks to be told how many there are.
+struct Counting(Arc<dyn DecisionClient>);
+
+impl DecisionClient for Counting {
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a indexmap::IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            for (key, question) in questions {
+                if let (Question::Noul(noul), Some(Answer::Noul(answer))) = (question, evaluation.answers.get_mut(key))
+                {
+                    let counts = ["exactly one whole", "Does any part of the task ask", "Is every factual statement"];
+                    if counts.iter().any(|asked| noul.instructions.contains(asked)) {
+                        answer.probability = 1.0;
+                    }
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+}
+
+async fn run_quotes(page: Arc<QuotesPage>, driver: Arc<Driver>, task: &str) -> RunResult {
+    let agent = Agent::new(page, Arc::new(Counting(supporting())), driver);
+    agent
+        .run(
+            task,
+            RunOptions {
+                start: Some("https://quotes.test/page/1/".into()),
+                limits: Some(Limits { max_steps: Some(10), ..Default::default() }),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a result")
+}
+
+fn count_all(pages: &[&str]) -> Value {
+    let tally = json!({"op": "count", "of": "quote", "scope": null, "field": null, "rank": null,
+        "by": null, "group": null, "written": "6"});
+    let claim = json!({"text": "There are 6 quotes on the site.", "quotes": [], "pages": pages,
+        "tally": tally, "within": null});
+    json!({"next": "", "actions": [{"tool": "done", "answer": [claim], "numbered": false}]})
+}
+
+#[tokio::test]
+async fn test_a_list_across_pages_is_counted_in_two_turns_with_read_pages() {
+    let page = QuotesPage::new(0);
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "read_pages", "id": "2", "max_pages": null}]}),
+        count_all(&["https://quotes.test/page/1/", "https://quotes.test/page/2/", "https://quotes.test/page/3/"]),
+        give_up(),
+    ]);
+    let result = run_quotes(page, driver.clone(), "How many quotes are there on the whole site?").await;
+    let told = driver.told(1);
+    let turns = driver.sent.lock().unwrap().len();
+    let third = if turns > 2 { driver.told(2) } else { String::new() };
+    assert_eq!(turns, 2, "{:?} {third}", result.error);
+    assert!(told.contains("read_pages read the page you were on and 2 more page(s) of the list"), "{told}");
+    assert!(told.contains("you have not seen the text of the other pages listed"), "{told}");
+    assert!(told.contains("is a tally: set tally and name these pages in `pages`"), "{told}");
+    assert!(told.contains("code checks the value or record you write against every record on them"), "{told}");
+    assert!(told.contains("the list ended there"), "{told}");
+    assert!(told.contains("https://quotes.test/page/1/"), "page 1, the page the read began on, is named: {told}");
+    assert!(told.contains("https://quotes.test/page/2/") && told.contains("https://quotes.test/page/3/"), "{told}");
+    assert!(told.contains("Page: \"Quotes\" https://quotes.test/page/3/"), "{told}");
+    // The three pages were never named by a refused done: every one was shown to the run.
+    assert!(!told.contains("done was refused"), "{told}");
+    assert_eq!(result.status, Status::Complete, "{:?} {:?}", result.error, result.answer);
+}
+
+#[tokio::test]
+async fn test_read_pages_stops_where_the_model_asked_and_says_the_list_goes_on() {
+    let driver =
+        Driver::new([json!({"next": "", "actions": [{"tool": "read_pages", "id": "2", "max_pages": 1}]}), give_up()]);
+    run_quotes(QuotesPage::new(0), driver.clone(), "Read the quotes.").await;
+    let told = driver.told(1);
+    assert!(
+        told.contains("read_pages read the page you were on and 1 more page(s)")
+            && told.contains("links to a further page"),
+        "{told}"
+    );
+    assert!(told.contains("quotes.test/page/2/") && !told.contains("quotes.test/page/3/"), "{told}");
+}
+
+#[tokio::test]
+async fn test_read_pages_refuses_a_link_the_page_does_not_mark_as_a_next_page() {
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "read_pages", "id": "1", "max_pages": null}]}),
+        give_up(),
+    ]);
+    run_quotes(QuotesPage::new(0), driver.clone(), "Read the quotes.").await;
+    assert!(driver.told(1).contains("read_pages was refused: [1] is not a link its page marks"), "{}", driver.told(1));
+}
+
+#[tokio::test]
+async fn test_read_text_naming_no_lines_is_refused_as_no_progress() {
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "read_text", "page": null, "from": 5, "lines": 0}]}),
+        give_up(),
+    ]);
+    run_quotes(QuotesPage::new(200), driver.clone(), "Read the quotes.").await;
+    let told = driver.told(1);
+    assert!(told.contains("read_text was refused: it names no lines"), "{told}");
+    assert!(!told.contains("lines 5 to 4"), "{told}");
+}
+
+#[tokio::test]
+async fn test_read_controls_naming_no_controls_is_refused() {
+    let driver =
+        Driver::new([json!({"next": "", "actions": [{"tool": "read_controls", "from": 1, "count": 0}]}), give_up()]);
+    run_quotes(QuotesPage::new(200), driver.clone(), "Read the quotes.").await;
+    let told = driver.told(1);
+    assert!(told.contains("read_controls was refused"), "{told}");
+}
+
+#[tokio::test]
+async fn test_read_controls_from_past_the_controls_left_out_is_refused_with_their_range() {
+    // An id passed as `from` was refused with only the count, and the driver asked again from another id.
+    let driver =
+        Driver::new([json!({"next": "", "actions": [{"tool": "read_controls", "from": 110, "count": 5}]}), give_up()]);
+    run_quotes(QuotesPage::new(200), driver.clone(), "Read the quotes.").await;
+    let told = driver.told(1);
+    assert!(
+        told.contains(
+            "read_controls was refused: from counts the 1 controls further than a screen from the viewport, 1 to 1"
+        ),
+        "{told}"
+    );
+}
+
+#[tokio::test]
+async fn test_a_read_too_long_for_the_context_is_cut_and_the_driver_told_where_to_resume() {
+    let first = {
+        let driver = Driver::new([give_up()]);
+        run_quotes(QuotesPage::new(3000), driver.clone(), "Read the quotes.").await;
+        serde_json::to_vec(&driver.sent.lock().unwrap()[0]).unwrap().len() as i64
+    };
+    let driver = Arc::new(Driver {
+        context: Some(first + 12_000),
+        ..Arc::into_inner(Driver::new([
+            json!({"next": "", "actions": [{"tool": "read_text", "page": null, "from": 10, "lines": 2500}]}),
+            give_up(),
+        ]))
+        .unwrap()
+    });
+    run_quotes(QuotesPage::new(3000), driver.clone(), "Read the quotes.").await;
+    let told = driver.told(1);
+    assert!(told.contains("does not fit your context: read it again from the line after the last one shown"), "{told}");
+    assert!(told.contains("Filler line 6 of page 1") && !told.contains("Filler line 2000 of page 1"), "{told}");
+    // The header names the lines still shown, not the range asked for.
+    let header = told.split("read_text shows lines 10 to ").nth(1).expect("the header keeps its first line");
+    let last: usize = header.split(" of ").next().unwrap().parse().unwrap();
+    let body = header.split_once(":\n").unwrap().1.split("\n(the rest").next().unwrap();
+    assert_eq!(last, 10 + body.lines().count() - 1, "{told}");
+    assert!(last < 2509, "{told}");
+}
+
+#[tokio::test]
+async fn test_a_long_page_goes_as_its_window_with_the_rest_named_and_readable() {
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "read_text", "page": null, "from": 40, "lines": 2}]}),
+        json!({"next": "", "actions": [{"tool": "read_controls", "from": 1, "count": 5}]}),
+        give_up(),
+    ]);
+    run_quotes(QuotesPage::new(200), driver.clone(), "Read the quotes.").await;
+    let first = driver.told(0);
+    assert!(first.contains("Page text, lines 1 to 6 of 203"), "{first}");
+    assert!(first.contains("The last 197 lines are not shown: read_text(null, from, lines, null)"), "{first}");
+    assert!(!first.contains("Filler line 100"), "{first}");
+    assert!(
+        first.contains("1 more controls are further than a screen from the viewport: read_controls(from, count) lists them in reading order, from the `from`th of them (1 to 1)"),
+        "{first}"
+    );
+    assert!(!first.contains("Terms"), "{first}");
+    let second = driver.told(1);
+    assert!(second.contains("read_text shows lines 40 to 41 of 203 of https://quotes.test/page/1/:\nFiller line 36 of page 1\nFiller line 37"), "{second}");
+    let third = driver.told(2);
+    assert!(third.contains("read_controls shows controls 1 to 1 of 1") && third.contains("link \"Terms\""), "{third}");
+}
+
+#[tokio::test]
+async fn test_read_text_with_find_lists_the_lines_holding_it_under_their_numbers() {
+    let driver = Driver::new([
+        json!({"next": "", "actions": [{"tool": "read_text", "page": null, "from": 1, "lines": 3, "find": "FILLER line 15 of"}]}),
+        give_up(),
+    ]);
+    run_quotes(QuotesPage::new(200), driver.clone(), "Read the quotes.").await;
+    let told = driver.told(1);
+    assert!(
+        told.contains("read_text shows matches 1 to 1 of 1 of https://quotes.test/page/1/ for \"FILLER line 15 of\""),
+        "{told}"
+    );
+    assert!(told.contains("\n19: Filler line 15 of page 1\n"), "{told}");
+}
+
+#[tokio::test]
+async fn test_the_driver_is_told_how_to_read_a_list_and_a_long_page() {
+    let driver = Driver::new([give_up()]);
+    run(Arc::new(DatePage::default()), driver.clone()).await;
+    let system = &driver.sent.lock().unwrap()[0][0].content;
+    for told in [
+        "read_pages(id, max_pages) follows the next-page link `id`",
+        "Their text is held for done: cite them in `pages`",
+        "read_text(page, from, lines, find) shows lines of a page's text",
+        "read_controls(from, count) lists controls further than a screen from the viewport",
+        "A long page is shown as its viewport and the screen above and below it",
+    ] {
+        assert!(system.contains(told), "{told}\n{system}");
+    }
 }

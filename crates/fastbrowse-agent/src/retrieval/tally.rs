@@ -601,9 +601,19 @@ fn typed_rule(note: &serde_json::Value) -> &'static str {
 const NO_VALUE: &str = "none";
 const NO_RECORD: &str = "no_record";
 
+/// Whether a field question for `tally` also offers each number as the extreme a note states across its records.
+/// A minimum is worked out from the records a page lists, and a list can show each record at another value than the
+/// page's own lowest: on a flight search ordered by "Best", every listed fare was $1,087 or more while the same page's
+/// sort tab read "Cheapest from $864", Jev rightly judged that note no record, and the run answered $1,087 (#1575).
+/// Only the extreme itself, the first place, can be contradicted by a stated extreme; a group's count states none.
+/// A minimum within groups compares records already selected, so it is left out.
+fn offers_stated(tally: &Tally, within: bool) -> bool {
+    !within && tally.grouped().is_none() && matches!(tally.op, Op::Min | Op::Max) && tally.place() == 1
+}
+
 /// Qualification and the field are one decision: independent questions can admit an unrelated date, then reject it.
 /// A draft can name a broader kind than the task asks for, so membership also applies the task's own scope.
-fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], grouped: bool) -> Question {
+fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], grouped: bool, stated: bool) -> Question {
     let of = text::repr(&tally.records());
     let field = text::repr(tally.field.as_deref().unwrap_or("value"));
     let mut criteria: IndexMap<String, serde_json::Value> = offers
@@ -620,6 +630,18 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
             )
         })
         .collect();
+    if stated && !grouped {
+        let extreme = if tally.op == Op::Min { "lowest" } else { "highest" };
+        for (index, value) in offers.iter().enumerate() {
+            criteria.insert(
+                format!("s{index}"),
+                json!(format!(
+                    "{} is the {extreme} {field} the note states across several {of}, such as the {extreme} a list of them is offered at, not one record's own {field}.",
+                    text::repr(value)
+                )),
+            );
+        }
+    }
     // `of` carries the task's scope, such as "row in the second table" or "five-star-rated book in the Nonfiction
     // category", and the note shows where its record sits. Without this sentence Jev read `of` as the record's kind
     // alone: it scored a row of the first table and a two-star book 0.45 to 0.55 as members, so sums and ranked picks
@@ -641,7 +663,7 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     }
     Question::Choice(ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the text is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this text is all text rendered for one repeated item; without that proof the text may still describe a whole record. Absence from a fragment does not prove absence from its record.{} Note: {}",
+            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the text is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this text is all text rendered for one repeated item; without that proof the text may still describe a whole record. Absence from a fragment does not prove absence from its record. A number inside a name or label, such as the 2 in \"Cafe 2 Go\", is part of that name and is not a value of the record.{} Note: {}",
             typed_rule(note),
             dumps(note)
         ),
@@ -658,6 +680,8 @@ fn fragment(note: &serde_json::Value) -> bool {
 #[derive(Debug)]
 enum FieldAnswer {
     Value(String),
+    /// The note is no record, and states this value as the extreme across the records.
+    Stated(String),
     NoRecord,
     NoValue,
     Unjudged,
@@ -668,11 +692,17 @@ fn field_answer(answer: Option<&Answer>, offers: &[String]) -> FieldAnswer {
     match answer.choice.as_str() {
         NO_RECORD => FieldAnswer::NoRecord,
         NO_VALUE => FieldAnswer::NoValue,
-        choice => choice
-            .strip_prefix('n')
-            .and_then(|n| n.parse::<usize>().ok())
-            .and_then(|n| offers.get(n))
-            .map_or(FieldAnswer::Unjudged, |value| FieldAnswer::Value(value.clone())),
+        choice => {
+            let offered =
+                |prefix| choice.strip_prefix(prefix).and_then(|n| n.parse::<usize>().ok()).and_then(|n| offers.get(n));
+            if let Some(value) = offered('n') {
+                FieldAnswer::Value(value.clone())
+            } else if let Some(value) = offered('s') {
+                FieldAnswer::Stated(value.clone())
+            } else {
+                FieldAnswer::Unjudged
+            }
+        }
     }
 }
 
@@ -858,29 +888,34 @@ enum Narrowed {
 /// The numbers of a note with more than a choice can offer, narrowed group by group to the one holding the field, as
 /// a field read from many candidates is: a results block holding 259 numbers was sent as one choice, Jev refused it
 /// for having more than 255 options, and the claim's support was left unanswered.
+#[allow(clippy::too_many_arguments)]
 async fn narrowed(
     jev: &dyn DecisionClient,
     state: &serde_json::Value,
     tally: &Tally,
     note: &serde_json::Value,
     mut numbers: Vec<String>,
+    stated: bool,
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
 ) -> Result<Narrowed> {
-    // A fragment with no value to offer gives no field of a record, and code needs no question to say so.
+    // A fragment with no value to offer gives no field of a record, and code needs no question to say so. One with a
+    // number is asked: a heading can state a field ("Adult ticket price $10"), and the question says a number in a
+    // name is not one, which took the 4 of the link "Galaxy Tab 4" from 0.55 as a price to 0.67 to 0.71 no record.
     if numbers.is_empty() && fragment(note) {
         return Ok(Narrowed::NoRecord);
     }
     let max = jev.profile().max_choice_options;
+    let per = if stated { 2 } else { 1 };
     // Two options distinguish an irrelevant note from a whole record whose field is missing.
-    while numbers.len() + 2 > max {
+    while numbers.len() * per + 2 > max {
         let size = numbers.len().div_ceil(max - 2);
         let groups: Vec<Vec<String>> = numbers.chunks(size).map(<[String]>::to_vec).collect();
         let offers = groups
             .iter()
             .map(|group| group.iter().map(|number| text::repr(number)).collect::<Vec<_>>().join(", "))
             .collect::<Vec<_>>();
-        let question = field_question(tally, note, &offers, true);
+        let question = field_question(tally, note, &offers, true, false);
         let key = "group".to_string();
         let answered = ask(jev, state, &IndexMap::from([(key.clone(), question)]), tokens, ledger).await?;
         let Some(Answer::Choice(answer)) = answered.as_ref().and_then(|answered| answered.get(&key)) else {
@@ -1250,7 +1285,9 @@ async fn select_records(
         if tally.field.as_deref() == Some(within.field.as_str()) {
             let value = match outer_fields.get(&(index, *note)) {
                 Some(FieldAnswer::Value(value)) => value,
-                Some(FieldAnswer::NoValue | FieldAnswer::NoRecord) => return Ok(Err(missing(*note))),
+                Some(FieldAnswer::NoValue | FieldAnswer::NoRecord | FieldAnswer::Stated(_)) => {
+                    return Ok(Err(missing(*note)));
+                }
                 _ => return Ok(Err(Unworked::Unjudged)),
             };
             known.insert(*note, value.clone());
@@ -1264,9 +1301,9 @@ async fn select_records(
             shown["source_kind"] = json!(kind);
         }
         let state = &states[&found[*note].page];
-        match narrowed(jev, state, &inner, &shown, numbers(&found[*note].quote), tokens, ledger).await? {
+        match narrowed(jev, state, &inner, &shown, numbers(&found[*note].quote), false, tokens, ledger).await? {
             Narrowed::Offer(values) => {
-                let question = field_question(&inner, &shown, &values, false);
+                let question = field_question(&inner, &shown, &values, false, false);
                 questions.insert(format!("inner/n{note}"), (found[*note].page.clone(), question));
                 offers.insert(*note, values);
             }
@@ -1285,7 +1322,7 @@ async fn select_records(
             None if oversized.contains(&format!("inner/n{note}")) => return Ok(Err(Unworked::Oversized)),
             None => match field_answer(answer, &offers[&note]) {
                 FieldAnswer::Value(value) => value,
-                FieldAnswer::NoValue | FieldAnswer::NoRecord => return Ok(Err(missing(note))),
+                FieldAnswer::NoValue | FieldAnswer::NoRecord | FieldAnswer::Stated(_) => return Ok(Err(missing(note))),
                 FieldAnswer::Unjudged => return Ok(Err(Unworked::Unjudged)),
             },
         };
@@ -1419,7 +1456,10 @@ pub(super) async fn work_selected_with_slots(
             let reason =
                 "The claim's tally sets a rank, which counts places from a minimum or maximum, from 2 for the \
                           second, or a group's place by its count, from 1 for the most: a total or a count of one \
-                          kind has no rank, and the extreme itself has none."
+                          kind has no rank, and the extreme itself has none. To state a group's place by its count, \
+                          such as the author with the most quotes, set op count, by to the field that groups the \
+                          records, group to the group this claim counts, scope to what the task limits the records to (null for all), and keep the rank, one claim \
+                          per group."
                     .to_string();
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
@@ -1470,9 +1510,12 @@ pub(super) async fn work_selected_with_slots(
                     shown_note["source_kind"] = json!(kind);
                 }
                 let state = &states[&candidate.page];
-                match narrowed(jev, state, tally, &shown_note, numbers(&candidate.quote), tokens, ledger).await? {
+                let stated = offers_stated(tally, selections.contains_key(index));
+                match narrowed(jev, state, tally, &shown_note, numbers(&candidate.quote), stated, tokens, ledger)
+                    .await?
+                {
                     Narrowed::Offer(numbers) => {
-                        let question = field_question(tally, &shown_note, &numbers, false);
+                        let question = field_question(tally, &shown_note, &numbers, false, stated);
                         members.insert(format!("t{index}/n{note}"), (candidate.page.clone(), question));
                         offered.insert((*index, note), numbers);
                     }
@@ -1501,7 +1544,7 @@ pub(super) async fn work_selected_with_slots(
         let index = led.get(&index).copied().unwrap_or(index);
         match fields.get(&(index, note)) {
             Some(FieldAnswer::Value(_) | FieldAnswer::NoValue) => Some(true),
-            Some(FieldAnswer::NoRecord) => Some(false),
+            Some(FieldAnswer::NoRecord | FieldAnswer::Stated(_)) => Some(false),
             Some(FieldAnswer::Unjudged) => None,
             None => match answered.as_ref().and_then(|a| a.get(&format!("t{index}/n{note}"))) {
                 Some(Answer::Noul(answer)) if (0.0..=1.0).contains(&answer.probability) => {
@@ -1646,8 +1689,17 @@ pub(super) async fn work_selected_with_slots(
             || !amounts.iter().all(|(_, amount)| amount.unit.as_deref() == unit)
         {
             let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+            // The first record's unit is the baseline; naming the values that differ from it states what code saw,
+            // so the driver can tell a number that is part of a name from a record in another currency.
+            let odd: Vec<String> = amounts
+                .iter()
+                .filter(|(_, amount)| amount.malformed_unit || amount.unit.as_deref() != unit)
+                .map(|(_, amount)| text::repr(&amount.written))
+                .collect();
+            let base = amounts.first().map_or(String::new(), |(_, amount)| text::repr(&amount.written));
             worked.insert(index, Err(Unworked::Draft(format!(
-                "The notes give incompatible units for {field}; code cannot compare or add them without an explicit conversion."
+                "The notes give incompatible units for {field}; code cannot compare or add them without an explicit conversion. The first record's value is {base}; these values carry another unit or none: {}.",
+                odd.join(", ")
             ))));
             continue;
         }
@@ -1679,6 +1731,43 @@ pub(super) async fn work_selected_with_slots(
                 let winners: Vec<&(usize, Amount)> = amounts.iter().filter(|(_, amount)| amount.value == at).collect();
                 let evidence_ids = kept.cited(winners.iter().map(|(note, _)| *note), &found);
                 let winner = &winners[0].1;
+                // A note judged to state the extreme across the records, beyond the one worked from the records read,
+                // shows those records leave out the one at it: the run that read a list ordered by "Best" answered
+                // its lowest listed fare while the page stated a lower one (#1575).
+                let mut beyond: Vec<(&str, &str)> = fields
+                    .iter()
+                    .filter_map(|((claim, note), answer)| match answer {
+                        FieldAnswer::Stated(stated) if *claim == index => Some((found[*note].id.as_str(), stated)),
+                        _ => None,
+                    })
+                    .filter(|(_, stated)| {
+                        amount(stated).is_some_and(|stated| {
+                            stated.date == winner.date
+                                && stated.unit == winner.unit
+                                && if tally.op == Op::Min { stated.value < at } else { stated.value > at }
+                        })
+                    })
+                    .map(|(id, stated)| (id, stated.as_str()))
+                    .collect();
+                if !beyond.is_empty() {
+                    beyond.sort();
+                    let (extreme, beyond_word) =
+                        if tally.op == Op::Min { ("lowest", "lower") } else { ("highest", "higher") };
+                    let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+                    let stated: Vec<String> = beyond.iter().map(|(_, stated)| text::repr(stated)).collect();
+                    let reason = format!(
+                        "These notes state the {extreme} {field} across the {} as {}, {beyond_word} than the {field} of \
+                         every record read, {} (computed): the records read leave out the one at that {field}. Read \
+                         the records the page gives at that {field}, such as its list ordered by {field}, and answer \
+                         again.",
+                        text::repr(&tally.records()),
+                        stated.join(", "),
+                        text::repr(&winner.written),
+                    );
+                    let notes = beyond.into_iter().map(|(id, _)| id.to_string()).collect();
+                    worked.insert(index, Err(Unworked::Notes { reason, notes }));
+                    continue;
+                }
                 let value = if tally.names_record() {
                     tally.written.clone()
                 } else if winner.date {
@@ -2000,10 +2089,11 @@ mod tests {
             group: None,
             written: "12".into(),
         };
-        let Question::Choice(question) = field_question(&tally, &shown(&notes, &whole), &[], false) else {
+        let Question::Choice(question) = field_question(&tally, &shown(&notes, &whole), &[], false, false) else {
             panic!("numeric fields use a choice");
         };
         assert!(question.instructions.contains("Absence from a fragment does not prove absence from its record"));
+        assert!(question.instructions.contains("A number inside a name or label"));
         assert!(question.criteria[NO_VALUE].as_str().unwrap().contains("does not state its"));
         assert!(question.criteria[NO_RECORD].as_str().unwrap().contains("source_kind is heading or link"));
     }
@@ -2024,7 +2114,9 @@ mod tests {
             written: "$251.00".into(),
         };
         let row = json!({"text": "| Smith | John | $50.00 |", "table": "table 1 of the 2 on its page"});
-        let Question::Choice(question) = field_question(&tally, &row, &["$50.00".into()], false) else { panic!() };
+        let Question::Choice(question) = field_question(&tally, &row, &["$50.00".into()], false, false) else {
+            panic!()
+        };
         let no_record = question.criteria[NO_RECORD].as_str().unwrap();
         assert!(
             no_record.contains("A whole record that the note shows is outside 'row in the second table', in a group, place or state other than the one 'row in the second table' names, is not one either."),
@@ -2049,7 +2141,7 @@ mod tests {
             written: "May 14, 2026".into(),
         };
         let row = json!({"text": "0.24.1\n\nMay 19, 2023", "headings": ["httpx 0.28.1", "Release history"]});
-        let Question::Choice(question) = field_question(&tally, &row, &["May 19, 2023".into()], false) else {
+        let Question::Choice(question) = field_question(&tally, &row, &["May 19, 2023".into()], false, false) else {
             panic!()
         };
         let no_record = question.criteria[NO_RECORD].as_str().unwrap();
@@ -2073,7 +2165,8 @@ mod tests {
         let note =
             json!({"text": "Pre-release 1.0.dev6 Aug 31, 2026", "headings": ["httpx 0.28.1", "Release history"]});
         for grouped in [false, true] {
-            let Question::Choice(question) = field_question(&tally, &note, &["Aug 31, 2026".into()], grouped) else {
+            let Question::Choice(question) = field_question(&tally, &note, &["Aug 31, 2026".into()], grouped, false)
+            else {
                 panic!()
             };
             assert!(question.instructions.contains("Judge the record against the scope of task as well as its kind"));
@@ -2096,14 +2189,17 @@ mod tests {
             written: "Clerkenwell Coffee".into(),
         };
         let heading = json!({"text": "Clerkenwell Coffee", "source_kind": "heading"});
-        let Question::Choice(question) = field_question(&tally, &heading, &["84.99".into()], false) else { panic!() };
+        let Question::Choice(question) = field_question(&tally, &heading, &["84.99".into()], false, false) else {
+            panic!()
+        };
         assert!(!question.criteria.contains_key(NO_VALUE), "{:?}", question.criteria.keys());
         let mut whole = heading.clone();
         whole["whole_record"] = true.into();
-        let Question::Choice(question) = field_question(&tally, &whole, &[], false) else { panic!() };
+        let Question::Choice(question) = field_question(&tally, &whole, &[], false, false) else { panic!() };
         assert!(question.criteria.contains_key(NO_VALUE));
         let tokens = FirstField.profile().fit(None).tokens;
-        let answer = narrowed(&FirstField, &json!({}), &tally, &heading, Vec::new(), &tokens, None).await.unwrap();
+        let answer =
+            narrowed(&FirstField, &json!({}), &tally, &heading, Vec::new(), false, &tokens, None).await.unwrap();
         assert!(matches!(answer, Narrowed::NoRecord));
     }
 
@@ -3227,6 +3323,46 @@ mod tests {
         );
     }
 
+    /// A link "Galaxy Tab 4" was offered its '4' as the tablet's price and Jev took it at 0.55, so the cheapest-tablet
+    /// minimum mixed it with '$69.99' and was refused as incompatible units, twice in three trials. The refusal names
+    /// the values that differ so the driver learns which note is the odd one.
+    #[tokio::test]
+    async fn a_unit_refusal_names_the_values_that_differ() {
+        let result = amount_tally(&["$69.99", "4", "$88.99"], Op::Min, "$69.99").await;
+        let Err(Unworked::Draft(reason)) = result else { panic!("{result:?}") };
+        assert!(reason.contains("incompatible units"), "{reason}");
+        assert!(reason.contains("these values carry another unit or none: '4'"), "{reason}");
+        assert!(!reason.contains("'$88.99'"), "{reason}");
+    }
+
+    /// A ranking of authors by their quotes was written as counts scoped to each author with a rank, refused three
+    /// times in a row for "a count of one kind has no rank" without being told the form that has one.
+    #[tokio::test]
+    async fn a_rank_on_a_plain_count_is_refused_with_the_form_that_has_one() {
+        let notes = amount_notes(&["1", "2"]);
+        let tally = Tally {
+            op: Op::Count,
+            of: "quote".into(),
+            scope: Some("by Albert Einstein".into()),
+            field: None,
+            rank: Some(1),
+            by: None,
+            group: None,
+            written: "10".into(),
+        };
+        let claim = "Albert Einstein has 10 quotes.";
+        let tokens = FirstField.profile().fit(None).tokens;
+        let worked =
+            work(&FirstField, &ReadsGroups(&[]), "Top authors", &[(0, &tally, claim, &[])], &notes, &tokens, None)
+                .await
+                .unwrap();
+        let Err(Unworked::Draft(reason)) = &worked[&0] else { panic!("{:?}", worked[&0]) };
+        assert!(
+            reason.contains("set op count, by to the field that groups the records, group to the group"),
+            "{reason}"
+        );
+    }
+
     #[tokio::test]
     async fn mixed_currency_tallies_are_unworked() {
         for op in [Op::Sum, Op::Min, Op::Max] {
@@ -3236,6 +3372,106 @@ mod tests {
                 "{op:?} failed to reject incompatible currencies: {worked:?}"
             );
         }
+    }
+
+    /// Answers as Jev did on google-flights (#1575): a fare beside its flight is that flight's, and a sort tab's "from"
+    /// price is the lowest stated across the flights, offered as such when the question offers it.
+    struct StatesFrom;
+
+    impl DecisionClient for StatesFrom {
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a serde_json::Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> fastbrowse_core::BoxFuture<
+            'a,
+            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+        > {
+            use fastbrowse_core::decision::{ChoiceAnswer, ChoiceTag, Evaluation};
+            let answers = questions
+                .iter()
+                .map(|(key, question)| {
+                    let Question::Choice(choice) = question else { panic!("only field choices expected") };
+                    let selected = if choice.instructions.contains("Which of these notes holds the record") {
+                        NO_VALUE
+                    } else if choice.instructions.contains("Cheapest from") {
+                        if choice.criteria.contains_key("s0") { "s0" } else { NO_RECORD }
+                    } else {
+                        "n0"
+                    };
+                    (
+                        key.clone(),
+                        Answer::Choice(ChoiceAnswer {
+                            kind: ChoiceTag,
+                            choice: selected.into(),
+                            probabilities: IndexMap::from([(selected.into(), 1.0)]),
+                            confidence: 1.0,
+                        }),
+                    )
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "fixture".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            fastbrowse_core::decision::DecisionProfile::jev()
+        }
+    }
+
+    async fn stated_tally(
+        values: &[&str],
+        op: Op,
+        rank: Option<u64>,
+        written: &str,
+    ) -> std::result::Result<Worked, Unworked> {
+        let notes = amount_notes(values);
+        let tally = Tally {
+            op,
+            of: "flight".into(),
+            scope: None,
+            field: Some("price".into()),
+            rank,
+            by: None,
+            group: None,
+            written: written.into(),
+        };
+        work(
+            &StatesFrom,
+            &ReadsGroups(&[]),
+            "Find the cheapest flight",
+            &[(0, &tally, written, &[])],
+            &notes,
+            &StatesFrom.profile().fit(None).tokens,
+            None,
+        )
+        .await
+        .unwrap()
+        .swap_remove(&0)
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_extreme_the_page_states_beyond_the_records_read_refuses_the_worked_one() {
+        let refused = stated_tally(&["$1,087", "$1,200", "Cheapest from $864"], Op::Min, None, "$1,087").await;
+        let Err(Unworked::Notes { reason, notes }) = refused else { panic!("{refused:?}") };
+        assert_eq!(notes.len(), 1);
+        assert!(
+            reason.contains("lowest 'price'") && reason.contains("'$864'") && reason.contains("'$1,087'"),
+            "{reason}"
+        );
+
+        // A stated extreme the records read reach, or a place after the first, leaves the worked value standing.
+        let reached = stated_tally(&["$1,087", "$1,200", "Cheapest from $1,087"], Op::Min, None, "$1,087").await;
+        assert_eq!(reached.unwrap().value, "$1,087");
+        let second = stated_tally(&["$1,087", "$1,200", "Cheapest from $864"], Op::Min, Some(2), "$1,200").await;
+        assert_eq!(second.unwrap().value, "$1,200");
     }
 
     fn amount_notes(values: &[&str]) -> Notes {

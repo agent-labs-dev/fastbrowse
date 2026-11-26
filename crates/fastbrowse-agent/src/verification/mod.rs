@@ -138,14 +138,15 @@ fn page_state_with(
     }
     if cut_page || size(&state) > budget {
         state["page"]["text"] = "".into();
+        // The page's links alone can outgrow the budget (5442 on an RFC's table of contents): they say less of it than
+        // its text does, and cut first the text went and a verdict on a site failure was asked of an empty page. What
+        // is kept of the controls is the inputs and selections, which text does not show.
+        if size(&state) > budget && !state.contains_key("controls_omitted") {
+            let kept = stateful(&observation.controls);
+            state.insert("controls_omitted".into(), (observation.controls.len() - kept.len()).into());
+            state.insert("controls".into(), controls(kept, compact));
+        }
         state["page"]["text"] = cut_text(&observation.viewport_text, room(&state) as usize, true).into();
-    }
-    // A long article's links alone can outgrow the budget once its text is gone: they say nothing a verdict needs,
-    // where inputs and selections do.
-    if size(&state) > budget && !state.contains_key("controls_omitted") {
-        let kept = stateful(&observation.controls);
-        state.insert("controls_omitted".into(), (observation.controls.len() - kept.len()).into());
-        state.insert("controls".into(), controls(kept, compact));
     }
     if size(&state) > budget {
         return Err(AgentError::ObservationTooLarge(format!(
@@ -342,6 +343,8 @@ mod tests {
     #[test]
     fn a_long_articles_links_give_way_before_its_verdict_is_refused() {
         let mut page = page();
+        let page_text = page.viewport_text.clone();
+        assert!(!page_text.is_empty());
         page.controls = (0..400)
             .map(|n| {
                 fastbrowse_core::page::Control::new(&format!("a:{n}"), "link", &format!("Article link number {n}"), [])
@@ -351,6 +354,7 @@ mod tests {
             TokenBudget { state_plus_largest_question: 2000, state_plus_all_questions: 4000, ..TokenBudget::default() };
         let state = page_state(&page, &Notes::default(), &tokens, &["q".to_string()], None, &[]).unwrap();
         assert_eq!(state["controls_omitted"], 400);
+        assert_eq!(state["page"]["text"], page_text, "the page's text is kept when its links go");
         page.controls.extend((0..3).map(|n| Control {
             value: Some(format!("value {n}")),
             ..Control::new(&format!("field:{n}"), "textbox", &format!("Field {n}"), [])

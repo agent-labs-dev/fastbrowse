@@ -48,7 +48,8 @@ A reviewer rejects a change that breaks one.
   fixing, name the limit the case exposes and check which other open issues share it. A fix that only the failing
   task or site would notice is a case patch: rework the part of the design that is too narrow instead.
 - **No caps.** Nothing a model reads or writes is cut short, except by a limit its provider documents, named as
-  that provider's in the code (Jev's in `DecisionProfile`).
+  that provider's in the code (Jev's in `DecisionProfile`). A window is not a cut when what it leaves out is named in the
+  turn and readable on request (`read_text`, `read_controls`), and quotes and tallies check against the whole capture.
 - **Measure before claiming.** A claim about the agent rests on a run made for it, compared with a baseline on the
   same harness, judge and task set ([docs/agents/evals.md](docs/agents/evals.md)).
 
@@ -83,7 +84,7 @@ A reviewer rejects a change that breaks one.
   its limits are listed there.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code refuses an
   irreversible one unless the run is authorized and Jev judges the task asked for it, and tells the driver why. Only
-  code-selected pagination skips classification.
+  code-selected pagination skips classification: the next page of a list, opened by code from the page's own pager.
 - **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE, a return to a seen page
   state with nothing read since, and any return after the first since the last new evidence are each no progress;
   `unchanged_actions` of them in a row tell the driver so it plans another way. An unseen page state or new evidence
