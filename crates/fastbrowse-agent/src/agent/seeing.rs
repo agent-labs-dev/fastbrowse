@@ -469,13 +469,28 @@ pub(super) fn numbered(viewport: &[u8], marks: &[(String, Edges)]) -> Option<Vec
     const WHITE: image::Rgba<u8> = image::Rgba([255, 255, 255, 255]);
     let mut image = rgba(viewport)?;
     let (width, height) = (image.width(), image.height());
-    for (number, edges) in marks {
+    let pixels = |edges: &Edges| {
+        let x = |f: f64| (f * width as f64).round() as u32;
+        let y = |f: f64| (f * height as f64).round() as u32;
+        [x(edges.left), y(edges.top), x(edges.right), y(edges.bottom)]
+    };
+    let boxes: Vec<[u32; 4]> = marks.iter().map(|(_, edges)| pixels(edges)).collect();
+    let overlaps = |a: &[u32; 4], b: &[u32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+    let mut tags: Vec<[u32; 4]> = Vec::new();
+    for (index, (number, _)) in marks.iter().enumerate() {
+        let own = boxes[index];
         let digits: Vec<usize> = number.chars().filter_map(|c| c.to_digit(10)).map(|d| d as usize).collect();
         let tag_width = (digits.len() as u32 * 4 + 1) * DIGIT_SCALE;
         let tag_height = 7 * DIGIT_SCALE;
-        let left = ((edges.left * width as f64).round() as u32).min(width.saturating_sub(tag_width));
-        let top = (edges.top * height as f64).round() as u32;
-        let top = if top >= tag_height { top - tag_height } else { top.min(height.saturating_sub(tag_height)) };
+        let left = own[0].min(width.saturating_sub(tag_width));
+        // Above the control's corner, unless that would cover another listed control or tag, which a reader would
+        // take the number to label; then inside the control's own top edge, where it can only label that control.
+        let above = (own[1] >= tag_height).then(|| [left, own[1] - tag_height, left + tag_width, own[1]]).filter(|tag| {
+            !boxes.iter().enumerate().any(|(other, region)| other != index && overlaps(tag, region))
+                && !tags.iter().any(|placed| overlaps(tag, placed))
+        });
+        let top = above.map_or(own[1].min(height.saturating_sub(tag_height)), |tag| tag[1]);
+        tags.push([left, top, left + tag_width, top + tag_height]);
         for y in top..(top + tag_height).min(height) {
             for x in left..(left + tag_width).min(width) {
                 let (column, row) = ((x - left) / DIGIT_SCALE, (y - top) / DIGIT_SCALE);
@@ -522,6 +537,23 @@ mod tests {
         // The 7's top row is lit across.
         assert_eq!(*marked.get_pixel(left + 5 * 3, top + 3), image::Rgba([255, 255, 255, 255]));
         assert_eq!(marked.get_pixel(50, 50)[3], 0, "the control itself is not covered");
+    }
+
+    /// A textbox just under a toolbar button has no free room above it: its tag goes inside its own top edge rather than
+    /// over the button, which a reader would take the number to label.
+    #[test]
+    fn test_a_tag_never_covers_another_listed_control() {
+        let button = Edges { left: 0.0, top: 0.2, right: 0.2, bottom: 0.4 };
+        let textbox = Edges { left: 0.0, top: 0.42, right: 1.0, bottom: 0.9 };
+        let marked =
+            rgba(&numbered(&blank(200, 100), &[("5".into(), button), ("10".into(), textbox)]).unwrap()).unwrap();
+        let tagged = |x0: u32, y0: u32, x1: u32, y1: u32| {
+            (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| marked.get_pixel(x, y)[3] != 0).count()
+        };
+        assert_eq!(tagged(0, 0, 200, 20), 0, "the button's tag would not fit above it without leaving the image");
+        assert_eq!(*marked.get_pixel(0, 42), OUTLINE, "the textbox's tag starts at its own corner");
+        assert_eq!(tagged(15, 20, 40, 40), 0, "no tag reaches past the button's own tag into the button");
+        assert_eq!(*marked.get_pixel(0, 20), OUTLINE, "the button's tag sits inside its top edge");
     }
 
     /// A control at the viewport's top has no room above it, so its tag sits inside its top edge; one at the right

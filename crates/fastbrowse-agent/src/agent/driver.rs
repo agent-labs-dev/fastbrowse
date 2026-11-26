@@ -241,7 +241,7 @@ const SCREENSHOT: &str = "The screenshot you took of the viewport is attached.";
 
 /// The notice a screenshot comes with that carries the listed controls' numbers.
 const SCREENSHOT_NUMBERED: &str = "The screenshot you took of the viewport is attached. Each listed control in view has \
-     its number drawn in a magenta tag at its top-left corner, above the control where there is room.";
+     its number drawn in a magenta tag at its top-left corner: above the control where that covers nothing else listed, otherwise inside its top edge.";
 
 /// The fixed instructions every request starts with, kept unchanged across a run so its prefix is cached.
 pub(super) const SYSTEM: &str = "You operate a web browser to complete the user's task. Each turn you are told what \
