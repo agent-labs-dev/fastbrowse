@@ -1016,7 +1016,13 @@ impl Agent {
                 })
             {
                 // A page that loads can still report the site failed; only Jev, reading it, clears that. A failed send
-                // is cleared only by a later commit's reply, wherever it lands.
+                // is cleared only by a later commit's reply, wherever it lands, and with it the copy kept for the start
+                // address, which recovery would otherwise end the run on.
+                if state.site_failure.as_ref().is_some_and(|failure| failure.sent)
+                    && state.start_failure == state.site_failure
+                {
+                    state.start_failure = None;
+                }
                 state.site_failure = None;
             }
         }

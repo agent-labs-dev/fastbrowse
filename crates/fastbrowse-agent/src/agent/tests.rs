@@ -576,9 +576,12 @@ async fn test_a_failed_reply_to_a_commit_stands_until_a_later_commit_succeeds() 
     agent.note_effect(&mut state, &elsewhere);
     agent.settle(&mut state, &elsewhere).await.unwrap();
     assert!(state.site_failure.is_some(), "leaving the page cleared the failed send");
+    // Sent from the start address, the failure is kept for it too, and recovery ends the run on that copy.
+    state.start_failure.clone_from(&state.site_failure);
     send(&mut state, StepOutcome::Executed);
     agent.note_effect(&mut state, &replied("confirmed", "https://example.test/sent", 200));
     assert!(state.site_failure.is_none(), "a later commit's reply, wherever it lands, clears it");
+    assert!(state.start_failure.is_none(), "the start address kept the failed send a later commit cleared");
 }
 
 fn capacities() -> (Fact, Fact) {
