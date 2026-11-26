@@ -28,6 +28,7 @@ from fastbrowse.evals.replay import (
     Exchange,
     Proxy,
     Spend,
+    UpstreamError,
     canonical_json,
     canonical_value,
     describe_request,
@@ -229,9 +230,19 @@ def test_an_upstream_error_is_shown_to_the_agent_but_never_recorded() -> None:
     proxy = Proxy(cassette, forward=lambda path, body: next(answers))
     with proxy as base:
         assert _post(base, JEV, {"q": 1}).status_code == 429
-        assert cassette.exchanges == [] and proxy.upstream_errors == [429]
+        assert cassette.exchanges == [] and proxy.upstream_errors == [UpstreamError(429, "rate limited")]
         assert _post(base, JEV, {"q": 1}).json() == {"n": 1}
     assert [e.status for e in cassette.exchanges] == [200] and proxy.forwarded == 1
+
+
+def test_an_upstream_error_keeps_the_providers_message_not_a_page() -> None:
+    """A refill that met a 403 reported only the status, so a key limit and an access refusal looked alike."""
+    assert UpstreamError.of(403, '{"error": {"message": "Key limit exceeded", "code": 403}}') == UpstreamError(
+        403, "Key limit exceeded"
+    )
+    assert UpstreamError.of(429, '{"error": "rate limited"}').message == "rate limited"
+    assert UpstreamError.of(502, "<html>\n  bad   gateway </html>").message == "<html> bad gateway </html>"
+    assert UpstreamError.of(502, "x" * 1000).message.endswith("...")
 
 
 def test_a_fill_sends_nothing_upstream_once_the_budget_is_spent() -> None:
@@ -261,7 +272,10 @@ def test_a_fill_pass_a_provider_refused_leaves_the_cassette_as_it_was(
     Cassette(task="mock-basket", exchanges=[_exchange(JEV, {"q": 0}, '{"n": 0}')]).save(path)
     before = path.read_bytes()
     answers = iter(
-        [(200, "application/json", json.dumps({"usage": {"cost": 0.1}})), (429, "application/json", '{"error": 1}')]
+        [
+            (200, "application/json", json.dumps({"usage": {"cost": 0.1}})),
+            (429, "application/json", '{"error": {"message": "refused"}}'),
+        ]
     )
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
     monkeypatch.setattr(bench, "openrouter_forward", lambda key: lambda path, body: next(answers))
@@ -275,7 +289,7 @@ def test_a_fill_pass_a_provider_refused_leaves_the_cassette_as_it_was(
             "result": {"status": "error", "grade": {"passed": False, "failure": "refused"}},
             "misses": [miss.to_json() for miss in proxy.misses],
             "forwarded": proxy.forwarded,
-            "upstream_errors": proxy.upstream_errors,
+            "upstream_errors": [error.to_json() for error in proxy.upstream_errors],
             "budget_refusals": proxy.budget_refusals,
         }
 
@@ -284,7 +298,7 @@ def test_a_fill_pass_a_provider_refused_leaves_the_cassette_as_it_was(
     assert bench.main(["fill", "--only", "mock-basket", "--cassettes", str(tmp_path), "--out", str(out)]) == 0
     assert path.read_bytes() == before
     [entry] = json.loads(out.read_text())["tasks"]
-    assert entry["upstream_errors"] == [429] and entry["fill_passes"] == 1
+    assert entry["upstream_errors"] == [{"status": 429, "message": "refused"}] and entry["fill_passes"] == 1
     assert entry["recorded_cost_usd"] == 0 and entry["spent_usd"] == pytest.approx(0.1)
 
 

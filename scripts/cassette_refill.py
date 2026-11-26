@@ -217,7 +217,8 @@ def fill_verdict(report: Mapping[str, Any] | None, tasks: Sequence[str], budget:
         if entry["misses"]:
             reasons.append(f"{len(entry['misses'])} replay misses remained")
         if entry.get("upstream_errors"):
-            reasons.append(f"upstream refused {len(entry['upstream_errors'])} requests {entry['upstream_errors']}")
+            refused = "; ".join(f"{e['status']} {e['message']}".strip() for e in entry["upstream_errors"])
+            reasons.append(f"upstream refused {len(entry['upstream_errors'])} requests: {refused}")
         if entry.get("budget_refusals"):
             reasons.append(f"the budget stopped {entry['budget_refusals']} requests before they were sent")
         if entry.get("unpriced_exchanges"):
