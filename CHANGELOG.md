@@ -9,6 +9,8 @@ Added/Fixed lists: what matters about a browser agent's release is why a behavio
 Released entries describe the corresponding package on PyPI; `Unreleased` describes changes awaiting a
 release. Older entries are kept verbatim rather than rewritten as the product moves.
 
+## [Unreleased]
+
 ## [0.12.0] - 2026-11-26
 
 - An OpenAI model, such as the default GPT-6 Luna through OpenRouter, and `FASTBROWSE_LLM_PROVIDER=openai` are read through the Responses API. A newer OpenAI model writes commentary and its final answer as separate messages and only the final answer follows the schema, but chat completions joins their text, so about one reply in ten was prose before the JSON or the JSON twice and cost a repair turn, and one run ended on a schema failure. The final answer is read on its own, and the answers sent back in later turns carry their phase. Other models and providers keep chat completions. `FASTBROWSE_LLM_EXTRA_BODY` on the `openai` preset now goes into a Responses request, which refuses a Chat Completions field such as `logit_bias`. A reply the provider marks failed is reported with the provider's error, not as a possible refusal. A reply through your own provider key (BYOK) is costed from its generation receipt: the fee OpenRouter put on the reply was taken for the whole cost. `FASTBROWSE_LLM_EXTRA_BODY` cannot set `store`, which the Responses request sets.
