@@ -75,6 +75,10 @@ if args[0] == "publish":
             file=sys.stderr,
         )
         sys.exit(1)
+    if name in state["lost"]:
+        # npm exits 0 and the registry never holds the version (0.12.0's darwin-arm64).
+        print(f"+ {{name}}@{{version}}")
+        sys.exit(0)
     if name in state["flaky"]:
         state["flaky"].remove(name)
         save()
@@ -103,6 +107,7 @@ def run_script(
         "flaky": [],
         "drift": [],
         "lag": {},
+        "lost": [],
         **state,
     }
     (tmp_path / "registry.json").write_text(json.dumps(state))
@@ -184,6 +189,14 @@ def test_a_transient_failure_is_retried(tmp_path: Path) -> None:
     result, _ = run_script(tmp_path, flaky=["@fastbrowse/linux-x64"])
     assert result.returncode == 0, result.stderr
     assert f"@fastbrowse/linux-x64@{VERSION} on the second attempt" in result.stdout
+
+
+def test_a_publish_npm_reports_and_the_registry_lacks_holds_back_the_sdk(tmp_path: Path) -> None:
+    """0.12.0: darwin-arm64's publish exited 0, the registry never held it, and the SDK went out depending on it."""
+    result, state = run_script(tmp_path, lost=["@fastbrowse/darwin-arm64"])
+    assert result.returncode == 1
+    assert "npm reported success, and the registry does not hold it" in result.stdout
+    assert f"fastbrowse@{VERSION}" not in state["published"]
 
 
 def test_a_published_version_whose_latest_tag_did_not_move_fails(tmp_path: Path) -> None:
