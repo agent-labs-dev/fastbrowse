@@ -405,6 +405,15 @@ impl Harness {
         let _ = self.session.close().await;
     }
 
+    /// `work` on this harness, then close it whether `work` returned or panicked, so a failed assertion leaves no session
+    /// open for the next test on the shared Chrome. The panic is raised again after the close.
+    pub async fn closing<T>(&self, work: impl Future<Output = T>) -> T {
+        use futures_util::FutureExt;
+        let outcome = std::panic::AssertUnwindSafe(work).catch_unwind().await;
+        let _ = self.session.close().await;
+        outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+
     pub async fn goto(&self, path: &str) {
         self.page.navigate(&format!("{}{path}", sites().main), None).await.expect("navigate");
     }

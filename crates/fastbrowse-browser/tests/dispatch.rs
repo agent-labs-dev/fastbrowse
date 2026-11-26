@@ -1646,30 +1646,32 @@ async fn test_a_full_window_frame_over_the_control_is_reported_with_the_frames_o
     // cross-origin document, so the report named no controls, and recovery closed another ad while this one stayed.
     // Nothing is pressed through a cover the size of the window; the frame's controls are named so it can be closed.
     let Some(h) = harness().await else { return };
-    h.goto("").await;
-    eval_active(&h.page, &anchored_form(false, "div")).await;
-    let script = format!(
-        "{{ const shown = document.querySelector('ins'); shown.style.cssText += ';top:0;height:auto'; \
-         shown.innerHTML = '<iframe aria-label=Advertisement src=\"{}/interstitial.html\" \
-         style=\"width:100%;height:100%;border:0\"></iframe>'; \
-         window.adLoaded = false; \
-         shown.querySelector('iframe').addEventListener('load', () => {{ window.adLoaded = true; }}); }} true",
-        sites().iframe
-    );
-    assert_eq!(eval_active(&h.page, &script).await, json!(true));
-    // The frame's document is reached only once it has loaded: a look before that meets an interim document whose page
-    // world is not registered yet. The frame's own load event says it is there.
-    wait_until(|| async { eval_active(&h.page, "window.adLoaded === true").await == json!(true) }, 10.0).await;
-    let obs = observe_until(&h.page, "Close ad").await;
-    let result = h.page.act(&action(Operation::Click, find(&obs, "Login")), &obs).await.expect("act");
-    assert_eq!(result.outcome, StepOutcome::Covered);
-    let detail = result.detail.unwrap_or_default();
-    assert!(
-        detail.contains("Advertisement") && detail.contains("Close ad") && detail.contains("spring offer"),
-        "{detail}"
-    );
-    assert_eq!(eval_active(&h.page, "[window.pressed, window.submitted]").await, json!([null, null]));
-    h.close().await;
+    h.closing(async {
+        h.goto("").await;
+        eval_active(&h.page, &anchored_form(false, "div")).await;
+        let script = format!(
+            "{{ const shown = document.querySelector('ins'); shown.style.cssText += ';top:0;height:auto'; \
+             shown.innerHTML = '<iframe aria-label=Advertisement src=\"{}/interstitial.html\" \
+             style=\"width:100%;height:100%;border:0\"></iframe>'; \
+             window.adLoaded = false; \
+             shown.querySelector('iframe').addEventListener('load', () => {{ window.adLoaded = true; }}); }} true",
+            sites().iframe
+        );
+        assert_eq!(eval_active(&h.page, &script).await, json!(true));
+        // The frame's document is reached only once it has loaded: a look before that meets an interim document whose page
+        // world is not registered yet. The frame's own load event says it is there.
+        wait_until(|| async { eval_active(&h.page, "window.adLoaded === true").await == json!(true) }, 10.0).await;
+        let obs = observe_until(&h.page, "Close ad").await;
+        let result = h.page.act(&action(Operation::Click, find(&obs, "Login")), &obs).await.expect("act");
+        assert_eq!(result.outcome, StepOutcome::Covered);
+        let detail = result.detail.unwrap_or_default();
+        assert!(
+            detail.contains("Advertisement") && detail.contains("Close ad") && detail.contains("spring offer"),
+            "{detail}"
+        );
+        assert_eq!(eval_active(&h.page, "[window.pressed, window.submitted]").await, json!([null, null]));
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
