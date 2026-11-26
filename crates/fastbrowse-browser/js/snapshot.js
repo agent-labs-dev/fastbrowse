@@ -114,6 +114,7 @@
       case 'active': return target.activeElement;
       case 'selected': return [...target.selectedOptions];
       case 'validity': return target.validity?.valid;
+      case 'selection': return selectionOf(target);
       case 'prop': return target?.[args];
     }
   };
@@ -149,6 +150,21 @@
   const boxOf = target => renderFact('box', target);
   const textBoxOf = target => renderFact('textBox', target);
   const nativeProperty = (target, property) => renderFact('prop', target, property);
+  // Password and agent-typed secret values never leave the page: only their length is observed.
+  const secret = e => nativeProperty(e, 'type') === 'password' || nativeProperty(nativeProperty(e, 'dataset'), 'fastbrowseSecret') === '1';
+  // The text selected in `doc`, empty when none is. A text field keeps its selection to itself, out of the document's,
+  // so the focused field's is read from it; a secret field's never leaves the page. A selection made with Ctrl+A or a
+  // drag edits nothing, yet it is what the next key or toolbar press acts on: left out, it read as "nothing visible
+  // changed" and counted toward the stall rule (#1574).
+  const selectionOf = doc => {
+    let field = doc.activeElement;
+    while (field?.shadowRoot?.activeElement) field = field.shadowRoot.activeElement;
+    if (field?.tagName === 'INPUT' || field?.tagName === 'TEXTAREA') {
+      const start = nativeProperty(field, 'selectionStart'), end = nativeProperty(field, 'selectionEnd');
+      return typeof start === 'number' && end > start && !secret(field) ? nativeProperty(field, 'value').slice(start, end) : '';
+    }
+    return doc.getSelection()?.toString() ?? '';
+  };
   // Keep the page's own timer overrides from holding a browser-side frame wait open.
   registry.nativeSetTimeout ||= window.setTimeout.bind(window);
   registry.nativeClearTimeout ||= window.clearTimeout.bind(window);
@@ -603,6 +619,8 @@
     const include = root => {
       if (root.nodeType === Node.DOCUMENT_NODE) documents.push(root);
       hashText(root.body?.innerText ?? root.textContent ?? '');
+      const selected = root.nodeType === Node.DOCUMENT_NODE ? selectionOf(root) : '';
+      if (selected) hashText(JSON.stringify(['selection', selected]));
       // innerText omits shadow trees and child documents even when their content is visible.
       for (const e of root.querySelectorAll('*')) {
         // A panel can move without changing any text or the document's own scroll position.
@@ -873,8 +891,6 @@
   const innerTextOf = e => renderFact('text', e);
 
   const safe = e => nativeProperty(e, 'type') !== 'hidden';
-  // Password and agent-typed secret values never leave the page: only their length is observed.
-  const secret = e => nativeProperty(e, 'type') === 'password' || nativeProperty(nativeProperty(e, 'dataset'), 'fastbrowseSecret') === '1';
   const reveal = e => (typeof nativeProperty(e, 'value') !== 'string' ? null : secret(e) ? '•'.repeat(nativeProperty(e, 'value').length) : nativeProperty(e, 'value'));
   // What a select has chosen. selectedIndex names only the first chosen option, so a list that allows several gives
   // every chosen index: a later option chosen or taken out changes it.
@@ -2997,6 +3013,9 @@
   };
   // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
   if (modal !== null) result.modal = modal;
+  // Absent unless text is selected, as on most pages.
+  const selection = renderFact('selection', document);
+  if (selection) result.selection = selection;
   // A JSON document is shown by its structure, as capture.js sends it to be read: shown Chrome's rendering of the
   // served text, the driver quoted `"size": "large"` off httpbin's echo, and the check, which reads the document key by
   // key, found no page that said it.

@@ -58,6 +58,7 @@ pub(super) fn observation(redactor: &Redactor, observation: &Observation) -> Obs
         offscreen_text,
         visual_content,
         modal,
+        selection,
         media,
         tabs,
         dialog,
@@ -80,6 +81,8 @@ pub(super) fn observation(redactor: &Redactor, observation: &Observation) -> Obs
         visual_content: *visual_content,
         // A page can name its modal with what it echoes back, a resolved secret among it.
         modal: mask_opt(modal),
+        // Selected text is page text, a typed secret among it.
+        selection: mask_opt(selection),
         media: media.iter().map(|item| self::media(redactor, item)).collect(),
         tabs: tabs.iter().map(|item| self::tab(redactor, item)).collect(),
         dialog: dialog.as_ref().map(|item| self::dialog(redactor, item)),

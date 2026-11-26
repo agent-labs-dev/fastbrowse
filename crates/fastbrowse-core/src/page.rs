@@ -363,6 +363,10 @@ pub struct Observation {
     /// under a modal from assistive technology, so those controls leave the observation without leaving the document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modal: Option<String>,
+    /// The text the page has selected, in its document or its focused text field; None when none is. A selection made
+    /// with Ctrl+A or a drag changes no control or text, yet it is what the next key or toolbar press acts on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<String>,
     /// Every audio and video player on the page, shown or not: their state lives in the element, not the page text.
     #[serde(default)]
     pub media: Vec<Media>,

@@ -1335,6 +1335,31 @@ async fn test_a_key_chord_dispatches_its_modifier_and_dom_key() {
     h.close().await;
 }
 
+/// An editor's select-all changes no control or text, but it is a change the next press acts on, so the step reports
+/// the page changed and the observation names the selected text (#1574).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_select_all_in_an_editor_is_a_page_change() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div contenteditable role=textbox aria-label=Document>Plain words</div>'; true",
+    )
+    .await;
+    let before = h.observe().await;
+    assert_eq!(before.selection, None);
+    let press = Action {
+        target_id: Some(find(&before, "Document").id.clone()),
+        text: Some("ctrl+a".into()),
+        ..Action::new(Operation::Press)
+    };
+    let result = h.page.act(&press, &before).await.expect("press");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(h.observe().await.selection.as_deref(), Some("Plain words"));
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_fixed_cover_the_page_means_to_be_answered_is_still_reported() {
     // Only a band floating over the page is routed around. A dialog asks its question first, an open menu or

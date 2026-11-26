@@ -71,7 +71,13 @@ pub fn state_key(observation: &Observation) -> String {
         })
         .collect();
     controls.sort();
-    sha256_hex(dumps(&json!([observation.url, controls])).as_bytes())
+    let mut key = json!([observation.url, controls]);
+    // A selection is what the next key or toolbar press acts on, so selecting text reaches a state a run has not been
+    // in, and selecting the same text again does not. A page with none keys as before.
+    if let Some(selection) = &observation.selection {
+        key.as_array_mut().expect("an array").push(json!({"selection": selection}));
+    }
+    sha256_hex(dumps(&key).as_bytes())
 }
 
 /// A control attribute as `str()` shows it.
@@ -411,6 +417,14 @@ fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, wai
     } else if !hidden.is_empty() {
         parts.push(format!("removed {}", listed(&hidden)));
     }
+    // A selection made with Ctrl+A or a drag changes no control or text, yet it is what the next key or toolbar press
+    // acts on: read as "nothing visible changed", an editor's select-all counted toward the stall rule (#1574).
+    if !navigated && !replaced && before.selection != after.selection {
+        parts.push(match &after.selection {
+            Some(selected) => format!("selected the text {selected:?}"),
+            None => "cleared the text selection".to_string(),
+        });
+    }
     if let Some(chosen) = chosen.filter(|_| !replaced) {
         let choice = plain(&chosen.label);
         setting =
@@ -484,6 +498,7 @@ mod tests {
             inaccessible_frames: 0,
             can_go_back: false,
             modal: None,
+            selection: None,
             history_entry: None,
         }
     }
@@ -736,6 +751,21 @@ mod tests {
         assert!(done.set_something);
         assert!(done.summary.starts_with("went to https://example.test/b; showed 2 controls: One way, Round trip"));
         assert_eq!(effect(&before, &before, None, false).summary, "nothing visible changed");
+    }
+
+    /// An editor's select-all changes no control or text, yet it is what the next press acts on: read as "nothing
+    /// visible changed", it counted toward the stall rule (#1574).
+    #[test]
+    fn test_a_selection_is_an_effect_and_a_page_state() {
+        let page = observation(vec![control("doc", "Document", "textbox")]);
+        let selected = Observation { selection: Some("The quick brown fox".into()), ..page.clone() };
+        let done = effect(&page, &selected, None, false);
+        assert_eq!(done.summary, r#"selected the text "The quick brown fox""#);
+        assert!(done.changed);
+        assert_eq!(effect(&selected, &page, None, false).summary, "cleared the text selection");
+        assert_eq!(effect(&selected, &selected, None, false).summary, "nothing visible changed");
+        assert_ne!(state_key(&page), state_key(&selected));
+        assert_eq!(state_key(&selected), state_key(&selected.clone()));
     }
 
     #[test]

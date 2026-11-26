@@ -461,6 +461,7 @@ impl Page for FetchedPage {
             self.gate().await?;
             let capture = self.current()?;
             Ok(Observation {
+                selection: None,
                 url: capture.url.clone(),
                 title: capture.title.clone(),
                 page_key: capture.sha256.clone(),

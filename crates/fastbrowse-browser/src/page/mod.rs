@@ -246,6 +246,9 @@ struct Snapshot {
     /// The open modal's name, empty when it has none; null when no modal is open.
     #[serde(default)]
     modal: Option<String>,
+    /// The text selected in the frame's document or its focused text field; absent when none is.
+    #[serde(default)]
+    selection: Option<String>,
     #[serde(default)]
     media: Vec<Media>,
     controls: Vec<SnapshotControl>,
@@ -898,6 +901,7 @@ impl CdpPage {
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 modal: main.and_then(|m| m.raw.modal.clone()),
+                selection: main.and_then(|m| m.raw.selection.clone()),
                 media: frames.iter().flat_map(|(_, f)| f.raw.media.iter().cloned()).collect(),
                 tabs: self.session.tabs(),
                 dialog: self.session.pending_dialog(),
@@ -957,6 +961,7 @@ impl CdpPage {
             self.set_last(ObservedState { page_key: page_key.clone(), ..ObservedState::default() });
         }
         Observation {
+            selection: None,
             url,
             title,
             page_key,
