@@ -630,14 +630,14 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
             )
         })
         .collect();
-    if stated && !grouped {
+    if stated {
         let extreme = if tally.op == Op::Min { "lowest" } else { "highest" };
         for (index, value) in offers.iter().enumerate() {
+            let value = if grouped { format!("one of {value}") } else { text::repr(value) };
             criteria.insert(
                 format!("s{index}"),
                 json!(format!(
-                    "{} is the {extreme} {field} the note states across several {of}, such as the {extreme} a list of them is offered at, not one record's own {field}.",
-                    text::repr(value)
+                    "{value} is the {extreme} {field} the note states across several {of}, such as the {extreme} a list of them is offered at, not one record's own {field}."
                 )),
             );
         }
@@ -907,15 +907,21 @@ async fn narrowed(
     }
     let max = jev.profile().max_choice_options;
     let per = if stated { 2 } else { 1 };
+    // Each group is offered as a record's field and, for a stated extreme, as that extreme too: asked only for a
+    // record's field, a summary reading "Cheapest from $864" beside 130 other numbers was rightly no record, its
+    // stated minimum never reached the final question, and a listed $1,087 was accepted as the minimum. A limit too
+    // small for two groups of both kinds asks for the field alone, as it did before.
+    let grouped_stated = stated && (max - 2) / 2 >= 2;
+    let slots = if grouped_stated { (max - 2) / 2 } else { max - 2 };
     // Two options distinguish an irrelevant note from a whole record whose field is missing.
     while numbers.len() * per + 2 > max {
-        let size = numbers.len().div_ceil(max - 2);
+        let size = numbers.len().div_ceil(slots);
         let groups: Vec<Vec<String>> = numbers.chunks(size).map(<[String]>::to_vec).collect();
         let offers = groups
             .iter()
             .map(|group| group.iter().map(|number| text::repr(number)).collect::<Vec<_>>().join(", "))
             .collect::<Vec<_>>();
-        let question = field_question(tally, note, &offers, true, false);
+        let question = field_question(tally, note, &offers, true, grouped_stated);
         let key = "group".to_string();
         let answered = ask(jev, state, &IndexMap::from([(key.clone(), question)]), tokens, ledger).await?;
         let Some(Answer::Choice(answer)) = answered.as_ref().and_then(|answered| answered.get(&key)) else {
@@ -928,7 +934,7 @@ async fn narrowed(
             return Ok(Narrowed::NoRecord);
         }
         let Some(group) =
-            answer.choice.strip_prefix('g').and_then(|n| n.parse::<usize>().ok()).and_then(|n| groups.get(n))
+            answer.choice.strip_prefix(['g', 's']).and_then(|n| n.parse::<usize>().ok()).and_then(|n| groups.get(n))
         else {
             return Ok(Narrowed::Unjudged);
         };
