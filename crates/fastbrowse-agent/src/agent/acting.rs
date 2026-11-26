@@ -624,15 +624,21 @@ impl Agent {
         let mut questions = IndexMap::new();
         if edits == Edits::RequestedOnly {
             let mut action = control_action(decision.operation, control, None, &observation.controls);
-            // The text as the driver wrote it, never as typed: a written address is masked, as the task Jev reads is.
-            let holds = (!control.sensitive).then(|| control.value.as_deref().unwrap_or_default());
-            match (decision.operation, &decision.given) {
-                (Operation::Fill | Operation::Select, Some(Given::Text(next))) => {
-                    action.push_str(&edit_fact(holds, next, false));
-                }
-                (Operation::Fill, Some(Given::Secret(name))) => action.push_str(&edit_fact(holds, name, true)),
-                _ => {}
-            }
+            // The text as the driver wrote it, never as typed: a written address is masked, as the task Jev reads is,
+            // and both sides are redacted here too, as the question leaves the run. A fetched page reads no values, so
+            // it states no current value rather than an empty one.
+            let holds =
+                (!control.sensitive && !self.page.over_http()).then(|| control.value.as_deref().unwrap_or_default());
+            // A multiple select toggles the one option and keeps the others, so it would not come to hold only that
+            // option: it states nothing rather than a wipe.
+            let multiple = control.input_type.as_deref() == Some("select-multiple");
+            let fact = match (decision.operation, &decision.given) {
+                (Operation::Fill, Some(Given::Text(next))) => edit_fact(holds, next, false),
+                (Operation::Select, Some(Given::Text(next))) if !multiple => edit_fact(holds, next, false),
+                (Operation::Fill, Some(Given::Secret(name))) => edit_fact(holds, name, true),
+                _ => String::new(),
+            };
+            action.push_str(&self.redact(&fact));
             questions.insert("requested".to_string(), Question::Noul(requested_question(&action)));
         }
         self.gate_asked_edit(state, observation, decision, control, edits, questions).await
@@ -703,8 +709,7 @@ impl Agent {
             {
                 Ok(evaluation) => evaluation,
                 Err(DecisionError::InputTooLarge(_)) => {
-                    let why =
-                        "changes a value too long to check against the task, and the task rules out other changes";
+                    let why = "is too long to check against the task, and the task rules out other changes";
                     return self.refuse_once(state, observation, decision, &describe(control), why).await;
                 }
                 Err(error) => return Err(error.into()),

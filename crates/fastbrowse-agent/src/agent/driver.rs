@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use fastbrowse_core::llm::{LLMError, Message, ResponseSchema, Role};
 use fastbrowse_core::models::{LLMPurpose, Operation, RunResult, Status, StepChoice, StepOutcome, UntilCheck};
 use fastbrowse_core::page::{Control, Observation, Unread};
+use fastbrowse_core::py::text;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -399,20 +400,30 @@ impl ResponseSchema for Actions {
 }
 
 /// The text a field holds once the one passage `old` of `shown`, its value as the driver reads it, is replaced with
-/// `new`; or why it cannot be. `raw` is the value unmasked: a field holding a masked value would be written back with
-/// the mask in place of what it hid, so only a field the driver reads whole is edited in part.
-fn edited(shown: Option<&str>, raw: Option<&str>, old: &str, new: &str) -> Result<String, String> {
+/// `new`; or why it cannot be. Only a field the driver reads whole is edited in part, since the rest is written back as
+/// read: `native` says the value is the field's own value (a contenteditable's is its trimmed rendered text, and a
+/// sensitive field's is a mask), and `raw`, the value unmasked, differs from `shown` when a written secret is masked.
+/// A passage counts once per place it starts, overlaps included, so "aa" in "aaa" is two passages.
+fn edited(shown: Option<&str>, raw: Option<&str>, native: bool, old: &str, new: &str) -> Result<String, String> {
     let shown = shown.unwrap_or_default();
-    if shown != raw.unwrap_or_default() {
-        return Err("the field's text is shown to you masked, so it cannot be changed in part; use type".into());
+    if !native || shown != raw.unwrap_or_default() {
+        return Err(
+            "the field's text is not shown to you exactly as it holds it, so it cannot be changed in part; use type"
+                .into(),
+        );
     }
     if old.is_empty() {
         return Err("old is empty; give the passage of the field's text to change".into());
     }
-    match shown.matches(old).count() {
-        1 => Ok(shown.replacen(old, new, 1)),
-        0 => Err("the field's text does not hold old word for word; copy the passage from its value exactly".into()),
-        n => Err(format!("old occurs {n} times in the field's text; give a longer passage that occurs once")),
+    let starts: Vec<usize> =
+        shown.char_indices().filter(|(at, _)| shown[*at..].starts_with(old)).map(|(at, _)| at).collect();
+    match starts[..] {
+        [at] => Ok(format!("{}{new}{}", &shown[..at], &shown[at + old.len()..])),
+        [] => Err("the field's text does not hold old word for word; copy the passage from its value exactly".into()),
+        _ => Err(format!(
+            "old occurs {} times in the field's text; give a longer passage that occurs once",
+            starts.len()
+        )),
     }
 }
 
@@ -1160,21 +1171,8 @@ impl Agent {
             Act::Type { id, text } => {
                 control(id).map(|target| decision(Operation::Fill, Some(target), None, Some(Given::Text(text.clone()))))
             }
-            Act::Edit { id, old, new } => match control(id) {
-                None => None,
-                Some(target) => {
-                    let raw = self.raw_target(&target).value;
-                    match edited(target.value.as_deref(), raw.as_deref(), old, new) {
-                        Ok(text) => Some(decision(Operation::Fill, Some(target), None, Some(Given::Text(text)))),
-                        Err(why) => {
-                            state.chat.queue.clear();
-                            state.chat.notices.push(format!("edit [{id}] was refused: {why}."));
-                            self.count_progress(state, false, observation, None.into(), Status::Stuck).await?;
-                            return Ok(None);
-                        }
-                    }
-                }
-            },
+            // The new text is worked out once the control is known to take a fill, below.
+            Act::Edit { id, .. } => control(id).map(|target| decision(Operation::Fill, Some(target), None, None)),
             Act::TypeSecret { id, name } => control(id)
                 .map(|target| decision(Operation::Fill, Some(target), None, Some(Given::Secret(name.clone())))),
             Act::Select { id, option } => control(id)
@@ -1194,7 +1192,7 @@ impl Agent {
                 control(id).map(|target| decision(operation, Some(target), None, Some(Given::Text(key.clone()))))
             }
         };
-        let Some(decision) = made else {
+        let Some(mut decision) = made else {
             let id = match &act {
                 Act::Drag { id, to: Some(to) } if control(id).is_some() => to.as_str(),
                 _ => target_of(&act).unwrap_or_default(),
@@ -1244,6 +1242,24 @@ impl Agent {
             ));
             self.count_progress(state, false, observation, Idle::tried(&decision), Status::Stuck).await?;
             return Ok(None);
+        }
+        if let (Act::Edit { id, old, new }, Some(target)) = (&act, &decision.target) {
+            // A fetched page holds no values to edit: the browser reads the field's value first.
+            if self.page.over_http() {
+                let reason = format!("{} can only be edited in a browser", text::repr(&target.label));
+                return Err(self.page.needs_browser(reason).into());
+            }
+            let raw = self.raw_target(target).value;
+            let native = !target.sensitive && target.input_type.is_some();
+            match edited(target.value.as_deref(), raw.as_deref(), native, old, new) {
+                Ok(text) => decision.given = Some(Given::Text(text)),
+                Err(why) => {
+                    state.chat.queue.clear();
+                    state.chat.notices.push(format!("edit [{id}] was refused: {why}."));
+                    self.count_progress(state, false, observation, Idle::tried(&decision), Status::Stuck).await?;
+                    return Ok(None);
+                }
+            }
         }
         // An action that moved nothing is not taken again until the page changes or the run learns something: a
         // submission whose effect never showed was sent again each time the model picked it (#516). Waiting again is how
@@ -1481,14 +1497,19 @@ mod tests {
     #[test]
     fn an_edit_replaces_its_one_passage_and_keeps_the_rest() {
         let text = "| a |     |\nKeep this.\nUpdated for 1.15.";
-        assert_eq!(edited(Some(text), Some(text), "\nUpdated for 1.15.", ""), Ok("| a |     |\nKeep this.".into()));
-        assert_eq!(edited(Some("ab"), Some("ab"), "b", "bc"), Ok("abc".into()));
-        assert!(edited(Some("a a"), Some("a a"), "a", "b").unwrap_err().contains("occurs 2 times"));
-        assert!(edited(Some("abc"), Some("abc"), "x", "y").unwrap_err().contains("does not hold old word for word"));
-        assert!(edited(Some("abc"), Some("abc"), "", "y").unwrap_err().contains("old is empty"));
-        assert!(edited(None, None, "a", "b").is_err());
-        // A masked value would be written back with the mask in it.
-        assert!(edited(Some("key \u{2022}\u{2022}"), Some("key hi"), "key", "k").unwrap_err().contains("masked"));
+        let edit = |shown: &str, old: &str, new: &str| edited(Some(shown), Some(shown), true, old, new);
+        assert_eq!(edit(text, "\nUpdated for 1.15.", ""), Ok("| a |     |\nKeep this.".into()));
+        assert_eq!(edit("ab", "b", "bc"), Ok("abc".into()));
+        assert!(edit("a a", "a", "b").unwrap_err().contains("occurs 2 times"));
+        // Overlapping passages are each a place old occurs.
+        assert!(edit("aaa", "aa", "b").unwrap_err().contains("occurs 2 times"));
+        assert!(edit("abc", "x", "y").unwrap_err().contains("does not hold old word for word"));
+        assert!(edit("abc", "", "y").unwrap_err().contains("old is empty"));
+        assert!(edited(None, None, true, "a", "b").is_err());
+        // A masked value, a sensitive field's mask or a contenteditable's trimmed text would be written back as read.
+        let inexact = "not shown to you exactly";
+        assert!(edited(Some("key \u{2022}\u{2022}"), Some("key hi"), true, "key", "k").unwrap_err().contains(inexact));
+        assert!(edited(Some("Keep\nRemove"), Some("Keep\nRemove"), false, "Remove", "").unwrap_err().contains(inexact));
     }
 
     #[test]
