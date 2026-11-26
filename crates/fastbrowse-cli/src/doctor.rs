@@ -280,15 +280,15 @@ mod tests {
                 .args(["--ignored", "--exact", "doctor::tests::chrome_probe_windows_fixture", "--nocapture"])
                 .env("FASTBROWSE_DOCTOR_FIXTURE", &fixture_path)
                 .env_remove("FASTBROWSE_DOCTOR_HELPER");
-            let result = runtime.block_on(probe_version(&mut command, Duration::from_secs(3)));
+            let result = runtime.block_on(probe_version(&mut command, Duration::from_secs(60)));
             drop(runtime);
             send.send(result).unwrap();
         });
 
-        let result = receive.recv_timeout(Duration::from_secs(5));
+        let result = receive.recv_timeout(Duration::from_secs(65));
         std::fs::write(&stop, "").unwrap();
         probe.join().unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
         while !done.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -302,7 +302,8 @@ mod tests {
     fn chrome_probe_windows_fixture() {
         let directory = std::path::PathBuf::from(std::env::var_os("FASTBROWSE_DOCTOR_FIXTURE").unwrap());
         if std::env::var_os("FASTBROWSE_DOCTOR_HELPER").is_some() {
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            std::fs::write(directory.join("started"), "").unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(120);
             while !directory.join("stop").exists() && std::time::Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -313,7 +314,13 @@ mod tests {
                 .env("FASTBROWSE_DOCTOR_HELPER", "1")
                 .spawn()
                 .unwrap();
-            // Simulate a wrapper exiting without closing the helper's copy of stdout.
+            // Starting this test binary again took over five seconds on a Windows runner, so the helper wrote
+            // `done` after the test stopped waiting for it. The wrapper waits until the helper runs, then exits
+            // without closing the helper's copy of stdout, which is the case the probe must survive.
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            while !directory.join("started").exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
             drop(helper);
             println!("Chrome 123");
         }
