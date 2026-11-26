@@ -2915,7 +2915,7 @@
     innerWidth,
     innerHeight,
     document.title,
-    selection,
+    ...(selection ? [selection] : []),
     viewport_text,
     semantics,
     field_state,
