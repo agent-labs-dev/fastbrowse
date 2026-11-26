@@ -2587,6 +2587,27 @@ async fn test_a_done_answers_from_the_notes_once_jev_finds_them_covering_the_tas
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("The answer is 42")));
 }
 
+/// A message form answered its send with a "Thank you, your message has been sent" page served as HTTP 503. Jev, asked
+/// whether that page reports a failure, answered 0.50, and the run completed claiming the message sent.
+#[tokio::test]
+async fn test_done_on_a_5xx_reply_to_a_send_is_refused_as_the_site_failure() {
+    let page = capture(&[(BlockKind::Paragraph, "Your message has been sent.")]);
+    let fact = Fact::read("Your message has been sent.", block_evidence(&page, "s0"), FactReader::JevChoice);
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.notes = Notes::new([fact.answering()]);
+    state.history.push(executed(Some(Operation::Click), Some("Send"), true));
+    let reply =
+        Observation { url: "https://example.test/message".into(), response_status: Some(503), ..observation(&[]) };
+    state.site_failure = Some(SiteFailure { sent: true, ..SiteFailure::http(&reply.url, 503, 0) });
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(reply.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    state.recoveries = agent.config.stall.max_recoveries;
+
+    let result = agent.finish(&mut state, &reply, None, None).await;
+    assert!(matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Unavailable), "{result:?}");
+}
+
 /// Asked to sign in and then report the account's email, a run filled the form, met the sign-in code, opened the page
 /// that shows the code, read the email there and ended `complete` without entering the code. A read that answers the
 /// question does not do the steps the task put before it.

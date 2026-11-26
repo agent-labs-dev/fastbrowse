@@ -98,7 +98,14 @@ impl Agent {
         // A step tried and not carried out, such as a click on a covered button, is asked about too: a task that wants
         // text after a step is not one whose only step is reading. So is a task that asks for a step when none has been
         // taken: a page can already show what it asks to be made (#1186).
-        let carried = if state.history.iter().any(crate::policy::HistoryEntry::acts) || state.asks_steps {
+        // A page served as a 5xx reply to what the run sent is not its outcome, whatever it says: code knows the status,
+        // and Jev, asked whether a "Thank you, your message has been sent" page served with 503 reports a failure,
+        // answered 0.50, so the run completed on it. A page found elsewhere showing the result is still judged.
+        let failed_reply = state.site_failure.as_ref().is_some_and(|failure| failure.sent)
+            && observation.response_status.is_some_and(|status| status >= 500);
+        let carried = if failed_reply {
+            Some(Carried::SiteFailed)
+        } else if state.history.iter().any(crate::policy::HistoryEntry::acts) || state.asks_steps {
             Some(self.actions_done(state, observation).await?)
         } else {
             self.site_failed(state, observation).await?.then_some(Carried::SiteFailed)

@@ -388,7 +388,8 @@ brought, is not the outcome of that action, and the run is not done on it: the s
 page again with goto(its address), which loads it afresh, or repeat the action that led to it, and give_up as \
 unavailable once retrying has not cleared it. When an action's effect says the failure is the site's reply to what it \
 sent, whether it went through is unknown and sending it again can make it twice: look for its result where the site \
-shows it, or give_up as unavailable.
+shows it, or give_up as unavailable. That failure is what stopped the task, so unavailable stays the status when the \
+way to its result is barred too, such as by a sign-in.
 
 An action the task did not ask for that cannot be undone (buying, sending, deleting, submitting) is refused unless the \
 user authorized it; you are told when an action was refused and why. Do not repeat a refused action, or a failed one \
@@ -1590,6 +1591,7 @@ mod tests {
         assert!(SYSTEM.contains("unavailable once retrying has not cleared it"));
         assert!(SYSTEM.contains("effect says the failure is the site's reply to what it"));
         assert!(SYSTEM.contains("sending it again can make it twice"));
+        assert!(SYSTEM.contains("unavailable stays the status when the way to its result is barred too"));
     }
 
     #[test]
