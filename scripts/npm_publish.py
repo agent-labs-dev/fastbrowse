@@ -114,9 +114,11 @@ def publish_one(package: str, path: Path, version: str, settle: float) -> tuple[
             f"succeed. Publish it with `npm publish <tarball> --access public --tag latest --provenance=false` "
             f"by hand after review, or ship it in the next tag."
         )
-    # A network or 5xx failure, or a publish the registry dropped, is worth one more try.
+    # A network or 5xx failure, or a publish the registry dropped, is worth one more try. Its verdict is final, so
+    # it waits out the cache whatever npm said: a first attempt that landed behind a timeout makes the retry a
+    # duplicate refusal while `npm view` still serves the document from before it.
     retry = publish(path, version)
-    if appeared(package, version, settle if retry.ok else 0):
+    if appeared(package, version, settle):
         return True, f"published {package}@{version} on the second attempt"
     said = "npm reported success, and the registry does not hold it" if retry.ok else retry.summary()
     return False, f"{package}@{version} could not be published: {said}"
