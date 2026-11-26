@@ -524,6 +524,29 @@ async fn test_http_error_visit_cannot_evidence_navigation_completion() {
     assert!(state.site_failure.is_none());
 }
 
+/// A reload of the form a message was posted from loads it afresh with HTTP 200, and says nothing of whether the post
+/// that got HTTP 503 went through: cleared by it, the run stalled on the form and ended stuck instead of unavailable.
+#[tokio::test]
+async fn test_a_failed_reply_to_a_commit_stands_until_a_later_commit_succeeds() {
+    let agent = agent();
+    let mut state = run_state();
+    let form = Observation { url: "https://example.test/message".into(), ..observation(&[button("Send")]) };
+    let reply = Observation { response_status: Some(503), ..form.clone() };
+    state.history.push(executed(Some(Operation::Click), Some("Send"), true));
+    state.acted_from = Some(form.clone());
+    state.committing = true;
+    agent.note_effect(&mut state, &reply);
+    assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent));
+    state.committing = false;
+    agent.note_effect(&mut state, &Observation { response_status: Some(200), ..form.clone() });
+    assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent), "a reload cleared the failed send");
+    agent.settle(&mut state, &Observation { response_status: Some(200), ..form.clone() }).await.unwrap();
+    assert!(state.site_failure.is_some(), "the reloaded form, a page state not seen before, cleared the failed send");
+    state.committing = true;
+    agent.note_effect(&mut state, &Observation { response_status: Some(200), ..form });
+    assert!(state.site_failure.is_none(), "a later commit's reply clears it");
+}
+
 fn capacities() -> (Fact, Fact) {
     let page = capture(&[(BlockKind::Paragraph, "Pine capacity 10"), (BlockKind::Paragraph, "Oak capacity 7")]);
     let pine = Fact::read("Pine capacity 10", block_evidence(&page, "s0"), FactReader::JevChoice);
@@ -4802,7 +4825,8 @@ async fn test_a_page_that_reports_a_failure_ends_as_it() {
     state.recoveries = agent.config.stall.max_recoveries;
     let apply = field("Apply");
     let page = observation(&[apply.clone(), button("Next")]);
-    state.site_failure = Some(SiteFailure { url: page.url.clone(), cause: FailureCause::Reported, since: 0 });
+    state.site_failure =
+        Some(SiteFailure { url: page.url.clone(), cause: FailureCause::Reported, since: 0, sent: false });
     let error = agent.recover(&mut state, &page, "nothing changed", Status::NeedsInput).await.err();
     assert!(matches!(error, Some(Flow::Stop(ref stop)) if stop.status == Status::Unavailable), "{error:?}");
 }
@@ -7579,10 +7603,11 @@ fn a_site_failure_stop_names_its_rule_and_not_its_address() {
                 url: url.into(),
                 cause: FailureCause::Navigation("net::ERR_ABORTED at shop.test".into()),
                 since: 0,
+                sent: false,
             },
             "SiteFailure/navigation",
         ),
-        (SiteFailure { url: url.into(), cause: FailureCause::Reported, since: 0 }, "SiteFailure/reported"),
+        (SiteFailure { url: url.into(), cause: FailureCause::Reported, since: 0, sent: false }, "SiteFailure/reported"),
     ];
     for (failure, rule) in cases {
         assert_eq!(failure.stop().rule, rule);

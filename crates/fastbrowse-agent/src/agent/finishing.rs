@@ -108,13 +108,26 @@ impl Agent {
         // error panel.
         let here = state.site_failure.as_ref().filter(|failure| failure.url == observation.url);
         if carried == Some(Carried::SiteFailed) {
+            let sent = here.is_some_and(|failure| failure.sent);
             if here.is_none_or(|failure| failure.cause == FailureCause::Reported) {
                 let since = here.map_or(state.steps.len(), |failure| failure.since);
-                state.site_failure =
-                    Some(SiteFailure { url: observation.url.clone(), cause: FailureCause::Reported, since });
+                state.site_failure = Some(SiteFailure {
+                    url: observation.url.clone(),
+                    cause: FailureCause::Reported,
+                    since,
+                    sent: false,
+                });
             }
-            let reason = "The page reports that the site failed to deliver what was asked, so the task is not done: \
-                open the page again with goto(its address), which loads it afresh, or repeat the action that led to it.";
+            // Told to repeat the action that led to a failed send, the driver sent a message again, which can make it
+            // twice when the first went through.
+            let reason = if sent {
+                "The site's reply to what the run sent reports a failure, so the task is not done and whether it went \
+                through is unknown: sending it again can make it twice. Look for its result where the site shows it, or \
+                give up as unavailable."
+            } else {
+                "The page reports that the site failed to deliver what was asked, so the task is not done: open the page \
+                again with goto(its address), which loads it afresh, or repeat the action that led to it."
+            };
             self.refuse(state, observation, reason, Status::Unavailable).await?;
             return Ok(None);
         }

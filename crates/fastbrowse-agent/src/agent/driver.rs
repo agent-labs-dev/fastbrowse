@@ -386,7 +386,9 @@ not exist), stuck (nothing left to try).
 A page that reports the site failed, such as an error message shown where the results or page an action should have \
 brought, is not the outcome of that action, and the run is not done on it: the site's failure can clear, so open the \
 page again with goto(its address), which loads it afresh, or repeat the action that led to it, and give_up as \
-unavailable once retrying has not cleared it.
+unavailable once retrying has not cleared it. When the failure is the site's reply to something the run sent, such as \
+a message, an order or a submitted form, whether it went through is unknown and sending it again can make it twice: \
+look for its result where the site shows it, or give_up as unavailable.
 
 An action the task did not ask for that cannot be undone (buying, sending, deleting, submitting) is refused unless the \
 user authorized it; you are told when an action was refused and why. Do not repeat a refused action, or a failed one \
@@ -1586,6 +1588,7 @@ mod tests {
         assert!(SYSTEM.contains("the run is not done on it"));
         assert!(SYSTEM.contains("page again with goto(its address), which loads it afresh, or repeat the action"));
         assert!(SYSTEM.contains("unavailable once retrying has not cleared it"));
+        assert!(SYSTEM.contains("sending it again can make it twice"));
     }
 
     #[test]

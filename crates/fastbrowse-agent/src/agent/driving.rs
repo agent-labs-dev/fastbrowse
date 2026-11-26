@@ -561,7 +561,7 @@ impl Agent {
                     _ => state.steps.len(),
                 };
                 let cause = FailureCause::Navigation(self.redact(error));
-                state.site_failure = Some(SiteFailure { url: url.clone(), cause, since });
+                state.site_failure = Some(SiteFailure { url: url.clone(), cause, since, sent: false });
             }
             if executed && let Some(text) = &action.text {
                 typed = Some(if action.secret { "<secret>".to_string() } else { self.mask(text) });
@@ -934,6 +934,7 @@ impl Agent {
             if let Some(failure) = &state.site_failure
                 && (observation.url != failure.url
                     || (failure.cause != FailureCause::Reported
+                        && !failure.sent
                         && observation.response_status.is_some_and(|status| (200..400).contains(&status))))
                 && observation.response_status.is_none_or(|status| status < 400)
             {
@@ -977,20 +978,25 @@ impl Agent {
                 state.start_failure = None;
             }
             if status >= 400 {
-                let since = match &state.site_failure {
-                    Some(failure) if failure.url == observation.url => failure.since,
-                    _ => state.steps.len(),
+                let (since, sent) = match &state.site_failure {
+                    Some(failure) if failure.url == observation.url => {
+                        (failure.since, failure.sent || state.committing)
+                    }
+                    _ => (state.steps.len(), state.committing),
                 };
-                state.site_failure = Some(SiteFailure::http(&observation.url, status, since));
+                state.site_failure = Some(SiteFailure { sent, ..SiteFailure::http(&observation.url, status, since) });
                 if state.first_url.as_deref() == Some(observation.url.as_str()) {
                     state.start_failure = state.site_failure.clone();
                 }
             } else if status >= 200
                 && state.site_failure.as_ref().is_some_and(|failure| {
-                    failure.url == observation.url && !matches!(failure.cause, FailureCause::Reported)
+                    failure.url == observation.url
+                        && !matches!(failure.cause, FailureCause::Reported)
+                        && (state.committing || !failure.sent)
                 })
             {
-                // A page that loads can still report the site failed; only Jev, reading it, clears that.
+                // A page that loads can still report the site failed; only Jev, reading it, clears that. A failed reply
+                // to a commit is cleared only by a later commit's reply, which this step's flag still marks here.
                 state.site_failure = None;
             }
         }
