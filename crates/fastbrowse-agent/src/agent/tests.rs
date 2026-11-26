@@ -105,6 +105,11 @@ fn agent() -> Agent {
 }
 
 #[test]
+fn the_driver_is_told_a_tallys_kind_of_record_is_singular() {
+    assert!(super::driver::SYSTEM.contains("the kind of one record, in the singular"));
+}
+
+#[test]
 fn result_normalizes_evidence_to_the_latest_capture() {
     let read = |sha: &str, start: u32, at: &str| {
         serde_json::from_value(json!({
@@ -2883,7 +2888,7 @@ async fn test_the_done_check_masks_a_secret_in_the_undone_clause_labels() {
     let carried = agent.actions_done(&mut state, &page).await.unwrap();
     let labels = jev.6.lock().unwrap();
     assert_eq!(labels.len(), 1, "{labels:?}");
-    assert_eq!(labels[0].len(), 2, "{labels:?}");
+    assert_eq!(labels[0].len(), 3, "the task's two clauses and the choice of none: {labels:?}");
     for label in &labels[0] {
         assert!(!label.contains("private-token"), "{label}");
     }
@@ -2892,6 +2897,19 @@ async fn test_the_done_check_masks_a_secret_in_the_undone_clause_labels() {
     let Carried::Undone(step) = carried else { panic!("expected an undone step, got {carried:?}") };
     assert!(!step.contains("private-token"), "{step}");
     assert_eq!(step, labels[0][0]);
+}
+
+/// Asked which clause is undone, Jev named the task's "Start at ..." on a page the run had opened itself and searched,
+/// so the question may name no clause, and a "none" is a step carried out.
+#[tokio::test]
+async fn test_a_done_check_that_names_no_undone_clause_is_carried_out() {
+    let page = observation(&[]);
+    let mut state = run_state();
+    state.raw_task = "Start at https://shop.test/. Find the cheapest shirt.".into();
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "none"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    let carried = agent.actions_done(&mut state, &page).await.unwrap();
+    assert!(matches!(carried, Carried::Done), "{carried:?}");
 }
 
 /// A secret holding a sentence delimiter must not redraw the clauses: masking first would blank the full stop
@@ -2907,7 +2925,7 @@ async fn test_the_done_check_masks_a_secret_holding_a_sentence_delimiter() {
     let carried = agent.actions_done(&mut state, &page).await.unwrap();
     let labels = jev.6.lock().unwrap();
     assert_eq!(labels.len(), 1, "{labels:?}");
-    assert_eq!(labels[0].len(), 3, "{labels:?}");
+    assert_eq!(labels[0].len(), 4, "the task's three clauses and the choice of none: {labels:?}");
     for label in &labels[0] {
         assert!(!label.contains("pass"), "{label}");
     }
@@ -4109,6 +4127,8 @@ async fn test_requested_final_screenshot_is_captured_with_default_config() {
 struct IntentJev {
     choice: &'static str,
     dates: bool,
+    /// Whether the task forbids an action, as the startup request's prohibition question is answered.
+    prohibits: bool,
     /// The answer to any other choice asked beside the output, where it is offered.
     evidence: &'static str,
     calls: std::sync::atomic::AtomicUsize,
@@ -4120,6 +4140,7 @@ impl IntentJev {
         Self {
             choice,
             dates: false,
+            prohibits: false,
             evidence: "page_text",
             calls: Default::default(),
             fallback: ScriptedJev::new(Vec::new()),
@@ -4175,6 +4196,15 @@ impl DecisionClient for IntentJev {
                 Answer::Noul(NoulAnswer {
                     kind: fastbrowse_core::decision::NoulTag,
                     probability: if self.dates { 1.0 } else { 0.0 },
+                }),
+            );
+        }
+        if questions.contains_key("prohibits") {
+            answers.insert(
+                "prohibits".into(),
+                Answer::Noul(NoulAnswer {
+                    kind: fastbrowse_core::decision::NoulTag,
+                    probability: if self.prohibits { 1.0 } else { 0.0 },
                 }),
             );
         }
@@ -4361,7 +4391,7 @@ async fn test_startup_batches_task_judgments_and_keeps_their_answers() {
     let jev = Arc::new(IntentJev { evidence: "appearance", ..IntentJev::new("image") });
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    let judgments = agent.task_judgments(&state.raw_task, &state.ledger).await.unwrap();
+    let judgments = agent.task_judgments(&state.raw_task, &state.raw_task, &state.ledger).await.unwrap();
     assert!(judgments.dates.is_empty());
     let answers = judgments.output.expect("output was judged beside dates");
     assert!(answers.contains_key("dates"));
@@ -4384,7 +4414,7 @@ async fn test_failed_date_extraction_keeps_the_other_startup_judgments() {
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(WrongRecord));
     let mut state = run_state();
     state.raw_task = "Report tomorrow's opening hours.".into();
-    let judgments = agent.task_judgments(&state.raw_task, &state.ledger).await.unwrap();
+    let judgments = agent.task_judgments(&state.raw_task, &state.raw_task, &state.ledger).await.unwrap();
     assert!(judgments.dates.is_empty(), "this writer returns claims instead of dates");
     assert_eq!(state.ledger.state().llm_calls, 1, "the failing date extraction was attempted");
     state.output_answers = judgments.output;
@@ -4447,7 +4477,7 @@ async fn test_oversized_startup_keeps_the_standalone_date_request() {
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(Tomorrow));
     let mut state = run_state();
     state.raw_task = "Take a screenshot of tomorrow's opening hours.".into();
-    let judgments = agent.task_judgments(&state.raw_task, &state.ledger).await.unwrap();
+    let judgments = agent.task_judgments(&state.raw_task, &state.raw_task, &state.ledger).await.unwrap();
     assert_eq!(judgments.dates[0].days_from_today, Some(1));
     assert!(judgments.output.is_none(), "an unasked output question must stay unknown");
     assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Image);
@@ -4464,7 +4494,7 @@ async fn test_startup_answers_still_reject_an_unoffered_output_choice() {
     let jev = Arc::new(IntentJev::new("image"));
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    let judgments = agent.task_judgments(&state.raw_task, &state.ledger).await.unwrap();
+    let judgments = agent.task_judgments(&state.raw_task, &state.raw_task, &state.ledger).await.unwrap();
     let mut answers = judgments.output.unwrap();
     let Answer::Choice(answer) = answers.get_mut("pick").unwrap() else { unreachable!() };
     answer.choice = "not offered".into();
@@ -9652,7 +9682,7 @@ async fn test_a_disabled_save_is_listed_as_disabled_and_acting_on_it_is_refused_
     for turn in &heard[1..4] {
         assert!(turn.contains("was refused: [2] is disabled, so the page lets nothing act on it"), "{turn}");
     }
-    assert!(heard[3].contains("Drag"), "{}", heard[3]);
+    assert!(heard[3].contains(r#"{"tool":"drag","id":"1","to":"2"}"#), "{}", heard[3]);
 }
 
 #[tokio::test]
@@ -10112,6 +10142,41 @@ fn test_a_tallied_claim_keeps_every_page_it_names_and_refuses_one_never_shown() 
         super::reading::Cited { quotes: &[], ranging: &[], pages: std::slice::from_ref(&unshown), pictured: None },
     );
     assert_eq!(refused, Err((Vec::new(), vec![unshown])));
+}
+
+/// A ranking of groups written as scoped counts with a rank was refused three times in a row (stretch-quotes-top-authors),
+/// because the tool text gave a rank only for the second cheapest: the form that has one is stated to the driver.
+#[test]
+fn test_the_done_tool_states_where_a_rank_goes() {
+    let tool = super::driver::SYSTEM;
+    assert!(tool.contains("for a count per group, the group's place by its count, 1 for the most"), "{tool}");
+    assert!(tool.contains("never a count scoped to each"), "{tool}");
+}
+
+/// A page named by the scheme the run reached it under, or the other one, is the page shown: the driver wrote
+/// "http://quotes.toscrape.com/" for a page the run read as "https://quotes.toscrape.com/", and done was refused.
+#[test]
+fn test_a_cited_page_matches_the_shown_one_across_http_and_https() {
+    let agent = agent();
+    let mut state = run_state();
+    let shown =
+        Capture { url: "https://example.test/q/".into(), ..capture(&[(BlockKind::Paragraph, "Quote A by Einstein")]) };
+    let current = Capture {
+        url: "https://example.test/q/2/".into(),
+        ..capture(&[(BlockKind::Paragraph, "Quote C by Einstein")])
+    };
+    let pages = vec!["http://example.test/q/".to_string(), "http://example.test/q/2/".to_string()];
+    agent
+        .read_quoted(
+            &mut state,
+            current,
+            &[shown],
+            &at("https://example.test/q/2/", &[]),
+            super::reading::Cited { quotes: &[], ranging: &[], pages: &pages, pictured: None },
+        )
+        .unwrap();
+    let texts: std::collections::BTreeSet<_> = state.notes.facts().iter().map(|fact| fact.text.clone()).collect();
+    assert_eq!(texts.len(), 2, "{texts:?}");
 }
 
 /// Every Jev request a run sends, its state and questions written out, answered as `DoneCheckJev` answers.
@@ -10664,6 +10729,276 @@ async fn test_a_click_inside_a_drawn_surface_is_authorized_for_the_thing_it_land
         asked.push(questions);
     }
     assert_ne!(asked[0], asked[1]);
+}
+
+/// The page of a run that reads over HTTP and then moves to a browser: the same document, which only the browser can
+/// act on.
+struct Switching {
+    page: Unmoved,
+    http: bool,
+}
+
+impl Switching {
+    fn new(http: bool) -> Arc<Self> {
+        let page = Unmoved {
+            now: at("https://pages.test/list", &[button("Next")]),
+            sent: Mutex::new(Vec::new()),
+            handed_over: Default::default(),
+            waits: Mutex::default(),
+            swap: Mutex::default(),
+            swap_on_capture: Mutex::default(),
+            waited_on: Mutex::default(),
+        };
+        Arc::new(Switching { page, http })
+    }
+}
+
+impl Page for Switching {
+    fn over_http(&self) -> bool {
+        self.http
+    }
+
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        self.page.observe()
+    }
+
+    fn document_changed<'a>(&'a self, observation: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        self.page.document_changed(observation)
+    }
+
+    fn navigate<'a>(&'a self, url: &'a str, back_to: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.page.navigate(url, back_to)
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        self.page.capture()
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        if self.http {
+            return Box::pin(async {
+                Err(BrowserError::NeedsBrowser("'Next' can only be filled in a browser".into()))
+            });
+        }
+        self.page.act(action, observation)
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        self.page.screenshot()
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        self.page.address()
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        self.page.response_status()
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+/// The chat driver, keeping every conversation it is asked a turn of.
+struct Conversations(Arc<crate::scripted::ScriptedDriver>, Mutex<Vec<Vec<Message>>>);
+
+impl LLMClient for Conversations {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
+        if purpose == LLMPurpose::Action {
+            self.1.lock().unwrap().push(messages.to_vec());
+        }
+        self.0.generate_value(purpose, messages, schema, ledger)
+    }
+}
+
+/// A run that read over HTTP and was told its action needs a browser carried on there with the driver's whole
+/// conversation: its task, the pages it read, its turns. A browser that started a new conversation planned again what
+/// the fetch had already planned (75 driver turns across 84 escalations in the fair sweep).
+#[tokio::test]
+async fn test_the_browser_driver_resumes_the_conversation_the_fetch_run_held() {
+    const TASK: &str = "Open the next page of the list";
+    let llm = Arc::new(Conversations(driven(steps("click Next; click Next")), Mutex::default()));
+    let options = || super::RunOptions { start: Some("https://pages.test/list".into()), ..Default::default() };
+    let fetch = Agent::new(Switching::new(true), Arc::new(ScriptedJev::new(Vec::new())), llm.clone());
+    let result = fetch.run(TASK, options()).await.unwrap();
+    assert_eq!(result.status, Status::Blocked, "{:?}", result.error);
+    let resume = fetch.resume().expect("the fetch run hands on");
+    let asked = llm.1.lock().unwrap().len();
+    assert_eq!(asked, 1, "the fetch run took one turn");
+
+    let browser = Agent::new(Switching::new(false), Arc::new(ScriptedJev::new(Vec::new())), llm.clone());
+    let options = super::RunOptions { start: None, resume: Some(resume), ..options() };
+    let _ = browser.run(TASK, options).await.unwrap();
+    let turns = llm.1.lock().unwrap().clone();
+    let fetched = &turns[0];
+    let resumed = &turns[1];
+    // The fetch run's turn and the reply it got are the start of the browser's first conversation, unchanged, so
+    // the provider's cached prefix holds.
+    let kept = fetched.len() + 1;
+    assert!(resumed.len() > kept, "the browser turn adds the switch and its page");
+    for (before, after) in fetched.iter().zip(resumed) {
+        assert_eq!((&before.role, &before.content), (&after.role, &after.content));
+    }
+    assert!(
+        resumed[kept - 1].content.contains(r#""tool":"click""#),
+        "the fetch run's own reply: {:?}",
+        resumed[kept - 1]
+    );
+    let switch = &resumed[kept].content;
+    assert!(switch.contains("none of your last actions ran"), "{switch}");
+    // Nothing the fetch run planned is asked for again: one task, one system message, a turn for each reply.
+    let last = turns.last().unwrap();
+    assert_eq!(last.iter().filter(|message| message.content.contains("<task>")).count(), 1);
+    let replies = last.iter().filter(|message| message.role == fastbrowse_core::llm::Role::Assistant).count();
+    assert_eq!(replies, turns.len() - 1, "each turn the run took is in the conversation once");
+}
+
+/// The prohibition question reads the task alone, so startup asks it in the task-judgment request while the start page
+/// opens, and the first gated action finds it answered: it never costs that action a request of its own.
+#[tokio::test]
+async fn test_the_prohibition_question_is_answered_at_startup_and_never_asked_at_the_gate() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([
+            ("prohibits", 0.99),
+            ("irreversible", 0.1),
+            ("forbidden", 0.98),
+            ("conditional", 0.01),
+        ]),
+        chosen: IndexMap::new(),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.prohibits = None;
+    state.raw_task = "Open the form. Do not click Upload.".into();
+    let judgments = agent.task_judgments(&state.raw_task, &state.raw_task, &state.ledger).await.unwrap();
+    assert_eq!(judgments.prohibits, Some(true));
+    state.prohibits = judgments.prohibits;
+    let upload = button("Upload");
+    let page = observation(std::slice::from_ref(&upload));
+    let decision = code_decision(Operation::Click, Some(upload));
+    for _ in 0..2 {
+        assert!(agent.gate_irreversible(&mut state, &page, &decision).await.is_err(), "forbidden click is refused");
+    }
+    let requests = jev.asked.lock().unwrap();
+    let keys: Vec<Vec<&str>> = requests.iter().map(|(_, q)| q.keys().map(String::as_str).collect()).collect();
+    assert!(keys[0].contains(&"prohibits") && keys[0].contains(&"dates"), "asked with the other task judgments");
+    assert_eq!(keys.iter().filter(|keys| keys.contains(&"prohibits")).count(), 1, "asked once for the run: {keys:?}");
+}
+
+/// A next page code chose from the list's own pager is opened to be read, and no model wrote its address: it makes no
+/// authorization request. The driver's goto of the same address still asks.
+#[tokio::test]
+async fn test_a_page_opened_by_code_makes_no_authorization_request() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([("irreversible", 0.1)]),
+        chosen: IndexMap::new(),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let page = observation(&[]);
+    let next = "https://list.test/page/2/".to_string();
+    let by_code = Decision { url: Some(next.clone()), by_code: true, ..code_decision(Operation::Navigate, None) };
+    state.pager_followed.insert(next.clone());
+    agent.action(&mut state, &page, &by_code).await.expect("opened");
+    assert!(jev.asked.lock().unwrap().is_empty());
+    let asked = Decision { by_code: false, ..by_code };
+    agent.action(&mut state, &page, &asked).await.expect("opened");
+    assert_eq!(jev.asked.lock().unwrap().len(), 1, "the driver's own goto is classified");
+}
+
+/// The task's own prohibition still stops a page code chose from the pager, and the pager's own link is what says it
+/// downloads: Jev is asked only what the task forbids, never whether the click is irreversible.
+#[tokio::test]
+async fn test_a_page_opened_by_code_is_still_refused_when_the_task_forbids_it() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([("prohibits", 0.99), ("forbidden", 0.99), ("irreversible", 0.0)]),
+        chosen: IndexMap::new(),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let page = observation(&[]);
+    let next = "https://list.test/page/2/".to_string();
+    state.prohibits = None;
+    state.pager_followed.insert(next.clone());
+    let by_code = Decision { url: Some(next.clone()), by_code: true, ..code_decision(Operation::Navigate, None) };
+    assert!(agent.action(&mut state, &page, &by_code).await.is_err(), "what the task forbids is refused");
+    let asked: Vec<String> =
+        jev.asked.lock().unwrap().iter().flat_map(|(_, q)| q.keys().cloned().collect::<Vec<_>>()).collect();
+    assert!(asked.contains(&"forbidden".to_string()) && !asked.contains(&"irreversible".to_string()), "{asked:?}");
+}
+
+#[tokio::test]
+async fn test_a_page_opened_by_code_is_gated_on_its_pager_links_download_metadata() {
+    let jev = Arc::new(Conditioned {
+        answers: IndexMap::from([("downloads", 0.99), ("prohibits", 0.0)]),
+        chosen: IndexMap::new(),
+        asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.pager_followed.insert("https://list.test/page/2/".into());
+    let mut next = Control::new("n", "link", "Next", [Operation::Click]);
+    next.href = Some("/page/2/".into());
+    next.next_page = Some(true);
+    next.download = Some(true);
+    let page = at("https://list.test/page/1/", &[next]);
+    let by_code = Decision {
+        url: Some("https://list.test/page/2/".into()),
+        by_code: true,
+        ..code_decision(Operation::Navigate, None)
+    };
+    assert!(agent.action(&mut state, &page, &by_code).await.is_err(), "a pager link that downloads is refused");
+}
+
+/// Two addresses that serve the same text are two pages: a result names each by its address.
+#[test]
+fn test_identical_text_at_two_addresses_is_kept_twice_and_once_per_address() {
+    let mut chat = crate::agent::driver::Chat::default();
+    let first = capture(&[(BlockKind::Paragraph, "Same words")]);
+    let mut second = first.clone();
+    second.url = "https://other.test/".into();
+    chat.keep(first.clone());
+    chat.keep(second);
+    chat.keep(first);
+    assert_eq!(chat.shown.len(), 2);
+}
+
+/// The startup request judges the task with its inputs written in, so it leaves the prohibition to the gate, which
+/// judges the task as written.
+#[tokio::test]
+async fn test_the_startup_request_asks_prohibits_only_when_the_task_has_no_inputs() {
+    let jev = Arc::new(Conditioned { answers: IndexMap::new(), chosen: IndexMap::new(), asked: Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let state = run_state();
+    agent.task_judgments("Send hello", "Send {body}", &state.ledger).await.expect("judged");
+    agent.task_judgments("Send hello", "Send hello", &state.ledger).await.expect("judged");
+    let asked = jev.asked.lock().unwrap();
+    assert!(!asked[0].1.contains_key(super::driving::PROHIBITS), "inputs differ");
+    assert!(asked[1].1.contains_key(super::driving::PROHIBITS), "inputs equal");
 }
 
 /// A dialog message that holds a password with a quote in it is recorded as the page wrote it, so the redactor that

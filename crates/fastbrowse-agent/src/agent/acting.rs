@@ -240,6 +240,22 @@ fn choice_picks(
     Ok(picks)
 }
 
+/// The page's own next-page link that leads to `url`, which carries the download metadata an address alone lacks.
+fn pager_link_to(observation: &Observation, base: &str, url: &str) -> Option<Control> {
+    let here = url::Url::parse(base).ok()?;
+    observation
+        .controls
+        .iter()
+        .filter(|control| fastbrowse_core::page::pager_link(control))
+        .find(|control| {
+            control.href.as_deref().and_then(|href| here.join(href).ok()).is_some_and(|to| to.as_str() == url)
+        })
+        .cloned()
+}
+
+/// The choice that names no clause of the task as an undone step.
+const NO_UNDONE_STEP: &str = "none";
+
 impl Agent {
     fn trace_authorization(&self, state: &RunState, decision: &Decision, reason: GateReason) {
         self.event("authorization_gate", || {
@@ -288,10 +304,21 @@ impl Agent {
                 }
                 // Jev classifies the address as the task shows it, credentials masked (#1381).
                 let shown = self.mask(&url);
-                self.gate_download(state, observation, decision, &caller_link(&shown)).await?;
-                let irreversible = navigation_question(&shown);
                 let action = format!("open the address {shown}.\n");
-                self.gate_question(state, observation, decision, &shown, Some(irreversible), &action, None).await?;
+                if decision.by_code {
+                    // An address code chose is the next page of a list the task reads, taken from the page's own pager
+                    // (`open_unread_page`): no model proposed it, and the run opens it only to read, so Jev has no
+                    // task-to-address judgment to make. What the task forbids still applies, and the pager's own link
+                    // is what says whether it downloads.
+                    let base = self.raw().map_or_else(|| observation.url.clone(), |raw| raw.url);
+                    let link = pager_link_to(observation, &base, &url).unwrap_or_else(|| caller_link(&shown));
+                    self.gate_download(state, observation, decision, &link).await?;
+                    self.gate_forbidden(state, observation, decision, &shown, &action).await?;
+                } else {
+                    self.gate_download(state, observation, decision, &caller_link(&shown)).await?;
+                    let irreversible = navigation_question(&shown);
+                    self.gate_question(state, observation, decision, &shown, Some(irreversible), &action, None).await?;
+                }
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
             Operation::Click | Operation::Enter => {
@@ -601,6 +628,45 @@ impl Agent {
         self.refuse_once(state, observation, decision, &describe(control), why).await
     }
 
+    /// Refuses an action the task forbids, without asking whether it is irreversible: the check for a step code took
+    /// that only reads. Nothing is asked of a task that forbids nothing.
+    async fn gate_forbidden(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        label: &str,
+        action: &str,
+    ) -> Step {
+        if !self.prohibits(state).await? {
+            return Ok(());
+        }
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let questions = IndexMap::from([
+            ("forbidden".to_string(), Question::Noul(forbidden_question(action))),
+            ("conditional".to_string(), Question::Noul(conditional_question(action))),
+        ]);
+        let page = json!({"task": self.caller_task(state), "page": {"origin": origin_of(&observation.url)}});
+        let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await?;
+        state.ledger.record([evaluation.cost.clone()])?;
+        let noul = |key: &str| match evaluation.answers.get(key) {
+            Some(Answer::Noul(answer)) => Some(answer.probability),
+            _ => None,
+        };
+        // Unanswered refuses, as in `gate_question`.
+        if noul("forbidden").is_none_or(|p| p > EVEN_ODDS) {
+            self.trace_authorization(state, decision, GateReason::Forbidden);
+            return self.refuse_once(state, observation, decision, label, "is what the task says not to do").await;
+        }
+        if noul("conditional").is_none_or(|p| p > EVEN_ODDS)
+            && let Some(why) = self.prohibition_refusal(state, observation, action).await?
+        {
+            self.trace_authorization(state, decision, GateReason::Forbidden);
+            return self.refuse_once(state, observation, decision, label, why).await;
+        }
+        Ok(())
+    }
+
     /// Refuse an action that changes a value on the page when the task does not allow it: every edit when the task rules
     /// out changing anything (#838), and an edit the task does not ask for when it asks for some and rules out the rest
     /// (#879).
@@ -726,7 +792,7 @@ impl Agent {
         if let Some(prohibits) = state.prohibits {
             return Ok(prohibits);
         }
-        let prohibits = self.task_rules_out(state, "prohibits", prohibits_question()).await?;
+        let prohibits = self.task_rules_out(state, super::driving::PROHIBITS, prohibits_question()).await?;
         state.prohibits = prohibits;
         Ok(prohibits.unwrap_or(true))
     }
@@ -1511,11 +1577,21 @@ impl Agent {
             let masked: Vec<char> = self.caller_task(state).chars().collect();
             let labels: Vec<String> =
                 steps.iter().map(|(start, end, _)| masked[*start..*end].iter().collect()).collect();
-            let criteria = labels
+            // A choice of clauses alone makes a step of every one: the run opened the address the task says to start at
+            // itself, and Jev named "Start at ..." as the undone step 3 times in 3 on a page that showed the answer,
+            // which sent the run to open that address again and search again. Only a clause holds a step, so the
+            // question may name none.
+            let mut criteria: IndexMap<String, JsonValue> = labels
                 .iter()
                 .enumerate()
                 .map(|(index, label)| (index.to_string(), JsonValue::from(label.clone())))
                 .collect();
+            criteria.insert(
+                NO_UNDONE_STEP.to_string(),
+                JsonValue::from(
+                    "No clause: every step the task asks for, other than finding, reading or reporting something, has been carried out, as opening the address the task says to start at was.",
+                ),
+            );
             // Asked which clause is undone without saying which kind, Jev named the one asking to be told the answer, 3
             // times in 3, on a run that had not yet written what that answer was to be read from (#1186), and recovery
             // then went after the answer instead of the step.
@@ -1527,6 +1603,9 @@ impl Agent {
                     criteria,
                 )
                 .await?;
+            if picked == NO_UNDONE_STEP {
+                return Ok(Carried::Done);
+            }
             let index = picked.parse::<usize>().map_err(|_| DecisionError::failed("expected an undone task step"))?;
             let Some(label) = labels.get(index) else {
                 return Err(DecisionError::failed("expected an undone task step").into());

@@ -226,12 +226,19 @@ impl Agent {
     ) -> Step<Option<RunResult>> {
         state.pager_followed.insert(next.clone());
         self.event("unread_next_page", || serde_json::Map::from_iter([("url".into(), next.clone().into())]));
-        self.open_by_code(state, observation, next).await?;
+        let _ = self.open_by_code(state, observation, next).await?;
         Ok(None)
     }
 
-    /// Open `url` as a step the run's code chose.
-    pub(super) async fn open_by_code(&self, state: &mut RunState, observation: &Observation, next: String) -> Step {
+    /// Open `url` as a step the run's code chose. False when the step did not open it: refused by a gate, or the page
+    /// changed under it, which the history shows as no executed navigation.
+    pub(super) async fn open_by_code(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        next: String,
+    ) -> Step<bool> {
+        let before = state.history.len();
         let decision = crate::policy::Decision {
             operation: Operation::Navigate,
             url: Some(next),
@@ -249,7 +256,9 @@ impl Agent {
             }
             other => other?,
         }
-        Ok(())
+        Ok(state.history[before..]
+            .iter()
+            .any(|entry| entry.operation == Some(Operation::Navigate) && entry.outcome == StepOutcome::Executed))
     }
 
     /// Read a drawn page's screenshot into the notes when nothing read answers the task.
@@ -475,7 +484,7 @@ impl Agent {
             if exhausted {
                 self.refuse(state, observation, &reason, Status::Unverified).await?;
             } else {
-                state.chat.queue_clear();
+                state.chat.queue.clear();
                 state.chat.notices.push(format!("done was refused: {reason}"));
             }
             return Ok(None);
@@ -659,7 +668,7 @@ pub(super) const REFUSED: &str = "A step the task asks for was not carried out b
 /// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
 /// claim failed which check, so it can look for the evidence that is missing rather than propose done again (#810).
 pub(super) fn rejection_reason(rejection: &str, published: bool) -> String {
-    let failed = rejected_parts(rejection, published);
+    let (failed, unsupported) = rejected_parts(rejection, published);
     if failed.is_empty() {
         return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
     }
@@ -667,6 +676,14 @@ pub(super) fn rejection_reason(rejection: &str, published: bool) -> String {
         "The composed answer was rejected: {}. Correct the answer or gather the evidence it needs.",
         failed.join("; ")
     );
+    // Told only that a "cheapest" claim did not follow from its one quoted fare, the driver cited other passages of
+    // that fare until one was accepted, while a cheaper nonstop sat in lines it had not read (google-flights). Told
+    // that an extreme is worked out from every record, it read the rest of the list or set a tally.
+    if unsupported && !published {
+        reason += " A count, total, minimum or maximum across records, such as the cheapest, does not follow from \
+                   quoting one record: set the claim's tally and pages, and code works it out from every record on \
+                   those pages.";
+    }
     // A coverage check rejects the answer whole, so only the draft says what it lacks. Told only that a value was left
     // out, the navigator chose done again over a checkout whose draft gave one shipping method's total and "not shown"
     // for four others; shown that draft, it chose the next method (#897).
@@ -692,7 +709,7 @@ pub(super) fn rejection_reason(rejection: &str, published: bool) -> String {
 /// task and withheld one claim was told "Partial evidence only. Remaining coverage is omitted", a notice for a run that
 /// stopped before reading everything, and nothing said which claim was missing (#892).
 fn withheld(rejection: &str, held: ComposedAnswer) -> ComposedAnswer {
-    let failed = rejected_parts(rejection, true);
+    let (failed, _) = rejected_parts(rejection, true);
     let notice = if failed.is_empty() {
         "This answer leaves out what did not pass its checks. Each claim below passed them.".to_string()
     } else {
@@ -704,14 +721,16 @@ fn withheld(rejection: &str, held: ComposedAnswer) -> ComposedAnswer {
     noticed(&notice, held)
 }
 
-/// Which claim of a rejected draft failed which check, one sentence part each.
-fn rejected_parts(rejection: &str, published: bool) -> Vec<String> {
+/// Which claim of a rejected draft failed which check, one sentence part each, and whether a claim failed for not
+/// following from the notes it cites.
+fn rejected_parts(rejection: &str, published: bool) -> (Vec<String>, bool) {
     let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
     let claim = |index: &Value| {
         let text = index.as_u64().and_then(|index| feedback["draft_claims"].get(index as usize)?["text"].as_str());
         text.map_or_else(|| "A claim".to_string(), text::repr)
     };
     let mut failed: Vec<String> = Vec::new();
+    let mut unsupported = false;
     for check in feedback["rejected_checks"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         let (index, part) = check.split_once('/').unwrap_or((check, ""));
         let Some(index) = index.strip_prefix("claim").and_then(|index| index.parse::<u64>().ok()) else {
@@ -764,15 +783,19 @@ fn rejected_parts(rejection: &str, published: bool) -> Vec<String> {
                     )),
                     None => failed.push(format!("{claim} does not follow from the notes it cites")),
                 }
+                unsupported = true;
             }
             _ => match feedback["tally_reasons"][check].as_str() {
                 Some(reason) => failed.push(format!("{claim}: {reason}")),
-                None => failed.push(format!("{claim} does not follow from the notes it cites")),
+                None => {
+                    failed.push(format!("{claim} does not follow from the notes it cites"));
+                    unsupported = true;
+                }
             },
         }
     }
     failed.dedup();
-    failed
+    (failed, unsupported)
 }
 
 /// The claims of a rejected draft, as its feedback records them.
@@ -941,7 +964,7 @@ mod tests {
         let mut incomplete = feedback;
         incomplete["untallied_claims"][0]["reason"] = json!("Only 1 of 50 pages was read.");
         incomplete["rejected_checks"] = json!(["claim0/tally", "claim0/cell0", "claim0/support"]);
-        let notice = super::rejected_parts(&incomplete.to_string(), true).join("; ");
+        let notice = super::rejected_parts(&incomplete.to_string(), true).0.join("; ");
         assert!(notice.contains("Only 1 of 50 pages was read."), "{notice}");
         assert!(!notice.contains("[title]"), "{notice}");
     }
@@ -979,9 +1002,16 @@ mod tests {
             "'Y costs £12.': its 'Shape' cell does not follow from the notes it cites",
             "the answer says something was not done or already existed that a step this run took may have done",
             "'The total is 175.00 (A 120.00, B 55.00).': it states something besides its total",
+            "set the claim's tally and pages",
         ] {
             assert!(reason.contains(part), "{reason}");
         }
+        let tally_only = json!({
+            "draft_claims": [{"text": "There are 9 quotes.", "evidence_ids": ["e1"]}],
+            "rejected_checks": ["claim0/tally"],
+        });
+        let reason = rejection_reason(&tally_only.to_string(), false);
+        assert!(!reason.contains("set the claim's tally"), "{reason}");
     }
 
     #[test]

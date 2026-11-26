@@ -2633,6 +2633,22 @@ async fn test_a_page_slower_than_one_try_is_waited_for() {
     h.close().await;
 }
 
+/// A look taken after a navigation commits but before the parser reaches <body> read as an empty page at the site's
+/// origin, and the driver left it. The look waits for the document instead and shows the page it became.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_look_at_a_document_still_parsing_its_head_shows_the_page_once_parsed() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(&h, "location.href = '/slow-page?ms=1500'").await;
+    // Long enough for the new document to commit, well short of its slow head script.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let observation = h.observe().await;
+    assert!(observation.url.contains("/slow-page"), "{}", observation.url);
+    assert!(observation.viewport_text.contains("Loaded"), "{}", observation.viewport_text);
+    h.close().await;
+}
+
 /// Not a test: the PDF helper, when this binary is run as one.
 #[test]
 fn pdf_helper() {

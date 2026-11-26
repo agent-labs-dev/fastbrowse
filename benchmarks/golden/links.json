@@ -17,6 +17,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -38,6 +39,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -59,6 +61,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -80,6 +83,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -101,6 +105,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -122,6 +127,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -143,6 +149,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -164,6 +171,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -185,6 +193,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -206,6 +215,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -227,6 +237,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -248,6 +259,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -269,6 +281,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -290,6 +303,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -311,6 +325,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -332,6 +347,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -353,6 +369,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -374,6 +391,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -395,6 +413,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -415,6 +434,7 @@
     "click"
    ],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -436,6 +456,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -457,6 +478,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -478,6 +500,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -499,6 +522,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -520,6 +544,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -541,6 +566,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -562,6 +588,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -583,6 +610,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -604,6 +632,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -625,6 +654,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -646,6 +676,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -667,6 +698,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -688,6 +720,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -709,6 +742,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -730,6 +764,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -751,6 +786,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -772,6 +808,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -793,6 +830,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -814,6 +852,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -827,7 +866,8 @@
    "operations": [
     "scroll"
    ],
-   "role": "region"
+   "role": "region",
+   "screen": 0
   },
   {
    "autocomplete": null,
@@ -847,6 +887,7 @@
     "click"
    ],
    "role": "link",
+   "screen": 1,
    "sensitive": false,
    "submit_semantics": null,
    "value": null

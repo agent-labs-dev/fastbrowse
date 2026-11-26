@@ -1568,6 +1568,7 @@
       // A nameless drawn surface is named for what it is: called by its role, an OpenLayers map read as a "button".
       label: named || fallbackLabel(e) || DRAWN_KINDS[e.tagName] || rname,
       offscreen: y < 0 || y >= innerHeight,
+      screen: Math.floor(y / innerHeight),
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
       // The root's own active element, so a field inside a shadow root reads as focused where the document names
@@ -1590,7 +1591,9 @@
       const u = new URL(nativeProperty(e, 'href'), location.href);
       // Another origin's link keeps its whole address, as capture.js writes it: a recipe or a follow joins the href
       // to this page, which would turn host and path into a path on this site and drop the query (#830).
-      base.href = u.origin === location.origin ? u.pathname + u.search : u.href;
+      // The fragment stays: on a page of twelve thousand lines it is the only address of a section, and a link
+      // shown without it led, as far as the driver could tell, to the top of the page it was already on.
+      base.href = u.origin === location.origin ? u.pathname + u.search + u.hash : u.href;
       // The page's own word for "the next page of this list", which survives an icon label or another language:
       // `rel="next"`, or the pager markup most sites use instead, a `next` class on the link or its list item inside a
       // pagination container (#750), one named by `pagin` or `pager`, as "page" alone is a layout class. A `next`
@@ -1915,6 +1918,7 @@
       role,
       label,
       offscreen: y < 0 || y >= innerHeight,
+      screen: Math.floor(y / innerHeight),
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: false,
       input_type: null,
@@ -2602,6 +2606,9 @@
           frame_origin: e.ownerDocument.location.origin,
           frame_path: framePath(e.ownerDocument),
           offscreen: rect.bottom <= 0 || rect.top >= view.innerHeight,
+          // The band its nearest edge is in, as the area is in view while any of it is.
+          screen: rect.bottom <= 0 ? Math.floor((rect.bottom - 1) / view.innerHeight)
+            : rect.top >= view.innerHeight ? Math.floor(rect.top / view.innerHeight) : 0,
           distance: rect.bottom <= 0 || rect.top >= view.innerHeight ? 1 + Math.abs(rect.top) : 0,
         });
       }

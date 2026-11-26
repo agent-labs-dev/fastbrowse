@@ -115,6 +115,10 @@ pub struct Control {
     pub sensitive: bool,
     #[serde(default, deserialize_with = "lax::boolean")]
     pub offscreen: bool,
+    /// Which viewport-height band of the page the control's centre is in, counted from the viewport: 0 inside it, 1 the
+    /// screen below, -1 the screen above. The driver is shown the controls one scroll reaches, as it is that text.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub screen: i32,
     /// A control the page has disabled (`disabled`, or inside `aria-disabled="true"`). It offers no operation until
     /// the page enables it, and is shown so a Save that stays disabled after an edit is not read as no Save (#1415).
     #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
@@ -209,6 +213,7 @@ impl Control {
             expanded: None,
             sensitive: false,
             offscreen: false,
+            screen: 0,
             disabled: None,
             required: None,
             invalid: None,
@@ -463,6 +468,10 @@ pub struct Block {
     /// The place of the list item this block is, or sits inside: a label does not say it is the third of the list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item_place: Option<ItemPlace>,
+    /// Some of this block is drawn inside the viewport when the page is captured, so the viewport's place in
+    /// `Capture.text` is the span of the blocks that say so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_viewport: bool,
     /// Structured values retain their boundaries, so copying one never requires retyping its whitespace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<SourceField>,
@@ -483,6 +492,53 @@ pub struct Capture {
     /// Where code blanked a secret value in `text`, as code point ranges: a `•` there is a mask, not page text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub masked: Vec<(i64, i64)>,
+    /// Where code wrote its own advice into `text`, such as a link's title beside its label or a date's
+    /// `datetime` beside the words that show it, as code point ranges with the space before each: words code added,
+    /// not page text, so a quote that leaves them out still quotes the page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advice: Vec<(i64, i64)>,
+}
+
+/// Marks a reader writes around its own advice while it reads a block, such as a link's title beside its label, so
+/// where the advice sits is known after the block's cleanup moves it. Unicode reserves these noncharacters for a
+/// program's internal use; the words between them were matched in the cleaned text before, which marked the page's
+/// own copy of those words as advice too, so a quote that left them out passed as quoting the page.
+pub const ADVICE_OPEN: char = '\u{FDD0}';
+pub const ADVICE_CLOSE: char = '\u{FDD1}';
+
+/// `text` without its advice marks, and where each piece of advice sits in it as code point ranges with the
+/// whitespace before it. Advice is written after a space, so where page text already ends in whitespace that space is
+/// dropped, as cleanup collapsed it before marks kept it apart. Only marks around words `advised` says the reader
+/// wrote are advice: a page that holds the marks itself still has its text read as page text.
+pub fn unmark_advice(text: &str, advised: impl Fn(&str) -> bool) -> (String, Vec<(i64, i64)>) {
+    let mut plain = String::with_capacity(text.len());
+    let mut length = 0i64;
+    let mut spans = Vec::new();
+    let mut open: Option<(usize, i64)> = None;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            ADVICE_OPEN => {
+                let kept = plain.trim_end_matches(crate::py::text::is_space);
+                if kept.len() < plain.len() || plain.is_empty() {
+                    chars.next_if_eq(&' ');
+                }
+                open = Some((plain.len(), crate::py::text::len(kept) as i64));
+            }
+            ADVICE_CLOSE => {
+                if let Some((at, start)) = open.take()
+                    && advised(plain[at..].trim_start_matches(crate::py::text::is_space))
+                {
+                    spans.push((start, length));
+                }
+            }
+            c => {
+                plain.push(c);
+                length += 1;
+            }
+        }
+    }
+    (plain, spans)
 }
 
 impl Capture {
@@ -510,6 +566,7 @@ impl Capture {
             links: Vec::new(),
             whole_record: false,
             item_place: None,
+            in_viewport: false,
             fields: Vec::new(),
         });
         self.sha256 = crate::py::sha256_hex(self.text.as_bytes());
@@ -958,9 +1015,40 @@ pub struct SearchOutcome {
     pub error: Option<String>,
 }
 
+fn is_zero(value: &i32) -> bool {
+    *value == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Advice is placed by its marks, not by its words: the page's own copy of the words stays page text.
+    #[test]
+    fn unmarked_advice_spans_only_what_the_reader_wrote() {
+        let text = "東京\u{FDD0} (title: Tokyo)\u{FDD1}, 1887 and 東京 (title: Tokyo)";
+        let (plain, spans) = unmark_advice(text, |words| words == "(title: Tokyo)");
+        assert_eq!(plain, "東京 (title: Tokyo), 1887 and 東京 (title: Tokyo)");
+        assert_eq!(spans, [(2, 17)]);
+        let chars: Vec<char> = plain.chars().collect();
+        assert_eq!(chars[2..17].iter().collect::<String>(), " (title: Tokyo)");
+    }
+
+    /// Whitespace before advice is the advice's, and the advice's own space is dropped where cleanup collapsed it.
+    #[test]
+    fn unmarked_advice_keeps_the_text_cleanup_wrote() {
+        let (plain, spans) = unmark_advice("Boulenger\n\u{FDD0} (title: G)\u{FDD1}, 1887", |_| true);
+        assert_eq!((plain.as_str(), spans.as_slice()), ("Boulenger\n(title: G), 1887", &[(9, 20)][..]));
+        let (plain, spans) = unmark_advice("\u{FDD0} (2026)\u{FDD1}", |_| true);
+        assert_eq!((plain.as_str(), spans.as_slice()), ("(2026)", &[(0, 6)][..]));
+    }
+
+    /// Marks a page wrote around words the reader never wrote are dropped and mark nothing.
+    #[test]
+    fn marks_around_words_the_reader_did_not_write_are_not_advice() {
+        let (plain, spans) = unmark_advice("Price\u{FDD0} $10\u{FDD1}", |words| words == "(title: Tokyo)");
+        assert_eq!((plain.as_str(), spans.len()), ("Price $10", 0));
+    }
 
     #[test]
     fn document_title_secret_masking_keeps_the_title_span_valid() {
@@ -973,6 +1061,7 @@ mod tests {
             blocks: Vec::new(),
             inaccessible_frames: 0,
             masked: Vec::new(),
+            advice: Vec::new(),
         }
         .with_document_title();
         let mut redactor = crate::safety::Redactor::new();
@@ -997,6 +1086,7 @@ mod tests {
             blocks: Vec::new(),
             inaccessible_frames: 0,
             masked: Vec::new(),
+            advice: Vec::new(),
         };
         capture = capture.with_document_title();
         assert!(capture.text.starts_with("Body\n\n"));

@@ -701,6 +701,33 @@ async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
     assert_eq!(capture.inaccessible_frames, 1);
 }
 
+/// A frame read into the page brings its links as controls, each id unique and each address read against the frame's
+/// own: a list read in from a frame showed its "Learn more" links as text the run could not follow.
+#[tokio::test]
+async fn test_a_frame_read_into_the_page_brings_its_links() {
+    let http = serving(|request| {
+        let body = if request.url.ends_with("/families/") {
+            "<h2>Pig-nosed turtle</h2><a href='pig-nosed'>Learn more</a>"
+        } else if request.url.ends_with("/families/pig-nosed") {
+            "<h1>Pig-nosed turtle</h1>"
+        } else {
+            "<a href='/about'>About</a><iframe src=/families/></iframe><iframe srcdoc='<a href=/notes>Notes</a>'></iframe>"
+        };
+        Response::new(200, body.to_string()).with_header("content-type", "text/html")
+    });
+    let page = FetchedPage::new(http, None, None);
+    page.navigate("https://shop.example.com/", None).await.expect("navigate");
+    let observation = page.observe().await.expect("observe");
+    let labels: Vec<&str> = observation.controls.iter().map(|control| control.label.as_str()).collect();
+    assert_eq!(labels, ["About", "Learn more", "Notes"]);
+    let ids: std::collections::HashSet<&str> = observation.controls.iter().map(|control| control.id.as_str()).collect();
+    assert_eq!(ids.len(), 3);
+    let id = observation.controls[1].id.clone();
+    let opened = page.act(&Action { target_id: Some(id), ..Action::new(Operation::Click) }, &observation).await;
+    assert!(opened.expect("followed").page_changed);
+    assert_eq!(page.address().await.expect("address"), "https://shop.example.com/families/pig-nosed");
+}
+
 /// A script in a frame read into the page, or an event handler a load fires, can build a link as a `<script>` of the
 /// page's own can, so the fetched page records unrun scripts for each (#1380). A frame it never reads, such as one
 /// nested in a frame, may hold links too: the page states it unread rather than free of scripts.

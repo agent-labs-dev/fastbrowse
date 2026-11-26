@@ -728,9 +728,11 @@ impl RunState {
         let start = self.start_landing_url.as_deref().or(self.caller_start.as_deref());
         let home = start.and_then(fastbrowse_core::origins::site_of);
         for control in &mut observation.controls {
-            let Some(leads_to) = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok()) else {
+            let Some(mut leads_to) = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok()) else {
                 continue;
             };
+            // A section's fragment is on a page read whole, so the page's address is what was read.
+            leads_to.set_fragment(None);
             if self.read_urls.contains(leads_to.as_str()) {
                 control.already_read = Some(true);
             }

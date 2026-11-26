@@ -94,7 +94,8 @@ pub(crate) fn cited_quote(evidence: &Evidence, notes: &Notes, redact: impl Fn(&s
     if !evidence.rendered_text {
         return (redact(&evidence.quote), url);
     }
-    let quote = redact(&page_text(&evidence.quote, evidence.start, notes.table_blocks(evidence)));
+    let quote =
+        redact(&page_text(&evidence.quote, evidence.start, notes.table_blocks(evidence), notes.advice(evidence)));
     // `text_fragment` refuses a quote of only whitespace; a capture never cuts one, so the address stands in.
     let deep_link = text_fragment(&url, &quote).unwrap_or(url);
     (quote, deep_link)
@@ -805,7 +806,7 @@ impl ComposeItem {
 
 // Told only "self-contained", the composer split a price off its record as "It costs £56.88.", which its support
 // check, judging that claim alone, rightly failed (6 of 10 first drafts; 0 of 15 once told how claims are checked).
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. A page that reports what other pages say, such as a search engine's results and the summaries it writes of them, is not the source of a value when the notes hold the page it reports on: cite that page instead. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. A claim is never a bare quote: prose beside each quoted value says what that value is, which record it belongs to and which field of it the task asks about, such as \"A remaining item is titled \" before a title, because the check judges a quoted text only through the claim around it, and a lone quote can read as more than the requested value. A list of values is one such claim per item, each saying what the item is without its place in the list. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, such as \"quote\", \"book\" or \"package\"), scope (which of those records the task lets count, such as \"by Albert Einstein\", \"in the Mystery category\", or \"httpx or requests\" when the task names the records it compares; null when every record of that kind counts; a record is never left out of scope for its value, so a selection by value, such as the cheapest or each store's newest listing, belongs to the tally or within, never to scope), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price, in which form code writes the computed part, so prose beside it never repeats a unit written there; the value as the notes write it even when the claim names only the record that holds it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record (\"quote\"), scope without the group, by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. When the records a min or max compares are each group's lowest or highest by another value, such as each supplier's latest offer, set within: by (the field that groups them, such as \"supplier\"), op (min or max) and field (the value compared inside each group, such as \"date\"); code selects each group's tied extremes before the outer tally, which is a min or max with a field and no by or group. Otherwise set within null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false. A note with list_position and list_size says where its item stands among its list's items, counted from 1, so a claim may state that place, such as that an item is the first or the third of its list, only from those fields; a note without them gives no place, and a place the notes do not give is left out.\n\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. A page that reports what other pages say, such as a search engine's results and the summaries it writes of them, is not the source of a value when the notes hold the page it reports on: cite that page instead. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. A claim is never a bare quote: prose beside each quoted value says what that value is, which record it belongs to and which field of it the task asks about, such as \"A remaining item is titled \" before a title, because the check judges a quoted text only through the claim around it, and a lone quote can read as more than the requested value. A list of values is one such claim per item, each saying what the item is without its place in the list. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of one record it ranges over, in the singular, such as \"quote\", \"book\" or \"package\", even when the task names them in the plural), scope (which of those records the task lets count, such as \"by Albert Einstein\", \"in the Mystery category\", or \"httpx or requests\" when the task names the records it compares; null when every record of that kind counts; a record is never left out of scope for its value, so a selection by value, such as the cheapest or each store's newest listing, belongs to the tally or within, never to scope), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price, in which form code writes the computed part, so prose beside it never repeats a unit written there; the value as the notes write it even when the claim names only the record that holds it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record (\"quote\"), scope without the group, by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. When the records a min or max compares are each group's lowest or highest by another value, such as each supplier's latest offer, set within: by (the field that groups them, such as \"supplier\"), op (min or max) and field (the value compared inside each group, such as \"date\"); code selects each group's tied extremes before the outer tally, which is a min or max with a field and no by or group. Otherwise set within null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false. A note with list_position and list_size says where its item stands among its list's items, counted from 1, so a claim may state that place, such as that an item is the first or the third of its list, only from those fields; a note without them gives no place, and a place the notes do not give is left out.\n\n";
 
 /// What the place beside a quote means. Told only the value, the check could not tell a value that is the third of a
 /// list from one that is not, and a claim stating the place was dropped as unsupported (#1108).
@@ -2199,14 +2200,24 @@ fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec
     // Jev says which record the claim names, and code checks it is one at the extreme: a yes or no on "every record
     // it names is one of these" reads the claim's subject, such as the product all of them sell, as a record.
     let mut records = IndexMap::new();
-    records.insert(
-        "none".into(),
-        json!(format!("The claim names no particular {of}, only the kind or what every one shares.")),
-    );
+    // A tally whose written is not a number writes a record's name, so its claim names none of the records only when
+    // what it writes is no record's: told code would work the answer out, the driver wrote "book and price" there,
+    // the claim passed as naming none, and the run ended on an answer naming no book.
+    if !tally.names_record() {
+        records.insert(
+            "none".into(),
+            json!(format!("The claim names no particular {of}, only the kind or what every one shares.")),
+        );
+    }
     for (index, winner) in winners.iter().enumerate() {
         records.insert(format!("r{index}"), json!(format!("The claim names this {of}: {}", dumps(winner))));
     }
-    records.insert(OTHER.into(), json!(format!("The claim names another particular {of}, not one of these.")));
+    let other = if tally.names_record() {
+        format!("The claim names another particular {of}, not one of these, or names no particular {of}.")
+    } else {
+        format!("The claim names another particular {of}, not one of these.")
+    };
+    records.insert(OTHER.into(), json!(other));
     vec![
         (
             "states",
@@ -2232,14 +2243,16 @@ fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec
                 records,
             )),
             // Code found the records at the extreme, so the reason names them by their notes: told only that the
-            // record was wrong, the composer had to find the name again among the records it had just confused.
+            // record was wrong, the composer had to find the name again among the records it had just confused. Each
+            // note names its page too: read across twenty pages and shown the last, the driver searched the pages one
+            // by one for the note it was told of and ran out of steps.
             format!(
-                "it names a {of} that does not have the {side} {field}; the {of} at it is the one in {}, and the claim \
+                "it does not name the {of} with the {side} {field}; the {of} at it is the one in {}, and the claim \
                  must name it as that note writes it",
                 winners
                     .iter()
-                    .filter_map(|winner| winner["quote"].as_str())
-                    .map(|quote| format!("the note {}", text::repr(quote)))
+                    .filter_map(|winner| Some((winner["quote"].as_str()?, winner["url"].as_str()?)))
+                    .map(|(quote, url)| format!("the note {} on {url}", text::repr(quote)))
                     .collect::<Vec<_>>()
                     .join(" or ")
             ),
@@ -3686,6 +3699,13 @@ mod tests {
         assert!(COMPOSITION.contains("When it requests only the identity, include only the winner-field slot."));
     }
 
+    /// A task that says "the orders" had its tally's kind drafted as "orders", and the per-record question read "one
+    /// whole 'orders'": Jev put a plain record at 0.54 no_record, so the report's total left a row out.
+    #[test]
+    fn the_kind_of_record_a_tally_ranges_over_is_asked_for_in_the_singular() {
+        assert!(COMPOSER.contains("the kind of one record it ranges over, in the singular"));
+    }
+
     #[test]
     fn source_binding_rejects_unknown_fragment_and_invalid_value_slots() {
         let notes = Notes::new([fact(0, "A source that is longer than one request ".repeat(10))]);
@@ -4899,6 +4919,36 @@ mod tests {
         let checked = review_claims(&jev, &READS, task, None, vec![claim], &notes, None, true, &[]).await.unwrap();
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("A was founded earliest.", earliest)]);
+    }
+
+    /// Read across twenty pages and shown the last, the driver was told the most expensive laptop's note but not its
+    /// page, and searched the pages one by one for it until the run stopped. The reason names each note's page.
+    #[test]
+    fn a_wrong_extreme_names_the_page_of_the_record_at_it() {
+        let claim = tallied("B costs $5.", "$5", tally::Op::Max, "item", Some("price"), vec![]);
+        let fact = page_fact(0, "https://shop.test/items?page=5", "$9 A");
+        let winner = json!(QuoteState {
+            quote: fact.evidence.as_ref().unwrap(),
+            superseded: false,
+            after_step: None,
+            whole_record: true,
+            source_kind: None,
+            whole_element: false,
+            typed_by_step: None,
+            list_position: None,
+            list_size: None,
+        });
+        let checks = tally_checks(claim.tally.as_ref().unwrap(), &claim.text, std::slice::from_ref(&winner));
+        let (_, _, reason) = checks.iter().find(|(key, _, _)| *key == "record").unwrap();
+        assert!(reason.contains("the note '$9 A' on https://shop.test/items?page=5"), "{reason}");
+        // A claim whose written is a record's name names one: written "book and price", it named none and passed.
+        let named = tallied("The priciest is book and price.", "book and price", tally::Op::Max, "item", None, vec![]);
+        let checks = tally_checks(named.tally.as_ref().unwrap(), &named.text, &[winner]);
+        let (_, Question::Choice(record), _) = checks.iter().find(|(key, _, _)| *key == "record").unwrap() else {
+            panic!("record is a choice")
+        };
+        assert_eq!(record.criteria.keys().map(String::as_str).collect::<Vec<_>>(), ["r0", OTHER]);
+        assert!(record.criteria[OTHER].as_str().unwrap().contains("or names no particular"));
     }
 
     /// Asked which three authors have the most quotes, the composer counted each author's quotes as a count of "quote

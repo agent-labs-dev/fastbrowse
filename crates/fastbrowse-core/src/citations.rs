@@ -122,7 +122,11 @@ fn divider_line(line: &str) -> bool {
         .is_some_and(|inner| inner.split(" | ").all(|cell| cell == "---"))
 }
 
-/// The page's own text for `quote`, the span of a capture starting at `start`, given the capture's `tables`.
+/// The page's own text for `quote`, the span of a capture starting at `start`, given the capture's `tables` and
+/// `advice` (`Capture::advice`).
+///
+/// Advice is words code wrote beside page text, such as a link's title, so a fragment that keeps it matches nothing on
+/// the page; it is dropped wherever it falls, inside a table or not.
 ///
 /// A capture writes a table row as `| cell | cell |`, escapes a pipe inside a cell as `\|`, and repeats the header
 /// and its `| --- |` divider before every row. None of that is on the page, so a citation showing it, or a text
@@ -131,12 +135,18 @@ fn divider_line(line: &str) -> bool {
 /// later row is dropped too, as the page shows it only above the table's first row; the quote stays text that runs
 /// on the page. Text outside every table block is the page's own and is kept as it is, pipes and backslashes
 /// included.
-pub fn page_text(quote: &str, start: i64, tables: &[TableBlock]) -> String {
+pub fn page_text(quote: &str, start: i64, tables: &[TableBlock], advice: &[(i64, i64)]) -> String {
     let chars: Vec<char> = quote.chars().collect();
     let end = start + chars.len() as i64;
     let text = |from: i64, to: i64| -> String {
         let clamp = |at: i64| (at - start).clamp(0, chars.len() as i64) as usize;
-        chars[clamp(from)..clamp(to).max(clamp(from))].iter().collect()
+        (clamp(from)..clamp(to).max(clamp(from)))
+            .filter(|&at| {
+                let at = start + at as i64;
+                !advice.iter().any(|&(from, to)| from <= at && at < to)
+            })
+            .map(|at| chars[at])
+            .collect()
     };
     let mut shown = String::new();
     let mut at = start;
@@ -153,7 +163,7 @@ pub fn page_text(quote: &str, start: i64, tables: &[TableBlock]) -> String {
         at = table.end.max(at);
     }
     if at == start {
-        return quote.to_owned();
+        return text(start, end);
     }
     shown.push_str(&text(at, end));
     shown
@@ -221,8 +231,8 @@ mod tests {
         }))
         .unwrap();
         let tables = table_blocks(&capture);
-        assert_eq!(page_text("| Name | Score |", start, &tables), "Name Score");
-        assert_eq!(page_text(second, start, &tables), "Grace 9");
+        assert_eq!(page_text("| Name | Score |", start, &tables, &[]), "Name Score");
+        assert_eq!(page_text(second, start, &tables, &[]), "Grace 9");
     }
 
     /// A capture of `blocks`, each `(is a table, text)`, one per line.
@@ -252,7 +262,21 @@ mod tests {
     fn shown(capture: &Capture, first: usize, last: usize) -> String {
         let (start, end) = (capture.blocks[first].start, capture.blocks[last].end);
         let quote: String = capture.text.chars().skip(start as usize).take((end - start) as usize).collect();
-        page_text(&quote, start, &table_blocks(capture))
+        page_text(&quote, start, &table_blocks(capture), &capture.advice)
+    }
+
+    #[test]
+    fn advice_code_wrote_is_not_page_text() {
+        let (text, advice) =
+            crate::page::unmark_advice("Dune\u{FDD0} (title: Dune: Deluxe Edition)\u{FDD1} by Frank Herbert", |_| true);
+        let mut capture = captured(&[(false, &text)]);
+        capture.advice = advice;
+        assert_eq!(shown(&capture, 0, 0), "Dune by Frank Herbert");
+        let (row, advice) =
+            crate::page::unmark_advice("| Dune\u{FDD0} (title: Dune: Deluxe Edition)\u{FDD1} | 9 |", |_| true);
+        let mut table = captured(&[(true, &row)]);
+        table.advice = advice;
+        assert_eq!(shown(&table, 0, 0), "Dune 9");
     }
 
     #[test]
@@ -319,7 +343,7 @@ mod tests {
         let text = "name,expression\nfilter,a | b";
         let mut capture = captured(&[(true, text)]);
         capture.blocks[0].source_id = "download/0".into();
-        assert_eq!(page_text(text, 0, &table_blocks(&capture)), text);
+        assert_eq!(page_text(text, 0, &table_blocks(&capture), &[]), text);
     }
 
     #[test]
@@ -329,7 +353,7 @@ mod tests {
         assert_eq!(shown(&capture, 0, 2), "| not a row | a \\| b\nDune Frank Herbert\nx | y");
         assert_eq!(shown(&capture, 0, 0), "| not a row | a \\| b");
         let quote = "| Dune | Frank Herbert |";
-        assert_eq!(page_text(quote, 0, &[]), quote, "with no capture the quote stands as cut");
+        assert_eq!(page_text(quote, 0, &[], &[]), quote, "with no capture the quote stands as cut");
     }
 
     #[test]

@@ -50,14 +50,16 @@ impl Page for SavePage {
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
         let text = if *self.saved.lock().unwrap() {
-            "Status: Changes saved successfully (title: Save status)\nHelp example:\nChanges saved successfully (title: This is an example confirmation)"
+            "Status: Changes saved successfully\u{FDD0} (title: Save status)\u{FDD1}\nHelp example:\nChanges saved successfully\u{FDD0} (title: This is an example confirmation)\u{FDD1}"
         } else {
-            "Status: Not saved (title: Save status)\nHelp example:\nChanges saved successfully (title: This is an example confirmation)"
+            "Status: Not saved\u{FDD0} (title: Save status)\u{FDD1}\nHelp example:\nChanges saved successfully\u{FDD0} (title: This is an example confirmation)\u{FDD1}"
         };
+        // capture.js marks the advice it writes, and the capture records where it sits.
+        let (text, advice) = fastbrowse_core::page::unmark_advice(text, |_| true);
         Box::pin(async move {
             Ok(serde_json::from_value(json!({
                 "url": "https://editor.test/", "title": "Editor", "captured_at": "2026-11-22T00:00:00Z",
-                "sha256": "", "text": text,
+                "sha256": "", "text": text, "advice": advice,
                 "blocks": [{"source_id": "s0", "kind": "paragraph", "frame_id": null, "start": 0, "end": text.chars().count()}]
             })).unwrap())
         })

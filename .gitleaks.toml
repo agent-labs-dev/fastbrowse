@@ -21,3 +21,14 @@ condition = "AND"
 paths = ['''^crates/fastbrowse-browser/(extension|extension-store/published/[0-9.]+)/manifest\.json$''']
 regexTarget = "line"
 regexes = ['''^\s*"key": "MII[A-Za-z0-9+/]+=*",?$''']
+
+[[allowlists]]
+description = "reasoning ciphertext the model provider returns, recorded in the replay cassettes"
+# A cassette records model traffic, which never holds a secret value, and the provider's encrypted reasoning is random
+# base64url: in mock-basket and mock-cheapest-product it happened to contain `ghp_` and 36 letters and digits, which the
+# github-pat rule reads as a token. Only that rule, only on cassette lines carrying such ciphertext, is let through.
+condition = "AND"
+targetRules = ["github-pat"]
+paths = ['''^bench/cassettes/[a-z0-9-]+\.jsonl$''']
+regexTarget = "line"
+regexes = ['''\\"encrypted_content\\":\\"''']
