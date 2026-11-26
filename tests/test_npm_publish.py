@@ -53,6 +53,11 @@ if args[0] == "view":
     name, _, asked = args[1].rpartition("@")
     if f"{{name}}@{{asked}}" not in state["published"]:
         sys.exit(1)
+    if state["unseen"].get(name, 0) > 0:
+        # Published, and the registry's cache still serves the document from before it.
+        state["unseen"][name] -= 1
+        save()
+        sys.exit(1)
     print(asked)
     sys.exit(0)
 
@@ -75,6 +80,21 @@ if args[0] == "publish":
             file=sys.stderr,
         )
         sys.exit(1)
+    if f"{{name}}@{{version}}" in state["published"]:
+        print("npm error code E403\\nnpm error You cannot publish over the previous versions", file=sys.stderr)
+        sys.exit(1)
+    if name in state["timeout"]:
+        # The registry takes the publish and the client gives up waiting for its answer.
+        state["timeout"].remove(name)
+        state["published"].append(f"{{name}}@{{version}}")
+        state["latest"][name] = version
+        save()
+        print("npm error code ETIMEDOUT\\nnpm error network timeout", file=sys.stderr)
+        sys.exit(1)
+    if name in state["lost"]:
+        # npm exits 0 and the registry never holds the version (0.12.0's darwin-arm64).
+        print(f"+ {{name}}@{{version}}")
+        sys.exit(0)
     if name in state["flaky"]:
         state["flaky"].remove(name)
         save()
@@ -103,6 +123,9 @@ def run_script(
         "flaky": [],
         "drift": [],
         "lag": {},
+        "lost": [],
+        "timeout": [],
+        "unseen": {},
         **state,
     }
     (tmp_path / "registry.json").write_text(json.dumps(state))
@@ -184,6 +207,23 @@ def test_a_transient_failure_is_retried(tmp_path: Path) -> None:
     result, _ = run_script(tmp_path, flaky=["@fastbrowse/linux-x64"])
     assert result.returncode == 0, result.stderr
     assert f"@fastbrowse/linux-x64@{VERSION} on the second attempt" in result.stdout
+
+
+def test_a_publish_npm_reports_and_the_registry_lacks_holds_back_the_sdk(tmp_path: Path) -> None:
+    """0.12.0: darwin-arm64's publish exited 0, the registry never held it, and the SDK went out depending on it."""
+    result, state = run_script(tmp_path, lost=["@fastbrowse/darwin-arm64"])
+    assert result.returncode == 1
+    assert "npm reported success, and the registry does not hold it" in result.stdout
+    assert f"fastbrowse@{VERSION}" not in state["published"]
+
+
+def test_a_publish_that_landed_behind_a_timeout_is_found_once_the_cache_catches_up(tmp_path: Path) -> None:
+    """The retry is refused as a duplicate while `npm view` is stale; the settle window finds the version."""
+    package = "@fastbrowse/darwin-arm64"
+    result, state = run_script(tmp_path, settle=5, timeout=[package], unseen={package: 2})
+    assert result.returncode == 0, result.stdout
+    assert f"published {package}@{VERSION} on the second attempt" in result.stdout
+    assert f"fastbrowse@{VERSION}" in state["published"]
 
 
 def test_a_published_version_whose_latest_tag_did_not_move_fails(tmp_path: Path) -> None:
