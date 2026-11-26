@@ -1698,6 +1698,9 @@ async fn review_composition(
         .enumerate()
         .map(|(index, claim)| match worked.get(&index) {
             Some(Ok(done)) => {
+                if let Some(reason) = &done.draft {
+                    untallied.push(json!({"claim": index, "reason": reason}));
+                }
                 tallies.extend(claim.tally.clone().map(|tally| (index, tally)));
                 // A claim naming the record keeps it in view, for the record check to judge.
                 if !claim.tally.as_ref().is_some_and(Tally::names_record) {
@@ -1756,6 +1759,9 @@ async fn review_composition(
             required[index].push(format!("claim{index}/citations"));
             uncited.push(json!({"claim": index, "unknown_evidence_ids": unknown}));
             continue;
+        }
+        if worked.get(&index).is_some_and(|done| done.as_ref().is_ok_and(|done| done.draft.is_some())) {
+            required[index].push(format!("claim{index}/tally"));
         }
         let shown = &shown[index];
         // A table row's tally is checked against the task as a claim's is: its cells are judged without recomputing it.
@@ -1925,6 +1931,7 @@ async fn review_composition(
         if let Some(index) = key.strip_prefix("claim").and_then(|rest| rest.strip_suffix("/tally")) {
             return index.parse::<usize>().ok().and_then(|index| match worked.get(&index) {
                 Some(Err(Unworked::Draft(_) | Unworked::Notes { .. })) => Some(false),
+                Some(Ok(done)) if done.draft.is_some() => Some(false),
                 _ => None,
             });
         }
@@ -3014,6 +3021,42 @@ mod tests {
                 assert_eq!(checked.claims[0].evidence_ids, items[1].sources);
             }
         }
+    }
+
+    /// A draft wrote "59" for a computed "GBP 59" and a clause besides its minimum. Refused for the unit alone, its
+    /// rewrite was refused for the clause, and the run spent its rejected drafts one fault each.
+    #[tokio::test]
+    async fn a_draft_with_a_unit_fault_is_still_judged_so_every_fault_is_named() {
+        let notes = Notes::new([
+            fact(0, "London to Paris, 08:10, GBP 74".into()),
+            fact(1, "London to Paris, 12:45, GBP 59".into()),
+        ]);
+        let items = initial_items(&notes, false);
+        let tally = tallied("", "59", Op::Min, "fare", Some("fare in GBP"), vec![]).tally;
+        let text = json!([{"prose": "The cheapest fare is "}, {"computed": true}, {"prose": ", departing at 12:45."}]);
+        let claim = bind_claim(&items, text, tally);
+        let jev = Tallying { support: 0.1, ..Tallying::new("London to Paris", "74|59") };
+        let task = "Tell me the cheapest London to Paris fare";
+        let checked = review_composition(
+            &jev,
+            &READS,
+            task,
+            None,
+            vec![claim],
+            &notes,
+            None,
+            false,
+            Screenshot::Absent,
+            false,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+        assert!(checked.claims.is_empty(), "{:?}", checked.claims);
+        let rejection = checked.rejection.as_deref().unwrap();
+        assert!(rejection.contains("in the unit the notes give it"), "{rejection}");
+        assert!(rejection.contains("states something besides its minimum"), "{rejection}");
     }
 
     #[test]

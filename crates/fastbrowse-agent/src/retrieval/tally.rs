@@ -143,6 +143,10 @@ pub struct Worked {
     pub evidence_ids: Vec<String>,
     pub winner_ids: Option<Vec<String>>,
     pub winner_records: Vec<Vec<String>>,
+    /// A fault in the draft that leaves the value computable, shown to the composer. The claim is still judged, so a
+    /// rejection names every fault at once: refused only for writing "59" for "GBP 59", a draft's next rewrite was
+    /// refused for the clause beside it the first had also held, and the run spent its rejected drafts one fault each.
+    pub draft: Option<String>,
 }
 
 /// Why a tally has no value.
@@ -870,7 +874,7 @@ fn per_group(
             )));
         }
     }
-    Ok(Worked { winner_records: Vec::new(), winner_ids: None, value: count.to_string(), evidence_ids })
+    Ok(Worked { winner_records: Vec::new(), winner_ids: None, value: count.to_string(), evidence_ids, draft: None })
 }
 
 /// What narrowing a note's numbers to a choice Jev can hold found.
@@ -1613,6 +1617,7 @@ pub(super) async fn work_selected_with_slots(
                     winner_ids: None,
                     value: records.len().to_string(),
                     evidence_ids,
+                    draft: None,
                 }),
             );
             continue;
@@ -1713,7 +1718,7 @@ pub(super) async fn work_selected_with_slots(
             Op::Sum => {
                 let all: Vec<&Amount> = amounts.iter().map(|(_, amount)| amount).collect();
                 let evidence_ids = kept.cited(amounts.iter().map(|(note, _)| *note), &found);
-                Worked { winner_records: Vec::new(), winner_ids: None, value: total(&all), evidence_ids }
+                Worked { winner_records: Vec::new(), winner_ids: None, value: total(&all), evidence_ids, draft: None }
             }
             Op::Min | Op::Max => {
                 // Places count distinct values, so two records tied at the lowest are both first, and the next value
@@ -1788,6 +1793,7 @@ pub(super) async fn work_selected_with_slots(
                     winner_ids: None,
                     value,
                     evidence_ids,
+                    draft: None,
                 }
             }
             Op::Count => unreachable!("a count is worked out above"),
@@ -1810,14 +1816,12 @@ pub(super) async fn work_selected_with_slots(
             // written value carries the computed unit, so the unit always comes from code: a unitless "23" beside prose
             // "USD" would otherwise have written a total of GBP values as USD.
             let field = text::repr(tally.field.as_deref().unwrap_or("value"));
-            worked.insert(
-                index,
-                Err(Unworked::Draft(format!(
-                    "tally.written {} is not a {field} in the unit the notes give it, as {} is. Write tally.written as the notes write the {field}; code writes the computed part in that form, so the claim's prose never repeats a unit written there.",
-                    text::repr(&tally.written),
-                    text::repr(&result.value)
-                ))),
+            let draft = format!(
+                "tally.written {} is not a {field} in the unit the notes give it, as {} is. Write tally.written as the notes write the {field}; code writes the computed part in that form, so the claim's prose never repeats a unit written there.",
+                text::repr(&tally.written),
+                text::repr(&result.value)
             );
+            worked.insert(index, Ok(Worked { draft: Some(draft), ..result }));
             continue;
         }
         let value =
@@ -3052,6 +3056,7 @@ mod tests {
             evidence_ids: ids.clone(),
             winner_ids: Some(vec![ids[0].clone()]),
             winner_records: vec![vec![ids[0].clone()]],
+            draft: None,
         };
         let tokens = FirstField.profile().fit(None).tokens;
         for (copied, accepted) in [
@@ -3568,13 +3573,16 @@ mod tests {
     async fn computed_amounts_cannot_be_relabelled_with_another_unit() {
         for values in [["USD 23", "USD 986"], ["23", "986"]] {
             let result = amount_tally(&values, Op::Sum, "GBP 23").await;
-            assert!(matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("unit")), "{result:?}");
+            assert!(
+                result.as_ref().is_ok_and(|done| done.draft.as_ref().is_some_and(|reason| reason.contains("unit"))),
+                "{result:?}"
+            );
         }
         for written in ["23", "USD 23"] {
             let result =
                 amount_tally_in_claim(&["GBP 23", "GBP 986"], Op::Sum, written, &format!("USD {written}")).await;
             assert!(
-                matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("unit")),
+                result.as_ref().is_ok_and(|done| done.draft.as_ref().is_some_and(|reason| reason.contains("unit"))),
                 "{written}: {result:?}"
             );
         }
