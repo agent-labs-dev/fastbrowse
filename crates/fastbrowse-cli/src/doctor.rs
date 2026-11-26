@@ -291,12 +291,15 @@ mod tests {
 
         let result = receive.recv_timeout(Duration::from_secs(120)).expect("the probe and runtime exited");
         probe.join().unwrap();
+        // Checked before waiting on the helper, which a failed probe may never have started.
+        let version = result.expect("the probe returned the launcher's output");
         // The helper connected before the launcher printed, so it is waiting in the backlog and still holds stdout.
         let (mut helper, _) = listener.accept().unwrap();
         helper.write_all(b"stop").unwrap();
-        let mut closed = Vec::new();
-        helper.read_to_end(&mut closed).unwrap();
-        assert_eq!(result.unwrap(), "Chrome 123");
+        helper.set_read_timeout(Some(Duration::from_secs(120))).unwrap();
+        helper.read_to_end(&mut Vec::new()).expect("the helper exited");
+        // The launcher is a test binary run with --nocapture, so its own harness lines share the captured output.
+        assert!(version.contains("Chrome 123"), "{version}");
     }
 
     #[cfg(windows)]

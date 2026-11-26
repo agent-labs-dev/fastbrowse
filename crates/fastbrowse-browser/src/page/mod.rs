@@ -2066,19 +2066,18 @@ impl CdpPage {
     }
 }
 
-/// Where the evaluated script threw, as the line and column in the script, and what threw: the exception's class and
-/// CDP object type and subtype, and which of this layer's own sentinels it is (`snapshot not installed`, `listeners
-/// not read`, or neither), so a `Script` failure names the branch that threw. Neither the exception's description nor
-/// CDP's `text` is carried: a page can throw from a getter it replaced, and both then hold the page's own message
-/// (`Uncaught (in promise) Error: ...` for a rejected promise). The class is the constructor's name, which no message
-/// or payload reaches.
+/// Where the evaluated script threw, as the line and column in the script, and what threw: the exception's CDP type and
+/// subtype, and which of this layer's own sentinels it is (`snapshot not installed`, `listeners not read`, or
+/// neither), so a `Script` failure names the branch that threw. Only CDP's closed enums are carried. Neither the
+/// exception's description nor CDP's `text` is, and neither is its `className`: a page can throw from a getter it
+/// replaced, and all three then hold the page's own text (`Uncaught (in promise) Error: ...` for a rejected promise).
 fn exception_text(details: &Value) -> String {
     let position = match (details["lineNumber"].as_u64(), details["columnNumber"].as_u64()) {
         (Some(line), Some(column)) => format!("thrown at line {line}, column {column}"),
         _ => "thrown at an unknown position".to_string(),
     };
     let exception = &details["exception"];
-    let kind = ["className", "type", "subtype"]
+    let kind = ["type", "subtype"]
         .iter()
         .filter_map(|key| exception[key].as_str().map(|value| format!("{key} {value}")))
         .collect::<Vec<_>>()
@@ -2391,11 +2390,11 @@ mod tests {
     #[test]
     fn a_script_failure_names_where_it_threw_and_never_the_exception_message() {
         let thrown = json!({"text": "Uncaught (in promise) Error: page text", "lineNumber": 3, "columnNumber": 7,
-            "exception": {"type": "object", "subtype": "error", "className": "TypeError",
+            "exception": {"type": "object", "subtype": "error", "className": "page text",
                 "description": "TypeError: page text"}});
         assert_eq!(
             exception_text(&thrown),
-            "thrown at line 3, column 7 (className TypeError, type object, subtype error; neither sentinel)"
+            "thrown at line 3, column 7 (type object, subtype error; neither sentinel)"
         );
         assert_eq!(
             exception_text(&json!({"text": "Uncaught (in promise) Error: page text"})),
@@ -2407,7 +2406,7 @@ mod tests {
     fn a_script_failure_names_the_sentinel_that_threw() {
         let thrown = |message: &str| {
             json!({"lineNumber": 1, "columnNumber": 2,
-                "exception": {"type": "object", "subtype": "error", "className": "Error", "description": message}})
+                "exception": {"type": "object", "subtype": "error", "description": message}})
         };
         assert!(exception_text(&thrown(LISTENERS_UNREAD)).ends_with("listeners not read)"));
         assert!(exception_text(&thrown(SNAPSHOT_UNINSTALLED)).ends_with("snapshot not installed)"));
