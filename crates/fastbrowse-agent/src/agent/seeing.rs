@@ -485,10 +485,11 @@ pub(super) fn numbered(viewport: &[u8], marks: &[(String, Edges)]) -> Option<Vec
         let left = own[0].min(width.saturating_sub(tag_width));
         // Above the control's corner, unless that would cover another listed control or tag, which a reader would
         // take the number to label; then inside the control's own top edge, where it can only label that control.
-        let above = (own[1] >= tag_height).then(|| [left, own[1] - tag_height, left + tag_width, own[1]]).filter(|tag| {
-            !boxes.iter().enumerate().any(|(other, region)| other != index && overlaps(tag, region))
-                && !tags.iter().any(|placed| overlaps(tag, placed))
-        });
+        let above =
+            (own[1] >= tag_height).then(|| [left, own[1] - tag_height, left + tag_width, own[1]]).filter(|tag| {
+                !boxes.iter().enumerate().any(|(other, region)| other != index && overlaps(tag, region))
+                    && !tags.iter().any(|placed| overlaps(tag, placed))
+            });
         let top = above.map_or(own[1].min(height.saturating_sub(tag_height)), |tag| tag[1]);
         tags.push([left, top, left + tag_width, top + tag_height]);
         for y in top..(top + tag_height).min(height) {
@@ -548,7 +549,10 @@ mod tests {
         let marked =
             rgba(&numbered(&blank(200, 100), &[("5".into(), button), ("10".into(), textbox)]).unwrap()).unwrap();
         let tagged = |x0: u32, y0: u32, x1: u32, y1: u32| {
-            (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| marked.get_pixel(x, y)[3] != 0).count()
+            (y0..y1)
+                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                .filter(|&(x, y)| marked.get_pixel(x, y)[3] != 0)
+                .count()
         };
         assert_eq!(tagged(0, 0, 200, 20), 0, "the button's tag would not fit above it without leaving the image");
         assert_eq!(*marked.get_pixel(0, 42), OUTLINE, "the textbox's tag starts at its own corner");

@@ -115,6 +115,7 @@
       case 'selected': return [...target.selectedOptions];
       case 'validity': return target.validity?.valid;
       case 'selection': return selectionOf(target);
+      case 'selectionPlace': return selectionPlaceOf(target);
       case 'prop': return target?.[args];
     }
   };
@@ -157,25 +158,39 @@
   // made with Ctrl+A or a drag edits nothing, yet it is what the next key or toolbar press acts on: left out, it read
   // as "nothing visible changed" and counted toward the stall rule (#1574). Selected secret text never leaves the page:
   // it is told as one dot a character, as a password field shows it, so selecting it still reads as a change.
-  const selectionOf = doc => {
+  const selectionOf = doc => selectedIn(doc).text;
+  // Where the selection sits, beside its text: the same words selected at another occurrence are another target for
+  // the next key, so the page's identity tells them apart. It is told as child-index chains, so it carries no page text.
+  const selectionPlaceOf = doc => selectedIn(doc).place;
+  const nodePath = node => {
+    const path = [];
+    for (; node?.parentNode; node = node.parentNode) path.push(Array.prototype.indexOf.call(node.parentNode.childNodes, node));
+    return path;
+  };
+  const selectedIn = doc => {
+    const none = {text: '', place: ''};
     let field = doc.activeElement;
     while (field?.shadowRoot?.activeElement) field = field.shadowRoot.activeElement;
     if (field?.tagName === 'IFRAME' || field?.tagName === 'FRAME') {
       const inner = childDocument(field);
-      return inner && granted(inner) ? selectionOf(inner) : '';
+      if (!inner || !granted(inner)) return none;
+      const within = selectedIn(inner);
+      return within.text ? {text: within.text, place: JSON.stringify([nodePath(field), within.place])} : none;
     }
     const hidden = length => '\u2022'.repeat(length);
     if (field?.tagName === 'INPUT' || field?.tagName === 'TEXTAREA') {
       const start = nativeProperty(field, 'selectionStart'), end = nativeProperty(field, 'selectionEnd');
-      if (typeof start !== 'number' || !(end > start)) return '';
-      return secret(field) ? hidden(end - start) : nativeProperty(field, 'value').slice(start, end);
+      if (typeof start !== 'number' || !(end > start)) return none;
+      const text = secret(field) ? hidden(end - start) : nativeProperty(field, 'value').slice(start, end);
+      return {text, place: JSON.stringify([nodePath(field), start, end])};
     }
     const selected = doc.getSelection();
     const text = selected?.toString() ?? '';
-    if (!text) return '';
+    if (!text) return none;
     const touchesSecret = (field && secret(field))
       || [...doc.querySelectorAll('[data-fastbrowse-secret="1"]')].some(e => selected.containsNode(e, true));
-    return touchesSecret ? hidden(text.length) : text;
+    const place = JSON.stringify([nodePath(selected.anchorNode), selected.anchorOffset, nodePath(selected.focusNode), selected.focusOffset]);
+    return {text: touchesSecret ? hidden(text.length) : text, place};
   };
   // Keep the page's own timer overrides from holding a browser-side frame wait open.
   registry.nativeSetTimeout ||= window.setTimeout.bind(window);
@@ -631,8 +646,8 @@
     const include = root => {
       if (root.nodeType === Node.DOCUMENT_NODE) documents.push(root);
       hashText(root.body?.innerText ?? root.textContent ?? '');
-      const selected = root.nodeType === Node.DOCUMENT_NODE ? selectionOf(root) : '';
-      if (selected) hashText(JSON.stringify(['selection', selected]));
+      const selected = root.nodeType === Node.DOCUMENT_NODE ? selectedIn(root) : null;
+      if (selected?.text) hashText(JSON.stringify(['selection', selected.text, selected.place]));
       // innerText omits shadow trees and child documents even when their content is visible.
       for (const e of root.querySelectorAll('*')) {
         // A panel can move without changing any text or the document's own scroll position.
@@ -716,8 +731,9 @@
   const rootState = root => {
     if (root.nodeType !== Node.DOCUMENT_NODE) return [registry.live(root), root.getAnimations().length];
     const view = root.defaultView;
+    // Selecting text writes no node either, yet the read tells the selection and keys the page by where it sits.
     return [registry.live(root), registry.sheets(root), root.URL, root.title, root.readyState, root.hidden,
-      view.scrollX, view.scrollY, view.innerWidth, view.innerHeight, root.getAnimations().length];
+      selectionPlaceOf(root), view.scrollX, view.scrollY, view.innerWidth, view.innerHeight, root.getAnimations().length];
   };
   const still =
     reuse &&
@@ -2908,6 +2924,7 @@
   ]));
   // A selection is what the next key acts on, so an action planned on one is not run on a page without it.
   const selection = renderFact('selection', document);
+  const selectionPlace = selection ? renderFact('selectionPlace', document) : '';
   const page_key = digest(JSON.stringify([
     location.href,
     scrollX,
@@ -2915,7 +2932,7 @@
     innerWidth,
     innerHeight,
     document.title,
-    ...(selection ? [selection] : []),
+    ...(selection ? [selection, selectionPlace] : []),
     viewport_text,
     semantics,
     field_state,
@@ -3029,7 +3046,11 @@
   // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
   if (modal !== null) result.modal = modal;
   // Absent unless text is selected, as on most pages.
-  if (selection) result.selection = selection;
+  if (selection) {
+    result.selection = selection;
+    // Several frames can keep a selection; the one whose document holds focus is the one the next key acts on.
+    result.selection_focused = document.hasFocus();
+  }
   // A JSON document is shown by its structure, as capture.js sends it to be read: shown Chrome's rendering of the
   // served text, the driver quoted `"size": "large"` off httpbin's echo, and the check, which reads the document key by
   // key, found no page that said it.

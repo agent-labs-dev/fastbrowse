@@ -249,6 +249,9 @@ struct Snapshot {
     /// The text selected in the frame's document or its focused text field; absent when none is.
     #[serde(default)]
     selection: Option<String>,
+    /// Whether the frame's document held focus when its selection was read.
+    #[serde(default)]
+    selection_focused: bool,
     #[serde(default)]
     media: Vec<Media>,
     controls: Vec<SnapshotControl>,
@@ -407,6 +410,17 @@ struct FrameObservation<T> {
     frame_id: Option<String>,
     session_id: String,
     raw: Arc<T>,
+}
+
+/// The selection the next key acts on: the page's own, else that of the cross-origin frame holding focus, whose editor
+/// reads its own. Where no frame reports focus, as in a tab run in the background, the first frame's is told.
+fn told_selection(frames: &[(String, FrameObservation<Snapshot>)]) -> Option<String> {
+    let selected = || frames.iter().filter(|(_, f)| f.raw.selection.is_some());
+    selected()
+        .find(|(key, _)| key == MAIN)
+        .or_else(|| selected().find(|(_, f)| f.raw.selection_focused))
+        .or_else(|| selected().next())
+        .and_then(|(_, f)| f.raw.selection.clone())
 }
 
 /// The page's own text, then each cross-origin frame's in `frames` order under a `[Frame: origin]` line. Only the
@@ -901,10 +915,7 @@ impl CdpPage {
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 modal: main.and_then(|m| m.raw.modal.clone()),
-                // A cross-origin frame's editor reads its own selection; the main document's comes first.
-                selection: main
-                    .and_then(|m| m.raw.selection.clone())
-                    .or_else(|| frames.iter().find_map(|(_, f)| f.raw.selection.clone())),
+                selection: told_selection(&frames),
                 media: frames.iter().flat_map(|(_, f)| f.raw.media.iter().cloned()).collect(),
                 tabs: self.session.tabs(),
                 dialog: self.session.pending_dialog(),
@@ -2361,6 +2372,24 @@ mod tests {
         }))
         .expect("snapshot");
         (key.to_owned(), FrameObservation { frame_id: None, session_id: String::new(), raw: Arc::new(raw) })
+    }
+
+    /// Two frames keep a selection; the one holding focus is the one a key acts on, whatever their order (#1574).
+    #[test]
+    fn the_selection_told_is_the_pages_then_the_focused_frames() {
+        let selecting = |key: &str, selection: &str, focused: bool| {
+            let (key, mut observed) = frame(key, "https://pay.test/", "", "");
+            let raw = Arc::get_mut(&mut observed.raw).expect("unshared");
+            (raw.selection, raw.selection_focused) = (Some(selection.into()), focused);
+            (key, observed)
+        };
+        let frames = vec![selecting("f1", "Old", false), selecting("f2", "New", true)];
+        assert_eq!(told_selection(&frames).as_deref(), Some("New"));
+        let unfocused = vec![selecting("f1", "Old", false), selecting("f2", "New", false)];
+        assert_eq!(told_selection(&unfocused).as_deref(), Some("Old"));
+        let with_page = vec![selecting("f2", "New", true), selecting(MAIN, "Page", false)];
+        assert_eq!(told_selection(&with_page).as_deref(), Some("Page"));
+        assert_eq!(told_selection(&[frame(MAIN, "https://shop.test/", "", "")]), None);
     }
 
     #[test]

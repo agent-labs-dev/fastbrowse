@@ -1360,6 +1360,33 @@ async fn test_a_select_all_in_an_editor_is_a_page_change() {
     h.close().await;
 }
 
+/// The same words selected at another occurrence are another target for the next key: the page's identity changes
+/// though the told selection reads the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_moving_a_selection_to_the_same_words_elsewhere_changes_the_page_key() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div contenteditable role=textbox aria-label=Document><p>same</p><p>same</p></div>'; true",
+    )
+    .await;
+    let select = |occurrence: usize| {
+        format!(
+            "{{ const words = document.querySelectorAll('p')[{occurrence}].firstChild; \
+             getSelection().setBaseAndExtent(words, 0, words, 4); }} true"
+        )
+    };
+    eval_active(&h.page, &select(0)).await;
+    let first = h.observe().await;
+    eval_active(&h.page, &select(1)).await;
+    let second = h.observe().await;
+    assert_eq!(first.selection.as_deref(), Some("same"));
+    assert_eq!(second.selection, first.selection);
+    assert_ne!(first.page_key, second.page_key);
+    h.close().await;
+}
+
 /// A selection in a password field or a frame's editor is a change too; the password's is told only as its length.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_select_all_in_a_password_or_a_framed_editor_is_a_page_change() {
