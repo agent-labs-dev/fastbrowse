@@ -272,6 +272,25 @@ pub fn requested_question(action: &str) -> NoulQuestion {
     )
 }
 
+/// What an edit changes a field from and to, said in the action [`requested_question`] asks about. `holds` is None for a
+/// field whose value is masked, and `secret` names the secret typed instead of `next`.
+///
+/// Asked only what a fill left in a long field, Jev could not tell what it took out: removing the last line of a
+/// description the task asked to lose scored 0.10 to 0.13 requested. Told what the field holds now as well, the same
+/// fill scored 0.74 to 0.82, and one that wiped all but a sentence of it 0.21 to 0.31 (#1432). A computed sentence
+/// naming what the fill removes did not tell the two apart (0.33 to 0.58 against 0.41 to 0.56), so both texts are given
+/// whole.
+pub fn edit_fact(holds: Option<&str>, next: &str, secret: bool) -> String {
+    let said = |value: &str| if value.is_empty() { "nothing".to_string() } else { text::repr(value) };
+    let mut fact = holds.map(|holds| format!("The field holds {} now.\n", said(holds))).unwrap_or_default();
+    if secret {
+        fact += &format!("The field would then hold the secret named {}.\n", text::repr(next));
+    } else {
+        fact += &format!("The field would then hold {}.\n", said(next));
+    }
+    fact
+}
+
 /// Whether the task tells the agent not to take some action: asked of the task alone, once, before the first action
 /// the gate asks about, so [`forbidden_question`] goes only into the requests of a run whose task forbids something.
 pub fn prohibits_question() -> NoulQuestion {
@@ -2436,6 +2455,19 @@ mod tests {
         let navigate = values_question(Operation::Navigate, "open the address https://example.test/next.\n");
         assert!(!navigate.instructions.contains("control it acts on"));
         assert!(navigate.instructions.contains("address"));
+    }
+
+    #[test]
+    fn test_an_edit_states_what_the_field_holds_and_would_hold() {
+        assert_eq!(
+            edit_fact(Some("Intro.\nUpdated for 1.15."), "Intro.", false),
+            "The field holds 'Intro.\\nUpdated for 1.15.' now.\nThe field would then hold 'Intro.'.\n"
+        );
+        assert_eq!(
+            edit_fact(Some(""), "", false),
+            "The field holds nothing now.\nThe field would then hold nothing.\n"
+        );
+        assert_eq!(edit_fact(None, "password", true), "The field would then hold the secret named 'password'.\n");
     }
 
     #[test]

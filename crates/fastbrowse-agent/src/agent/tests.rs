@@ -2260,6 +2260,56 @@ impl fastbrowse_core::decision::DecisionClient for RequestedRecorder {
     }
 }
 
+/// Asked only about a fill's result, Jev could not tell a requested removal from a wipe of a long field (#1432): a fill
+/// and a select state what the field holds now and would hold then, a masked field only the latter, and a checkbox
+/// click neither.
+#[tokio::test]
+async fn test_a_requested_edit_states_what_the_field_holds_and_would_hold() {
+    use crate::policy::Given;
+    let notes = Control {
+        value: Some("Intro.\nUpdated for 1.15.".into()),
+        ..Control::new("n", "textbox", "Notes", [Operation::Fill])
+    };
+    let secret = Control {
+        value: Some("\u{2022}\u{2022}".into()),
+        sensitive: true,
+        ..Control::new("p", "textbox", "Key", [Operation::Fill])
+    };
+    let size = Control {
+        value: Some("S".into()),
+        options: vec!["S".into(), "M".into()],
+        ..Control::new("s", "combobox", "Size", [Operation::Select])
+    };
+    let page = observation(&[notes.clone(), secret.clone(), size.clone()]);
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.raw_task = "Remove the line 'Updated for 1.15.' from the notes. Change nothing else.".into();
+    let fill = |control: &Control, given: Given| Decision {
+        given: Some(given),
+        ..code_decision(Operation::Fill, Some(control.clone()))
+    };
+    let select =
+        Decision { given: Some(Given::Text("M".into())), ..code_decision(Operation::Select, Some(size.clone())) };
+    for (decision, control) in [
+        (fill(&notes, Given::Text("Intro.".into())), &notes),
+        (fill(&secret, Given::Secret("api_key".into())), &secret),
+        (select, &size),
+    ] {
+        let gated = agent.gate_edit(&mut state, &page, &decision, control).await;
+        assert!(gated.is_ok(), "{gated:?}");
+    }
+    let asked: Vec<String> = jev.0.lock().unwrap().iter().map(|(_, question)| question.clone()).collect();
+    assert!(
+        asked[0].contains("The field holds 'Intro.\\nUpdated for 1.15.' now.\nThe field would then hold 'Intro.'."),
+        "{}",
+        asked[0]
+    );
+    assert!(!asked[1].contains("The field holds"), "{}", asked[1]);
+    assert!(asked[1].contains("The field would then hold the secret named 'api_key'."), "{}", asked[1]);
+    assert!(asked[2].contains("The field holds 'S' now.\nThe field would then hold 'M'."), "{}", asked[2]);
+}
+
 /// ArrowRight can select a tab where Delete closes it, so a task that asks for one press and rules out the rest is
 /// asked about the exact chord, not a press on the control.
 #[tokio::test]

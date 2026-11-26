@@ -120,6 +120,14 @@ pub(super) enum Act {
         id: String,
         text: String,
     },
+    /// Replaces the one passage `old` of what a field holds with `new`, which code applies to the field's value. Asked
+    /// to remove the last line of a 10,575-character description, the driver retyped it whole and added five spaces to
+    /// a table row it was to keep (#1434): a long text copied back through a model is not copied exactly.
+    Edit {
+        id: String,
+        old: String,
+        new: String,
+    },
     TypeSecret {
         id: String,
         name: String,
@@ -192,6 +200,7 @@ impl Act {
     fn written(&self) -> Vec<String> {
         match self {
             Act::Type { text, .. } => vec![text.clone()],
+            Act::Edit { old, new, .. } => vec![old.clone(), new.clone()],
             Act::Select { option, .. } => vec![option.clone()],
             Act::Key { key, .. } => vec![key.clone()],
             Act::Goto { url } => vec![url.clone()],
@@ -251,6 +260,9 @@ Act only on ids listed in the current page. Check what the actions did in the ne
 Tools:
 - click(id, on); on is null, except on a control marked drawn, such as a map or canvas, where it names the thing to \
 click inside it as your screenshot shows it, such as \"the blue square labelled Depot\". type(id, text) replaces the field's text; select(id, option) picks one of the listed options exactly.
+- edit(id, old, new) changes part of the text a field holds: old is a passage of its value, copied exactly, that \
+occurs once in it, and it is replaced with new, an empty new removing it; the rest of the text is kept as it is. To \
+change part of a text a field already holds, use edit, not type, which writes the whole text again.
 - type_secret(id, name) types the secret with that name; you never see its value. Use only the secret names given.
 - key(id, key) presses a key or chord in the control, such as Enter, Escape, Tab or ArrowDown.
 - drag(id, to) drags a control that can drag and drops it on the control `to`; on a control marked drawn, such as a \
@@ -334,6 +346,7 @@ impl ResponseSchema for Actions {
         let tools = [
             Actions::tool("click", &[("id", string.clone()), ("on", nullable.clone())]),
             Actions::tool("type", &[("id", string.clone()), ("text", string.clone())]),
+            Actions::tool("edit", &[("id", string.clone()), ("old", string.clone()), ("new", string.clone())]),
             Actions::tool("type_secret", &[("id", string.clone()), ("name", string.clone())]),
             Actions::tool("select", &[("id", string.clone()), ("option", string.clone())]),
             Actions::tool("key", &[("id", string.clone()), ("key", string.clone())]),
@@ -382,6 +395,24 @@ impl ResponseSchema for Actions {
             return Err("actions holds no action".into());
         }
         Ok(value)
+    }
+}
+
+/// The text a field holds once the one passage `old` of `shown`, its value as the driver reads it, is replaced with
+/// `new`; or why it cannot be. `raw` is the value unmasked: a field holding a masked value would be written back with
+/// the mask in place of what it hid, so only a field the driver reads whole is edited in part.
+fn edited(shown: Option<&str>, raw: Option<&str>, old: &str, new: &str) -> Result<String, String> {
+    let shown = shown.unwrap_or_default();
+    if shown != raw.unwrap_or_default() {
+        return Err("the field's text is shown to you masked, so it cannot be changed in part; use type".into());
+    }
+    if old.is_empty() {
+        return Err("old is empty; give the passage of the field's text to change".into());
+    }
+    match shown.matches(old).count() {
+        1 => Ok(shown.replacen(old, new, 1)),
+        0 => Err("the field's text does not hold old word for word; copy the passage from its value exactly".into()),
+        n => Err(format!("old occurs {n} times in the field's text; give a longer passage that occurs once")),
     }
 }
 
@@ -488,6 +519,7 @@ fn target_of(act: &Act) -> Option<&str> {
     match act {
         Act::Click { id, .. }
         | Act::Type { id, .. }
+        | Act::Edit { id, .. }
         | Act::TypeSecret { id, .. }
         | Act::Select { id, .. }
         | Act::Key { id, .. }
@@ -1128,6 +1160,21 @@ impl Agent {
             Act::Type { id, text } => {
                 control(id).map(|target| decision(Operation::Fill, Some(target), None, Some(Given::Text(text.clone()))))
             }
+            Act::Edit { id, old, new } => match control(id) {
+                None => None,
+                Some(target) => {
+                    let raw = self.raw_target(&target).value;
+                    match edited(target.value.as_deref(), raw.as_deref(), old, new) {
+                        Ok(text) => Some(decision(Operation::Fill, Some(target), None, Some(Given::Text(text)))),
+                        Err(why) => {
+                            state.chat.queue.clear();
+                            state.chat.notices.push(format!("edit [{id}] was refused: {why}."));
+                            self.count_progress(state, false, observation, None.into(), Status::Stuck).await?;
+                            return Ok(None);
+                        }
+                    }
+                }
+            },
             Act::TypeSecret { id, name } => control(id)
                 .map(|target| decision(Operation::Fill, Some(target), None, Some(Given::Secret(name.clone())))),
             Act::Select { id, option } => control(id)
@@ -1428,6 +1475,32 @@ mod tests {
         let images: Vec<usize> = messages.iter().map(|message| message.images.len()).collect();
         assert_eq!(images, [0, 1, 1]);
         assert!(messages[0].content.ends_with("(the screenshot sent with this turn was removed)"));
+    }
+
+    /// A long field edited in part keeps every character of the rest, copied by code (#1434).
+    #[test]
+    fn an_edit_replaces_its_one_passage_and_keeps_the_rest() {
+        let text = "| a |     |\nKeep this.\nUpdated for 1.15.";
+        assert_eq!(edited(Some(text), Some(text), "\nUpdated for 1.15.", ""), Ok("| a |     |\nKeep this.".into()));
+        assert_eq!(edited(Some("ab"), Some("ab"), "b", "bc"), Ok("abc".into()));
+        assert!(edited(Some("a a"), Some("a a"), "a", "b").unwrap_err().contains("occurs 2 times"));
+        assert!(edited(Some("abc"), Some("abc"), "x", "y").unwrap_err().contains("does not hold old word for word"));
+        assert!(edited(Some("abc"), Some("abc"), "", "y").unwrap_err().contains("old is empty"));
+        assert!(edited(None, None, "a", "b").is_err());
+        // A masked value would be written back with the mask in it.
+        assert!(edited(Some("key \u{2022}\u{2022}"), Some("key hi"), "key", "k").unwrap_err().contains("masked"));
+    }
+
+    #[test]
+    fn the_driver_is_told_to_edit_part_of_a_field_rather_than_retype_it() {
+        assert!(SYSTEM.contains("edit(id, old, new) changes part of the text a field holds"));
+        assert!(SYSTEM.contains("To change part of a text a field already holds, use edit, not type"));
+        let value =
+            Actions.validate_json(r#"{"next":"","actions":[{"tool":"edit","id":"3","old":"a","new":""}]}"#).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Turn>(value).unwrap().actions,
+            vec![Act::Edit { id: "3".into(), old: "a".into(), new: String::new() }]
+        );
     }
 
     #[test]
