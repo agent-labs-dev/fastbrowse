@@ -1068,7 +1068,7 @@ impl Agent {
     }
 
     /// Carry out `act`, which returns a result only once the run ends.
-    async fn dispatch(
+    pub(super) async fn dispatch(
         &self,
         state: &mut RunState,
         observation: &Observation,
@@ -1202,6 +1202,11 @@ impl Agent {
             }
             Act::Wait { .. } if self.page.over_http() => {
                 return Err(self.page.needs_browser("the page needs its scripts run to finish loading".into()).into());
+            }
+            // A send the site failed is what stopped the task, as the driver is told: a run that met a sign-in on the way
+            // to its result and gave up needs_login sent its caller to sign in and send it again, maybe twice.
+            Act::GiveUp { .. } if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.sent) => {
+                return Err(failure.stop().into());
             }
             Act::GiveUp { status, reason } => {
                 let status = status.status();

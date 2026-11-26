@@ -2611,6 +2611,21 @@ async fn test_done_on_a_5xx_reply_to_a_send_is_refused_as_the_site_failure() {
     assert!(matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Unavailable), "{result:?}");
 }
 
+/// A send met a 503, and the page holding its result asked for a sign-in: giving up there as needs_login told the
+/// caller to sign in and send again, though the send may have gone through.
+#[tokio::test]
+async fn test_a_give_up_after_a_failed_send_reports_the_send_failure() {
+    let mut state = run_state();
+    let page = Observation { url: "https://example.test/login".into(), ..observation(&[]) };
+    state.site_failure = Some(SiteFailure { sent: true, ..SiteFailure::http("https://example.test/message", 503, 0) });
+    let agent =
+        Agent::new(Arc::new(FinishPage(page.clone())), Arc::new(ScriptedJev::new(vec![])), Arc::new(ScriptedLLM));
+    let give_up = super::driver::Act::GiveUp { status: super::driver::GiveUp::NeedsLogin, reason: "sign-in".into() };
+
+    let result = agent.dispatch(&mut state, &page, give_up, None, None).await;
+    assert!(matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Unavailable), "{result:?}");
+}
+
 /// Asked to sign in and then report the account's email, a run filled the form, met the sign-in code, opened the page
 /// that shows the code, read the email there and ended `complete` without entering the code. A read that answers the
 /// question does not do the steps the task put before it.
