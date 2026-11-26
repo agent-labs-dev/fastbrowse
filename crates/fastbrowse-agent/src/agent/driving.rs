@@ -932,9 +932,9 @@ impl Agent {
         let last = if switched { tab_last } else { state_last };
         if last.is_none() {
             if let Some(failure) = &state.site_failure
+                && !failure.sent
                 && (observation.url != failure.url
                     || (failure.cause != FailureCause::Reported
-                        && !failure.sent
                         && observation.response_status.is_some_and(|status| (200..400).contains(&status))))
                 && observation.response_status.is_none_or(|status| status < 400)
             {
@@ -990,13 +990,16 @@ impl Agent {
                 }
             } else if status >= 200
                 && state.site_failure.as_ref().is_some_and(|failure| {
-                    failure.url == observation.url
-                        && !matches!(failure.cause, FailureCause::Reported)
-                        && (state.committing || !failure.sent)
+                    if failure.sent {
+                        state.committing
+                    } else {
+                        failure.url == observation.url && !matches!(failure.cause, FailureCause::Reported)
+                    }
                 })
             {
                 // A page that loads can still report the site failed; only Jev, reading it, clears that. A failed reply
-                // to a commit is cleared only by a later commit's reply, which this step's flag still marks here.
+                // to a commit is cleared only by a later commit's reply, wherever it lands, which this step's flag
+                // still marks here.
                 state.site_failure = None;
             }
         }
@@ -1043,6 +1046,10 @@ impl Agent {
             }
             state.arrived_by = Some((landed, href));
         }
+        // Code knows which step sent what the site failed to answer; the driver, told only "HTTP 503", sent it again.
+        let sent_failed = state.site_failure.as_ref().is_some_and(|failure| failure.sent)
+            && state.committing
+            && observation.response_status.is_some_and(|status| status >= 400);
         let Some(last) = state.history.last_mut() else { return };
         let waited = last.operation == Some(Operation::Wait);
         let mut done = if last.operation == Some(Operation::SwitchTab) {
@@ -1129,6 +1136,10 @@ impl Agent {
                     put.push(piece.clone());
                 }
             }
+        }
+        if sent_failed {
+            done.summary
+                .push_str("; this is the site's reply to what this step sent, so whether it went through is unknown");
         }
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),

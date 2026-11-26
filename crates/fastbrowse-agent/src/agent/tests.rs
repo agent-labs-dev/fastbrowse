@@ -537,14 +537,20 @@ async fn test_a_failed_reply_to_a_commit_stands_until_a_later_commit_succeeds() 
     state.committing = true;
     agent.note_effect(&mut state, &reply);
     assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent));
+    let effect = state.history.last().unwrap().effect.clone().unwrap_or_default();
+    assert!(effect.contains("the site's reply to what this step sent"), "{effect}");
     state.committing = false;
     agent.note_effect(&mut state, &Observation { response_status: Some(200), ..form.clone() });
     assert!(state.site_failure.as_ref().is_some_and(|failure| failure.sent), "a reload cleared the failed send");
     agent.settle(&mut state, &Observation { response_status: Some(200), ..form.clone() }).await.unwrap();
     assert!(state.site_failure.is_some(), "the reloaded form, a page state not seen before, cleared the failed send");
+    let elsewhere = Observation { url: "https://example.test/sent".into(), response_status: Some(200), ..form };
+    agent.note_effect(&mut state, &elsewhere);
+    agent.settle(&mut state, &elsewhere).await.unwrap();
+    assert!(state.site_failure.is_some(), "leaving the page cleared the failed send");
     state.committing = true;
-    agent.note_effect(&mut state, &Observation { response_status: Some(200), ..form });
-    assert!(state.site_failure.is_none(), "a later commit's reply clears it");
+    agent.note_effect(&mut state, &elsewhere);
+    assert!(state.site_failure.is_none(), "a later commit's reply, wherever it lands, clears it");
 }
 
 fn capacities() -> (Fact, Fact) {
