@@ -1082,7 +1082,8 @@ impl Agent {
                             })
                             .collect();
                         let ids: Vec<String> = listed.iter().map(|(id, _)| id.clone()).collect();
-                        let edges = self.page.edges(&ids).await?;
+                        // The picture is taken; a page that cannot be measured now sends it unnumbered.
+                        let edges = self.page.edges(&ids).await.unwrap_or_default();
                         let marks: Vec<(String, Edges)> =
                             listed.into_iter().filter_map(|(id, number)| Some((number, *edges.get(&id)?))).collect();
                         let marked = if marks.is_empty() { None } else { super::seeing::numbered(&png, &marks) };

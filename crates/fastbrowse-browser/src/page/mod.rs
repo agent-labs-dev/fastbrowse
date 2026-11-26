@@ -901,7 +901,10 @@ impl CdpPage {
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 modal: main.and_then(|m| m.raw.modal.clone()),
-                selection: main.and_then(|m| m.raw.selection.clone()),
+                // A cross-origin frame's editor reads its own selection; the main document's comes first.
+                selection: main
+                    .and_then(|m| m.raw.selection.clone())
+                    .or_else(|| frames.iter().find_map(|(_, f)| f.raw.selection.clone())),
                 media: frames.iter().flat_map(|(_, f)| f.raw.media.iter().cloned()).collect(),
                 tabs: self.session.tabs(),
                 dialog: self.session.pending_dialog(),

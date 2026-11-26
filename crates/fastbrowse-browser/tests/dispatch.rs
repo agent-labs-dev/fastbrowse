@@ -1360,6 +1360,34 @@ async fn test_a_select_all_in_an_editor_is_a_page_change() {
     h.close().await;
 }
 
+/// A selection in a password field or a frame's editor is a change too; the password's is told only as its length.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_select_all_in_a_password_or_a_framed_editor_is_a_page_change() {
+    let pages = [
+        ("<input type=password aria-label=Secret value=hunter2>", "Secret", "\u{2022}".repeat(7)),
+        (
+            "<iframe srcdoc='<div contenteditable role=textbox aria-label=Framed>Inner words</div>'></iframe>",
+            "Framed",
+            "Inner words".into(),
+        ),
+    ];
+    for (markup, label, selected) in pages {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        eval_active(&h.page, &format!("document.body.innerHTML = {}; true", json!(markup))).await;
+        let before = observe_until(&h.page, label).await;
+        let press = Action {
+            target_id: Some(find(&before, label).id.clone()),
+            text: Some("ctrl+a".into()),
+            ..Action::new(Operation::Press)
+        };
+        let result = h.page.act(&press, &before).await.expect("press");
+        assert!(result.page_changed, "{label}: {result:?}");
+        assert_eq!(h.observe().await.selection, Some(selected), "{label}");
+        h.close().await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_fixed_cover_the_page_means_to_be_answered_is_still_reported() {
     // Only a band floating over the page is routed around. A dialog asks its question first, an open menu or

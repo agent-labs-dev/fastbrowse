@@ -153,17 +153,29 @@
   // Password and agent-typed secret values never leave the page: only their length is observed.
   const secret = e => nativeProperty(e, 'type') === 'password' || nativeProperty(nativeProperty(e, 'dataset'), 'fastbrowseSecret') === '1';
   // The text selected in `doc`, empty when none is. A text field keeps its selection to itself, out of the document's,
-  // so the focused field's is read from it; a secret field's never leaves the page. A selection made with Ctrl+A or a
-  // drag edits nothing, yet it is what the next key or toolbar press acts on: left out, it read as "nothing visible
-  // changed" and counted toward the stall rule (#1574).
+  // so the focused field's is read from it, and a focused frame's editor keeps it in the frame's document. A selection
+  // made with Ctrl+A or a drag edits nothing, yet it is what the next key or toolbar press acts on: left out, it read
+  // as "nothing visible changed" and counted toward the stall rule (#1574). Selected secret text never leaves the page:
+  // it is told as one dot a character, as a password field shows it, so selecting it still reads as a change.
   const selectionOf = doc => {
     let field = doc.activeElement;
     while (field?.shadowRoot?.activeElement) field = field.shadowRoot.activeElement;
+    if (field?.tagName === 'IFRAME' || field?.tagName === 'FRAME') {
+      const inner = childDocument(field);
+      return inner && granted(inner) ? selectionOf(inner) : '';
+    }
+    const hidden = length => '\u2022'.repeat(length);
     if (field?.tagName === 'INPUT' || field?.tagName === 'TEXTAREA') {
       const start = nativeProperty(field, 'selectionStart'), end = nativeProperty(field, 'selectionEnd');
-      return typeof start === 'number' && end > start && !secret(field) ? nativeProperty(field, 'value').slice(start, end) : '';
+      if (typeof start !== 'number' || !(end > start)) return '';
+      return secret(field) ? hidden(end - start) : nativeProperty(field, 'value').slice(start, end);
     }
-    return doc.getSelection()?.toString() ?? '';
+    const selected = doc.getSelection();
+    const text = selected?.toString() ?? '';
+    if (!text) return '';
+    const touchesSecret = (field && secret(field))
+      || [...doc.querySelectorAll('[data-fastbrowse-secret="1"]')].some(e => selected.containsNode(e, true));
+    return touchesSecret ? hidden(text.length) : text;
   };
   // Keep the page's own timer overrides from holding a browser-side frame wait open.
   registry.nativeSetTimeout ||= window.setTimeout.bind(window);
@@ -2894,6 +2906,8 @@
     innerHeight,
     scroll_positions,
   ]));
+  // A selection is what the next key acts on, so an action planned on one is not run on a page without it.
+  const selection = renderFact('selection', document);
   const page_key = digest(JSON.stringify([
     location.href,
     scrollX,
@@ -2901,6 +2915,7 @@
     innerWidth,
     innerHeight,
     document.title,
+    selection,
     viewport_text,
     semantics,
     field_state,
@@ -3014,7 +3029,6 @@
   // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
   if (modal !== null) result.modal = modal;
   // Absent unless text is selected, as on most pages.
-  const selection = renderFact('selection', document);
   if (selection) result.selection = selection;
   // A JSON document is shown by its structure, as capture.js sends it to be read: shown Chrome's rendering of the
   // served text, the driver quoted `"size": "large"` off httpbin's echo, and the check, which reads the document key by
