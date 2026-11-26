@@ -3779,9 +3779,9 @@ impl Page for Screenshots {
         Box::pin(async move { Ok(clicked) })
     }
 
-    fn edges<'a>(&'a self, _: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
+    fn edges<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
         let edges = *self.5.lock().unwrap();
-        Box::pin(async move { Ok(edges) })
+        Box::pin(async move { Ok(ids.iter().filter_map(|id| Some((id.clone(), edges?))).collect()) })
     }
 
     fn pictures<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {

@@ -63,9 +63,9 @@ impl CdpPage {
         self.regions(ids, "pictured").await
     }
 
-    /// Where control `id` itself sits, as `pictures` measures a card.
-    pub async fn edges(&self, id: &str) -> Result<Option<Edges>, BrowserError> {
-        Ok(self.regions(&[id.to_string()], "nodes").await?.swap_remove(id))
+    /// Where each control among `ids` itself sits, as `pictures` measures a card.
+    pub async fn edges(&self, ids: &[String]) -> Result<IndexMap<String, Edges>, BrowserError> {
+        self.regions(ids, "nodes").await
     }
 
     /// Scroll control `id` into view, by the rule the hit test scrolls by, unless it is already in full view. A

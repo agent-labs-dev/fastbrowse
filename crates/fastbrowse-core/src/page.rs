@@ -896,10 +896,10 @@ pub trait Page: Send + Sync {
         Box::pin(async { Ok(IndexMap::new()) })
     }
 
-    /// Where control `id` of the last observation sits, as `pictures` measures a card. None out of view, gone, or in
-    /// another frame.
-    fn edges<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
-        Box::pin(async { Ok(None) })
+    /// Where each control of the last observation among `ids` sits, as `pictures` measures a card. One out of view,
+    /// gone, or in another frame has none.
+    fn edges<'a>(&'a self, _ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        Box::pin(async { Ok(IndexMap::new()) })
     }
 
     /// Scroll control `id` of the last observation into view if it is not already in full view, as an action on it
