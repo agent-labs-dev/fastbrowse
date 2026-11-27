@@ -25,7 +25,7 @@ from fastbrowse.evals.benchmarks import (
     check_catalog,
     group_arms,
 )
-from fastbrowse.evals.catalog import CATALOG_SHA256, SUITES
+from fastbrowse.evals.catalog import CATALOG_SHA256, SUITES, eligible
 from fastbrowse.evals.catalog import PATH as CATALOG_PATH
 from fastbrowse.models import Status
 from parallax.models import ENVIRONMENT_INTERRUPTION, TrajectoryStatus, TrialResult, Verdict
@@ -236,10 +236,7 @@ def _group(
         limits=["Parallax campaign budget and reserve"],
         rows=sorted(rows, key=lambda row: (row.arm, row.task, row.repeat)),
         unjudged=sorted(unjudged, key=lambda item: (item.arm, item.task, item.repeat)),
-        # Parallax marks each repeat of a task an arm cannot attempt; the task is excluded once.
-        excluded=sorted(
-            {(item.arm, item.task): item for item in excluded}.values(), key=lambda item: (item.arm, item.task)
-        ),
+        excluded=sorted(excluded, key=lambda item: (item.arm, item.task)),
         sources=sources,
     )
 
@@ -424,16 +421,14 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
             )
             rows_by_group.setdefault(group_id, {}).setdefault(arm, []).append(row)
         elif result.verdict is Verdict.NA:
-            # The catalog states why an arm skips a task, in public words; Parallax only names what the harness
-            # lacks. A task the catalog lists the arm for must be measured, so its not-applicable result is an error.
+            # A task the catalog lists the arm for must be measured, so its not-applicable result is an error. One
+            # the catalog excludes the arm from is recorded below with every other exclusion of the arm.
             catalog_task = next(task for task in _catalog_tasks() if task.id == result.task_id)
-            reason = catalog_task.excluded.get(arm)
-            if reason is None:
+            if arm not in catalog_task.excluded:
                 raise ValueError(
                     f"{run.path}: {arm} was not applicable on {result.task_id}, which the catalog lists it for:"
                     f" {_failure(result)}"
                 )
-            excluded_by_group.setdefault(group_id, []).append(ExcludedTask(arm=arm, task=result.task_id, reason=reason))
         else:
             why = (
                 "evidence-unavailable"
@@ -442,6 +437,23 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
             )
             unjudged_by_group.setdefault(group_id, {}).setdefault(arm, []).append(
                 UnjudgedSlot(task=result.task_id, repeat=result.repeat, arm=arm, reason=why)
+            )
+    # The campaign skips each task the catalog excludes an arm from, so such a task leaves no row to learn the
+    # exclusion from (#1546 made a head-to-head candidate fail on browser-use's missing saucedemo-pause). Every
+    # measured partial arm's exclusions come from the catalog, with its public reasons, as check_catalog expects.
+    for group_id, rows_by_arm in rows_by_group.items():
+        if group_id in OFFICIAL_SOURCES.values():
+            continue
+        # Only an arm the group publishes, as _group keeps only its rows: a stale arm's exclusions would fail
+        # check_slots with no rows beside them.
+        partial = set(COVERAGE[group_id].partial) & set(group_arms(group_id, 7))
+        for arm in rows_by_arm:
+            if arm not in partial:
+                continue
+            excluded_by_group.setdefault(group_id, []).extend(
+                ExcludedTask(arm=arm, task=task.id, reason=task.excluded.get(arm))
+                for task in _catalog_tasks()
+                if task.id in task_ids_by_group[group_id] and not eligible(arm, task)
             )
     groups: list[Group] = []
     for group_id, rows_by_arm in sorted(rows_by_group.items()):
