@@ -12,7 +12,7 @@ documentation code. Task versions continue to come from `versions.json`.
 Publication reads Parallax result directories through
 `fastbrowse_evals.publication`. It maps every selected result and its physical
 retries to the existing `fastbrowse.evals.benchmarks.Row`, then runs the
-existing schema 7 publication gate. Historical candidate and evidence files
+schema 8 publication gate. Historical candidate and evidence files
 are not regenerated.
 
 The official suite runner, dataset loader, upstream bridge, and official rows
