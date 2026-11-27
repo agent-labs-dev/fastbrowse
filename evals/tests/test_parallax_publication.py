@@ -458,9 +458,12 @@ def test_official_groups_use_their_own_selected_task_ids(tmp_path: Path) -> None
     assert set(groups["bu-bench"].task_ids).isdisjoint(groups["online-mind2web"].task_ids)
 
 
-def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_path: Path) -> None:
+@pytest.mark.parametrize("skipped", [False, True], ids=["not-applicable-rows", "skipped"])
+def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_path: Path, skipped: bool) -> None:
     """The group names its newest source's build, the candidate its newest fastbrowse run's, and the competitor's own
-    status words ("done") never reach fastbrowse's status vocabulary."""
+    status words ("done") never reach fastbrowse's status vocabulary. A task the catalog excludes the arm from is
+    excluded with the catalog's reason whether the run recorded it as not applicable or, as a campaign does, skipped
+    it and left no row."""
     source_task_map = {task.id: task for task in source_tasks(source_names=("fastbrowse",))}
     task_ids = sorted(_required_task_ids("internal-hosted"))
 
@@ -468,6 +471,7 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
 
     def parallax_run(name: str, day: int, harness: str, model: str, status: str, **support: str) -> Path:
         own = {task_id for task_id in task_ids if eligible(harness, catalog[task_id])}
+        ran = sorted(own) if skipped else task_ids
         run = tmp_path / name
         run.mkdir()
         manifest = RunManifest(
@@ -476,7 +480,7 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
             parallax_version="2.0.0.dev29",
             harnesses=(),
             models=(model,),
-            tasks=tuple((task_id, source_task_map[task_id].hash) for task_id in task_ids),
+            tasks=tuple((task_id, source_task_map[task_id].hash) for task_id in ran),
             repeats=3,
             judge=("test/judge",),
             isolation=Isolation.HOST,
@@ -506,7 +510,7 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
                 )
                 .model_dump_json()
                 + "\n"
-                for task_id in task_ids
+                for task_id in ran
                 for repeat in range(3)
             )
         )
