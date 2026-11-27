@@ -200,11 +200,16 @@ pub(crate) struct SiteFailure {
     pub cause: FailureCause,
     /// The run's step count when the failure was first seen, so how long it has stood is stated in steps.
     pub since: usize,
+    /// The failure is the site's reply to a commit the run sent. Loading the address again shows the page afresh, not
+    /// whether what was sent went through, so only a later commit's reply clears it, wherever it lands: cleared by a
+    /// reload of the form a message was posted from, a run that got HTTP 503 for its send ended stuck instead of
+    /// unavailable. It stands when the run leaves the address too, since the driver is sent to look for the result.
+    pub sent: bool,
 }
 
 impl SiteFailure {
     pub fn http(url: &str, status: i64, since: usize) -> SiteFailure {
-        SiteFailure { url: url.to_string(), cause: FailureCause::Http(status), since }
+        SiteFailure { url: url.to_string(), cause: FailureCause::Http(status), since, sent: false }
     }
 
     pub fn message(&self) -> String {
@@ -728,9 +733,11 @@ impl RunState {
         let start = self.start_landing_url.as_deref().or(self.caller_start.as_deref());
         let home = start.and_then(fastbrowse_core::origins::site_of);
         for control in &mut observation.controls {
-            let Some(leads_to) = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok()) else {
+            let Some(mut leads_to) = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok()) else {
                 continue;
             };
+            // A section's fragment is on a page read whole, so the page's address is what was read.
+            leads_to.set_fragment(None);
             if self.read_urls.contains(leads_to.as_str()) {
                 control.already_read = Some(true);
             }

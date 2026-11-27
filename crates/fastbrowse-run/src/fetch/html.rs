@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use encoding_rs::{Encoding, UTF_8};
 use fastbrowse_core::models::Operation;
-use fastbrowse_core::page::{BlockKind, Control, ItemPlace};
+use fastbrowse_core::page::{ADVICE_CLOSE, ADVICE_OPEN, BlockKind, Control, ItemPlace, unmark_advice};
 use fastbrowse_core::py::text;
 use html5ever::Attribute;
 use html5ever::tendril::StrTendril;
@@ -700,13 +700,11 @@ impl Tree {
             let element = &elements[i];
             let tag = element.tag.as_str();
             let inside = holds[i];
-            let own_heading = usize::from(heading_level(tag).is_some());
             // A table or frame is read in its own way, so neither one nor anything holding one is a card.
             let framed = matches!(tag, "table" | "iframe" | "frame") && !self.read_through(i);
             let record = self.repeated(i, &groups[runs[i]], &headings)
                 && !framed
                 && !inside.framed
-                && headings[i] - own_heading <= 1
                 && inside.block
                 && !inside.item
                 // A card holding items is a group: read whole, none of them would have its own place.
@@ -778,6 +776,8 @@ pub struct Found {
     /// The place of the list item the block is or sits inside, as `capture.js` states it.
     pub item_place: Option<ItemPlace>,
     pub fields: Vec<fastbrowse_core::page::SourceField>,
+    /// Where this read wrote its own advice into the block's text, as code point ranges with the space before each.
+    pub advice: Vec<(i64, i64)>,
 }
 
 impl From<fastbrowse_core::page::json::Found> for Found {
@@ -792,6 +792,7 @@ impl From<fastbrowse_core::page::json::Found> for Found {
             whole_record: block.whole_record,
             item_place: None,
             fields: block.fields,
+            advice: Vec::new(),
         }
     }
 }
@@ -867,6 +868,8 @@ struct Reader<'a> {
     stamps: Vec<(String, String, String)>,
     /// Native tooltip text can hold the full name when a listing shortens its visible label.
     titles: Vec<TitleAdvice>,
+    /// The advice this read wrote into the text, each once, in the order first written.
+    advised: Vec<String>,
     ends: HashMap<usize, usize>,
     /// Empty elements can label a separator that CSS draws but the served text does not contain.
     empty: HashSet<usize>,
@@ -1024,6 +1027,7 @@ impl<'a> Reader<'a> {
             paging: Vec::new(),
             stamps: Vec::new(),
             titles: Vec::new(),
+            advised: Vec::new(),
             ends,
             empty,
             records,
@@ -1263,9 +1267,23 @@ impl<'a> Reader<'a> {
             let advice = self.titles.remove(index);
             let shown = clean(&advice.text);
             if (self.tables == 0 || self.cell.is_some()) && !shown.is_empty() && shown != advice.title {
-                self.add(&format!(" (title: {})", advice.title));
+                self.advise(format!("(title: {})", advice.title));
             }
         }
+    }
+
+    /// Writes `words`, advice of this read's own, after the text read so far, and keeps them to list with each block
+    /// that holds them: a quote that leaves out words code added still quotes the page.
+    fn advise(&mut self, words: String) {
+        self.add(&format!("{ADVICE_OPEN} {words}{ADVICE_CLOSE}"));
+        if !self.advised.contains(&words) {
+            self.advised.push(words);
+        }
+    }
+
+    /// `text` without the marks around this read's advice, and where that advice sits in it.
+    fn unmark(&self, text: &str) -> (String, Vec<(i64, i64)>) {
+        unmark_advice(text, |words| self.advised.iter().any(|advised| advised == words))
     }
 
     fn emit_link_titles(&mut self) {
@@ -1278,7 +1296,7 @@ impl<'a> Reader<'a> {
             }
             let advice = self.titles.remove(index);
             if shown != advice.title {
-                self.add(&format!(" (title: {})", advice.title));
+                self.advise(format!("(title: {})", advice.title));
             }
         }
     }
@@ -1354,7 +1372,7 @@ impl<'a> Reader<'a> {
             if shown.is_empty() {
                 self.add(&datetime);
             } else if !shown.contains(&datetime) {
-                self.add(&format!(" ({datetime})"));
+                self.advise(format!("({datetime})"));
             }
         }
         if self.record.is_some() {
@@ -1502,8 +1520,10 @@ impl<'a> Reader<'a> {
                 // value. It shares the header's block, as a browser capture writes it, so a block of dashes is a row.
                 text.push_str(&format!("\n| {} |", vec!["---"; cells.len()].join(" | ")));
             }
+            let (text, advice) = self.unmark(&text);
             self.blocks.push(Found {
                 kind: BlockKind::Table,
+                advice,
                 text,
                 heading_path: path.clone(),
                 href: None,
@@ -1553,8 +1573,10 @@ impl<'a> Reader<'a> {
             return;
         }
         let kind = kind.unwrap_or(self.kind);
+        let (text, advice) = self.unmark(&text);
         self.blocks.push(Found {
             kind,
+            advice,
             text: text.clone(),
             heading_path: self.path(),
             href,
@@ -2332,6 +2354,17 @@ mod tests {
         );
     }
 
+    /// The page's own copy of the words a title wrote stays page text: found by its words, the second "(title: Tokyo)"
+    /// was taken for advice, and a quote that left it out passed as quoting the page.
+    #[test]
+    fn page_text_that_repeats_title_advice_is_not_advice() {
+        let (_, found, _, _) =
+            read("<p><span title='Tokyo'>東京</span>, 1887 and 東京 (title: Tokyo)</p>", "https://a.example/");
+        let block = found.iter().find(|block| block.text.contains("1887")).expect("the paragraph");
+        assert_eq!(block.text, "東京 (title: Tokyo), 1887 and 東京 (title: Tokyo)");
+        assert_eq!(block.advice, [(2, 17)]);
+    }
+
     #[test]
     fn title_advice_stays_with_its_record_and_visible_text() {
         let (_, found, _, _) = read(
@@ -2353,6 +2386,13 @@ mod tests {
         assert!(!records[0].text.contains("A Different Volume"));
         assert!(records[1].text.contains("Second... (title: A Different Volume)"));
         assert!(found.iter().any(|block| block.text.contains("WWW (title: World Wide Web)")));
+        // Each block places the advice it holds, so a quote that leaves it out still quotes the page.
+        let advised = |block: &Found| -> Vec<String> {
+            let chars: Vec<char> = block.text.chars().collect();
+            block.advice.iter().map(|&(from, to)| chars[from as usize..to as usize].iter().collect()).collect()
+        };
+        assert_eq!(advised(records[0]), [" (title: The Complete First Volume)"]);
+        assert!(found.iter().any(|block| advised(block) == [" (title: World Wide Web)"]));
         assert!(
             found
                 .iter()
@@ -2643,11 +2683,26 @@ mod tests {
         assert!(records.iter().all(|(_, text)| text == "Quotation\n\nby Author"));
     }
 
+    /// A product card states its price and its name each under a heading. The fetched read left such a card as
+    /// separate blocks after `capture.js` read it whole, so a maximum over prices read a laptop's description as the
+    /// whole record, with no price in it.
+    #[test]
+    fn a_repeated_card_with_two_headings_is_one_whole_record() {
+        let cards: String = (0..3)
+            .map(|n| {
+                format!("<div class='card'><h4>${n}99</h4><h4><a href='/p{n}'>Item {n}</a></h4><p>Detail {n}</p></div>")
+            })
+            .collect();
+        let found = kinds_and_texts(&cards);
+        let records: Vec<_> =
+            found.iter().filter(|(kind, _)| *kind == BlockKind::Record).map(|(_, text)| text.as_str()).collect();
+        assert_eq!(records, (0..3).map(|n| format!("${n}99\nItem {n}\n\nDetail {n}")).collect::<Vec<_>>(), "{found:?}");
+    }
+
     #[test]
     fn a_card_is_not_a_record_where_capture_reads_it_otherwise() {
         for (id, html) in [
             ("inline-only", "<div class='card'><span>Inline only</span></div>".repeat(3)),
-            ("two-headings", "<div class='card'><h2>First</h2><h3>Second</h3><p>Body</p></div>".repeat(3)),
             ("table", "<div class='card'><p>Out</p><table><tr><td>In</td></tr></table></div>".repeat(3)),
             ("classless", "<div><p>Layout</p><p>column</p></div>".repeat(3)),
             ("in-a-table", format!("<table><tr><td>{}</td></tr></table>", "<div class='c'><p>x</p></div>".repeat(3))),

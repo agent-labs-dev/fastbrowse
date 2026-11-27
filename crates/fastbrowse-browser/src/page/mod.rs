@@ -161,6 +161,8 @@ struct SnapshotControl {
     #[serde(default)]
     offscreen: bool,
     #[serde(default)]
+    screen: i32,
+    #[serde(default)]
     read_only: bool,
     layer: Option<u32>,
     disabled: Option<bool>,
@@ -336,6 +338,13 @@ struct SnapshotBlock {
     /// The place of the list item the block is or sits inside.
     #[serde(default)]
     item_place: Option<ItemPlace>,
+    /// Some of the block is drawn inside the viewport.
+    #[serde(default)]
+    in_viewport: bool,
+    /// Where the capture script wrote its own advice into the block's text, such as a link's title, as code point
+    /// ranges with the space before each.
+    #[serde(default)]
+    advice: Vec<(i64, i64)>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -577,6 +586,7 @@ fn control_from_raw(
         expanded: c.expanded,
         sensitive: c.sensitive,
         offscreen: c.offscreen,
+        screen: c.screen,
         read_only: c.read_only,
         layer: c.layer,
         disabled: c.disabled,
@@ -1061,6 +1071,12 @@ impl CdpPage {
             Err(error) => return Err(error),
         };
         if raw.is_null() {
+            if is_main && self.evaluate(session_id, "document.readyState").await? == "loading" {
+                // A read taken after a navigation commits but before the parser reaches <body> finds nothing, and was
+                // shown to the driver as an empty page at the site's origin, which it then left (#1567). The document
+                // is still arriving, so this read is lost to it as to a navigation, and is taken again once it settles.
+                return Err(BrowserError::ContextLost("the page's document had no body yet".into()));
+            }
             return Ok(None);
         }
         // The page answers "unchanged" only about the read it kept, so that answer is the kept read, sent back as the
@@ -1220,12 +1236,14 @@ impl CdpPage {
                 blocks: vec![],
                 inaccessible_frames: 0,
                 masked: Vec::new(),
+                advice: Vec::new(),
             });
         };
         let frames = frames?;
         let mut text = String::new();
         let mut blocks: Vec<Block> = vec![];
         let mut offset = 0usize;
+        let mut advice = Vec::new();
         let mut coverage: Vec<(String, usize)> = vec![];
         let main = frames.iter().find(|(k, _)| k == MAIN).map(|(_, f)| f);
         let title = main.map(|m| m.raw.title.clone()).unwrap_or_default();
@@ -1261,6 +1279,7 @@ impl CdpPage {
                         links: Vec::new(),
                         whole_record: block.whole_record,
                         item_place: None,
+                        in_viewport: false,
                         fields: block.fields.into_iter().map(|field| field.shifted(int(start))).collect(),
                     });
                 }
@@ -1281,6 +1300,7 @@ impl CdpPage {
                 let found: Vec<(String, String)> =
                     block.links.iter().map(|link| (link.text.clone(), link.href.clone())).collect();
                 let links = Link::locate(&block.text, int(start), &found);
+                advice.extend(block.advice.iter().map(|(from, to)| (int(start) + from, int(start) + to)));
                 text.push_str(&block.text);
                 offset += text::len(&block.text);
                 let end = offset;
@@ -1317,6 +1337,7 @@ impl CdpPage {
                     links,
                     whole_record: block.whole_record,
                     item_place: block.item_place,
+                    in_viewport: block.in_viewport,
                     fields: Vec::new(),
                 });
             }
@@ -1359,6 +1380,7 @@ impl CdpPage {
                     links: Vec::new(),
                     whole_record: false,
                     item_place: None,
+                    in_viewport: false,
                     fields: Vec::new(),
                 });
                 text.push_str("\n\n");
@@ -1374,6 +1396,7 @@ impl CdpPage {
             blocks,
             inaccessible_frames: int(self.inaccessible_frames(&coverage)?),
             masked: Vec::new(),
+            advice,
         }
         .with_document_title())
     }

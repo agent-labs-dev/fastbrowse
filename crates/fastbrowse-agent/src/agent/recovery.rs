@@ -171,7 +171,7 @@ impl Agent {
             }
             // The caller tells the driver why: a refused done told "3 actions in a row changed nothing" sent it looking
             // for a stall it never made.
-            state.chat.queue_clear();
+            state.chat.queue.clear();
             Ok(())
         })
     }

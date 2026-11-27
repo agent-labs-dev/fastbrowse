@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use fastbrowse_core::llm::{LLMError, Message, ResponseSchema, Role};
 use fastbrowse_core::models::{LLMPurpose, Operation, RunResult, Status, StepChoice, StepOutcome, UntilCheck};
 use fastbrowse_core::page::{Control, Observation, Unread};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::Agent;
@@ -36,9 +36,9 @@ pub(super) struct Chat {
     /// How much of the run's history the model has been told the results of.
     reported: usize,
     /// Actions the model planned past the first, run while the page they were planned on stays.
-    queue: VecDeque<Act>,
+    pub(super) queue: VecDeque<Act>,
     /// The page the queue was planned on, as its url, document and page key, and the ids of the controls it had.
-    planned_on: Option<(String, String, String)>,
+    pub(super) planned_on: Option<(String, String, String)>,
     /// Each control as id, role, label and record context: a list redrawn in place reuses its element ids for others.
     planned_ids: HashSet<ControlIdentity>,
     /// The ids of the controls that were disabled when the queue was planned. A planned click on a delete that an
@@ -50,6 +50,9 @@ pub(super) struct Chat {
     images_told: bool,
     /// What code tells the model before the next page: a refusal, a stall, a dropped plan.
     pub(super) notices: Vec<String>,
+    /// The action just run with more of its plan queued, judged at the next observation: the page it leaves shows
+    /// whether it did anything, and a plan built on an action that did nothing is dropped.
+    judging: Option<String>,
     /// The page state last read, as its url, document and page key, so `done` reads the page in front of it only once.
     read_on: Option<(String, String, String)>,
     /// The number the model knows each control by, in the order controls were first shown. The page's own ids carry a
@@ -64,7 +67,7 @@ pub(super) struct Chat {
     /// Each page state the model was shown, as captured then: a value it saw before an action moved on, such as an
     /// order's total on the page Finish replaces, was not on the page done is called on, and the run ended
     /// unverified with the total in its conversation (saucedemo-checkout).
-    shown: Vec<fastbrowse_core::page::Capture>,
+    pub(super) shown: Vec<fastbrowse_core::page::Capture>,
     /// The answer the latest done wrote, every quote of which a page held. What it names is the answer: a screenshot
     /// read of the page done was called on stood beside it, and saucedemo's emptied cart, "$0.00", replaced the order
     /// total the driver quoted from the page before.
@@ -75,11 +78,28 @@ pub(super) struct Chat {
     /// Each screenshot the model was shown, by the page state it shows: a quote no page text holds is read off the
     /// latest of the page done is called on, and a second one of the same state counts as no progress.
     pictures: Vec<((String, String, String), Vec<u8>)>,
+    /// The lines of each page text (by address and text) that `read_text` showed, so lines read before count as no progress.
+    pub(super) read_lines: std::collections::HashMap<(String, String), HashSet<usize>>,
+    /// The controls further than a screen from the viewport that `read_controls` listed, by document and id.
+    pub(super) read_controls: HashSet<(String, String)>,
+    /// What `read_text` and `read_controls` showed since the last turn. It goes after the page in the next request, so
+    /// it is dropped with that page when the conversation outgrows the model's context, as the page's own render is:
+    /// kept as a notice it was permanent, and a few long slices filled the context for the rest of the run.
+    pub(super) reads: Vec<Read>,
 }
 
 impl Chat {
+    /// Keeps `capture` for `read_text` and a done's quotes as the latest page shown, once per address and text:
+    /// another address with the same text is a page of its own, which a result names by its address. A page state
+    /// shown again moves to the end, since `read_text` reads the latest: after A, B and A again it returned B.
+    pub(super) fn keep(&mut self, capture: fastbrowse_core::page::Capture) {
+        let place = crate::memory::address(&capture.url);
+        self.shown.retain(|shown| shown.sha256 != capture.sha256 || crate::memory::address(&shown.url) != place);
+        self.shown.push(capture);
+    }
+
     /// The number control `id` of `document` is shown as, given one the first time it is shown, kept for the run.
-    fn number(&mut self, document: &str, id: &str) -> String {
+    pub(super) fn number(&mut self, document: &str, id: &str) -> String {
         let next = self.ids.len() + 1;
         let key = (document.to_string(), id.to_string());
         let number = *self.numbers.entry(key.clone()).or_insert(next);
@@ -92,7 +112,7 @@ impl Chat {
     /// The control id the model named as `shown`, or `shown` itself when it names no number given out. The `*` the
     /// page lines put before a new control's number is part of the line, not the id, and a model copied it: `*146`.
     /// A number given out on another document names no control of `document`, though its id may now name one.
-    fn id_of(&self, document: &str, shown: &str) -> String {
+    pub(super) fn id_of(&self, document: &str, shown: &str) -> String {
         shown
             .trim()
             .trim_start_matches('*')
@@ -106,7 +126,7 @@ impl Chat {
 }
 
 /// One action the model asks for.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 pub(super) enum Act {
     Click {
@@ -160,6 +180,27 @@ pub(super) enum Act {
         tab: String,
     },
     Back,
+    /// Follows a page's next-page link and the next page's own, reading each into the run's evidence in one turn, so a
+    /// list across ten pages is not ten turns. `max_pages` is the model's own stopping point, not a limit of ours.
+    ReadPages {
+        id: String,
+        #[serde(default)]
+        max_pages: Option<u64>,
+    },
+    /// Shows `lines` lines of a page's text from line `from`: the page in front of the model when `page` is null, else a
+    /// page shown earlier, by address. The page in front is windowed to its viewport, and this reads the rest.
+    ReadText {
+        page: Option<String>,
+        from: u64,
+        lines: u64,
+        find: Option<String>,
+    },
+    /// Lists `count` of the controls further than a screen from the viewport, from the `from`th, which a windowed page
+    /// names but leaves out.
+    ReadControls {
+        from: u64,
+        count: u64,
+    },
     /// Presses Escape to close the open modal. Controls behind a modal are not listed, so one that lists none of its
     /// own left the model no control to press Escape in, and the run stalled behind it.
     Close,
@@ -187,6 +228,12 @@ pub(super) enum Act {
 }
 
 impl Act {
+    /// The action as the model wrote it, for a note that names it: Rust's debug form showed the driver
+    /// `TypeSecret { id: "23", name: "username" }`, a shape it never writes.
+    fn shown(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| format!("{self:?}"))
+    }
+
     /// The text the model wrote into this action, as it reaches a gate question or the page. A done's claims are taken
     /// whole: their fields are the answer module's, and Debug keeps a value with no quote or escape in it verbatim.
     fn written(&self) -> Vec<String> {
@@ -204,7 +251,7 @@ impl Act {
 }
 
 /// The ways the model may end a run short of done.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum GiveUp {
     NeedsLogin,
@@ -235,10 +282,41 @@ struct Turn {
     actions: Vec<Act>,
 }
 
+/// What `read_text` or `read_controls` showed: `lines` are items `first` onward of `total`, and the header says the
+/// range held, so a read cut to fit the model's context names only the lines it still shows.
+#[derive(Debug, Clone)]
+pub(super) struct Read {
+    pub(super) tool: &'static str,
+    pub(super) noun: &'static str,
+    pub(super) first: usize,
+    pub(super) total: usize,
+    pub(super) place: String,
+    pub(super) lines: Vec<String>,
+}
+
+impl Read {
+    /// The read as the model sees it, cut to its first `count` lines.
+    fn render(&self, count: usize) -> String {
+        if count == 0 {
+            return String::new();
+        }
+        let (tool, noun, first, total, place) = (self.tool, self.noun, self.first, self.total, &self.place);
+        let last = first + count - 1;
+        let body = self.lines[..count].join("\n");
+        format!("\n{tool} shows {noun} {first} to {last} of {total}{place}:\n{body}\n")
+    }
+}
+
+/// Said after a read cut to the model's context.
+const NOT_FIT: &str =
+    "(the rest of what you read does not fit your context: read it again from the line after the last one shown)";
+
 /// The fixed instructions every request starts with, kept unchanged across a run so its prefix is cached.
 pub(super) const SYSTEM: &str = "You operate a web browser to complete the user's task. Each turn you are told what \
 your previous actions did, then the current page: its title and address, one line per control as \
-`[id] role \"label\" = \"value\" (states) can <operations>`, then its visible text, a heading's line starting `# `. An id starting with `*` was not on \
+`[id] role \"label\" = \"value\" (states) can <operations>`, then its text, a heading's line starting `# `. A long page \
+is shown as its viewport and the screen above and below it, with a line naming the lines and controls left out, which \
+read_text and read_controls show. An id starting with `*` was not on \
 the page you last saw: it is what your last action opened or loaded. Controls in a layer drawn over the page, such \
 as a popup, menu or calendar a control opened, are listed under their own heading.
 
@@ -260,6 +338,16 @@ canvas, give to as null and the path is drawn from a screenshot.
 - switch_tab(tab) shows the open tab with that id from the Tabs list.
 - scroll(id, down) scrolls the control, or the page when id is null; goto(url) opens an address; \
 back() goes back; close() presses Escape to close the open modal.
+- read_pages(id, max_pages) follows the next-page link `id`, which its line marks \"leads to the next page of a list\", \
+and each next page's own, reading every page into your evidence in one turn; max_pages is how many pages after the one you are on to \
+read, null for the whole list. You are told the pages read and whether the list ended; the page you see next is the last. \
+Their text is held for done: cite them in `pages` for a count, total, minimum or maximum, and read_text reads them.
+- read_text(page, from, lines, find) shows lines of a page's text, as numbered in the line that names what a long page \
+left out; page is null for the page in front of you, else the address of a page shown to you before. With find, it \
+shows instead the lines holding that text, each under its line number, from the `from`th of them: a way to a section \
+of a long page.
+- read_controls(from, count) lists controls further than a screen from the viewport that a long page left out, in \
+reading order, from the `from`th of them: from counts those controls, 1 first, and is not an id.
 - screenshot() shows you the viewport as an image in your next turn, for what the text does not give: pictures, \
 colours, icons, charts, a canvas, or where things sit. Actions after it in the same turn are not run.
 - wait(seconds) waits until the page changes, for at most that many seconds, for a page that is still loading or \
@@ -278,11 +366,12 @@ write no numbers before the claims.
   A count, total, minimum or maximum across records, such as the number of quotes by an author or the cheapest \
 book, is worked out by code from every record on the pages the claim names, which code reads whole and cites. Set \
 pages to the address of every page shown to you that its records are on, and quote no record: its quotes hold only \
-what else the claim states, or are empty. Any other claim has pages empty. Set tally to {op (count, sum, min or max), of (the kind of record, such as \"quote\"), scope (which \
+what else the claim states, or are empty. Any other claim has pages empty. Set tally to {op (count, sum, min or max), of (the kind of one record, in the singular, such as \"quote\"), scope (which \
 of them the task lets count, such as \"by Albert Einstein\", or null for all; never a selection by value), field (the \
-value added or compared, such as \"price\"; null for a count), rank (2 for the second cheapest, else null), by and \
-group (for a count per group, such as quotes per author: the field that groups them and the group this claim \
-counts; else null), written (the value as you work it out, written exactly once in text, which code replaces with \
+value added or compared, such as \"price\"; null for a count), rank (the place counted from the extreme, 2 for the second cheapest; for a count per group, the group's place by \
+its count, 1 for the most; else null), by and group (for a count per group, such as quotes per author: the field \
+that groups them and the group this claim counts; else null; a ranking of groups by their counts, such as the three \
+authors with the most quotes, is one such claim per group with its rank, never a count scoped to each), written (the value as you work it out, written exactly once in text, which code replaces with \
 the value it computes; for a minimum or maximum that names the record, the record's name)}. When the records a \
 minimum or maximum compares are each group's own lowest or highest, such as each shop's latest offer, set within to \
 {by (the field that groups them), op (min or max), field (the value compared inside each group)}; else null. A claim \
@@ -297,7 +386,10 @@ not exist), stuck (nothing left to try).
 A page that reports the site failed, such as an error message shown where the results or page an action should have \
 brought, is not the outcome of that action, and the run is not done on it: the site's failure can clear, so open the \
 page again with goto(its address), which loads it afresh, or repeat the action that led to it, and give_up as \
-unavailable once retrying has not cleared it.
+unavailable once retrying has not cleared it. When an action's effect says the failure is the site's reply to what it \
+sent, whether it went through is unknown and sending it again can make it twice: look for its result where the site \
+shows it, or give_up as unavailable. That failure is what stopped the task, so unavailable stays the status when the \
+way to its result is barred too, such as by a sign-in.
 
 An action the task did not ask for that cannot be undone (buying, sending, deleting, submitting) is refused unless the \
 user authorized it; you are told when an action was refused and why. Do not repeat a refused action, or a failed one \
@@ -341,8 +433,28 @@ impl ResponseSchema for Actions {
             Actions::tool("upload", &[("id", string.clone()), ("file", string.clone())]),
             Actions::tool("hover", &[("id", string.clone())]),
             Actions::tool("switch_tab", &[("tab", string.clone())]),
-            Actions::tool("scroll", &[("id", nullable), ("down", json!({"type": "boolean"}))]),
+            Actions::tool("scroll", &[("id", nullable.clone()), ("down", json!({"type": "boolean"}))]),
             Actions::tool("goto", &[("url", string.clone())]),
+            Actions::tool(
+                "read_pages",
+                &[("id", string.clone()), ("max_pages", json!({"type": ["integer", "null"], "minimum": 1}))],
+            ),
+            Actions::tool(
+                "read_text",
+                &[
+                    ("page", nullable.clone()),
+                    ("from", json!({"type": "integer", "minimum": 1})),
+                    ("lines", json!({"type": "integer", "minimum": 1})),
+                    ("find", nullable.clone()),
+                ],
+            ),
+            Actions::tool(
+                "read_controls",
+                &[
+                    ("from", json!({"type": "integer", "minimum": 1})),
+                    ("count", json!({"type": "integer", "minimum": 1})),
+                ],
+            ),
             Actions::tool("back", &[]),
             Actions::tool("close", &[]),
             Actions::tool("screenshot", &[]),
@@ -447,7 +559,7 @@ fn identity(control: &Control) -> ControlIdentity {
 }
 
 /// A page state as read: a date picked in place keeps the url and document but changes the page key.
-fn read_key(observation: &Observation) -> (String, String, String) {
+pub(super) fn read_key(observation: &Observation) -> (String, String, String) {
     (observation.url.clone(), observation.document_key.clone(), observation.page_key.clone())
 }
 
@@ -495,6 +607,8 @@ fn target_of(act: &Act) -> Option<&str> {
         | Act::Upload { id, .. }
         | Act::Hover { id } => Some(id),
         Act::Scroll { id, .. } => id.as_deref(),
+        Act::ReadPages { id, .. } => Some(id),
+        Act::ReadText { .. } | Act::ReadControls { .. } => None,
         Act::Goto { .. }
         | Act::SwitchTab { .. }
         | Act::Back
@@ -534,25 +648,24 @@ impl Agent {
                 return Err(Flow::Stop(stop));
             }
             let observation = self.observe().await?;
-            if state.first_url.is_none() {
-                state.first_url = Some(observation.url.clone());
+            let quiet = state.chat.judging.take().filter(|_| {
+                state.history.last().is_some_and(|entry| !entry.page_changed)
+                    && state.acted_from.as_ref().is_some_and(|before| {
+                        let done = fastbrowse_core::effects::effect(before, &observation, None, false);
+                        !done.changed && !done.set_something
+                    })
+            });
+            self.arrive(state, &observation).await?;
+            if let Some(shown) = quiet
+                && !state.chat.queue.is_empty()
+            {
+                let dropped = state.chat.queue.len();
+                state.chat.queue.clear();
+                state.chat.notices.push(format!(
+                    "{dropped} planned action(s) were not run because {} changed nothing; plan again from the page below.",
+                    self.redact(&shown)
+                ));
             }
-            // Read before the effect is recorded, which consumes the flag: the record is what coverage is told later.
-            let keeps = state.keeping;
-            self.note_effect(state, &observation);
-            let shown = std::mem::take(&mut state.sent_text);
-            if shown.iter().any(|piece| piece.added) {
-                // A failed capture loses only the quotes: the step's effect still records what the page added.
-                if let Ok(capture) = self.capture().await {
-                    self.record_sent_notice(state, &capture, &shown);
-                }
-            }
-            self.settle(state, &observation).await?;
-            self.take_commit(state, &observation, keeps);
-            self.record_page(state, &observation);
-            // The pages of a list this page links to, so finishing opens one the run left unread: without them a count
-            // over every page ended on the pages the model chose to read, one short (quotes-rowling-count).
-            state.note_pager_pages(&observation);
             // Saved steps from an earlier run go first, through the same gates as the driver's own actions.
             if let Some(decision) = state
                 .replay
@@ -585,6 +698,30 @@ impl Agent {
 }
 
 impl Agent {
+    /// Takes in the page the last step reached: what the step changed, the commit it sent, and the page's place in the run.
+    pub(super) async fn arrive(&self, state: &mut RunState, observation: &Observation) -> Step {
+        if state.first_url.is_none() {
+            state.first_url = Some(observation.url.clone());
+        }
+        // Read before the effect is recorded, which consumes the flag: the record is what coverage is told later.
+        let keeps = state.keeping;
+        self.note_effect(state, observation);
+        let shown = std::mem::take(&mut state.sent_text);
+        if shown.iter().any(|piece| piece.added) {
+            // A failed capture loses only the quotes: the step's effect still records what the page added.
+            if let Ok(capture) = self.capture().await {
+                self.record_sent_notice(state, &capture, &shown);
+            }
+        }
+        self.settle(state, observation).await?;
+        self.take_commit(state, observation, keeps);
+        self.record_page(state, observation);
+        // The pages of a list this page links to, so finishing opens one the run left unread: without them a count
+        // over every page ended on the pages the model chose to read, one short (quotes-rowling-count).
+        state.note_pager_pages(observation);
+        Ok(())
+    }
+
     /// Counts the commit the last step sent once the page after it shows: authorization checks a later commit against
     /// the ones the run made, and the coverage check is told the steps it kept. Left set, the gate's flag also marked
     /// every later step, such as a fill, as a commit sent. Only a commit that went counts: one that opened a dialog is
@@ -602,10 +739,6 @@ impl Agent {
 }
 
 impl Chat {
-    pub(super) fn queue_clear(&mut self) {
-        self.queue.clear();
-    }
-
     /// The next planned action, while the page it was planned on keeps the same controls. A plan is dropped once a
     /// control appears or goes, or the document changes, and the model is told: after a popup or redraw the ids it named
     /// may mean other controls. A field taking a value changes the page but no control, and dropping the plan there ran
@@ -767,11 +900,16 @@ impl Agent {
             control.id = chat.number(&observation.document_key, &control.id);
         }
         let content = self.redact(&content);
+        let reads = std::mem::take(&mut state.chat.reads);
         let capture = self.capture().await?;
-        let page = self.redact(&render(&shown, &seen, Some(&page_text(&capture))));
+        let text = page_text(&capture);
+        // A page with something outside its viewport goes as the viewport and a screen each side, the rest named and
+        // read by `read_text` and `read_controls`: sent whole, a Wikipedia article's 100k tokens went with every turn.
+        let window = super::render::window_of(&capture);
+        let page = self.redact(&super::render::render_view(&shown, &seen, Some(&text), window));
         // A page the model was shown whole is read: it answers from what it saw. Counted unread, every page of a list
         // it paged through left the list unread, and code reopened page 2 after it answered from all ten.
-        let whole = match self.fit(&mut state.chat, &content, page, &shown, &seen).await {
+        let whole = match self.fit(&mut state.chat, &content, page, reads, &shown, &seen).await {
             Ok(whole) => whole,
             Err(error) => {
                 let (messages, reported, secrets_told, notices, images_told) = untold;
@@ -782,15 +920,13 @@ impl Agent {
                 return Err(error);
             }
         };
-        if whole {
+        if whole && window.is_none() {
             state.read_urls.insert(observation.url.clone());
         }
         if let Some(png) = state.chat.image.take() {
             attach(&mut state.chat.messages, png);
         }
-        if !state.chat.shown.iter().any(|shown| shown.sha256 == capture.sha256) {
-            state.chat.shown.push(capture);
-        }
+        state.chat.keep(capture);
         state.chat.seen =
             observation.controls.iter().map(|control| (observation.document_key.clone(), control.id.clone())).collect();
         let generation =
@@ -828,18 +964,25 @@ impl Agent {
         chat: &mut Chat,
         content: &str,
         mut page: String,
+        held: Vec<Read>,
         shown: &Observation,
         seen: &HashSet<String>,
     ) -> Step<bool> {
         let mut whole = true;
+        let mut kept: Vec<usize> = held.iter().map(|read| read.lines.len()).collect();
+        let shown_reads = |kept: &[usize], cut: bool| {
+            let text: String = held.iter().zip(kept).map(|(read, count)| read.render(*count)).collect();
+            self.redact(&if cut { format!("{text}\n{NOT_FIT}") } else { text })
+        };
+        let mut reads = shown_reads(&kept, false);
         if let Some(limit) = self.llm.context_tokens(LLMPurpose::Action).await {
             let limit = crate::retrieval::context_limit(limit)?;
-            let fits = |messages: &[Message], page: &str| {
+            let fits = |messages: &[Message], page: &str, reads: &str| {
                 let mut messages = messages.to_vec();
-                messages.push(Message::user(format!("{content}{page}")));
+                messages.push(Message::user(format!("{content}{page}{reads}")));
                 crate::retrieval::request_bytes(&messages, &Actions) <= limit
             };
-            while !fits(&chat.messages, &page) {
+            while !fits(&chat.messages, &page, &reads) {
                 let Some((at, start)) = chat.pages.first().copied() else { break };
                 chat.pages.remove(0);
                 let message = &mut chat.messages[at].content;
@@ -851,7 +994,7 @@ impl Agent {
             }
             // A fetched page has no viewport to cut it to: a Hacker News thread of 2923 comments was fetched whole and
             // stayed past the driver model's context. A browser lays it out, and what is past the viewport goes.
-            if !fits(&chat.messages, &page) && self.page.over_http() {
+            if !fits(&chat.messages, &page, &reads) && self.page.over_http() {
                 return Err(self
                     .page
                     .needs_browser("the page is longer than the driver model's context and has no viewport".into())
@@ -860,7 +1003,7 @@ impl Agent {
             // A thread of 2923 comments rendered 3.2 MB of controls alone, past the driver model's context with its
             // offscreen text left out, so what lies outside the viewport goes as a whole: controls and text.
             let offscreen = shown.controls.iter().any(|control| control.offscreen);
-            if !fits(&chat.messages, &page) && (offscreen || !shown.offscreen_text.is_empty()) {
+            if !fits(&chat.messages, &page, &reads) && (offscreen || !shown.offscreen_text.is_empty()) {
                 let viewport = Observation {
                     offscreen_text: String::new(),
                     controls: shown.controls.iter().filter(|control| !control.offscreen).cloned().collect(),
@@ -872,9 +1015,22 @@ impl Agent {
                        your context. Scroll to see them.";
                 whole = false;
             }
+            // What a read showed is cut to what the provider's context holds, and the model is told where it left off:
+            // the rest is read again from there.
+            if !fits(&chat.messages, &page, &reads) && !reads.is_empty() {
+                // Each read's header is rewritten to the lines it still shows, so none claims more than it holds.
+                while !fits(&chat.messages, &page, &shown_reads(&kept, true)) {
+                    let Some(last) = kept.iter().rposition(|count| *count > 0) else { break };
+                    if kept[last] == 1 && kept.iter().filter(|count| **count > 0).count() == 1 {
+                        break;
+                    }
+                    kept[last] -= 1;
+                }
+                reads = shown_reads(&kept, true);
+            }
             // Nothing more can go without cutting what the model reads, and a request past the provider's limit is
             // refused after it is billed.
-            if !fits(&chat.messages, &page) {
+            if !fits(&chat.messages, &page, &reads) {
                 return Err(Stop::new(
                     Status::ObservationLimit,
                     "Chat/context",
@@ -884,7 +1040,7 @@ impl Agent {
             }
         }
         chat.pages.push((chat.messages.len(), content.len()));
-        chat.messages.push(Message::user(format!("{content}{page}")));
+        chat.messages.push(Message::user(format!("{content}{page}{reads}")));
         Ok(whole)
     }
 
@@ -912,7 +1068,7 @@ impl Agent {
     }
 
     /// Carry out `act`, which returns a result only once the run ends.
-    async fn dispatch(
+    pub(super) async fn dispatch(
         &self,
         state: &mut RunState,
         observation: &Observation,
@@ -976,8 +1132,11 @@ impl Agent {
                             }
                             if !unshown.is_empty() {
                                 why.push(format!(
-                                    "no page shown to you in this run has the address {}. Name only pages you were shown",
-                                    listed(&unshown)
+                                    "no page shown to you in this run has the address {}. Name only pages you were shown: {}",
+                                    listed(&unshown),
+                                    listed(&crate::memory::unique(
+                                        state.chat.shown.iter().map(|page| page.url.clone()).chain([observation.url.clone()])
+                                    ))
                                 ));
                             }
                             state.chat.notices.push(format!("done was refused: {}.", why.join("; ")));
@@ -1044,6 +1203,11 @@ impl Agent {
             Act::Wait { .. } if self.page.over_http() => {
                 return Err(self.page.needs_browser("the page needs its scripts run to finish loading".into()).into());
             }
+            // A send the site failed is what stopped the task, as the driver is told: a run that met a sign-in on the way
+            // to its result and gave up needs_login sent its caller to sign in and send it again, maybe twice.
+            Act::GiveUp { .. } if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.sent) => {
+                return Err(failure.stop().into());
+            }
             Act::GiveUp { status, reason } => {
                 let status = status.status();
                 // The driver gives up blocked only at a bot check, which the page alone cannot name: a caller routing on
@@ -1077,6 +1241,18 @@ impl Agent {
                     }
                 };
                 self.count_progress(state, pictured, observation, None.into(), Status::Stuck).await?;
+                return Ok(None);
+            }
+            Act::ReadPages { id, max_pages } => {
+                self.read_pages(state, observation, id, *max_pages).await?;
+                return Ok(None);
+            }
+            Act::ReadText { page, from, lines, find } => {
+                self.read_text(state, observation, page.as_deref(), *from, *lines, find.as_deref()).await?;
+                return Ok(None);
+            }
+            Act::ReadControls { from, count } => {
+                self.read_controls(state, observation, *from, *count).await?;
                 return Ok(None);
             }
             Act::Back => Some(decision(Operation::Back, None, None, None)),
@@ -1178,7 +1354,8 @@ impl Agent {
         if let Some((_, id)) = disabled {
             state.chat.queue.clear();
             state.chat.notices.push(format!(
-                "{act:?} was refused: [{}] is disabled, so the page lets nothing act on it until the page enables it.",
+                "{} was refused: [{}] is disabled, so the page lets nothing act on it until the page enables it.",
+                self.redact(&act.shown()),
                 id.unwrap_or_default()
             ));
             self.count_progress(state, false, observation, Idle::tried(&decision), Status::Stuck).await?;
@@ -1192,7 +1369,8 @@ impl Agent {
         {
             state.chat.queue.clear();
             state.chat.notices.push(format!(
-                "{act:?} was refused: that control does not take {}; use an operation its line lists.",
+                "{} was refused: that control does not take {}; use an operation its line lists.",
+                self.redact(&act.shown()),
                 decision.operation
             ));
             self.count_progress(state, false, observation, Idle::tried(&decision), Status::Stuck).await?;
@@ -1205,7 +1383,8 @@ impl Agent {
         if decision.operation != Operation::Wait && state.idle.iter().any(|idle| idle.tried.as_ref() == Some(&action)) {
             state.chat.queue.clear();
             state.chat.notices.push(format!(
-                "{act:?} was not taken: it was already tried here and changed nothing; the page has not changed since."
+                "{} was not taken: it was already tried here and changed nothing; the page has not changed since.",
+                self.redact(&act.shown())
             ));
             self.count_progress(state, false, observation, Idle::tried(&decision), Status::Stuck).await?;
             return Ok(None);
@@ -1263,13 +1442,25 @@ impl Agent {
                 // added nothing leaves the page as the plan expected it.
                 let failed = state.history.len() > before.0
                     && state.history.last().is_some_and(|entry| entry.outcome != StepOutcome::Executed);
-                let idle = decision.operation != Operation::Read
-                    && (state.unchanged > before.1 || state.recoveries > before.2);
+                // Whether the action itself did nothing is read off the page it leaves, at the next observation: a
+                // password typed again into a form already submitted once returned the page to a state seen before,
+                // which counts as no progress, and the Submit planned after it was dropped as if the typing had changed
+                // nothing. Only a step that left no entry is judged by the stall count.
+                let entered = state.history.len() > before.0;
+                let stalled = !entered && state.unchanged > before.1;
+                let idle = decision.operation != Operation::Read && (stalled || state.recoveries > before.2);
+                if entered && decision.operation != Operation::Read && !failed && !idle && !state.chat.queue.is_empty()
+                {
+                    state.chat.judging = Some(act.shown());
+                }
                 // The page redrew while the action was decided, so it was not sent: the rest of the plan, run on, clicked
                 // submit with the checkbox before it unclicked.
                 let redrawn = state.redecided && !before.3;
                 if redrawn && state.chat.queue.is_empty() {
-                    state.chat.notices.push(self.redact(&format!("{act:?} was not run: the page redrew first.")));
+                    state
+                        .chat
+                        .notices
+                        .push(self.redact(&format!("{} was not run: the page redrew first.", act.shown())));
                 }
                 if (failed || idle || redrawn) && !state.chat.queue.is_empty() {
                     let dropped = state.chat.queue.len();
@@ -1282,14 +1473,19 @@ impl Agent {
                         "changed nothing"
                     };
                     state.chat.notices.push(format!(
-                        "{dropped} planned action(s) were not run because {act:?} {what}; plan again from the page below."
+                        "{dropped} planned action(s) were not run because {} {what}; plan again from the page below.",
+                        self.redact(&act.shown())
                     ));
                 }
                 Ok(None)
             }
             Err(Flow::Unsure(unsure)) => {
                 state.chat.queue.clear();
-                state.chat.notices.push(format!("{act:?} was refused: {}", self.redact(&unsure.reason)));
+                state.chat.notices.push(format!(
+                    "{} was refused: {}",
+                    self.redact(&act.shown()),
+                    self.redact(&unsure.reason)
+                ));
                 self.count_progress(state, false, observation, Idle::tried(&decision), unsure.gives_up_as).await?;
                 Ok(None)
             }
@@ -1398,6 +1594,9 @@ mod tests {
         assert!(SYSTEM.contains("the run is not done on it"));
         assert!(SYSTEM.contains("page again with goto(its address), which loads it afresh, or repeat the action"));
         assert!(SYSTEM.contains("unavailable once retrying has not cleared it"));
+        assert!(SYSTEM.contains("effect says the failure is the site's reply to what it"));
+        assert!(SYSTEM.contains("sending it again can make it twice"));
+        assert!(SYSTEM.contains("unavailable stays the status when the way to its result is barred too"));
     }
 
     #[test]

@@ -59,6 +59,7 @@ pub(crate) mod testing {
                 links: Vec::new(),
                 whole_record: false,
                 item_place: None,
+                in_viewport: false,
                 fields: Vec::new(),
             });
             start += length + 2;
@@ -72,6 +73,7 @@ pub(crate) mod testing {
             blocks,
             inaccessible_frames: 0,
             masked: Vec::new(),
+            advice: Vec::new(),
         }
     }
 }
