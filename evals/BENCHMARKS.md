@@ -74,7 +74,7 @@ Publication maps Parallax results to the existing public arm names in one place:
 | `browser-use-oss` with model `bu-4.0` (browser-use 1.0.6's default), or `bu-fast` from browser-use 1.0.5 | `browser-use-oss` |
 | `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` | diagnostic only |
 
-The public schema remains 7. `GROUPS`, site groups, task versions, catalog
+The public schema is 9. `GROUPS`, site groups, task versions, catalog
 coverage, and published history are unchanged. The candidate projection reads
 Parallax run directories and does not rewrite `docs/results` history.
 
@@ -84,8 +84,12 @@ Parallax run directories and does not rewrite `docs/results` history.
 uv run fastbrowse-evals browser publish-candidate \
     runs/internal-fastbrowse \
     --campaign-id release-0.11.0 \
+    --catalog-sha "$(git rev-parse HEAD)" \
     --out benchmark-candidate.json
 ```
+
+`--catalog-sha` is the commit of the fastbrowse checkout running the projection: the candidate's catalog is that
+checkout's, and the site reads it there.
 
 The projection sums physical attempts for a task and repeat, retains typed
 timing and cost components, and rejects a candidate that does not pass the
