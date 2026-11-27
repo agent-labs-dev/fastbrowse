@@ -24,7 +24,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -43,7 +44,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -62,7 +64,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -81,7 +84,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -100,7 +104,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -119,7 +124,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -138,7 +144,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -157,7 +164,8 @@
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
-          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "agent-browser": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "7a1bc3b81f4ef9d6",
@@ -175,7 +183,8 @@
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
-          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "agent-browser": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "b06c887b5d683a5b",
@@ -193,7 +202,8 @@
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
-          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "agent-browser": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "6a98aba0ec9cc8fa",
@@ -211,7 +221,8 @@
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
-          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "agent-browser": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "156cab977ebf6845",
@@ -229,7 +240,8 @@
         "excluded": {
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
-          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
+          "browser-use-1-luna": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given",
+          "agent-browser": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "6605335ab4ef0697",
@@ -247,7 +259,8 @@
           "browser-use-ultrafast": "the task passes only by stopping before an irreversible step it does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
           "browser-harness": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause",
           "browser-use-oss": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause",
-          "browser-use-1-luna": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause"
+          "browser-use-1-luna": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause",
+          "agent-browser": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause"
         },
         "expect": "needs_confirmation",
         "source_fingerprint": "6317aca38d903937",
@@ -265,7 +278,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -283,7 +297,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -301,7 +316,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -319,7 +335,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -337,7 +354,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -355,7 +373,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -373,7 +392,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -394,7 +414,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -413,7 +434,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -432,7 +454,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -451,7 +474,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -470,7 +494,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -489,7 +514,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -508,7 +534,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -527,7 +554,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -546,7 +574,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -565,7 +594,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -584,7 +614,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -603,7 +634,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -622,7 +654,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -641,7 +674,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -660,7 +694,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -679,7 +714,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -698,7 +734,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -717,7 +754,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -736,7 +774,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -755,7 +794,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -774,7 +814,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -793,7 +834,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -814,7 +856,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -833,7 +876,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -852,7 +896,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -871,7 +916,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -890,7 +936,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -909,7 +956,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -928,7 +976,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -947,7 +996,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -966,7 +1016,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -985,7 +1036,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -1004,7 +1056,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -1025,7 +1078,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -1044,7 +1098,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -1063,7 +1118,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -1082,7 +1138,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -1101,7 +1158,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",
@@ -1120,7 +1178,8 @@
           "browser-harness",
           "browser-use-ultrafast",
           "browser-use-oss",
-          "browser-use-1-luna"
+          "browser-use-1-luna",
+          "agent-browser"
         ],
         "excluded": {},
         "expect": "complete",

@@ -61,6 +61,8 @@ Arm = Literal[
     "jev-ultrafast",
     "browser-harness",
     "browser-use-oss",
+    "agent-browser",
+    "browser-use-1-luna",
 ]
 FASTBROWSE_ARMS: frozenset[Arm] = frozenset({"fastbrowse", "fastbrowse-pool"})
 RESULTS = Path("docs/results")
@@ -252,6 +254,9 @@ HEAD_TO_HEAD: tuple[Arm, ...] = (
     "browser-harness",
     "browser-use-oss",
 )
+"""The head-to-head's arms before `LUNA_ARMS_SCHEMA`."""
+LUNA_ARMS: tuple[Arm, ...] = ("agent-browser", "browser-use-1-luna")
+"""The head-to-head's arms on openai/gpt-6-luna that drive their own browser tool, from `LUNA_ARMS_SCHEMA`."""
 OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use")
 COVERAGE: dict[GroupId, Coverage] = {
     "internal-fastbrowse": Coverage(frozenset({53, 54, 59, 60}), 3, "task-success", ("fastbrowse",)),
@@ -259,10 +264,10 @@ COVERAGE: dict[GroupId, Coverage] = {
         frozenset({46, 47, 52, 53, 59}),
         3,
         "task-success",
-        HEAD_TO_HEAD,
+        (*HEAD_TO_HEAD, *LUNA_ARMS),
         (),
         # jev-ultrafast stays partial for the figures approved before BU_ULTRAFAST_SCHEMA (`group_arms`).
-        ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness", "browser-use-oss"),
+        ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness", "browser-use-oss", *LUNA_ARMS),
     ),
     "internal-ultrafast": Coverage(
         frozenset({6, 47, 52, 58}), 3, "task-success", ("fastbrowse-pool", "browser-use-ultrafast")
@@ -279,6 +284,9 @@ BU_ULTRAFAST_SCHEMA = 7
 """From this schema the Ultrafast comparison is fastbrowse on its own browser pool against the hosted Browser Use
 agent on bu-ultrafast (`browser-use-ultrafast`), and no group measures `jev-ultrafast`, which the harness no longer
 runs. Figures approved under an older schema keep the pairing they were measured under."""
+LUNA_ARMS_SCHEMA = 8
+"""From this schema the head-to-head also publishes `LUNA_ARMS`. Figures approved under an older schema keep the five
+arms they were published with."""
 
 
 def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
@@ -289,6 +297,8 @@ def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
         return ("fastbrowse-pool", "jev-ultrafast")
     if group == "internal-hosted" and schema_version < BU_ULTRAFAST_SCHEMA:
         return (*HEAD_TO_HEAD, "jev-ultrafast")
+    if group == "internal-hosted" and schema_version < LUNA_ARMS_SCHEMA:
+        return HEAD_TO_HEAD
     return COVERAGE[group].arms
 
 
@@ -479,7 +489,7 @@ class ExportReceipt(PublicModel):
     trace_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")]
 
 
-SCHEMA = 7
+SCHEMA = 8
 """The schema a new or changed record is written under. Older schemas still read: Parallax writes schema 2 for a
 candidate of official suites alone, and the approved published figures and the staged candidate were written under
 earlier ones, where an approval binds the bytes it approved."""
@@ -510,7 +520,7 @@ REFERENCE_PATH = "docs/results/competitor-reference.json"
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[2, 3, 4, 5, 6, 7]
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha

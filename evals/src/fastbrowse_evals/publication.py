@@ -13,6 +13,7 @@ from typing import Any, Literal, assert_never, cast
 
 from fastbrowse.evals.benchmarks import (
     COVERAGE,
+    SCHEMA,
     Arm,
     Candidate,
     ExcludedTask,
@@ -70,6 +71,8 @@ def public_arm(result: TrialResult) -> Arm | None:
         "browser-use-ultrafast",
         "browser-harness",
         "browser-use-oss",
+        "agent-browser",
+        "browser-use-1-luna",
     }
     return cast(Arm | None, arm if arm in supported else None)
 
@@ -202,7 +205,7 @@ def _catalog_tasks() -> list[Any]:
 def _required_task_ids(group_id: GroupId) -> list[str]:
     if group_id in OFFICIAL_SOURCES.values():
         raise ValueError("official task ids come from the upstream run")
-    arms = group_arms(group_id, 7)
+    arms = group_arms(group_id, SCHEMA)
     partial = COVERAGE[group_id].partial
     return sorted(task.id for task in _catalog_tasks() if all(arm in task.arms for arm in arms if arm not in partial))
 
@@ -219,7 +222,7 @@ def _group(
     sources: list[Source],
 ) -> Group:
     task_ids = sorted(set(task_ids))
-    arms = group_arms(group_id, 7)
+    arms = group_arms(group_id, SCHEMA)
     rows = [row for arm, arm_rows in rows_by_arm.items() if arm in arms for row in arm_rows if row.task in task_ids]
     unjudged = [
         slot for arm, slots in unjudged_by_arm.items() if arm in arms for slot in slots if slot.task in task_ids
@@ -358,7 +361,7 @@ def _validate_run(run: LoadedRun, source: GroupId | None) -> frozenset[str]:
 
 
 def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candidate:
-    """Build schema 7 groups from Parallax `parallax.result/2` run directories."""
+    """Build current-schema groups from Parallax `parallax.result/2` run directories."""
     paths = tuple(run_dirs)
     loaded = [load_run(path) for path in paths]
     if not loaded:
@@ -446,7 +449,7 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
             continue
         # Only an arm the group publishes, as _group keeps only its rows: a stale arm's exclusions would fail
         # check_slots with no rows beside them.
-        partial = set(COVERAGE[group_id].partial) & set(group_arms(group_id, 7))
+        partial = set(COVERAGE[group_id].partial) & set(group_arms(group_id, SCHEMA))
         for arm in rows_by_arm:
             if arm not in partial:
                 continue
@@ -478,7 +481,7 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
     if not verified:
         raise ValueError("all Parallax run directories must carry a successful verification result")
     candidate = Candidate(
-        schema_version=7,
+        schema_version=SCHEMA,
         campaign_id=campaign_id,
         agent_sha=measured_agent,
         runner_sha=measured_runner,

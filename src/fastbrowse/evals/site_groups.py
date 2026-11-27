@@ -34,6 +34,8 @@ SYSTEMS = {
     "jev-ultrafast": "jev-ultrafast",  # figures approved before schema 7 carry it
     "browser-harness": "browser-harness",
     "browser-use-oss": "browser-use-oss",
+    "agent-browser": "agent-browser",
+    "browser-use-1-luna": "browser-use-1-luna",
 }
 """The site system each candidate arm is shown as (`SYSTEM_ARMS` in the site's benchmark-groups.ts)."""
 RETIRED = frozenset({"jev-ultrafast"})
