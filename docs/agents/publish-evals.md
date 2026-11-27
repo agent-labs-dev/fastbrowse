@@ -60,7 +60,9 @@ provides the agent integration and final page observation.
 
 ## Build the candidate
 
-The adapter reads one or more Parallax run directories:
+The adapter reads one or more Parallax run directories. It runs on the harness's own fastbrowse, not
+the measured build: the candidate schema and catalog are the harness's, and each run's provenance names
+the build it measured.
 
 ```sh
 uv run fastbrowse-evals browser publish-candidate \
