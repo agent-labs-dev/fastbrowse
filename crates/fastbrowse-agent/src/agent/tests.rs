@@ -576,12 +576,53 @@ async fn test_a_failed_reply_to_a_commit_stands_until_a_later_commit_succeeds() 
     agent.note_effect(&mut state, &elsewhere);
     agent.settle(&mut state, &elsewhere).await.unwrap();
     assert!(state.site_failure.is_some(), "leaving the page cleared the failed send");
-    // Sent from the start address, the failure is kept for it too, and recovery ends the run on that copy.
-    state.start_failure.clone_from(&state.site_failure);
     send(&mut state, StepOutcome::Executed);
     agent.note_effect(&mut state, &replied("confirmed", "https://example.test/sent", 200));
     assert!(state.site_failure.is_none(), "a later commit's reply, wherever it lands, clears it");
-    assert!(state.start_failure.is_none(), "the start address kept the failed send a later commit cleared");
+}
+
+/// The start address keeps the failure its own page answered with, and loses a failed send once a later commit is
+/// answered: copied from the run's failure, it took a failed send made elsewhere, and kept a first failed send after a
+/// second one elsewhere replaced the run's, so recovery ended a run whose later commit succeeded.
+#[tokio::test]
+async fn test_the_start_address_keeps_only_its_own_failure() {
+    let agent = agent();
+    let mut state = run_state();
+    let start = "https://example.test/message";
+    state.first_url = Some(start.into());
+    let page = |key: &str, url: &str, status: i64| Observation {
+        url: url.into(),
+        document_key: key.into(),
+        response_status: Some(status),
+        ..observation(&[button("Send")])
+    };
+    let send = |state: &mut RunState, from: &Observation| {
+        state.history.push(HistoryEntry::new(Some(Operation::Click), Some("Send"), StepOutcome::Executed, true));
+        state.acted_from = Some(from.clone());
+        state.committing = true;
+    };
+    let form = page("form", start, 200);
+    send(&mut state, &form);
+    agent.note_effect(&mut state, &page("first", start, 503));
+    assert!(state.start_failure.as_ref().is_some_and(|failure| failure.sent));
+    send(&mut state, &form);
+    agent.note_effect(&mut state, &page("second", "https://example.test/retry", 503));
+    send(&mut state, &form);
+    agent.note_effect(&mut state, &page("done", "https://example.test/done", 200));
+    assert!(state.site_failure.is_none());
+    assert!(state.start_failure.is_none(), "the start kept a failed send after a later commit succeeded");
+
+    state.committing = false;
+    agent.note_effect(&mut state, &page("missing", start, 404));
+    send(&mut state, &form);
+    agent.note_effect(&mut state, &page("sent", "https://example.test/sent", 503));
+    state.committing = false;
+    agent.note_effect(&mut state, &page("missing-again", start, 404));
+    let held = state.start_failure.clone().unwrap();
+    assert!(held.url == start && !held.sent, "the start took a failed send made elsewhere: {held:?}");
+    send(&mut state, &form);
+    agent.note_effect(&mut state, &page("confirmed", "https://example.test/confirmed", 200));
+    assert!(state.start_failure.is_some(), "a commit's reply elsewhere cleared the start address's own 404");
 }
 
 fn capacities() -> (Fact, Fact) {
