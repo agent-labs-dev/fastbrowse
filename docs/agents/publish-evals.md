@@ -47,9 +47,9 @@ Parallax supplies `browser-use-cloud`, `browser-use-oss`, `browser-harness`
 | `browser-use-cloud` with model `bu-ultrafast` | `browser-use-ultrafast` |
 | other `browser-use-cloud` results | `browser-use` |
 | `browser-harness` | `browser-harness` |
-| `agent-browser` on its pinned model | `agent-browser`, carried by no publication group yet |
+| `agent-browser` on its pinned model | `agent-browser`, a partial arm of `internal-hosted` |
 | `browser-use-oss` | `browser-use-oss` |
-| `browser-use-1-luna` on `openai/gpt-6-luna` | `browser-use-1-luna`, carried by no publication group |
+| `browser-use-1-luna` on `openai/gpt-6-luna` | `browser-use-1-luna`, a partial arm of `internal-hosted` |
 | `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` | diagnostic only |
 
 Every task record is world-less, uses `Area.BROWSER`, requires browser
@@ -72,8 +72,9 @@ uv run fastbrowse-evals browser publish-candidate \
 `TrialResult` becomes one public `Row`. Physical attempts are retained in
 `physical_runs`, with their typed timing, usage, and costs summed on the row.
 The adapter then runs `fastbrowse.evals.benchmarks.check_catalog` before it
-writes the candidate. A candidate uses schema 7, the existing `GROUPS`, the
-existing site groups, and the existing task versions.
+writes the candidate. A candidate uses schema 8, the existing `GROUPS`, the
+existing site groups, and the existing task versions. Schema 8 adds `agent-browser`
+and `browser-use-1-luna` to `internal-hosted`; a schema 7 candidate keeps that group's five arms.
 
 The candidate carries an export receipt containing the run bundle digest,
 campaign id, measured build, group ids, row count, and Parallax run trace. It

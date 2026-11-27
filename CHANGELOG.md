@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The published internal head-to-head adds two arms that drive their own browser on `openai/gpt-6-luna`: `agent-browser` (Codex) and `browser-use-1-luna` (browser-use 1.0.8). New publication candidates are schema 8; a schema 7 candidate still reads with the group's earlier five arms.
+
 ## [0.12.0] - 2026-11-26
 
 - A failure the site sends in reply to what the run sent, such as HTTP 503 for a message, stands until a later send succeeds: reloading the form or going to another page does not clear it, and the step's effect says it was the reply to what was sent. The driver is told that whether it went through is unknown and sending it again can make it twice, so it looks for the result or gives up as `unavailable`. Cleared by a reload, a send the site failed was retried and the run ended `stuck`.

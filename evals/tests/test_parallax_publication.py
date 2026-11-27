@@ -358,7 +358,7 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
         )
         == 0
     )
-    assert out.read_text().startswith('{\n  "schema_version": 7')
+    assert out.read_text().startswith('{\n  "schema_version": 8')
 
 
 def test_official_run_uses_upstream_score_and_execution_completion(tmp_path: Path) -> None:

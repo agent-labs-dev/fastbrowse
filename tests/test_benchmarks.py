@@ -1362,6 +1362,17 @@ def test_the_head_to_head_publishes_whichever_of_its_arms_ran(candidate, arms):
     assert len(group.task_ids) == 59
 
 
+def test_the_luna_arms_join_the_head_to_head_from_their_schema(candidate):
+    arms = ("fastbrowse", "agent-browser", "browser-use-1-luna")
+    parsed = Candidate.model_validate(_head_to_head(candidate, arms))
+    check_catalog(parsed, CATALOG)
+    assert parsed.groups[0].measured_arms(benchmarks.group_arms("internal-hosted", SCHEMA)) == arms
+    # Figures approved before keep the five arms they were measured with.
+    assert benchmarks.group_arms("internal-hosted", benchmarks.LUNA_ARMS_SCHEMA - 1) == benchmarks.HEAD_TO_HEAD
+    with pytest.raises(ValidationError, match="internal-hosted measures only"):
+        Candidate.model_validate({**_head_to_head(candidate, arms), "schema_version": benchmarks.LUNA_ARMS_SCHEMA - 1})
+
+
 def test_an_arm_without_a_cost_has_none_on_every_row(candidate):
     data = _head_to_head(candidate, ("fastbrowse", "browser-use"))
     for row in data["groups"][0]["rows"]:
