@@ -705,12 +705,6 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.fastbrowse_sha }}
-          path: fastbrowse
-          fetch-depth: 0
-          persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
       - name: Check out the harness
@@ -721,14 +715,13 @@ jobs:
           # Publication checks that every run's agent and runner commits are in the history of the newest build.
           fetch-depth: 0
           persist-credentials: false
-      - name: Install the harness and fastbrowse
-        env:
-          FASTBROWSE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
+      - name: Install the harness
+        # Publication runs the harness's own fastbrowse: the candidate schema and catalog are the harness's, and each
+        # run's provenance names the build it measured. Installing the measured build refused an arm the harness
+        # gained after that build, so a release campaign could not publish it.
         run: |
           cd harness/evals
-          uv sync --locked --no-install-package fastbrowse
-          # The package metadata records the measured build, and publication checks the run provenance.
-          uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
+          uv sync --locked
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ needs.campaign.result == 'success' }}
         with: {path: runs, pattern: run-*, merge-multiple: true}
