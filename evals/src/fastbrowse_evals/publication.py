@@ -236,10 +236,7 @@ def _group(
         limits=["Parallax campaign budget and reserve"],
         rows=sorted(rows, key=lambda row: (row.arm, row.task, row.repeat)),
         unjudged=sorted(unjudged, key=lambda item: (item.arm, item.task, item.repeat)),
-        # Parallax marks each repeat of a task an arm cannot attempt; the task is excluded once.
-        excluded=sorted(
-            {(item.arm, item.task): item for item in excluded}.values(), key=lambda item: (item.arm, item.task)
-        ),
+        excluded=sorted(excluded, key=lambda item: (item.arm, item.task)),
         sources=sources,
     )
 
@@ -447,7 +444,9 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
     for group_id, rows_by_arm in rows_by_group.items():
         if group_id in OFFICIAL_SOURCES.values():
             continue
-        partial = COVERAGE[group_id].partial
+        # Only an arm the group publishes, as _group keeps only its rows: a stale arm's exclusions would fail
+        # check_slots with no rows beside them.
+        partial = set(COVERAGE[group_id].partial) & set(group_arms(group_id, 7))
         for arm in rows_by_arm:
             if arm not in partial:
                 continue
