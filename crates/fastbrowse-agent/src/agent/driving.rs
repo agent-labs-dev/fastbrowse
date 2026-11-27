@@ -998,16 +998,16 @@ impl Agent {
                         .map_or(steps, |failure| failure.since);
                     SiteFailure { sent, ..SiteFailure::http(&observation.url, status, since) }
                 };
+                // Any later failure says nothing of whether a failed send went through, and replacing it let a page
+                // left clear it, so the driver sent it again.
+                let keeps = |held: &Option<SiteFailure>| held.as_ref().is_some_and(|held| held.sent && !sent);
                 // The start address keeps the failure its own page answered with: copying the run's failure instead
                 // gave it a failed send made elsewhere, which a later commit then cleared along with the start's 404.
-                if state.first_url.as_deref() == Some(observation.url.as_str()) {
+                if state.first_url.as_deref() == Some(observation.url.as_str()) && !keeps(&state.start_failure) {
                     state.start_failure = Some(failure(&state.start_failure));
                 }
-                match &state.site_failure {
-                    // Any later failure says nothing of whether a failed send went through, and replacing it let a page
-                    // left clear it, so the driver sent it again.
-                    Some(held) if held.sent && !sent => {}
-                    current => state.site_failure = Some(failure(current)),
+                if !keeps(&state.site_failure) {
+                    state.site_failure = Some(failure(&state.site_failure));
                 }
             } else if status >= 200
                 && state.site_failure.as_ref().is_some_and(|failure| {

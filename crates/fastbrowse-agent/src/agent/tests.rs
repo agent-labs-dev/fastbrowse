@@ -583,7 +583,8 @@ async fn test_a_failed_reply_to_a_commit_stands_until_a_later_commit_succeeds() 
 
 /// The start address keeps the failure its own page answered with, and loses a failed send once a later commit is
 /// answered: copied from the run's failure, it took a failed send made elsewhere, and kept a first failed send after a
-/// second one elsewhere replaced the run's, so recovery ended a run whose later commit succeeded.
+/// second one elsewhere replaced the run's, so recovery ended a run whose later commit succeeded. A reload of the
+/// failed page is no reply, so it leaves the send marked.
 #[tokio::test]
 async fn test_the_start_address_keeps_only_its_own_failure() {
     let agent = agent();
@@ -605,6 +606,9 @@ async fn test_the_start_address_keeps_only_its_own_failure() {
     send(&mut state, &form);
     agent.note_effect(&mut state, &page("first", start, 503));
     assert!(state.start_failure.as_ref().is_some_and(|failure| failure.sent));
+    state.committing = false;
+    agent.note_effect(&mut state, &page("reloaded", start, 503));
+    assert!(state.start_failure.as_ref().is_some_and(|failure| failure.sent), "a reload unmarked the failed send");
     send(&mut state, &form);
     agent.note_effect(&mut state, &page("second", "https://example.test/retry", 503));
     send(&mut state, &form);
