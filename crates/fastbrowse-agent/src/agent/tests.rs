@@ -608,6 +608,7 @@ async fn test_the_start_address_keeps_only_its_own_failure() {
     assert!(state.start_failure.as_ref().is_some_and(|failure| failure.sent));
     state.committing = false;
     agent.note_effect(&mut state, &page("reloaded", start, 503));
+    agent.note_effect(&mut state, &page("reloaded-clear", start, 200));
     assert!(state.start_failure.as_ref().is_some_and(|failure| failure.sent), "a reload unmarked the failed send");
     send(&mut state, &form);
     agent.note_effect(&mut state, &page("second", "https://example.test/retry", 503));

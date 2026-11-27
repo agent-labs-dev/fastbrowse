@@ -983,7 +983,10 @@ impl Agent {
             && state.history.last().is_some_and(|last| last.outcome == StepOutcome::Executed)
             && state.acted_from.as_ref().is_some_and(|before| before.document_key != observation.document_key);
         if let Some(status) = observation.response_status {
-            if status < 400 && state.start_failure.as_ref().is_some_and(|failure| failure.url == observation.url) {
+            // A failed send stands until a later commit's reply, and a reload of the start address is none.
+            if status < 400
+                && state.start_failure.as_ref().is_some_and(|failure| failure.url == observation.url && !failure.sent)
+            {
                 state.start_failure = None;
             }
             if status >= 400 {
