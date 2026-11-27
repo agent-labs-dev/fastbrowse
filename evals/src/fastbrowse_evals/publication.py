@@ -360,7 +360,7 @@ def _validate_run(run: LoadedRun, source: GroupId | None) -> frozenset[str]:
     return frozenset(stale)
 
 
-def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candidate:
+def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str, catalog_sha: str) -> Candidate:
     """Build current-schema groups from Parallax `parallax.result/2` run directories."""
     paths = tuple(run_dirs)
     loaded = [load_run(path) for path in paths]
@@ -486,6 +486,7 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
         agent_sha=measured_agent,
         runner_sha=measured_runner,
         catalog_sha256=CATALOG_SHA256,
+        catalog_sha=catalog_sha,
         export=ExportReceipt(
             bundle_sha256=hashlib.sha256(result_bytes).hexdigest(),
             campaign_id=campaign_id,
@@ -502,8 +503,8 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
     return candidate
 
 
-def candidate_from_run(run_dir: Path, *, campaign_id: str) -> Candidate:
-    return candidate_from_runs([run_dir], campaign_id=campaign_id)
+def candidate_from_run(run_dir: Path, *, campaign_id: str, catalog_sha: str) -> Candidate:
+    return candidate_from_runs([run_dir], campaign_id=campaign_id, catalog_sha=catalog_sha)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -511,8 +512,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("run", type=Path, nargs="+")
     parser.add_argument("--campaign-id", required=True)
     parser.add_argument("--out", type=Path, required=True)
+    # The commit of the fastbrowse checkout this runs from: the candidate's catalog is that checkout's, and the site
+    # reads it back there.
+    parser.add_argument("--catalog-sha", required=True)
     args = parser.parse_args(argv)
-    candidate = candidate_from_runs(args.run, campaign_id=args.campaign_id)
+    candidate = candidate_from_runs(args.run, campaign_id=args.campaign_id, catalog_sha=args.catalog_sha)
     args.out.write_bytes(candidate.model_dump_json(indent=2).encode() + b"\n")
     return 0
 

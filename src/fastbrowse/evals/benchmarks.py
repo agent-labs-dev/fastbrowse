@@ -489,12 +489,16 @@ class ExportReceipt(PublicModel):
     trace_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")]
 
 
-SCHEMA = 8
+SCHEMA = 9
 """The schema a new or changed record is written under. Older schemas still read: Parallax writes schema 2 for a
 candidate of official suites alone, and the approved published figures and the staged candidate were written under
 earlier ones, where an approval binds the bytes it approved."""
 TIMED_SCHEMA = 6
 """From this schema every row records its timing basis."""
+CATALOG_COMMIT_SCHEMA = 9
+"""From this schema a candidate names `catalog_sha`, the fastbrowse commit its catalog was read at. The catalog is the
+harness's, which can be newer than the measured build (an arm the harness gained after a release), so the site reads it
+there, not at `agent_sha`."""
 
 
 class CompetitorReference(PublicModel):
@@ -520,21 +524,29 @@ REFERENCE_PATH = "docs/results/competitor-reference.json"
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[2, 3, 4, 5, 6, 7, 8]
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
     catalog_sha256: Digest
+    catalog_sha: Sha | None = None
     fixture: Fixture | None = None
     export: ExportReceipt | None = None
     langfuse_verified: Literal[True]
     groups: list[Group]
+
+    @model_serializer(mode="wrap")
+    def without_unrecorded_catalog_commit(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A candidate from before `catalog_sha` keeps its old bytes, so approved candidates still match."""
+        return _without_empty(handler(self), ("catalog_sha",))
 
     @model_validator(mode="after")
     def suites(self) -> Self:
         ids = {g.id for g in self.groups}
         if not self.groups or len(ids) != len(self.groups):
             raise ValueError("at least one complete, unique benchmark group is required")
+        if (self.catalog_sha is not None) != (self.schema_version >= CATALOG_COMMIT_SCHEMA):
+            raise ValueError(f"a candidate names its catalog commit from schema {CATALOG_COMMIT_SCHEMA}, and only then")
         for group in self.groups:
             group.check_slots(group_arms(group.id, self.schema_version))
             if self.schema_version >= TIMED_SCHEMA and any(r.timing_basis is None for r in group.rows):
