@@ -70,7 +70,7 @@ depends=(
   'python-h2'
   'python-httpx>=0.28.1'
   'python-packaging>=24'
-  'python-pydantic>=2.11'
+  'python-pydantic>=2.14.2'
 )
 makedepends=('python-build' 'python-installer' 'python-maturin' 'rust')
 optdepends=(
@@ -123,7 +123,7 @@ pkgbase = fastbrowse
 \tdepends = python-h2
 \tdepends = python-httpx>=0.28.1
 \tdepends = python-packaging>=24
-\tdepends = python-pydantic>=2.11
+\tdepends = python-pydantic>=2.14.2
 \toptdepends = chromium: a local browser for --local
 \toptdepends = google-chrome: a local browser for --local
 \toptions = !lto
