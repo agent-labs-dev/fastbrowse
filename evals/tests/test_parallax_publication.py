@@ -41,6 +41,10 @@ AGENT_SHA = "a" * 40
 RUNNER_SHA = "b" * 40
 
 
+CATALOG_SHA = "c" * 40
+"""The commit a test candidate names for its catalog: any commit, since only the site reads the catalog there."""
+
+
 def result(
     task_id: str,
     repeat: int,
@@ -333,6 +337,7 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
     candidate = candidate_from_run(
         run,
         campaign_id="synthetic-campaign",
+        catalog_sha=CATALOG_SHA,
     )
 
     assert len(candidate.groups) == 1
@@ -342,7 +347,7 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
     assert candidate.groups[0].sources[0].tasks == sorted(task.id for task in tasks)
     check_catalog(candidate, CATALOG_PATH)
 
-    duplicate = candidate_from_runs([run, run], campaign_id="synthetic-campaign")
+    duplicate = candidate_from_runs([run, run], campaign_id="synthetic-campaign", catalog_sha=CATALOG_SHA)
     assert len(duplicate.groups[0].rows) == len(tasks) * 3
 
     out = tmp_path / "candidate.json"
@@ -352,13 +357,16 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
                 str(run),
                 "--campaign-id",
                 "synthetic-campaign",
+                "--catalog-sha",
+                CATALOG_SHA,
                 "--out",
                 str(out),
             ]
         )
         == 0
     )
-    assert out.read_text().startswith('{\n  "schema_version": 8')
+    written = json.loads(out.read_text())
+    assert (written["schema_version"], written["catalog_sha"]) == (9, CATALOG_SHA)
 
 
 def test_official_run_uses_upstream_score_and_execution_completion(tmp_path: Path) -> None:
@@ -398,7 +406,7 @@ def test_official_run_uses_upstream_score_and_execution_completion(tmp_path: Pat
     )
     _support(run, manifest)
 
-    candidate = candidate_from_run(run, campaign_id="official-campaign")
+    candidate = candidate_from_run(run, campaign_id="official-campaign", catalog_sha=CATALOG_SHA)
 
     assert len(candidate.groups) == 1
     group = candidate.groups[0]
@@ -450,7 +458,7 @@ def test_official_groups_use_their_own_selected_task_ids(tmp_path: Path) -> None
     bu_run = write_official_run("bu-bench", "bu-bench-upstream-v1", 200)
     mind2web_run = write_official_run("online-mind2web", "online-mind2web-upstream-v1", 300)
 
-    candidate = candidate_from_runs([bu_run, mind2web_run], campaign_id="official-campaign")
+    candidate = candidate_from_runs([bu_run, mind2web_run], campaign_id="official-campaign", catalog_sha=CATALOG_SHA)
 
     groups = {group.id: group for group in candidate.groups}
     assert len(groups["bu-bench"].task_ids) == 200
@@ -522,7 +530,7 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
         "oss-run", 16, "browser-use-oss", "bu-fast", "done", agent_sha="c" * 40, runner_sha="d" * 40
     )
 
-    candidate = candidate_from_runs([fastbrowse, competitor], campaign_id="mixed-builds")
+    candidate = candidate_from_runs([fastbrowse, competitor], campaign_id="mixed-builds", catalog_sha=CATALOG_SHA)
 
     (group,) = candidate.groups
     assert (candidate.agent_sha, candidate.runner_sha) == (AGENT_SHA, RUNNER_SHA)
@@ -583,9 +591,9 @@ def test_a_changed_task_drops_only_its_own_earlier_rows(tmp_path: Path) -> None:
     earlier = fastbrowse_run("earlier", 14, [task.id for task in tasks], stale=changed)
     # The changed task's earlier rows no longer count, so the run alone leaves its slots unmeasured.
     with pytest.raises(ValueError, match=r"slots with no row \(first: "):
-        candidate_from_runs([earlier], campaign_id="changed-task")
+        candidate_from_runs([earlier], campaign_id="changed-task", catalog_sha=CATALOG_SHA)
 
     rerun = fastbrowse_run("rerun", 16, [changed])
-    candidate = candidate_from_runs([earlier, rerun], campaign_id="changed-task")
+    candidate = candidate_from_runs([earlier, rerun], campaign_id="changed-task", catalog_sha=CATALOG_SHA)
     assert len(candidate.groups[0].rows) == len(tasks) * 3
     check_catalog(candidate, CATALOG_PATH)

@@ -759,6 +759,8 @@ jobs:
         env:
           CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
           RUN_ON: ${{ needs.resolve.outputs.run_on }}
+          # The candidate's catalog is this checkout's, so it names this commit for the site to read the catalog at.
+          HARNESS_SHA: ${{ needs.resolve.outputs.harness_sha }}
         run: |
           cd harness/evals
           args=()
@@ -772,6 +774,7 @@ jobs:
           uv run --no-sync fastbrowse-evals browser publish-candidate \
             "${args[@]}" \
             --campaign-id "$CAMPAIGN_ID" \
+            --catalog-sha "$HARNESS_SHA" \
             --out "$GITHUB_WORKSPACE/candidate/benchmark-candidate.json"
       - name: Record the run facts
         # What the site shows beside the figures: the run date, harness and judge. Each group's card shows the newest

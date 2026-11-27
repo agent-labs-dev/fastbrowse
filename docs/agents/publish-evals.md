@@ -62,21 +62,24 @@ provides the agent integration and final page observation.
 
 The adapter reads one or more Parallax run directories. It runs on the harness's own fastbrowse, not
 the measured build: the candidate schema and catalog are the harness's, and each run's provenance names
-the build it measured.
+the build it measured. `--catalog-sha` names the commit of that harness checkout: the candidate records
+it as `catalog_sha`, and the site reads the catalog there to check `catalog_sha256`.
 
 ```sh
 uv run fastbrowse-evals browser publish-candidate \
   runs/internal-fastbrowse runs/internal-hosted \
   --campaign-id release-0.11.0 \
+  --catalog-sha "$(git rev-parse HEAD)" \
   --out benchmark-candidate.json
 ```
 
 `TrialResult` becomes one public `Row`. Physical attempts are retained in
 `physical_runs`, with their typed timing, usage, and costs summed on the row.
 The adapter then runs `fastbrowse.evals.benchmarks.check_catalog` before it
-writes the candidate. A candidate uses schema 8, the existing `GROUPS`, the
-existing site groups, and the existing task versions. Schema 8 adds `agent-browser`
-and `browser-use-1-luna` to `internal-hosted`; a schema 7 candidate keeps that group's five arms.
+writes the candidate. A candidate uses schema 9, the existing `GROUPS`, the
+existing site groups, and the existing task versions. Schema 9 adds `catalog_sha`; a candidate before it has
+its catalog read at `agent_sha`. Schema 8 adds `agent-browser` and `browser-use-1-luna` to `internal-hosted`;
+a schema 7 candidate keeps that group's five arms.
 
 The candidate carries an export receipt containing the run bundle digest,
 campaign id, measured build, group ids, row count, and Parallax run trace. It

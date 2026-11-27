@@ -311,6 +311,8 @@ def official_receipts(repo: str, candidate: Candidate) -> list[str]:
                 produced = candidate_from_runs(
                     run_dirs,
                     campaign_id=candidate.campaign_id,
+                    # Only the produced groups are compared, so the catalog commit is the candidate's own.
+                    catalog_sha=candidate.catalog_sha or candidate.agent_sha,
                 )
             except (OSError, TypeError, ValueError):
                 continue
