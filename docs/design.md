@@ -157,7 +157,9 @@ script-rendered body was read.
 
 Browser and HTTP captures keep a text label's `title` advice beside it as `(title: ...)`, within the
 same record or table cell. The advice supplements the label rather than replacing it, so a shortened listing
-name can retain its full native tooltip text as citable evidence.
+name can retain its full native tooltip text as citable evidence. The capture lists where it wrote such advice, a
+title or a date's `datetime`, as `advice`: a quote or a sent notice matched without those words still cites the
+capture's own text.
 
 With `EXA_API_KEY` and no start page, the LLM proposes an entry address and web search queries from the task, and
 Jev picks one. Exa auto search returns up to ten results. Every returned result
@@ -224,6 +226,21 @@ so choosing the next page is an ordinary step. A page number drawn as text rathe
 when it is focusable and has visible text, including a label wrapped in child elements. Hidden menu links do not
 exclude the trigger that reveals them. An element already inside a control, or holding visible controls, leaves
 actions to those controls.
+
+`read_pages(id, max_pages)` follows a link the page marks as the next page of a list, and each next page's own, in one turn:
+code opens each page as a step it chose (no authorization question, as for any code-selected pagination), takes its capture
+into the evidence a `done` is checked against, and tells the driver the pages read and whether the list ended. `max_pages`
+is the model's own stopping point. A page the pager already reached ends it. The pages count as read for finishing.
+
+A page with text outside the viewport goes to the driver as a window: the controls and the page text from one screen
+above the viewport to one screen below it (a scroll moves one viewport). Each control reports the viewport-height band
+its centre is in (`screen`). A line names the lines and the count of controls
+left out; `read_text(page, from, lines, find)` shows any lines of the page or of a page shown earlier (with `find`, the lines holding
+that text under their numbers, a way to a section of a long page; the page is read from the capture the driver was shown), and
+`read_controls(from, count)` lists the controls further than a screen from the viewport, `from` counting them from 1 (the page names their range). The viewport is placed by the
+capture's blocks the browser reports it drew there; a capture that reports none, or a page that fits the window, goes
+whole. Nothing is cut: quotes and tallies
+check against the full capture, and a windowed page is not counted as read by being shown.
 
 A field is named by its label, never by its value. A select or a combobox or listbox widget is not named from the
 options, chips or buttons it shows. A widget wrapping exactly one field borrows that field's label, and its own label

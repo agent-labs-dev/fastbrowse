@@ -45,6 +45,9 @@ class Control(Frozen):
     expanded: bool | None = None
     sensitive: bool = False
     offscreen: bool = False
+    screen: int = Field(default=0, exclude_if=lambda screen: screen == 0)
+    """Which viewport-height band of the page the control's centre is in, counted from the viewport: 0 inside it, 1
+    the screen below, -1 the screen above."""
     read_only: bool = Field(default=False, exclude_if=lambda read_only: not read_only)
     """A field the page marks readonly (`readonly` or `aria-readonly`): it takes a click but not typing."""
     layer: int | None = Field(default=None, exclude_if=lambda layer: layer is None)
@@ -206,6 +209,8 @@ class Block(Frozen):
     so its kind does not say this."""
     item_place: ItemPlace | None = Field(default=None, exclude_if=lambda place: place is None)
     """The place of the list item this block is, or sits inside: a label does not say it is the third of the list."""
+    in_viewport: bool = Field(default=False, exclude_if=lambda shown: not shown)
+    """Some of this block is drawn inside the viewport when the page is captured."""
     fields: tuple[SourceField, ...] = Field(default=(), exclude_if=lambda fields: not fields)
     """Structured values retain their boundaries, so copying one never requires retyping its whitespace."""
 
@@ -219,6 +224,9 @@ class Capture(Frozen):
     text: str
     blocks: tuple[Block, ...]
     inaccessible_frames: int = Field(default=0, ge=0)
+    advice: tuple[tuple[int, int], ...] = Field(default=(), exclude_if=lambda advice: not advice)
+    """Where code wrote its own advice into `text`, such as a link's title beside its label, as code point ranges with
+    the space before each: words code added, not page text."""
 
 
 class DragPoint(Frozen):

@@ -27,8 +27,13 @@ use crate::start::{accept_start, propose_readable_start, propose_start};
 use crate::verification::RecordSchema;
 use fastbrowse_core::navigation::written_addresses;
 
+/// The key of the prohibition question in the task-judgment request and in the gate's own.
+pub(super) const PROHIBITS: &str = "prohibits";
+
 pub(super) struct TaskJudgments {
     pub dates: Vec<crate::dates::DateReference>,
+    /// Whether the task forbids some action, when the batch answered it.
+    pub prohibits: Option<bool>,
     pub output: Option<Box<indexmap::IndexMap<String, fastbrowse_core::decision::Answer>>>,
 }
 
@@ -220,6 +225,7 @@ impl Agent {
     pub(super) async fn task_judgments(
         &self,
         given: &str,
+        raw: &str,
         ledger: &fastbrowse_core::telemetry::Ledger,
     ) -> Step<TaskJudgments> {
         use fastbrowse_core::decision::{Answer, DecisionError, Question};
@@ -227,13 +233,20 @@ impl Agent {
         // These judgments all read the task alone. Sending them separately reread the same task on every run.
         let mut questions = self.output_questions();
         questions.insert("dates".to_string(), Question::Noul(crate::dates::dates_question()));
+        // The authorization gate needs this before its first action, and it reads the task alone, so it rides this
+        // request while the start page opens instead of costing the first action a call of its own. The gate judges the
+        // task as written, inputs left out, while this request's task has them written in: a message body used as an
+        // input could read as a prohibition. Only a task with no inputs is asked here; any other is asked by the gate.
+        if given == raw {
+            questions.insert(PROHIBITS.to_string(), Question::Noul(fastbrowse_core::safety::prohibits_question()));
+        }
         let state = json!({"task": given});
         let asked = self.jev.evaluate(&state, &questions);
         // As with the consent question, a task whose dates could not be asked about runs on with today's date alone:
         // the step that needs Jev next meets the same failure and handles it. Only the budget stops the run here.
-        let failed = |error: String, output| {
+        let failed = |error: String, prohibits, output| {
             self.event("task_dates_failed", || Map::from_iter([("error".into(), error.into())]));
-            Ok(TaskJudgments { dates: Vec::new(), output })
+            Ok(TaskJudgments { dates: Vec::new(), prohibits, output })
         };
         let mut batched = true;
         let evaluation =
@@ -256,27 +269,32 @@ impl Agent {
                     {
                         Ok(evaluation) => evaluation,
                         Err(DecisionError::Budget(budget)) => return Err(budget.into()),
-                        Err(error) => return failed(error.to_string(), None),
+                        Err(error) => return failed(error.to_string(), None, None),
                     }
                 }
-                Err(error) => return failed(error.to_string(), None),
+                Err(error) => return failed(error.to_string(), None, None),
             };
         ledger.record([evaluation.cost.clone()])?;
         let names_dates =
             matches!(evaluation.answers.get("dates"), Some(Answer::Noul(answer)) if answer.probability > EVEN_ODDS);
+        // An unanswered question stays None: the gate asks it again at the first action, as before.
+        let prohibits = match evaluation.answers.get(PROHIBITS) {
+            Some(Answer::Noul(answer)) => Some(answer.probability > EVEN_ODDS),
+            _ => None,
+        };
         let output = batched.then(|| Box::new(evaluation.answers));
         if !names_dates {
-            return Ok(TaskJudgments { dates: Vec::new(), output });
+            return Ok(TaskJudgments { dates: Vec::new(), prohibits, output });
         }
         let extracted = match crate::dates::task_dates(&*self.llm, given, Some(ledger)).await {
             Ok(extracted) => extracted,
             Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
-            Err(error) => return failed(error.to_string(), output),
+            Err(error) => return failed(error.to_string(), prohibits, output),
         };
         ledger.record([extracted.cost])?;
         let references = extracted.data.dates;
         self.event("task_dates", || Map::from_iter([("dates".into(), json!(references))]));
-        Ok(TaskJudgments { dates: references, output })
+        Ok(TaskJudgments { dates: references, prohibits, output })
     }
 
     /// Go to the site's front page when the address this run chose for itself opened nothing.
@@ -543,7 +561,10 @@ impl Agent {
                     _ => state.steps.len(),
                 };
                 let cause = FailureCause::Navigation(self.redact(error));
-                state.site_failure = Some(SiteFailure { url: url.clone(), cause, since });
+                // A failed send stands over it, as over any later failure (`note_effect`).
+                if !state.site_failure.as_ref().is_some_and(|failure| failure.sent) {
+                    state.site_failure = Some(SiteFailure { url: url.clone(), cause, since, sent: false });
+                }
             }
             if executed && let Some(text) = &action.text {
                 typed = Some(if action.secret { "<secret>".to_string() } else { self.mask(text) });
@@ -914,6 +935,7 @@ impl Agent {
         let last = if switched { tab_last } else { state_last };
         if last.is_none() {
             if let Some(failure) = &state.site_failure
+                && !failure.sent
                 && (observation.url != failure.url
                     || (failure.cause != FailureCause::Reported
                         && observation.response_status.is_some_and(|status| (200..400).contains(&status))))
@@ -954,25 +976,53 @@ impl Agent {
 
     /// Record on the last action what it did, which the next choice and recovery both read.
     pub(super) fn note_effect(&self, state: &mut RunState, observation: &Observation) {
+        // The document is the site's reply to a commit only when this step sent it and it replaced the page: the gate's
+        // flag alone also marked a covered click, and a commit that loaded nothing, with the status of the page before.
+        let replied = state.committing
+            && observation.dialog.is_none()
+            && state.history.last().is_some_and(|last| last.outcome == StepOutcome::Executed)
+            && state.acted_from.as_ref().is_some_and(|before| before.document_key != observation.document_key);
         if let Some(status) = observation.response_status {
             if status < 400 && state.start_failure.as_ref().is_some_and(|failure| failure.url == observation.url) {
                 state.start_failure = None;
             }
             if status >= 400 {
-                let since = match &state.site_failure {
-                    Some(failure) if failure.url == observation.url => failure.since,
-                    _ => state.steps.len(),
-                };
-                state.site_failure = Some(SiteFailure::http(&observation.url, status, since));
+                // A 4xx is the site refusing the request, so nothing went through, and the run can correct and send it
+                // again (an invalid postcode); only a 5xx leaves unknown whether the server acted on it.
+                let sent = replied && status >= 500;
+                match &state.site_failure {
+                    // Any later failure says nothing of whether a failed send went through, and replacing it let a page
+                    // left clear it, so the driver sent it again.
+                    Some(failure) if failure.sent && !sent => {}
+                    current => {
+                        let since = current
+                            .as_ref()
+                            .filter(|failure| failure.url == observation.url)
+                            .map_or(state.steps.len(), |failure| failure.since);
+                        state.site_failure =
+                            Some(SiteFailure { sent, ..SiteFailure::http(&observation.url, status, since) });
+                    }
+                }
                 if state.first_url.as_deref() == Some(observation.url.as_str()) {
                     state.start_failure = state.site_failure.clone();
                 }
             } else if status >= 200
                 && state.site_failure.as_ref().is_some_and(|failure| {
-                    failure.url == observation.url && !matches!(failure.cause, FailureCause::Reported)
+                    if failure.sent {
+                        replied
+                    } else {
+                        failure.url == observation.url && !matches!(failure.cause, FailureCause::Reported)
+                    }
                 })
             {
-                // A page that loads can still report the site failed; only Jev, reading it, clears that.
+                // A page that loads can still report the site failed; only Jev, reading it, clears that. A failed send
+                // is cleared only by a later commit's reply, wherever it lands, and with it the copy kept for the start
+                // address, which recovery would otherwise end the run on.
+                if state.site_failure.as_ref().is_some_and(|failure| failure.sent)
+                    && state.start_failure == state.site_failure
+                {
+                    state.start_failure = None;
+                }
                 state.site_failure = None;
             }
         }
@@ -1019,6 +1069,8 @@ impl Agent {
             }
             state.arrived_by = Some((landed, href));
         }
+        // Code knows which step sent what the site failed to answer; the driver, told only "HTTP 503", sent it again.
+        let sent_failed = replied && observation.response_status.is_some_and(|status| status >= 500);
         let Some(last) = state.history.last_mut() else { return };
         let waited = last.operation == Some(Operation::Wait);
         let mut done = if last.operation == Some(Operation::SwitchTab) {
@@ -1105,6 +1157,10 @@ impl Agent {
                     put.push(piece.clone());
                 }
             }
+        }
+        if sent_failed {
+            done.summary
+                .push_str("; this is the site's reply to what this step sent, so whether it went through is unknown");
         }
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),

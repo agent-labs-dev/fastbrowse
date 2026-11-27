@@ -174,6 +174,24 @@ fn words(text: &str) -> Vec<String> {
     words
 }
 
+/// The place of the page `wanted` names among `urls`, the latest one on a tie. An address held exactly wins; only when
+/// none is, one differing in being http against https stands for it, since a site's redirect makes those one document
+/// and a driver that named the page under the other scheme was refused a page it was shown. Never the other way round:
+/// a site can serve different pages under the two schemes, and both can have been read.
+pub(crate) fn latest_page<'a>(urls: impl DoubleEndedIterator<Item = &'a str> + Clone, wanted: &str) -> Option<usize> {
+    let wanted = address(wanted);
+    let bare = |url: &str| url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).map(str::to_string);
+    let wanted_bare = bare(&wanted);
+    let len = urls.clone().count();
+    let exact = urls.clone().rev().position(|url| address(url) == wanted);
+    let either = || {
+        wanted_bare
+            .as_ref()
+            .and_then(|wanted| urls.clone().rev().position(|url| bare(&address(url)).as_ref() == Some(wanted)))
+    };
+    exact.or_else(either).map(|from_end| len - 1 - from_end)
+}
+
 /// `urlsplit(url)._replace(fragment="").geturl()`, as CPython 3.13 splits and joins.
 ///
 /// An evidence id hashes this address, and ids reach every prompt that shows notes, so it is CPython's reading of
@@ -361,6 +379,8 @@ pub struct Notes {
     source_blocks: HashMap<CaptureIdentity, Arc<CaptureBlocks>>,
     /// Where code blanked a secret value in each capture's text.
     masked: HashMap<CaptureIdentity, Arc<[(i64, i64)]>>,
+    /// Where code wrote its own advice into each capture's text, which a citation of the page leaves out.
+    advice: HashMap<CaptureIdentity, Arc<[(i64, i64)]>>,
     /// Each step that typed into a control, in order.
     typed: Vec<Typing>,
 }
@@ -481,6 +501,7 @@ impl Notes {
         for (identity, blocks) in sources {
             self.tables.entry(identity.clone()).or_insert_with(|| table_blocks(capture).into());
             self.masked.entry(identity.clone()).or_insert_with(|| capture.masked.clone().into());
+            self.advice.entry(identity.clone()).or_insert_with(|| capture.advice.clone().into());
             self.source_blocks.entry(identity).or_insert_with(|| Arc::new(blocks.into()));
         }
     }
@@ -591,6 +612,12 @@ impl Notes {
     pub fn table_blocks(&self, evidence: &Evidence) -> &[TableBlock] {
         let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
         self.tables.get(&key).map_or(&[], |tables| tables)
+    }
+
+    /// Where code wrote advice into the capture `evidence` was cut from; none when that capture was never remembered.
+    pub fn advice(&self, evidence: &Evidence) -> &[(i64, i64)] {
+        let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
+        self.advice.get(&key).map_or(&[], |advice| advice)
     }
 
     /// How many of the run's steps that could change the site had been taken when `evidence` was read; None for a
@@ -1020,6 +1047,15 @@ mod tests {
     use fastbrowse_core::models::SourceControl;
 
     use super::*;
+
+    #[test]
+    fn the_exact_address_wins_over_the_other_scheme_and_the_latest_of_equals() {
+        let urls = ["http://a.test/x", "https://a.test/x", "https://a.test/y", "https://a.test/x"];
+        assert_eq!(latest_page(urls.iter().copied(), "http://a.test/x"), Some(0), "exact before scheme-insensitive");
+        assert_eq!(latest_page(urls.iter().copied(), "https://a.test/x"), Some(3), "the latest of equals");
+        assert_eq!(latest_page(["http://a.test/z"].into_iter(), "https://a.test/z"), Some(0), "else the other scheme");
+        assert_eq!(latest_page(urls.iter().copied(), "https://a.test/q"), None);
+    }
 
     fn span(sha: &str, start: i64, end: i64) -> Evidence {
         serde_json::from_value(json!({
