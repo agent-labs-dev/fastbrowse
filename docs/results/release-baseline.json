@@ -1,6 +1,6 @@
 {
-  "version": "0.11.1",
-  "campaign": "release-0.11.1",
+  "version": "0.12.0",
+  "campaign": "release-0.12.0",
   "note": "The campaign a release is compared with: the last release's, each task from its newest run that measured it three times, as the candidate is read. `tasks` is every task that campaign measured; the gate refuses a baseline that no longer supplies all of them, such as after a ledger artifact expires. scripts/release_gate.py reads it.",
   "tasks": [
     "core/arxiv-open",
@@ -45,6 +45,12 @@
     "dev/ruff-release",
     "dev/table-largest-due",
     "dev/table-total-due",
+    "heldout/heldout-laptops-priciest",
+    "heldout/heldout-python-bit-count",
+    "heldout/heldout-rfc-421",
+    "heldout/heldout-tables-username",
+    "heldout/heldout-tablets-cheapest",
+    "heldout/heldout-turtles-discoverer",
     "stretch-dev/stretch-books-nonfiction-five-star",
     "stretch-dev/stretch-books-sequential-art-one-star",
     "stretch-dev/stretch-books-young-adult-one-star",

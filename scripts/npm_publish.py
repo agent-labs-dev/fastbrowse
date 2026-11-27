@@ -65,6 +65,20 @@ def published(package: str, version: str) -> bool:
     return run("npm", "view", f"{package}@{version}", "version").returncode == 0
 
 
+def appeared(package: str, version: str, settle: float) -> bool:
+    """Whether the registry shows this version within `settle` seconds.
+
+    0.12.0's `@fastbrowse/darwin-arm64` publish exited 0 and the registry never held the version, so a zero exit
+    is waited out against the registry rather than believed: the SDK went out pointing at a package npm lacked.
+    """
+    deadline = time.monotonic() + settle
+    while not published(package, version):
+        if (remaining := deadline - time.monotonic()) <= 0:
+            return False
+        time.sleep(min(SETTLE_POLL, remaining))
+    return True
+
+
 def latest(package: str) -> str:
     """The version `npm install <package>` resolves to."""
     result = run("npm", "view", package, "dist-tags.latest")
@@ -80,7 +94,7 @@ def publish(path: Path, version: str) -> Attempt:
     return Attempt(result.returncode == 0, output)
 
 
-def publish_one(package: str, path: Path, version: str) -> tuple[bool, str]:
+def publish_one(package: str, path: Path, version: str, settle: float) -> tuple[bool, str]:
     """Publish `path` as `package`, skipping and retrying the cases npm makes safe to retry.
 
     Returns whether the version is on npm afterwards, and a line to print about it.
@@ -88,8 +102,9 @@ def publish_one(package: str, path: Path, version: str) -> tuple[bool, str]:
     if published(package, version):
         return True, f"{package}@{version} is already published"
     attempt = publish(path, version)
-    if attempt.ok or published(package, version):
-        # npm can report an error for a publish the registry accepted; the version is what counts.
+    # npm can report an error for a publish the registry accepted, and success for one it never holds: the version
+    # is what counts.
+    if appeared(package, version, settle if attempt.ok else 0):
         return True, f"published {package}@{version}"
     if attempt.collision:
         # A second attempt sends the same tarball, which can only produce the same entry.
@@ -99,11 +114,14 @@ def publish_one(package: str, path: Path, version: str) -> tuple[bool, str]:
             f"succeed. Publish it with `npm publish <tarball> --access public --tag latest --provenance=false` "
             f"by hand after review, or ship it in the next tag."
         )
-    # A network or 5xx failure is worth one more try.
+    # A network or 5xx failure, or a publish the registry dropped, is worth one more try. Its verdict is final, so
+    # it waits out the cache whatever npm said: a first attempt that landed behind a timeout makes the retry a
+    # duplicate refusal while `npm view` still serves the document from before it.
     retry = publish(path, version)
-    if retry.ok or published(package, version):
+    if appeared(package, version, settle):
         return True, f"published {package}@{version} on the second attempt"
-    return False, f"{package}@{version} could not be published: {retry.summary() or attempt.summary()}"
+    said = "npm reported success, and the registry does not hold it" if retry.ok else retry.summary()
+    return False, f"{package}@{version} could not be published: {said}"
 
 
 def differences(version: str) -> list[tuple[str, str]]:
@@ -140,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         "--settle",
         type=float,
         default=300,
-        help="Seconds to wait for npm's cached `latest` to show the release before calling it drift.",
+        help="Seconds to wait for npm's cache to show a published version, and the release as `latest`.",
     )
     arguments = parser.parse_args(argv)
     version = arguments.version
@@ -148,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     failed = []
     for target in TARGETS:
         package = f"@fastbrowse/{target}"
-        ok, line = publish_one(package, arguments.platforms / target, version)
+        ok, line = publish_one(package, arguments.platforms / target, version, arguments.settle)
         print(line, flush=True)
         if not ok:
             failed.append(package)
@@ -162,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    ok, line = publish_one(SDK, arguments.sdk, version)
+    ok, line = publish_one(SDK, arguments.sdk, version, arguments.settle)
     print(line, flush=True)
     if not ok:
         print(

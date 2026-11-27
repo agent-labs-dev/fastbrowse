@@ -315,6 +315,27 @@ async fn annotations_follow_generated_suffixes() {
     let read = texts(&capture);
     assert!(read.iter().any(|text| text == "prefix (title: Full)"), "{read:?}");
     assert!(read.iter().any(|text| text == "prefix (2026-12-16)"), "{read:?}");
+    // Code's advice is marked with the space before it, so a quote that leaves it out still quotes the page.
+    let advice: Vec<String> = capture
+        .advice
+        .iter()
+        .map(|(start, end)| capture.text.chars().skip(*start as usize).take((end - start) as usize).collect())
+        .collect();
+    assert_eq!(advice, [" (title: Full)", " (2026-12-16)"]);
+    h.close().await;
+}
+
+/// The page's own copy of the words a title wrote stays page text: found by its words, the second "(title: Tokyo)"
+/// was taken for advice, and a quote that left it out passed as quoting the page.
+#[tokio::test(flavor = "multi_thread")]
+async fn page_text_that_repeats_title_advice_is_not_advice() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(&h.session, r#"<p><span title="Tokyo">東京</span>, 1887 and 東京 (title: Tokyo)</p>"#).await;
+    let capture = content_capture(&h.page).await;
+    let at = capture.text.find("東京 (title: Tokyo), 1887 and 東京 (title: Tokyo)").expect("the paragraph");
+    let start = capture.text[..at].chars().count() as i64;
+    assert_eq!(capture.advice, [(start + 2, start + 17)]);
     h.close().await;
 }
 
@@ -1017,6 +1038,22 @@ async fn test_table_rows_below_the_viewport_are_captured() {
     h.close().await;
 }
 
+/// The capture says which blocks are drawn in the viewport, so a window is placed by the browser's report, and a label
+/// repeated far below does not stand for the one on screen.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_blocks_drawn_in_the_viewport_say_so() {
+    let Some(h) =
+        icons_with(r#"<p>Add</p><p>On screen</p><p style="margin-top:200vh">Add</p><p>Below the viewport</p>"#).await
+    else {
+        return;
+    };
+    let capture = content_capture(&h.page).await;
+    let shown: Vec<(&str, bool)> =
+        capture.blocks.iter().map(|b| (&capture.text[b.start as usize..b.end as usize], b.in_viewport)).collect();
+    assert_eq!(shown, [("Add", true), ("On screen", true), ("Add", false), ("Below the viewport", false)]);
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_records_keep_single_links_whatever_their_length() {
     for (tag, kind) in [("div", BlockKind::Record), ("li", BlockKind::ListItem)] {
@@ -1071,7 +1108,6 @@ async fn test_non_records_fall_back_to_the_walk() {
             "<div><p>First</p></div><section><p>Second</p></section><article><p>Third</p></article>".to_owned(),
         ),
         ("inline-only", "<div class='card'><span>Inline only</span></div>".repeat(3)),
-        ("two-headings", "<div class='card'><h2>First title</h2><h3>Second title</h3><p>Body</p></div>".repeat(3)),
         ("table", "<div class='card'><p>Outside</p><table><tr><td>Inside</td></tr></table></div>".repeat(3)),
         ("list", "<div class='card'><p>Outside</p><ul><li>Inside</li><li>Another</li><li>Last</li></ul></div>".repeat(3)),
         ("classless", "<div><p>Layout</p><p>column</p></div>".repeat(3)),
@@ -1084,6 +1120,26 @@ async fn test_non_records_fall_back_to_the_walk() {
         assert!(capture.blocks.iter().all(|b| b.kind != BlockKind::Record), "{id}");
         h.close().await;
     }
+}
+
+/// A product card states its price and its name each under a heading, and read as separate blocks the price was in
+/// neither the record's text nor its name's block, so a maximum over prices found no price on any laptop.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_repeated_card_with_two_headings_is_one_whole_record() {
+    let cards: String = (0..3)
+        .map(|n| {
+            format!("<div class='card'><h4>${n}99</h4><h4><a href='/p{n}'>Item {n}</a></h4><p>Detail {n}</p></div>")
+        })
+        .collect();
+    let Some(h) = icons_with(&cards).await else { return };
+    let capture = content_capture(&h.page).await;
+    let records: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Record).collect();
+    assert_eq!(
+        records.iter().map(|b| text_of(&capture, b)).collect::<Vec<_>>(),
+        (0..3).map(|n| format!("${n}99\nItem {n}\n\nDetail {n}")).collect::<Vec<_>>()
+    );
+    assert!(records.iter().all(|b| b.whole_record));
+    h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

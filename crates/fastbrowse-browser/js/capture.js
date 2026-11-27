@@ -64,6 +64,41 @@
     );
     return clean(parts.join(''));
   };
+  // The advice code writes after page text, between marks (`fastbrowse_core::page::ADVICE_OPEN`): a block places the
+  // advice it holds, so a quote that leaves out words code added still quotes the page. A link's title written beside
+  // its label was taken for page text, and a quote of the label and the year after it was refused with both on screen.
+  // Found by its words instead, the page's own copy of them was taken for advice too.
+  const OPEN = '\uFDD0';
+  const CLOSE = '\uFDD1';
+  const advised = new Set();
+  const advise = words => {
+    advised.add(words);
+    return `${OPEN} ${words}${CLOSE}`;
+  };
+  // `text` without its marks, and where its advice sits as code point ranges with the whitespace before each, as
+  // `fastbrowse_core::page::unmark_advice` reads them: advice's own space goes where cleanup collapsed it before.
+  const unmark = text => {
+    const chars = [...text];
+    const advice = [];
+    let plain = '';
+    let length = 0;
+    let open = null;
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      if (ch === OPEN) {
+        const kept = plain.replace(/\s+$/u, '');
+        if ((kept.length < plain.length || !plain) && chars[i + 1] === ' ') i++;
+        open = { at: plain.length, start: [...kept].length };
+      } else if (ch === CLOSE) {
+        if (open && advised.has(plain.slice(open.at).trimStart())) advice.push([open.start, length]);
+        open = null;
+      } else {
+        plain += ch;
+        length++;
+      }
+    }
+    return { text: plain, advice };
+  };
   // `text` as `e` reads it, with each dated element's stamp written after the text it shows, in document order.
   const dated = (e, text) => {
     if (!datable(e) && !e.querySelector('[datetime]')) return text;
@@ -72,13 +107,14 @@
       const stamp = stampOf(d);
       const shown = stamp ? shownOf(d) : '';
       if (!shown) continue;
-      if (d === e && !clean(text)) return shown.includes(stamp) ? shown : `${shown} (${stamp})`;
+      if (d === e && !clean(text)) return shown.includes(stamp) ? shown : `${shown}${advise(`(${stamp})`)}`;
       const at = text.indexOf(shown, cursor);
       if (at < 0) continue;
       cursor = at + shown.length;
       if (shown.includes(stamp)) continue;
-      text = `${text.slice(0, cursor)} (${stamp})${text.slice(cursor)}`;
-      cursor += stamp.length + 3;
+      const note = advise(`(${stamp})`);
+      text = `${text.slice(0, cursor)}${note}${text.slice(cursor)}`;
+      cursor += note.length;
     }
     return text;
   };
@@ -159,7 +195,7 @@
       const title = clean(node.getAttribute('title') || '');
       const shown = shownOf(node);
       if (title && shown && title !== shown && cursor > start) {
-        insertions.push({ at: cursor, depth, advice: ` (title: ${title})` });
+        insertions.push({ at: cursor, depth, advice: advise(`(title: ${title})`) });
       }
     };
     visit(e, 0);
@@ -375,6 +411,16 @@
     }
     return found ? registry.hoverContexts.get(found).control : null;
   };
+  // Whether any of a block's nodes is drawn inside the viewport, by the test the observation applies to its text. A
+  // node in a frame is measured in the frame's own coordinates, so it counts as shown rather than being placed wrongly.
+  const shownNow = nodes =>
+    nodes.some(node => {
+      const element = node.nodeType === 1 ? node : node.parentElement;
+      if (!element) return false;
+      if (element.ownerDocument !== document) return true;
+      const r = element.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+    });
   const linkTitles = new WeakSet();
   const push = (kind, text, extra = {}, nodes = []) => {
     if (!text) return;
@@ -384,14 +430,17 @@
     const inherited = link && readableLink(link) && nodes.every(node => node !== link && link.contains(node));
     const title = inherited && !linkTitles.has(link) ? clean(link.getAttribute('title') || '') : '';
     if (title && title !== shownOf(link)) {
-      text = `${text} (title: ${title})`;
+      text = `${text}${advise(`(title: ${title})`)}`;
       linkTitles.add(link);
     }
     const { hosts = hostsOf(nodes), at = first, ...rest } = extra;
+    const { text: shown, advice } = unmark(text);
+    text = shown;
     blocks.push({
       kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath,
-      control_context: controlOf(nodes), ...itemPlace(at), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
+      control_context: controlOf(nodes), ...itemPlace(at), ...(shownNow(nodes) ? { in_viewport: true } : {}), ...rest, ...(hosts.length ? { held: hosts.map(hold) } : {}),
       ...(inherited ? { href: hrefOf(link), links: [{ text, href: link.href }, ...(extra.links ?? [])] } : {}),
+      ...(advice.length ? { advice } : {}),
     });
   };
 
@@ -625,7 +674,7 @@
     records.set(el, null);
     if (!repeated(el) || el.shadowRoot || el.querySelector('table,iframe,frame')) return null;
     const descendants = [...el.querySelectorAll('*')];
-    if (descendants.some(c => c.shadowRoot) || descendants.filter(c => HEADINGS[c.tagName]).length > 1) return null;
+    if (descendants.some(c => c.shadowRoot)) return null;
     if (!descendants.some(c => !SKIP.has(c.tagName) && !hidden(c) && isBlock(c))) return null;
     const text = [textOf(el), ...drawnFacts(descendants)].filter(Boolean).join(' ');
     if (!text) return null;
@@ -974,7 +1023,9 @@
   const type = document.contentType.toLowerCase();
   const served = document.querySelector('body > pre');
   const json = type === 'application/json' || (type.startsWith('application/') && type.endsWith('+json'));
-  return {
+  // Advice also reaches headings, record names and link labels, read by the same text helpers; only a block's text
+  // places it, so every other copy leaves without its marks.
+  const result = {
     url: location.href,
     title: document.title,
     blocks,
@@ -984,4 +1035,5 @@
     held,
     ...(json && served ? { json_text: served.textContent } : {}),
   };
+  return JSON.parse(JSON.stringify(result).replace(/[\uFDD0\uFDD1]/g, ''));
 })

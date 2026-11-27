@@ -11,6 +11,7 @@ mod driving;
 mod finishing;
 pub mod helpers;
 mod masking;
+mod paging;
 mod reading;
 mod recovery;
 mod render;
@@ -581,7 +582,7 @@ impl Agent {
             // Masked as the task every step is shown is: a task that writes the start address out carried its
             // credentials to the task judgments.
             let given = self.mask(&state::with_inputs(task, &options.inputs));
-            let judgments = self.task_judgments(&given, ledger).await?;
+            let judgments = self.task_judgments(&given, &self.mask(task), ledger).await?;
             let mut state = RunState::new(
                 task.to_string(),
                 options.inputs.clone(),
@@ -591,6 +592,7 @@ impl Agent {
             );
             state.dates = judgments.dates;
             state.output_answers = judgments.output;
+            state.prohibits = judgments.prohibits;
             state.replay = options.recipe.clone().map(replay::Replay::new);
             state.raw_context = options.context.clone();
             state.caller_start = start.map(String::from);

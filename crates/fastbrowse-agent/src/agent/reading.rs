@@ -10,7 +10,7 @@ use super::helpers::read_sources;
 use super::state::{FailureCause, RunState, Step, tab_key};
 use fastbrowse_core::models::{Evidence, FactReader};
 
-use crate::memory::{Fact, address};
+use crate::memory::{Fact, address, latest_page};
 use crate::retrieval::{PageRead, read_page};
 
 /// What a done's claims cite: their `quotes`, the quotes of a count, total or extreme (`ranging`), and the `pages` such
@@ -88,13 +88,15 @@ impl Agent {
         // The pages kept whole: the current one, and the earlier ones by their place in `earlier`.
         let (mut whole_current, mut whole_before) = (false, std::collections::BTreeSet::new());
         let mut unshown = Vec::new();
+        // The current page is last, so it wins a tie among the captures of one address.
+        let held: Vec<&str> = earlier.iter().map(|shown| shown.url.as_str()).chain([capture.url.as_str()]).collect();
         for page in pages {
-            if address(page) == address(&capture.url) {
-                whole_current = true;
-            } else if let Some(at) = earlier.iter().rposition(|shown| address(&shown.url) == address(page)) {
-                whole_before.insert(at);
-            } else {
-                unshown.push(page.clone());
+            match latest_page(held.iter().copied(), page) {
+                Some(at) if at == earlier.len() => whole_current = true,
+                Some(at) => {
+                    whole_before.insert(at);
+                }
+                None => unshown.push(page.clone()),
             }
         }
         // The note each quote is read into, in the quotes' order, for the claims that cite them.
@@ -104,7 +106,7 @@ impl Agent {
         // The fact is the evidence's text, which for a table row is the row under its header.
         let fact = |evidence: Evidence| Fact::read(&evidence.quote.clone(), evidence, FactReader::LlmQuote).answering();
         for quote in quotes {
-            if let Some(evidence) = crate::retrieval::quoted(&capture, quote) {
+            if let Some(evidence) = super::render::quoted_in(&capture, quote) {
                 whole_current |= ranging.contains(quote);
                 let fact = fact(evidence);
                 ids.push(crate::memory::fact_id(&fact));
@@ -113,7 +115,7 @@ impl Agent {
                 .iter()
                 .enumerate()
                 .rev()
-                .find_map(|(at, page)| crate::retrieval::quoted(page, quote).map(|evidence| (at, evidence)))
+                .find_map(|(at, page)| super::render::quoted_in(page, quote).map(|evidence| (at, evidence)))
             {
                 if ranging.contains(quote) {
                     whole_before.insert(at);
@@ -157,6 +159,12 @@ impl Agent {
                 }
             }
         }
+        // A page kept whole is read: the records of every page of a list the driver paged through are in the evidence,
+        // so finishing does not reopen one whose view was windowed to its viewport.
+        if whole_current {
+            state.read_urls.insert(capture.url.clone());
+        }
+        state.read_urls.extend(whole_before.iter().map(|at| earlier[*at].url.clone()));
         // Several quotes are parts of one answer, written up together, as is one a count, total or extreme ranges over:
         // a single quote picked as the whole answer ended a whole-list count on its first page.
         let compose = quotes.len() > 1 || !ranging.is_empty() || !pages.is_empty();

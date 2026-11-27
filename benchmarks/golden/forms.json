@@ -20,6 +20,7 @@
    ],
    "required": true,
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/0\",\"text\":\"Booking 0\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -43,6 +44,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/0\",\"text\":\"Booking 0\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": "guest0@example.com"
@@ -66,6 +68,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/0\",\"text\":\"Booking 0\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -91,6 +94,7 @@
     "Double"
    ],
    "role": "combobox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": "Single"
@@ -113,6 +117,7 @@
     "click"
    ],
    "role": "checkbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": "on"
@@ -136,6 +141,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": true,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/0\",\"text\":\"Booking 0\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": "•••••••"
@@ -157,6 +163,7 @@
     "click"
    ],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/0\",\"text\":\"Booking 0\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -180,6 +187,7 @@
     "enter"
    ],
    "role": "spinbutton",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -203,6 +211,7 @@
     "enter"
    ],
    "role": "spinbutton",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -224,6 +233,7 @@
     "click"
    ],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -244,6 +254,7 @@
    "offscreen": false,
    "operations": [],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -264,6 +275,7 @@
    "offscreen": false,
    "operations": [],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -288,6 +300,7 @@
    ],
    "required": true,
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/1\",\"text\":\"Booking 1\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -311,6 +324,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/1\",\"text\":\"Booking 1\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": "guest1@example.com"
@@ -334,6 +348,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/1\",\"text\":\"Booking 1\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -359,6 +374,7 @@
     "Double"
    ],
    "role": "combobox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": "Single"
@@ -381,6 +397,7 @@
     "click"
    ],
    "role": "checkbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": "on"
@@ -404,6 +421,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": true,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/1\",\"text\":\"Booking 1\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": "•••••••"
@@ -425,6 +443,7 @@
     "click"
    ],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/1\",\"text\":\"Booking 1\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -448,6 +467,7 @@
     "enter"
    ],
    "role": "spinbutton",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -471,6 +491,7 @@
     "enter"
    ],
    "role": "spinbutton",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -492,6 +513,7 @@
     "click"
    ],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -512,6 +534,7 @@
    "offscreen": false,
    "operations": [],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -532,6 +555,7 @@
    "offscreen": false,
    "operations": [],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -556,6 +580,7 @@
    ],
    "required": true,
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/2\",\"text\":\"Booking 2\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -579,6 +604,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/2\",\"text\":\"Booking 2\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": "guest2@example.com"
@@ -602,6 +628,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/2\",\"text\":\"Booking 2\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -627,6 +654,7 @@
     "Double"
    ],
    "role": "combobox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": "Single"
@@ -649,6 +677,7 @@
     "click"
    ],
    "role": "checkbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": "on"
@@ -672,6 +701,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": true,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/2\",\"text\":\"Booking 2\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": "•••••••"
@@ -693,6 +723,7 @@
     "click"
    ],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/2\",\"text\":\"Booking 2\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -716,6 +747,7 @@
     "enter"
    ],
    "role": "spinbutton",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -739,6 +771,7 @@
     "enter"
    ],
    "role": "spinbutton",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -760,6 +793,7 @@
     "click"
    ],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -780,6 +814,7 @@
    "offscreen": false,
    "operations": [],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -800,6 +835,7 @@
    "offscreen": false,
    "operations": [],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -824,6 +860,7 @@
    ],
    "required": true,
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/3\",\"text\":\"Booking 3\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -847,6 +884,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/3\",\"text\":\"Booking 3\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": "guest3@example.com"
@@ -870,6 +908,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/3\",\"text\":\"Booking 3\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -895,6 +934,7 @@
     "Double"
    ],
    "role": "combobox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": "Single"
@@ -917,6 +957,7 @@
     "click"
    ],
    "role": "checkbox",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": "on"
@@ -940,6 +981,7 @@
     "enter"
    ],
    "role": "textbox",
+   "screen": 0,
    "sensitive": true,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/3\",\"text\":\"Booking 3\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": "•••••••"
@@ -961,6 +1003,7 @@
     "click"
    ],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/3\",\"text\":\"Booking 3\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
    "value": ""
@@ -984,6 +1027,7 @@
     "enter"
    ],
    "role": "spinbutton",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -1007,6 +1051,7 @@
     "enter"
    ],
    "role": "spinbutton",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -1028,6 +1073,7 @@
     "click"
    ],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null
@@ -1048,6 +1094,7 @@
    "offscreen": false,
    "operations": [],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": ""
@@ -1068,6 +1115,7 @@
    "offscreen": false,
    "operations": [],
    "role": "button",
+   "screen": 0,
    "sensitive": false,
    "submit_semantics": null,
    "value": null

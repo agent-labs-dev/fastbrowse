@@ -86,6 +86,7 @@ impl Page for SearchPage {
                                 whole_record: true,
                                 item_place: None,
                                 fields: Vec::new(),
+                                advice: Vec::new(),
                             }
                         })
                         .collect();

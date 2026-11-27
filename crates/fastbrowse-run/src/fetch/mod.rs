@@ -70,8 +70,10 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
     let mut text_out = String::new();
     let mut captured = Vec::with_capacity(found.len());
     let mut offset = 0;
+    let mut advice = Vec::new();
     for block in found {
         let start = offset;
+        advice.extend(block.advice.iter().map(|(from, to)| (start as i64 + from, start as i64 + to)));
         offset += text::len(&block.text);
         text_out.push_str(&block.text);
         text_out.push_str("\n\n");
@@ -89,6 +91,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
             links: Link::locate(&block.text, start as i64, &block.links),
             whole_record: block.whole_record,
             item_place: block.item_place,
+            in_viewport: false,
             fields: block.fields.into_iter().map(|field| field.shifted(start as i64)).collect(),
         });
         offset += 2;
@@ -104,6 +107,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
         // reader told nothing is missing would take the page without it as the whole page.
         inaccessible_frames: unread_frames as i64,
         masked: Vec::new(),
+        advice,
     }
     .with_document_title()
 }
@@ -196,34 +200,42 @@ pub async fn fetch_document(
     allowed_origins: Option<&[String]>,
     seconds: f64,
 ) -> Result<Fetched, NotFetched> {
-    let Served { url, title, mut found, controls, frames, mut scripts } =
+    let Served { url, title, mut found, mut controls, frames, mut scripts } =
         serve(http, url, allowed_origins, seconds).await?;
     let origin = origin_of(&url);
     let mut unread = 0;
     let mut framed = Vec::new();
     for (index, Frame { at, document, headings }) in frames.into_iter().enumerate() {
-        let blocks = match document {
+        let read_in = match document {
             _ if index >= MAX_FRAMES => None,
             // A frame read into the page brings its scripts too: one that builds a link leaves the page no more
             // known to lead nowhere than a script of its own would (#1380 review).
             FrameDocument::Markup(markup) => {
                 scripts |= html::scripts(&markup) > 0;
-                Some(read(&markup, &url).1)
+                let (_, found, controls, _) = read(&markup, &url);
+                Some((found, controls))
             }
             FrameDocument::Address(address) if origin.is_some() && origin_of(&address) == origin => {
                 match serve(http, &address, allowed_origins, seconds).await {
                     Ok(inner) => {
                         unread += inner.frames.len();
                         scripts |= inner.scripts;
-                        Some(inner.found)
+                        Some((inner.found, inner.controls))
                     }
                     Err(_) => None,
                 }
             }
             FrameDocument::Address(_) => None,
         };
-        match blocks {
-            Some(blocks) if blocks.iter().any(|block| !block.text.is_empty()) => {
+        match read_in {
+            Some((blocks, frame_controls)) if blocks.iter().any(|block| !block.text.is_empty()) => {
+                // A frame read into the page brings its controls too, as a browser capture lists a same-origin frame's:
+                // a list of families read in from a frame showed each "Learn more" link with no control to follow it,
+                // and the run answered from another site's page instead.
+                for mut control in frame_controls {
+                    control.id = format!("fetched-{}", controls.len());
+                    controls.push(control);
+                }
                 // A frame's text stands under the page's headings above the frame, as a browser capture reads it:
                 // the heading an embedded form shows is that form's, which its own document alone does not say.
                 let frame_id = format!("root/{index}");
@@ -325,6 +337,7 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
                     whole_record: false,
                     item_place: None,
                     fields: Vec::new(),
+                    advice: Vec::new(),
                 }]
             });
         return Ok(Served {

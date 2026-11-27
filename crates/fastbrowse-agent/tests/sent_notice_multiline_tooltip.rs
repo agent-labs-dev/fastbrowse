@@ -50,14 +50,16 @@ impl Page for SavePage {
         // Like a toast, the notice is available for the capture immediately after Save, then disappears.
         let text =
             if *self.saved.lock().unwrap() && !std::mem::replace(&mut *self.notice_captured.lock().unwrap(), true) {
-                "Changes\nsaved\nsuccessfully now (title: Save status)"
+                "Changes\nsaved\nsuccessfully now\u{FDD0} (title: Save status)\u{FDD1}"
             } else {
                 "Editor"
             };
+        // capture.js marks the advice it writes, and the capture records where it sits.
+        let (text, advice) = fastbrowse_core::page::unmark_advice(text, |_| true);
         Box::pin(async move {
             Ok(serde_json::from_value(json!({
                 "url": "https://editor.test/", "title": "Editor", "captured_at": "2026-11-22T00:00:00Z",
-                "sha256": "", "text": text,
+                "sha256": "", "text": text, "advice": advice,
                 "blocks": [{"source_id": "s0", "kind": "paragraph", "frame_id": null, "start": 0, "end": text.chars().count()}]
             })).unwrap())
         })
