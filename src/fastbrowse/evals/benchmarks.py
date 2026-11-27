@@ -536,8 +536,9 @@ class Candidate(PublicModel):
     groups: list[Group]
 
     @model_serializer(mode="wrap")
-    def without_unrecorded_catalog_commit(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """A candidate from before `catalog_sha` keeps its old bytes, so approved candidates still match."""
+    def without_unnamed_catalog_commit(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A candidate before schema 9 is written without `catalog_sha`, so it reads back: the key is refused there
+        even as null."""
         return _without_empty(handler(self), ("catalog_sha",))
 
     @model_validator(mode="after")
@@ -545,7 +546,9 @@ class Candidate(PublicModel):
         ids = {g.id for g in self.groups}
         if not self.groups or len(ids) != len(self.groups):
             raise ValueError("at least one complete, unique benchmark group is required")
-        if (self.catalog_sha is not None) != (self.schema_version >= CATALOG_COMMIT_SCHEMA):
+        # Presence, not value: the site refuses the key before schema 9 even when it holds null.
+        named = "catalog_sha" in self.model_fields_set
+        if named != (self.schema_version >= CATALOG_COMMIT_SCHEMA) or (named and self.catalog_sha is None):
             raise ValueError(f"a candidate names its catalog commit from schema {CATALOG_COMMIT_SCHEMA}, and only then")
         for group in self.groups:
             group.check_slots(group_arms(group.id, self.schema_version))

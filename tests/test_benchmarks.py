@@ -1683,7 +1683,11 @@ def test_a_candidate_names_its_catalog_commit_from_the_catalog_commit_schema(can
     older = {**candidate, "schema_version": benchmarks.CATALOG_COMMIT_SCHEMA - 1}
     with pytest.raises(ValidationError, match="names its catalog commit"):
         Candidate.model_validate(older)
-    # An older candidate keeps its old bytes: no `catalog_sha` key appears when it is written back.
+    with pytest.raises(ValidationError, match="names its catalog commit"):
+        Candidate.model_validate({**older, "catalog_sha": None})
+    with pytest.raises(ValidationError, match="names its catalog commit"):
+        Candidate.model_validate({**candidate, "catalog_sha": None})
+    # A candidate before schema 9 is written without the key, so it reads back.
     data = [g for g in without["groups"] if g["id"] != "internal-ultrafast"]
     parsed = Candidate.model_validate({**without, "schema_version": 5, "groups": data})
-    assert "catalog_sha" not in json.loads(parsed.model_dump_json())
+    assert Candidate.model_validate_json(parsed.model_dump_json()) == parsed
