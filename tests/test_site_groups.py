@@ -173,3 +173,22 @@ def test_republishing_a_campaign_keeps_the_previous_release_the_site_already_hol
     for held in (same, unmeasured):
         files = group_files(STAGED.read_bytes(), FACTS, {**CURRENT, "live-suite-fastbrowse": held})
         assert "data/previous-release.json" not in files
+
+
+def test_each_measured_group_shows_the_day_its_own_runs_measured_it() -> None:
+    """A rerun of one group dates the campaign later; the other group's card keeps the day its runs were measured."""
+    candidate = json.loads(STAGED.read_bytes())
+    for group, day in (("internal-fastbrowse", "2026-11-26"), ("internal-hosted", "2026-11-27")):
+        held = next(g for g in candidate["groups"] if g["id"] == group)
+        run = {"agent_sha": held["agent_sha"], "runner_sha": held["runner_sha"]}
+        held["sources"] = []
+        for arm in sorted({r["arm"] for r in held["rows"]}):
+            tasks = sorted({r["task"] for r in held["rows"] if r["arm"] == arm})
+            held["sources"] += [
+                {**run, "arm": arm, "run_id": "r1", "measured_on": "2026-11-25", "tasks": tasks[:1]},
+                {**run, "arm": arm, "run_id": "r2", "measured_on": day, "tasks": tasks[1:]},
+            ]
+    files = group_files(json.dumps(candidate).encode(), FACTS.model_copy(update={"run_on": "2026-11-27"}), CURRENT)
+    names = ("live-suite", "live-suite-fastbrowse")
+    shown = {name: json.loads(files[f"data/benchmarks/{name}.json"])["measured"]["run_on"] for name in names}
+    assert shown == {"live-suite": "2026-11-27", "live-suite-fastbrowse": "2026-11-26"}

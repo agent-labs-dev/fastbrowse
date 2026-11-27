@@ -781,9 +781,10 @@ jobs:
             --campaign-id "$CAMPAIGN_ID" \
             --out "$GITHUB_WORKSPACE/candidate/benchmark-candidate.json"
       - name: Record the run facts
-        # What the site shows beside the figures: the run date, harness and judge. The date and harness come from the
-        # candidate, the newest run's, so a candidate rebuilt later from finished runs keeps when and how they were
-        # measured rather than the rebuild's own date and checkout.
+        # What the site shows beside the figures: the run date, harness and judge. Each group's card shows the newest
+        # date its own sources record (site_groups); this campaign-wide date is the fallback for a group without them.
+        # The date and harness come from the candidate, so a candidate rebuilt later from finished runs keeps when and
+        # how they were measured rather than the rebuild's own date and checkout.
         env:
           # Source records carry the measurement dates; the dispatch date is only a fallback for old artifacts.
           DISPATCHED_ON: ${{ needs.resolve.outputs.run_on }}

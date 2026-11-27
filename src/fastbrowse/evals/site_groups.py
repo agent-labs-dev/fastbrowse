@@ -71,10 +71,14 @@ class RunFacts(BaseModel):
     judge: str = Field(min_length=1)
     groups: dict[SiteGroup, GroupFacts] = {}
 
-    def shown(self, group: SiteGroup) -> dict[str, str]:
+    def shown(self, group: SiteGroup, source: Group) -> dict[str, str]:
         own = self.groups.get(group)
+        # A group shows the day its own runs measured it: the campaign's newest date can belong to another group, and
+        # a card then names a day its results were not measured on. A group from before sources recorded dates has
+        # only the campaign's.
+        measured = max((s.measured_on for s in source.sources), default=self.run_on)
         return {
-            "run_on": own.run_on if own else self.run_on,
+            "run_on": own.run_on if own else measured,
             "harness": self.harness,
             "judge": own.judge if own else self.judge,
         }
@@ -146,7 +150,7 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
                 "agent_sha": candidate.agent_sha,
                 "candidate_sha256": digest,
                 "rows": rows,
-                **facts.shown(site_group),
+                **facts.shown(site_group, source),
                 "systems": {SYSTEMS[arm]: arm for arm in arms},
                 "cost_not_reported": [SYSTEMS[arm] for arm in arms if arm in unpriced],
                 "not_measured": [system for arm, system in SYSTEMS.items() if arm not in arms and arm not in RETIRED],
