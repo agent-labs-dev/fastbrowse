@@ -145,6 +145,9 @@ class Observation(Frozen):
     modal: str | None = None
     """The accessible name of the open modal dialog the rest of the page sits behind, empty when it has none; None
     when no modal is open. Controls behind an open modal are left out of `controls`."""
+    selection: str | None = None
+    """The text the page has selected, in its document or its focused text field; None when none is. A selection
+    made with Ctrl+A or a drag changes no control or text, yet it is what the next key or toolbar press acts on."""
     media: tuple[Media, ...] = ()
     """Every audio and video player on the page, shown or not: their state lives in the element, not the page text."""
     tabs: tuple[Tab, ...]

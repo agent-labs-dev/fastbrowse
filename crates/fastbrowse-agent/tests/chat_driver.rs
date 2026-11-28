@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use fastbrowse_agent::agent::{Agent, RunOptions};
 use fastbrowse_agent::scripted::{ScriptedJev, ScriptedLLM};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, DecisionProfile, Evaluation, Question};
+use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
     Artifact, CostBasis, CostComponent, CostLine, LLMPurpose, Limits, RunResult, Status, StepOutcome,
@@ -41,6 +41,8 @@ struct DatePage {
     next_record: std::sync::atomic::AtomicBool,
     /// A real PNG for a screenshot, in place of none.
     png: bool,
+    /// Each control sits in the screenshot's lower right quarter, as `edges` measures it, in place of nowhere.
+    boxed: bool,
     /// The text the Date field holds, shown as its value as a browser reads it.
     dated: Mutex<Option<String>>,
     acted: Mutex<Vec<Action>>,
@@ -171,9 +173,14 @@ impl Page for DatePage {
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         let mut png = std::io::Cursor::new(Vec::new());
         if self.png {
-            image::DynamicImage::new_rgba8(1, 1).write_to(&mut png, image::ImageFormat::Png).unwrap();
+            image::DynamicImage::new_rgba8(200, 100).write_to(&mut png, image::ImageFormat::Png).unwrap();
         }
         Box::pin(async move { Ok(png.into_inner()) })
+    }
+
+    fn edges<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        let edges = Edges { left: 0.5, top: 0.5, right: 0.75, bottom: 0.75 };
+        Box::pin(async move { Ok(ids.iter().filter(|_| self.boxed).map(|id| (id.clone(), edges)).collect()) })
     }
 
     fn withhold_frames(&self, _: bool) {}
@@ -787,6 +794,25 @@ async fn test_a_screenshot_kept_in_the_conversation_is_counted_against_the_model
     let result = run(page, driver.clone()).await;
     assert_eq!(result.status, Status::Stuck, "{:?}", result.error);
     assert!(!driver.sent.lock().unwrap()[2].iter().all(|message| message.images.is_empty()));
+}
+
+/// The driver's screenshot carries the number of each listed control the page could measure, and its notice says so;
+/// with none measured, the screenshot goes as taken (#1574).
+#[tokio::test]
+async fn test_a_screenshot_numbers_the_listed_controls_it_shows() {
+    for boxed in [true, false] {
+        let page = Arc::new(DatePage { png: true, boxed, ..DatePage::default() });
+        let turns = [json!({"next": "", "actions": [{"tool": "screenshot"}]}), give_up()];
+        let driver = Driver::new(turns);
+        run(page, driver.clone()).await;
+        let told = driver.told(1);
+        assert_eq!(told.contains("its number drawn in a magenta tag"), boxed, "{told}");
+        let sent = driver.sent.lock().unwrap();
+        let image = sent[1].iter().find_map(|message| message.images.first()).expect("the screenshot is attached");
+        let png = image::load_from_memory(&image.0).unwrap().to_rgba8();
+        let tagged = png.pixels().any(|pixel| *pixel == image::Rgba([255, 0, 255, 255]));
+        assert_eq!(tagged, boxed);
+    }
 }
 
 #[tokio::test]

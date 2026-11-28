@@ -14,7 +14,10 @@ async fn test_reveal_scrolls_an_offscreen_frame_containing_a_visible_surface() {
     let target = find(&observation, "Framed pad");
     assert_eq!(target.drawn, Some(true));
     h.page.reveal(&target.id).await.unwrap();
-    assert!(h.page.edges(&target.id).await.unwrap().is_some(), "the screenshot needs the revealed surface bounds");
+    assert!(
+        h.page.edges(std::slice::from_ref(&target.id)).await.unwrap().contains_key(&target.id),
+        "the screenshot needs the revealed surface bounds"
+    );
     assert_eq!(eval_active(&h.session, "(() => { const r = document.querySelector('iframe').getBoundingClientRect(); return r.top < innerHeight && r.bottom > 0; })()").await, json!(true), "the drag-path model's screenshot still cannot see the target's frame");
     h.close().await;
 }

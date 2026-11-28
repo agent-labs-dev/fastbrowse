@@ -81,7 +81,7 @@ impl Agent {
             .into());
         };
         // A surface inside a cross-origin frame has no box in the top viewport; the screenshot still shows where it is.
-        let target_box = self.page.edges(&target.id).await?.map_or_else(
+        let target_box = self.page.edges(std::slice::from_ref(&target.id)).await?.swap_remove(&target.id).map_or_else(
             || "unknown: find the target in the screenshot".to_owned(),
             |edges| {
                 json!({"left": edges.left, "top": edges.top, "right": edges.right, "bottom": edges.bottom}).to_string()
@@ -170,7 +170,11 @@ impl Agent {
         // The target is measured before the screenshot, so a viewport resized after it shows as a moved target: a
         // cloud browser's viewport grew from 524 to 568 px between the screenshot and a later measure, and the click
         // landed below the pin Jev had boxed.
-        let placed = if on_target { self.page.edges(&target.id).await? } else { None };
+        let placed = if on_target {
+            self.page.edges(std::slice::from_ref(&target.id)).await?.swap_remove(&target.id)
+        } else {
+            None
+        };
         let Some(png) = self.viewport().await? else { return Ok(None) };
         let reference = screenshot_reference(&png);
         seen["viewport_screenshot"] = reference.clone().into();
@@ -217,7 +221,7 @@ impl Agent {
         // after any question; a point inside it keeps its meaning while the surface stays where it was. A covered
         // control's point is on its cover, which only the pixels show.
         let unmoved = if on_target {
-            self.page.edges(&target.id).await? == placed
+            self.page.edges(std::slice::from_ref(&target.id)).await?.swap_remove(&target.id) == placed
         } else {
             self.viewport().await?.is_some_and(|current| current == png)
         };
@@ -437,4 +441,133 @@ fn cut(image: &image::RgbaImage, edges: &Edges, outlined: bool) -> Option<Vec<u8
     let mut png = Vec::new();
     card.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
     jev_takes_png(&png).then_some(png)
+}
+
+/// Each digit as five rows of three pixels, the top bit the left one.
+const DIGITS: [[u8; 5]; 10] = [
+    [0b111, 0b101, 0b101, 0b101, 0b111],
+    [0b010, 0b110, 0b010, 0b010, 0b111],
+    [0b111, 0b001, 0b111, 0b100, 0b111],
+    [0b111, 0b001, 0b111, 0b001, 0b111],
+    [0b101, 0b101, 0b111, 0b001, 0b001],
+    [0b111, 0b100, 0b111, 0b001, 0b111],
+    [0b111, 0b100, 0b111, 0b101, 0b111],
+    [0b111, 0b001, 0b010, 0b010, 0b010],
+    [0b111, 0b101, 0b111, 0b101, 0b111],
+    [0b111, 0b101, 0b111, 0b001, 0b111],
+];
+
+/// How many image pixels a digit's pixel takes: a 3 by 5 digit reads at 9 by 15.
+const DIGIT_SCALE: u32 = 3;
+
+/// `viewport`, a PNG, with each control's number drawn in an `OUTLINE` tag at the top-left corner of its `edges`,
+/// fractions of the viewport. The driver names controls by the numbers its page lines give them, and an icon
+/// toolbar's unlabelled buttons could be told apart in the screenshot only by guessing which line each was (#1574).
+/// The tag sits just above the control, or inside its top where the control meets the viewport's top edge, so the
+/// control itself stays in view. None when `viewport` is not a PNG.
+pub(super) fn numbered(viewport: &[u8], marks: &[(String, Edges)]) -> Option<Vec<u8>> {
+    const WHITE: image::Rgba<u8> = image::Rgba([255, 255, 255, 255]);
+    let mut image = rgba(viewport)?;
+    let (width, height) = (image.width(), image.height());
+    let pixels = |edges: &Edges| {
+        let x = |f: f64| (f * width as f64).round() as u32;
+        let y = |f: f64| (f * height as f64).round() as u32;
+        [x(edges.left), y(edges.top), x(edges.right), y(edges.bottom)]
+    };
+    let boxes: Vec<[u32; 4]> = marks.iter().map(|(_, edges)| pixels(edges)).collect();
+    let overlaps = |a: &[u32; 4], b: &[u32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+    let mut tags: Vec<[u32; 4]> = Vec::new();
+    for (index, (number, _)) in marks.iter().enumerate() {
+        let own = boxes[index];
+        let digits: Vec<usize> = number.chars().filter_map(|c| c.to_digit(10)).map(|d| d as usize).collect();
+        let tag_width = (digits.len() as u32 * 4 + 1) * DIGIT_SCALE;
+        let tag_height = 7 * DIGIT_SCALE;
+        let left = own[0].min(width.saturating_sub(tag_width));
+        // Above the control's corner, unless that would cover another listed control or tag, which a reader would
+        // take the number to label; then inside the control's own top edge, where it can only label that control.
+        let above =
+            (own[1] >= tag_height).then(|| [left, own[1] - tag_height, left + tag_width, own[1]]).filter(|tag| {
+                !boxes.iter().enumerate().any(|(other, region)| other != index && overlaps(tag, region))
+                    && !tags.iter().any(|placed| overlaps(tag, placed))
+            });
+        let top = above.map_or(own[1].min(height.saturating_sub(tag_height)), |tag| tag[1]);
+        tags.push([left, top, left + tag_width, top + tag_height]);
+        for y in top..(top + tag_height).min(height) {
+            for x in left..(left + tag_width).min(width) {
+                let (column, row) = ((x - left) / DIGIT_SCALE, (y - top) / DIGIT_SCALE);
+                let lit = column % 4 != 0
+                    && (1..=5).contains(&row)
+                    && digits
+                        .get(column as usize / 4)
+                        .is_some_and(|&digit| DIGITS[digit][row as usize - 1] >> (3 - column % 4) & 1 == 1);
+                image.put_pixel(x, y, if lit { WHITE } else { OUTLINE });
+            }
+        }
+    }
+    let mut png = Vec::new();
+    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    Some(png)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn blank(width: u32, height: u32) -> Vec<u8> {
+        let mut png = Vec::new();
+        image::RgbaImage::new(width, height)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        png
+    }
+
+    /// Two digits, 1 and 7, in a tag just above the control's top-left corner: the tag spans (2 * 4 + 1) * 3 by 7 * 3
+    /// pixels, its digits white on `OUTLINE`, and the control's own pixels are left as they were.
+    #[test]
+    fn test_a_control_is_numbered_in_a_tag_above_its_top_left_corner() {
+        let edges = Edges { left: 0.25, top: 0.5, right: 0.5, bottom: 0.75 };
+        let marked = rgba(&numbered(&blank(200, 100), &[("17".into(), edges)]).unwrap()).unwrap();
+        let (left, top) = (50, 50 - 21);
+        assert_eq!(*marked.get_pixel(left, top), OUTLINE, "the tag's corner");
+        assert_eq!(*marked.get_pixel(left + 26, top + 20), OUTLINE, "the tag's far corner");
+        assert_eq!(marked.get_pixel(left + 27, top)[3], 0, "past the tag");
+        // The 1's middle column is lit on every row; its left column only on the second.
+        assert_eq!(*marked.get_pixel(left + 2 * 3, top + 3), image::Rgba([255, 255, 255, 255]));
+        assert_eq!(*marked.get_pixel(left + 3, top + 3), OUTLINE);
+        assert_eq!(*marked.get_pixel(left + 3, top + 2 * 3), image::Rgba([255, 255, 255, 255]));
+        // The 7's top row is lit across.
+        assert_eq!(*marked.get_pixel(left + 5 * 3, top + 3), image::Rgba([255, 255, 255, 255]));
+        assert_eq!(marked.get_pixel(50, 50)[3], 0, "the control itself is not covered");
+    }
+
+    /// A textbox just under a toolbar button has no free room above it: its tag goes inside its own top edge rather than
+    /// over the button, which a reader would take the number to label.
+    #[test]
+    fn test_a_tag_never_covers_another_listed_control() {
+        let button = Edges { left: 0.0, top: 0.2, right: 0.2, bottom: 0.4 };
+        let textbox = Edges { left: 0.0, top: 0.42, right: 1.0, bottom: 0.9 };
+        let marked =
+            rgba(&numbered(&blank(200, 100), &[("5".into(), button), ("10".into(), textbox)]).unwrap()).unwrap();
+        let tagged = |x0: u32, y0: u32, x1: u32, y1: u32| {
+            (y0..y1)
+                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                .filter(|&(x, y)| marked.get_pixel(x, y)[3] != 0)
+                .count()
+        };
+        assert_eq!(tagged(0, 0, 200, 20), 0, "the button's tag would not fit above it without leaving the image");
+        assert_eq!(*marked.get_pixel(0, 42), OUTLINE, "the textbox's tag starts at its own corner");
+        assert_eq!(tagged(15, 20, 40, 40), 0, "no tag reaches past the button's own tag into the button");
+        assert_eq!(*marked.get_pixel(0, 20), OUTLINE, "the button's tag sits inside its top edge");
+    }
+
+    /// A control at the viewport's top has no room above it, so its tag sits inside its top edge; one at the right
+    /// edge keeps its tag whole in the image.
+    #[test]
+    fn test_a_tag_stays_inside_the_viewport() {
+        let edges = Edges { left: 0.99, top: 0.0, right: 1.0, bottom: 0.1 };
+        let marked = rgba(&numbered(&blank(200, 100), &[("3".into(), edges)]).unwrap()).unwrap();
+        assert_eq!(*marked.get_pixel(199, 0), OUTLINE);
+        assert_eq!(*marked.get_pixel(200 - 15, 20), OUTLINE);
+        assert_eq!(marked.get_pixel(200 - 16, 0)[3], 0);
+    }
 }

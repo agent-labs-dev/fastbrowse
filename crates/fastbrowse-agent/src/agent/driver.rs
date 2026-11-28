@@ -12,6 +12,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use fastbrowse_core::decision::Edges;
 use fastbrowse_core::llm::{LLMError, Message, ResponseSchema, Role};
 use fastbrowse_core::models::{LLMPurpose, Operation, RunResult, Status, StepChoice, StepOutcome, UntilCheck};
 use fastbrowse_core::page::{Control, Observation, Unread};
@@ -281,6 +282,13 @@ struct Turn {
     next: String,
     actions: Vec<Act>,
 }
+
+/// The notice a screenshot comes with when no listed control could be numbered on it.
+const SCREENSHOT: &str = "The screenshot you took of the viewport is attached.";
+
+/// The notice a screenshot comes with that carries the listed controls' numbers.
+const SCREENSHOT_NUMBERED: &str = "The screenshot you took of the viewport is attached. Each listed control in view has \
+     its number drawn in a magenta tag at its top-left corner: above the control where that covers nothing else listed, otherwise inside its top edge.";
 
 /// What `read_text` or `read_controls` showed: `lines` are items `first` onward of `total`, and the header says the
 /// range held, so a read cut to fit the model's context names only the lines it still shows.
@@ -1226,9 +1234,26 @@ impl Agent {
                     Some(png) => {
                         let key = read_key(observation);
                         let new = !state.chat.pictures.iter().any(|(pictured, _)| *pictured == key);
-                        state.chat.image = Some(png.clone());
+                        // The model's copy carries each listed control's number; the clean one is kept, as quotes
+                        // are read off it. A control in another process's frame has no box, so no number drawn.
+                        let listed: Vec<(String, String)> = observation
+                            .controls
+                            .iter()
+                            .filter_map(|control| {
+                                let number =
+                                    state.chat.numbers.get(&(observation.document_key.clone(), control.id.clone()));
+                                Some((control.id.clone(), number?.to_string()))
+                            })
+                            .collect();
+                        let ids: Vec<String> = listed.iter().map(|(id, _)| id.clone()).collect();
+                        // The picture is taken; a page that cannot be measured now sends it unnumbered.
+                        let edges = self.page.edges(&ids).await.unwrap_or_default();
+                        let marks: Vec<(String, Edges)> =
+                            listed.into_iter().filter_map(|(id, number)| Some((number, *edges.get(&id)?))).collect();
+                        let marked = if marks.is_empty() { None } else { super::seeing::numbered(&png, &marks) };
+                        state.chat.notices.push(if marked.is_some() { SCREENSHOT_NUMBERED } else { SCREENSHOT }.into());
+                        state.chat.image = Some(marked.unwrap_or_else(|| png.clone()));
                         state.chat.pictures.push((key, png));
-                        state.chat.notices.push("The screenshot you took of the viewport is attached.".into());
                         new
                     }
                     // A run that holds an address credential was told so once (`IMAGES_WITHHELD`).

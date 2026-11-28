@@ -1335,6 +1335,86 @@ async fn test_a_key_chord_dispatches_its_modifier_and_dom_key() {
     h.close().await;
 }
 
+/// An editor's select-all changes no control or text, but it is a change the next press acts on, so the step reports
+/// the page changed and the observation names the selected text (#1574).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_select_all_in_an_editor_is_a_page_change() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div contenteditable role=textbox aria-label=Document>Plain words</div>'; true",
+    )
+    .await;
+    let before = h.observe().await;
+    assert_eq!(before.selection, None);
+    let press = Action {
+        target_id: Some(find(&before, "Document").id.clone()),
+        text: Some("ctrl+a".into()),
+        ..Action::new(Operation::Press)
+    };
+    let result = h.page.act(&press, &before).await.expect("press");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(h.observe().await.selection.as_deref(), Some("Plain words"));
+    h.close().await;
+}
+
+/// The same words selected at another occurrence are another target for the next key: the page's identity changes
+/// though the told selection reads the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_moving_a_selection_to_the_same_words_elsewhere_changes_the_page_key() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div contenteditable role=textbox aria-label=Document><p>same</p><p>same</p></div>'; true",
+    )
+    .await;
+    let select = |occurrence: usize| {
+        format!(
+            "{{ const words = document.querySelectorAll('p')[{occurrence}].firstChild; \
+             getSelection().setBaseAndExtent(words, 0, words, 4); }} true"
+        )
+    };
+    eval_active(&h.page, &select(0)).await;
+    let first = h.observe().await;
+    eval_active(&h.page, &select(1)).await;
+    let second = h.observe().await;
+    assert_eq!(first.selection.as_deref(), Some("same"));
+    assert_eq!(second.selection, first.selection);
+    assert_ne!(first.page_key, second.page_key);
+    h.close().await;
+}
+
+/// A selection in a password field or a frame's editor is a change too; the password's is told only as its length.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_select_all_in_a_password_or_a_framed_editor_is_a_page_change() {
+    let pages = [
+        ("<input type=password aria-label=Secret value=hunter2>", "Secret", "\u{2022}".repeat(7)),
+        (
+            "<iframe srcdoc='<div contenteditable role=textbox aria-label=Framed>Inner words</div>'></iframe>",
+            "Framed",
+            "Inner words".into(),
+        ),
+    ];
+    for (markup, label, selected) in pages {
+        let Some(h) = harness().await else { return };
+        h.goto("").await;
+        eval_active(&h.page, &format!("document.body.innerHTML = {}; true", json!(markup))).await;
+        let before = observe_until(&h.page, label).await;
+        let press = Action {
+            target_id: Some(find(&before, label).id.clone()),
+            text: Some("ctrl+a".into()),
+            ..Action::new(Operation::Press)
+        };
+        let result = h.page.act(&press, &before).await.expect("press");
+        assert!(result.page_changed, "{label}: {result:?}");
+        assert_eq!(h.observe().await.selection, Some(selected), "{label}");
+        h.close().await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_fixed_cover_the_page_means_to_be_answered_is_still_reported() {
     // Only a band floating over the page is routed around. A dialog asks its question first, an open menu or

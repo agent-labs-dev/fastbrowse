@@ -368,6 +368,10 @@ pub struct Observation {
     /// under a modal from assistive technology, so those controls leave the observation without leaving the document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modal: Option<String>,
+    /// The text the page has selected, in its document or its focused text field; None when none is. A selection made
+    /// with Ctrl+A or a drag changes no control or text, yet it is what the next key or toolbar press acts on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<String>,
     /// Every audio and video player on the page, shown or not: their state lives in the element, not the page text.
     #[serde(default)]
     pub media: Vec<Media>,
@@ -949,10 +953,10 @@ pub trait Page: Send + Sync {
         Box::pin(async { Ok(IndexMap::new()) })
     }
 
-    /// Where control `id` of the last observation sits, as `pictures` measures a card. None out of view, gone, or in
-    /// another frame.
-    fn edges<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
-        Box::pin(async { Ok(None) })
+    /// Where each control of the last observation among `ids` sits, as `pictures` measures a card. One out of view,
+    /// gone, or in another frame has none.
+    fn edges<'a>(&'a self, _ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        Box::pin(async { Ok(IndexMap::new()) })
     }
 
     /// Scroll control `id` of the last observation into view if it is not already in full view, as an action on it
