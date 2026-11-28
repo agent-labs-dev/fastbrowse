@@ -1076,6 +1076,25 @@ impl Agent {
         }
         // Code knows which step sent what the site failed to answer; the driver, told only "HTTP 503", sent it again.
         let sent_failed = replied && observation.response_status.is_some_and(|status| status >= 500);
+        // A commit that sent from the page it stayed on leaves a page nothing has loaded since: a site that draws what it
+        // kept only on a load (a posted reply, a deleted item) shows the old copy, and told only what changed the
+        // driver read that copy as the site's answer. Code knows what was sent and whether the page was loaded since.
+        let unloaded = (state.committing || keeping)
+            && observation.dialog.is_none()
+            && state.history.last().is_some_and(|last| last.outcome == StepOutcome::Executed)
+            && before.document_key == observation.document_key;
+        let missing: Vec<String> = match unloaded {
+            true => {
+                let page = [&observation.viewport_text, &observation.offscreen_text]
+                    .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .join(" ");
+                super::finishing::sent_by_last(&state.history)
+                    .into_iter()
+                    .filter(|sent| !page.contains(&sent.split_whitespace().collect::<Vec<_>>().join(" ")))
+                    .collect()
+            }
+            false => Vec::new(),
+        };
         let Some(last) = state.history.last_mut() else { return };
         let waited = last.operation == Some(Operation::Wait);
         let mut done = if last.operation == Some(Operation::SwitchTab) {
@@ -1166,6 +1185,13 @@ impl Agent {
         if sent_failed {
             done.summary
                 .push_str("; this is the site's reply to what this step sent, so whether it went through is unknown");
+        }
+        if unloaded {
+            done.summary.push_str("; the page has not been loaded since this step sent, so it may show an older copy than the site now keeps");
+            if !missing.is_empty() {
+                let quoted: Vec<String> = missing.iter().map(|sent| text::repr(sent)).collect();
+                done.summary.push_str(&format!(", and the text this step sent is not on it: {}", quoted.join(", ")));
+            }
         }
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),

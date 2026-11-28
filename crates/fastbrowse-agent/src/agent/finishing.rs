@@ -617,6 +617,24 @@ pub(super) const UNSEEN: &str = "the run ended before the page showed whether it
 /// new value, checked or selected state, as a select that shows its choice only in its label does.
 pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports what it now holds";
 
+/// The values the latest step, a commit, sent: what the fills since the commit before it entered in its own form. A
+/// secret is its marker, not a value the page could show, so it is left out. Empty when the step reports no form, as
+/// `changed_fields` sends none of a form-less field either.
+pub(super) fn sent_by_last(history: &[crate::policy::HistoryEntry]) -> Vec<String> {
+    let Some((last, earlier)) = history.split_last() else { return Vec::new() };
+    let Some(form) = last.form.as_ref() else { return Vec::new() };
+    earlier
+        .iter()
+        .rev()
+        .take_while(|entry| entry.commit.is_none())
+        .filter(|entry| entry.outcome == StepOutcome::Executed && entry.operation == Some(Operation::Fill))
+        .filter(|entry| entry.form.as_ref() == Some(form))
+        .filter_map(|entry| entry.text.as_deref())
+        .filter(|text| *text != "<secret>")
+        .map(str::to_string)
+        .collect()
+}
+
 /// What a run's executed steps did to the page: each commit it sent, as [`COMMITTED`] says it, with what it entered in
 /// the commit's own form, then the fields left changed, the latest change to each, as [`CHANGED`] says it: text typed
 /// or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field it changed, as
