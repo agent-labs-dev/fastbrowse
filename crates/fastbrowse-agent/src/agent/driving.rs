@@ -1082,7 +1082,13 @@ impl Agent {
         let unloaded = (state.committing || keeping)
             && observation.dialog.is_none()
             && state.history.last().is_some_and(|last| last.outcome == StepOutcome::Executed)
-            && before.document_key == observation.document_key;
+            && !before.document_key.is_empty()
+            && before.document_key == observation.document_key
+            && state
+                .history
+                .last()
+                .and_then(|last| last.submitted.as_ref())
+                .is_none_or(|sent| sent.stayed_in(observation));
         let missing: Vec<String> = match unloaded {
             true => {
                 let page = [&observation.viewport_text, &observation.offscreen_text]

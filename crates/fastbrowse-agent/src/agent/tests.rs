@@ -305,6 +305,57 @@ async fn test_a_commit_that_stayed_on_its_page_says_the_page_was_not_loaded_sinc
     assert!(!effect.contains("not been loaded"), "{effect}");
 }
 
+/// A fill the same field's later fill replaced was not what the commit sent, so it is not reported missing (the page
+/// shows only the final reply), and an iframe that navigated under an unchanged top-level document, or a document with
+/// no known identity, is a page that was loaded since.
+#[tokio::test]
+async fn test_what_a_commit_sent_is_the_latest_fill_and_only_from_a_document_still_loaded() {
+    let form = || crate::policy::Form { document: "d".into(), frame: None, id: "reply".into() };
+    let fill = |text: &str| HistoryEntry {
+        text: Some(text.into()),
+        form: Some(form()),
+        ..executed(Some(Operation::Fill), Some("Reply"), true)
+    };
+    let post = || HistoryEntry { form: Some(form()), ..executed(Some(Operation::Click), Some("Post"), true) };
+    let page = |text: &str, key: &str| Observation {
+        viewport_text: text.into(),
+        document_key: key.into(),
+        ..observation(&[button("Post")])
+    };
+    let run = |after: Observation, submitted: Option<crate::policy::Submitted>| {
+        let mut state = run_state();
+        state.history.extend([fill("first draft"), fill("final reply"), HistoryEntry { submitted, ..post() }]);
+        state.acted_from = Some(page("2 replies", "d"));
+        state.committing = true;
+        agent().note_effect(&mut state, &after);
+        state.history.last().unwrap().effect.clone().unwrap_or_default()
+    };
+    let effect = run(page("2 replies\nfinal reply", "d"), None);
+    assert!(effect.contains("not been loaded"), "{effect}");
+    assert!(!effect.contains("is not on it"), "{effect}");
+    let effect = run(page("2 replies", "d"), None);
+    assert!(effect.contains("is not on it: 'final reply'"), "{effect}");
+    assert!(!effect.contains("first draft"), "{effect}");
+    // A form in an iframe: only the same frame document is still loaded.
+    let inside = |document: &str| {
+        let mut control = Control::new("post", "button", "Post", [Operation::Click]);
+        control.frame_id = Some("frame".into());
+        control.form_id = Some("reply".into());
+        control.frame_document_key = Some(document.into());
+        control
+    };
+    let in_frame = |document: &str| Observation { document_key: "d".into(), ..observation(&[inside(document)]) };
+    let submitted = || crate::policy::Submitted::of(Operation::Click, &inside("one"), &in_frame("one"));
+    assert!(submitted().is_some());
+    let effect = run(Observation { viewport_text: "2 replies".into(), ..in_frame("one") }, submitted());
+    assert!(effect.contains("is not on it: 'final reply'"), "{effect}");
+    let effect = run(Observation { viewport_text: "2 replies".into(), ..in_frame("two") }, submitted());
+    assert!(!effect.contains("not been loaded"), "{effect}");
+    // An unknown document identity proves nothing about what stayed loaded.
+    let effect = run(page("2 replies", ""), None);
+    assert!(!effect.contains("not been loaded"), "{effect}");
+}
+
 #[tokio::test]
 async fn test_the_next_observation_records_what_an_action_did() {
     let field_before = field("Search elsewhere");
