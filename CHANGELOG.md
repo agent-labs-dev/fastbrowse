@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run no longer ends `complete` without the reload its task lists before confirming. The check of whether the task's steps were carried out left reading out, and read "reload the page and confirm the saved text" as reading; it is now told that reloading or reopening a page is a step when the task lists it, and only reading what the page then shows is left out ([#1431](https://github.com/agent-labs-dev/fastbrowse/issues/1431)).
+- `docs/troubleshooting.md` no longer lists the replacement-password guard, which a run no longer raises ([#1571](https://github.com/agent-labs-dev/fastbrowse/issues/1571)).
 - The published internal head-to-head adds two arms that drive their own browser on `openai/gpt-6-luna`: `agent-browser` (Codex) and `browser-use-1-luna` (browser-use 1.0.8). New publication candidates are schema 8; a schema 7 candidate still reads with the group's earlier five arms.
 
 ## [0.12.0] - 2026-11-26

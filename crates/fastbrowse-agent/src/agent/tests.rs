@@ -2748,6 +2748,54 @@ async fn test_a_done_with_no_step_taken_on_a_task_that_asks_for_one_checks_the_t
             .any(|q| q.contains("asks for a step, other than finding, reading or reporting something, that has not")),
         "{asked:?}"
     );
+    // A reload the task lists is a step, however the task words its purpose.
+    assert!(asked.iter().any(|q| q.contains(super::acting::RELOADING_ACTS)), "{asked:?}");
+}
+
+/// "Open it again and tell me the displayed value" asks for a step, but the initial classifier listed opening pages as
+/// reading, so a run that never reopened the page was never asked whether its steps were done. The classifier is
+/// asked the distinction itself, and a run it marks as asking for a step is judged on its history: read-only history
+/// is undone, a recorded reopening is done.
+#[tokio::test]
+async fn test_a_task_to_open_a_page_again_is_classified_as_asking_for_a_step() {
+    let task = "Open the page again and tell me the displayed value.";
+    let mut state = run_state();
+    state.raw_task = task.into();
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "acts"));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+    agent.output_intent(&mut state).await.expect("classified");
+    assert!(state.asks_steps);
+    let offered = jev.6.lock().unwrap().iter().flatten().cloned().collect::<Vec<_>>();
+    assert!(offered.iter().any(|c| c.contains("opening it again")), "{offered:?}");
+    assert!(!offered.iter().any(|c| c.contains("asks only to open pages")), "{offered:?}");
+
+    let verdict = |history: Vec<crate::policy::HistoryEntry>, pick: &'static str| async move {
+        let page = capture(&[(BlockKind::Paragraph, "42")]);
+        let fact = Fact::read("42", block_evidence(&page, "s0"), FactReader::JevChoice);
+        let mut state = run_state();
+        state.output_intent = super::state::OutputIntent::Text;
+        state.asks_steps = true;
+        state.raw_task = task.into();
+        state.notes = Notes::new([fact.answering()]);
+        state.history = history;
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, pick));
+        let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev, Arc::new(ScriptedLLM));
+        state.recoveries = agent.config.stall.max_recoveries;
+        agent.finish(&mut state, &observation(&[]), None, None).await
+    };
+    let read_only = vec![crate::policy::HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Executed, true)];
+    let result = verdict(read_only, "undone").await;
+    assert!(
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("task step"))),
+        "{result:?}"
+    );
+    let reopened =
+        vec![crate::policy::HistoryEntry::new(Some(Operation::Navigate), Some("page"), StepOutcome::Executed, true)];
+    let result = verdict(reopened, "done").await;
+    assert!(
+        !matches!(&result, Err(Flow::Stop(stop)) if stop.error.as_deref().is_some_and(|error| error.contains("task step"))),
+        "{result:?}"
+    );
 }
 
 /// Asked to start a demo and report the text it loads, a run's click on Start was covered, and it read the page's
@@ -2945,7 +2993,7 @@ async fn test_the_done_check_is_told_the_run_attaches_its_screenshot() {
         let asked = jev.5.lock().unwrap();
         let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
         assert_eq!(
-            carried.contains(&format!("been carried out? {}", crate::retrieval::SCREENSHOT_PICTURED)),
+            carried.contains(&format!("{} {}", super::acting::RELOADING_ACTS, crate::retrieval::SCREENSHOT_PICTURED)),
             told,
             "{intent:?}: {carried}"
         );

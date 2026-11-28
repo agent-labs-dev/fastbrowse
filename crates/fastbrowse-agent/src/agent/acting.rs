@@ -192,6 +192,12 @@ pub(super) fn gate_questions(
     (irreversible, action, lasting)
 }
 
+/// Said to the question of whether the task's steps were carried out. Reloading or opening a page again is an action
+/// on the page, whatever the task says it is for: a task that lists a reload before confirming a saved value was judged
+/// carried out by a run that never reloaded, because the question left reading out and the reload was framed as reading.
+/// What the page shows after the reload is still read, and is not judged here.
+pub(super) const RELOADING_ACTS: &str = "Reloading a page or opening it again is a step the task asks to be carried out when the task lists it, even as the way to confirm or check something: only reading what the page then shows is left out.";
+
 /// What a step held for confirmation in an unauthorized run says: which step, and how a caller lets the run take it.
 /// Told only that a Post "needs confirmation", a caller could not tell how to go on and asked a person to post (#1413).
 pub(super) const NOT_AUTHORIZED: &str = "needs confirmation: this run is not authorized to take actions that cannot be undone, so it stopped before taking it. Run the task again with authorization to let it.";
@@ -1345,12 +1351,14 @@ impl Agent {
             (
                 "acts".to_string(),
                 JsonValue::from(
-                    "The task asks for a step besides opening pages and finding, reading or reporting something, such as typing, choosing, submitting or signing in, even if only under some condition.",
+                    "The task asks for a step besides finding, reading or reporting something, such as typing, choosing, submitting, signing in, or reloading a page or opening it again because the task asks for that, even if only under some condition.",
                 ),
             ),
             (
                 "reads".to_string(),
-                JsonValue::from("The task asks only to open pages and find, read or report something."),
+                JsonValue::from(
+                    "The task asks only to find, read or report something, opening each page once as the way to get to it.",
+                ),
             ),
         ]);
         asked.push(("steps", "What does `task` ask to be done on a page?".into(), steps));
@@ -1473,6 +1481,7 @@ impl Agent {
         // every value ended stuck. It is part of the question because it is code's own fact about the run, not page
         // content.
         let mut question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?".to_string();
+        question.push_str(&format!(" {RELOADING_ACTS}"));
         if let Some(pictured) = self.screenshot(state.output_intent).pictured() {
             question.push_str(&format!(" {pictured}"));
         }
@@ -1599,7 +1608,7 @@ impl Agent {
                 .ask_choice(
                     state,
                     observation,
-                    "Which sentence or clause of the task asks for a step, other than finding, reading or reporting something, that has not been carried out? Choose the task's own wording.",
+                    "Which sentence or clause of the task asks for a step, other than finding, reading or reporting something, that has not been carried out? Choose the task's own wording. Reloading a page or opening it again counts as such a step when the task lists it.",
                     criteria,
                 )
                 .await?;

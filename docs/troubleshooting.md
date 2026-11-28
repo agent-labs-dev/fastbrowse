@@ -130,8 +130,6 @@ limit.
   nothing of is left as it is, and is named here only when the page marks it required.
 - The page asks for a file and the run has none: `the page asks for a file and none was provided`.
 - A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
-- A password change without a replacement secret: `A replacement password requires --secret
-  new_password=ENV_VAR@https://host; set ENV_VAR to the new value instead of putting it in the task.`
 - A field that takes no credential chose a secret declared for the origin that resolves to nothing, such as a
   password manager item that changed during the run: `secret <name> is not available for <origin>`. A sign-in
   field ends `needs_login` instead, see [needs_login](#needs_login-exit-4).
@@ -145,8 +143,7 @@ limit.
   text.
 - Pass files as `attachments` in the embedding API or the JavaScript SDK. The CLI and the MCP tool cannot
   supply files.
-- Supply a new password as `--secret new_password=ENV_VAR@https://host`, and fix the origin of a secret
-  scoped to the wrong one.
+- Fix the origin of a secret scoped to the wrong one.
 
 ## blocked (exit 6)
 
