@@ -1,23 +1,23 @@
 {
   "assets": {
     "assets/architecture-dark.svg": {
-      "surface": "f74577803e9f59ed320c339d73a7b1a198d9de466811e7dff56f864948aaeb36",
+      "surface": "06b415843a6c1ee1ec3e00314c126ee82315297c4367b45a2766cb3c7a80558a",
       "shows": "The step loop and the gates, as the code runs them."
     },
     "assets/architecture.svg": {
-      "surface": "f74577803e9f59ed320c339d73a7b1a198d9de466811e7dff56f864948aaeb36",
+      "surface": "06b415843a6c1ee1ec3e00314c126ee82315297c4367b45a2766cb3c7a80558a",
       "shows": "The step loop and the gates, as the code runs them."
     },
     "assets/wordmark-dark.svg": {
-      "surface": "f74577803e9f59ed320c339d73a7b1a198d9de466811e7dff56f864948aaeb36",
+      "surface": "06b415843a6c1ee1ec3e00314c126ee82315297c4367b45a2766cb3c7a80558a",
       "shows": "The fastbrowse wordmark."
     },
     "assets/wordmark.svg": {
-      "surface": "f74577803e9f59ed320c339d73a7b1a198d9de466811e7dff56f864948aaeb36",
+      "surface": "06b415843a6c1ee1ec3e00314c126ee82315297c4367b45a2766cb3c7a80558a",
       "shows": "The fastbrowse wordmark."
     },
     "docs/assets/demo.gif": {
-      "surface": "f74577803e9f59ed320c339d73a7b1a198d9de466811e7dff56f864948aaeb36",
+      "surface": "06b415843a6c1ee1ec3e00314c126ee82315297c4367b45a2766cb3c7a80558a",
       "shows": "A run on Sauce Demo, a public practice store: it signs in, adds the backpack and the bike light to the cart, checks out as Ada Lovelace, and answers with the order total, cited.",
       "command": "uvx fastbrowse==0.10.0 \"...\" --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --local --authorize --record demo.mp4",
       "recorded_at": "2026-11-10"

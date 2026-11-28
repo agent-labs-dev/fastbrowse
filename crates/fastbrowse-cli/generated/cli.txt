@@ -9,7 +9,7 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS] [--json]
                   [--record FILE] [--recipe FILE] [--save-recipe FILE]
                   [--fetch] [--browser] [--extension]
-                  [--extension-browser LABEL] [--trace FILE]
+                  [--extension-browser LABEL] [--open-chrome] [--trace FILE]
                   [--cursor | --no-cursor]
                   task
 
@@ -88,6 +88,10 @@ options:
                         which browser to use when the extension is connected
                         in more than one, by the label its popup shows
                         (implies --extension)
+  --open-chrome         start Chrome when no browser has the extension
+                        connected, and wait for it to connect (needs a
+                        desktop session; a headless shell still ends
+                        unavailable)
   --trace FILE          append the run's trace to FILE as JSON lines, or - for
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every
@@ -102,9 +106,9 @@ Refused together: --fetch starts no browser, so it refuses --browser, --cloud,
 --local, --extension, --extension-browser, --headed, --profile,
 --cloud-profile, --cdp-url, --cdp-port, --attach, --target-match,
 --foreground, --proxy-country, --viewport, --record, --recipe, --save-recipe,
---downloads, --cursor, --secret, --bitwarden, --input, --file and --authorize.
---cloud refuses --headed, --profile, --cdp-url, --cdp-port, --extension,
---extension-browser, --attach and --target-match.
+--downloads, --cursor, --open-chrome, --secret, --bitwarden, --input, --file
+and --authorize. --cloud refuses --headed, --profile, --cdp-url, --cdp-port,
+--extension, --extension-browser, --attach, --target-match and --open-chrome.
 
 Update: fastbrowse self-update names how this copy was installed and the
 command that upgrades it.

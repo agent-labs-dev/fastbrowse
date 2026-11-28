@@ -13,6 +13,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::open_chrome::Opened;
 use fastbrowse_clients::environment::ConfigurationError;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Authorization, Event, FailureKind, Limits, LocalChrome, SecretValue, Status};
@@ -152,6 +153,7 @@ pub fn parser(build: &Build) -> Parser {
             Opt::flag("--browser"),
             Opt::flag("--extension"),
             Opt::value("--extension-browser"),
+            Opt::flag("--open-chrome"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
             Opt::flag("--no-cursor"),
@@ -198,6 +200,8 @@ pub struct Args {
     pub extension: bool,
     /// Which browser the extension is connected in, by its label; implies `extension`.
     pub extension_browser: Option<String>,
+    /// Start Chrome when no browser has the extension connected, and wait for it to connect.
+    pub open_chrome: bool,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     /// `--cursor` or `--no-cursor`; neither draws the cursor wherever the page can be seen.
@@ -265,6 +269,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         browser: parsed.flag("--browser"),
         extension: parsed.flag("--extension"),
         extension_browser: text("--extension-browser"),
+        open_chrome: parsed.flag("--open-chrome"),
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
@@ -538,9 +543,22 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     // Check secrets before browser setup so a missing credential names what the operator needs to supply.
     let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let extension = task.wants_extension();
+    if args.open_chrome && !extension {
+        return Err(ConfigurationError(
+            "--open-chrome starts the Chrome the extension runs in, which this run does not use".into(),
+        ));
+    }
     let recipe_sink =
         (args.recipe.is_some() || args.save_recipe.is_some()).then(fastbrowse_agent::agent::RecipeSink::default);
     let browser_api_key = options::environment(&task, &settings)?;
+    if args.open_chrome {
+        let binary = settings.local_chrome().binary;
+        match crate::open_chrome::open(&context.environ, binary.as_deref(), args.extension_browser.as_deref()).await? {
+            Opened::Connected => context.streams.eprint("  opened Chrome; its extension connected"),
+            Opened::NotConnected => context.streams.eprint("  opened Chrome; its extension did not connect"),
+            Opened::Nothing => {}
+        }
+    }
     // Every local run writes its own trace, kept only when it ends short of complete, so a failure nobody traced can
     // still be read afterwards (#1414). It starts after the last check that can refuse the run, so a refused run
     // leaves no file behind that nothing names.

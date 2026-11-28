@@ -20,6 +20,7 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--extension` | run in your own Chrome, signed in as you are, through the fastbrowse extension; this is the default for a browser task, see [Your own Chrome](#your-own-chrome) |
 | `--local` | an alias for `--extension` |
 | `--extension-browser LABEL` | with the extension connected in more than one browser, use the one its popup labels `LABEL` |
+| `--open-chrome` | with the extension, start Chrome (or the browser `FASTBROWSE_CHROME` names) when no browser has it connected, and wait up to a minute for it to connect; a shell with no display still ends `unavailable` |
 | `--cloud` | run in a Browser Use Cloud browser instead, which needs `BROWSER_USE_API_KEY` |
 | `--cloud-profile ID` | with `--cloud`, run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads; without `--start`, a first page it cannot read, such as one scripts build, is replaced by another page proposed knowing why, and the run ends `blocked` only when no readable page is known |
@@ -48,9 +49,9 @@ Some flags are refused together, with exit status 1 before the run starts. `--fe
 can only follow links, so it refuses every browser flag (`--browser`, `--cloud`, `--local`, `--extension`,
 `--extension-browser`, `--headed`, `--profile`, `--cloud-profile`, `--cdp-url`, `--cdp-port`, `--attach`,
 `--target-match`, `--foreground`, `--proxy-country`, `--viewport`, `--record`, `--recipe`, `--save-recipe`,
-`--downloads`, `--cursor`) and every flag that types, attaches or submits (`--secret`, `--bitwarden`, `--input`,
+`--downloads`, `--cursor`, `--open-chrome`) and every flag that types, attaches or submits (`--secret`, `--bitwarden`, `--input`,
 `--file`, `--authorize`). `--cloud` refuses `--headed`, `--profile`, `--cdp-url`, `--cdp-port`, `--extension`,
-`--extension-browser`, `--attach` and `--target-match`. `fastbrowse --help` ends with the same list.
+`--extension-browser`, `--attach`, `--target-match` and `--open-chrome`. `fastbrowse --help` ends with the same list.
 
 Trace events also record code state: `authorization_gate` records the authorization flag, thresholds and
 branch outcome; `run_finished` records the final status after spend and screenshot checks. These events describe
@@ -136,7 +137,7 @@ interception failed, update the extension. For an unpacked extension, run `fastb
 current CLI and click **Reload** on the extension's card in `chrome://extensions`.
 
 With no browser connected, the run ends `unavailable` before it spends anything; it never falls back to another
-browser. It also ends `unavailable` when the extension is older than fastbrowse and cannot relay a command fastbrowse
+browser. `--open-chrome` starts Chrome first on a desktop and waits for its extension to connect. It also ends `unavailable` when the extension is older than fastbrowse and cannot relay a command fastbrowse
 sends, naming the commands: update the extension from the Chrome Web Store. With the extension in more than one browser, label each one in its popup and pick one with
 `--extension-browser LABEL`. `fastbrowse extension install --policy` (Linux) prints a Chrome policy for you to write
 as root, which installs the extension for every profile with no debugging bar and marks Chrome as managed by your
