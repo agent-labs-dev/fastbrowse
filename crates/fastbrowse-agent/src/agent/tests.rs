@@ -2748,6 +2748,8 @@ async fn test_a_done_with_no_step_taken_on_a_task_that_asks_for_one_checks_the_t
             .any(|q| q.contains("asks for a step, other than finding, reading or reporting something, that has not")),
         "{asked:?}"
     );
+    // A reload the task lists is a step, however the task words its purpose.
+    assert!(asked.iter().any(|q| q.contains(super::acting::RELOADING_ACTS)), "{asked:?}");
 }
 
 /// Asked to start a demo and report the text it loads, a run's click on Start was covered, and it read the page's
