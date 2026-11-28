@@ -43,7 +43,7 @@ With no browser connected the run ends `unavailable` and names the install step;
 switching to another browser. When it says `no browser's fastbrowse extension can be reached from this process`, the
 extension is installed but your sandbox refuses the directory or socket the error names: ask the user to allow
 that directory in your sandbox or to run fastbrowse with the sandbox off. With the extension in more than one browser, the error lists their labels; pass
-the one the user chooses with `--extension-browser LABEL`. A run the user stops in the browser ends `cancelled`:
+the one the user chooses with `--extension-browser LABEL`. With a desktop session, `--open-chrome` starts Chrome (or the browser `FASTBROWSE_CHROME` names) when none has the extension connected. A run the user stops in the browser ends `cancelled`:
 report that it was stopped and do not retry it.
 
 A run works behind the window's current tab and opens a link's new tab there too. A tab the page opens by

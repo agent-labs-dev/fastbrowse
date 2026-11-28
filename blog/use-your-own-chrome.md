@@ -3,9 +3,9 @@ title: Run a browser agent in your own signed-in Chrome
 description: "Install the fastbrowse extension, check it is connected, run a read-only task with --extension, and stop it. What the run can reach and what Chrome shows."
 topic: Browsers and logins
 published: 2026-11-12
-updated: 2026-11-25
+updated: 2026-11-28
 verifiedAgainst: v0.12.0
-verifiedOn: 2026-11-25
+verifiedOn: 2026-11-28
 ---
 
 A fresh browser has none of your sign-ins. The fastbrowse extension lets a run work in the Chrome you already use, where you are signed in. The run opens tabs of its own in that browser; it does not use the tabs you already have open. No Browser Use key is involved: the run uses your own browser and your own model key.
@@ -22,7 +22,7 @@ fastbrowse extension install
 
 `fastbrowse extension install` registers fastbrowse with every Chromium browser it finds for your user, then prints the store link. It writes a small launcher and a native-messaging manifest into your user folders, and needs no admin rights. Run it again if you move or reinstall fastbrowse. Each fastbrowse that runs it stays registered, and the extension starts the newest one still present, by the version each reports when Chrome starts it; `fastbrowse extension status` lists them, and `fastbrowse extension status --json` adds the browsers whose extension is connected, by the label `--extension-browser` takes.
 
-Next, add the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), then restart Chrome or turn the extension off and on at `chrome://extensions` so it connects. The first task below is the check: with no browser connected, the run ends `unavailable`. Open fastbrowse from Chrome's Extensions menu to see active runs and their **Stop** buttons.
+Next, add the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), then restart Chrome or turn the extension off and on at `chrome://extensions` so it connects. The first task below is the check: with no browser connected, the run ends `unavailable`. Add `--open-chrome` to have the run start Chrome for you and wait for the extension to connect, when you have a desktop session. Open fastbrowse from Chrome's Extensions menu to see active runs and their **Stop** buttons.
 
 The extension has to match the fastbrowse you install: the Store's **0.1.0** works with fastbrowse **0.10.x**, and fastbrowse **0.11.0 or later** requires extension **0.1.1 or later** with its supported-command list. A run that finds an older extension stops before it spends anything and names the version it needs. If the Store does not list the version you need yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
 

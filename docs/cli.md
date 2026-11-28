@@ -49,9 +49,9 @@ Some flags are refused together, with exit status 1 before the run starts. `--fe
 can only follow links, so it refuses every browser flag (`--browser`, `--cloud`, `--local`, `--extension`,
 `--extension-browser`, `--headed`, `--profile`, `--cloud-profile`, `--cdp-url`, `--cdp-port`, `--attach`,
 `--target-match`, `--foreground`, `--proxy-country`, `--viewport`, `--record`, `--recipe`, `--save-recipe`,
-`--downloads`, `--cursor`) and every flag that types, attaches or submits (`--secret`, `--bitwarden`, `--input`,
+`--downloads`, `--cursor`, `--open-chrome`) and every flag that types, attaches or submits (`--secret`, `--bitwarden`, `--input`,
 `--file`, `--authorize`). `--cloud` refuses `--headed`, `--profile`, `--cdp-url`, `--cdp-port`, `--extension`,
-`--extension-browser`, `--attach` and `--target-match`. `fastbrowse --help` ends with the same list.
+`--extension-browser`, `--attach`, `--target-match` and `--open-chrome`. `fastbrowse --help` ends with the same list.
 
 Trace events also record code state: `authorization_gate` records the authorization flag, thresholds and
 branch outcome; `run_finished` records the final status after spend and screenshot checks. These events describe

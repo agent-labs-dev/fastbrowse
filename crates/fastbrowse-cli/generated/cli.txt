@@ -106,9 +106,9 @@ Refused together: --fetch starts no browser, so it refuses --browser, --cloud,
 --local, --extension, --extension-browser, --headed, --profile,
 --cloud-profile, --cdp-url, --cdp-port, --attach, --target-match,
 --foreground, --proxy-country, --viewport, --record, --recipe, --save-recipe,
---downloads, --cursor, --secret, --bitwarden, --input, --file and --authorize.
---cloud refuses --headed, --profile, --cdp-url, --cdp-port, --extension,
---extension-browser, --attach and --target-match.
+--downloads, --cursor, --open-chrome, --secret, --bitwarden, --input, --file
+and --authorize. --cloud refuses --headed, --profile, --cdp-url, --cdp-port,
+--extension, --extension-browser, --attach, --target-match and --open-chrome.
 
 Update: fastbrowse self-update names how this copy was installed and the
 command that upgrades it.
