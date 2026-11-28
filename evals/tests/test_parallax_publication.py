@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastbrowse.evals.benchmarks import check_catalog
+from fastbrowse.evals.benchmarks import Candidate, check_catalog
 from fastbrowse.evals.catalog import CATALOG, eligible
 from fastbrowse.evals.catalog import PATH as CATALOG_PATH
 from parallax.models import (
@@ -53,6 +53,7 @@ def result(
     task_hash: str = "c" * 64,
     task_version: int = 1,
     details: dict[str, object] | None = None,
+    harness_version: str = "test",
 ) -> TrialResult:
     return TrialResult(
         key=f"{task_id}-{repeat}",
@@ -60,7 +61,7 @@ def result(
         task_version=task_version,
         task_hash=task_hash,
         harness="fastbrowse",
-        harness_version="test",
+        harness_version=harness_version,
         harness_kind=HarnessKind.OPEN,
         config_hash="d" * 64,
         model="test/model",
@@ -319,26 +320,29 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
         grading_policy="browser-evidence-v2",
     )
     (run / "manifest.json").write_text(manifest.model_dump_json() + "\n")
-    (run / "results.jsonl").write_text(
-        "".join(
-            result(
-                task.id,
-                repeat,
-                task_hash=source_task_map[task.id].hash,
-                task_version=source_task_map[task.id].meta.version,
-            ).model_dump_json()
-            + "\n"
-            for task in tasks
-            for repeat in range(3)
-        )
-    )
-    _support(run, manifest)
 
-    candidate = candidate_from_run(
-        run,
-        campaign_id="synthetic-campaign",
-        catalog_sha=CATALOG_SHA,
-    )
+    def measured(version: str) -> Candidate:
+        (run / "results.jsonl").write_text(
+            "".join(
+                result(
+                    task.id,
+                    repeat,
+                    task_hash=source_task_map[task.id].hash,
+                    task_version=source_task_map[task.id].meta.version,
+                    harness_version=version,
+                ).model_dump_json()
+                + "\n"
+                for task in tasks
+                for repeat in range(3)
+            )
+        )
+        return candidate_from_run(run, campaign_id="synthetic-campaign", catalog_sha=CATALOG_SHA)
+
+    _support(run, manifest)
+    # A run from before the harness reported its release recorded only the harness's name.
+    assert measured("fastbrowse").groups[0].sources[0].version is None
+    candidate = measured("fastbrowse==0.12.0")
+    assert candidate.groups[0].sources[0].version == "fastbrowse==0.12.0"
 
     assert len(candidate.groups) == 1
     assert len(candidate.groups[0].rows) == len(tasks) * 3

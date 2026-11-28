@@ -187,6 +187,33 @@ def test_republishing_a_campaign_keeps_the_previous_release_the_site_already_hol
         assert "data/previous-release.json" not in files
 
 
+def test_the_previous_release_rolls_only_when_the_solo_group_measures_another_release() -> None:
+    """A competitor refresh is a new campaign of the same release, and rolling then compared the release with itself."""
+    candidate = json.loads(STAGED.read_bytes())
+    candidate["campaign_id"] = "comparison-0.12.0"
+    group = next(g for g in candidate["groups"] if g["id"] == "internal-fastbrowse")
+    group["sources"] = [
+        {
+            "run_id": "r1",
+            "arm": "fastbrowse",
+            "agent_sha": group["agent_sha"],
+            "runner_sha": group["runner_sha"],
+            "measured_on": "2026-11-28",
+            "tasks": sorted({r["task"] for r in group["rows"] if r["arm"] == "fastbrowse"}),
+            "version": "fastbrowse==0.12.0",
+            "models": [],
+        }
+    ]
+    content = json.dumps(candidate).encode()
+
+    def rolled(campaign: str) -> bool:
+        held = {"measured": {"campaign_id": campaign}, "published": []}
+        return "data/previous-release.json" in group_files(content, FACTS, {**CURRENT, "live-suite-fastbrowse": held})
+
+    assert not rolled("release-0.12.0")
+    assert rolled("release-0.11.1")
+
+
 def test_each_measured_group_shows_the_day_its_own_runs_measured_it() -> None:
     """A rerun of one group dates the campaign later; the other group's card keeps the day its runs were measured."""
     candidate = json.loads(STAGED.read_bytes())

@@ -266,8 +266,10 @@ def _sources(
     for (path, arm), results in grouped.items():
         run = next(run for run, _ in selected.values() if run.path == path)
         agent_sha, runner_sha, _ = metadata[path]
-        versions = {result.harness_version for result in results if result.harness_version}
-        if arm not in PRODUCT_ARMS and len(versions) != 1:
+        # A fastbrowse run before the harness reported its release recorded only the harness's name, which names no
+        # version, so its source records none.
+        versions = {v for result in results if (v := result.harness_version) and v not in PRODUCT_ARMS}
+        if (arm not in PRODUCT_ARMS or versions) and len(versions) != 1:
             raise ValueError(f"{path}: {arm} has no single recorded harness version")
         models = {model.replace("/", ":") for result in results for model in result.actual_models if model}
         sources.append(
@@ -278,7 +280,7 @@ def _sources(
                 runner_sha=runner_sha,
                 measured_on=run.manifest.created_at.date().isoformat(),
                 tasks=sorted({result.task_id for result in results}),
-                version=None if arm in PRODUCT_ARMS else next(iter(versions)),
+                version=next(iter(versions), None),
                 models=sorted(models),
             )
         )

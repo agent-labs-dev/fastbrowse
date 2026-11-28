@@ -30,6 +30,11 @@ Parallax writes `manifest.json`, `results.jsonl`, and private trial artifacts.
 Retry settings cover environment interruptions. The campaign keeps the complete
 run directory as the source for publication.
 
+A campaign that refreshes competitors for a release already published measures the solo group again under its own
+campaign id (`head_to_head_arms` keeps the head-to-head group to the arms it refreshes plus `fastbrowse`), since the
+site reads one candidate for every group. Each fastbrowse source records the release it ran (`fastbrowse==X.Y.Z`), and
+publication keeps `data/previous-release.json` until the solo group measures a different release.
+
 A narrowed rerun can use the workflow's `only` input for affected task ids. `candidate_only`
 skips new trials and builds from the campaign's downloaded run artifacts. The
 stage selects, for each task and repeat, the newest run that measured it in full.
