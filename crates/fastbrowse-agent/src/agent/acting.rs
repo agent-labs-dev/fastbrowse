@@ -222,6 +222,18 @@ fn site_failure_question() -> NoulQuestion {
     )
 }
 
+/// Whether the page is a sign-in or account wall standing where the task's content should be. A form to fill in is not
+/// one when the task is about the form, so the question names what the task asked for.
+fn signin_required_question() -> NoulQuestion {
+    NoulQuestion::new(
+        format!(
+            "{UNTRUSTED}\n\nDoes this page ask the user to sign in, log in or create an account before it will show what the task asks for, with none of that content on it?"
+        ),
+        Some("The page is a sign-in or account wall and the content the task asks for is not on it."),
+        Some("The page shows the content the task asks for, or sign-in is not what stands between the run and it."),
+    )
+}
+
 fn choice_picks(
     questions: &IndexMap<String, Question>,
     answers: &IndexMap<String, Answer>,
@@ -1435,7 +1447,28 @@ impl Agent {
 
     /// Whether this page reports that the site failed, for a finish that asks nothing about steps.
     pub(super) async fn site_failed(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
-        let questions = IndexMap::from([("site_failure".to_string(), Question::Noul(site_failure_question()))]);
+        self.ask_page(state, observation, "site_failure", site_failure_question()).await
+    }
+
+    /// Whether the page withholds what the task asks for until the user signs in. A run that read a sign-in page and
+    /// finished ended unverified on its coverage check, so a caller keyed on needs_login offered no way to sign in
+    /// (#1582). A site the run holds a stored sign-in for is no wall: signing in is a step the driver takes.
+    pub(super) async fn signin_required(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        if !self.secret_names(&origin_of(&observation.url)).is_empty() {
+            return Ok(false);
+        }
+        self.ask_page(state, observation, "signin_required", signin_required_question()).await
+    }
+
+    /// One yes-or-no question of Jev about the page as it stands, with the run's history as context.
+    async fn ask_page(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        key: &str,
+        question: NoulQuestion,
+    ) -> Step<bool> {
+        let questions = IndexMap::from([(key.to_string(), Question::Noul(question))]);
         let context = self.verdict_context(state);
         let state_json = page_verdict_state(
             observation,
@@ -1449,9 +1482,9 @@ impl Agent {
         let evaluation =
             jev_purpose(JevPurpose::Action, self.jev.evaluate_images(&state_json, &questions, &Images::new())).await?;
         state.ledger.record([evaluation.cost.clone()])?;
-        match evaluation.answers.get("site_failure") {
+        match evaluation.answers.get(key) {
             Some(Answer::Noul(answer)) => Ok(answer.probability > 0.5),
-            _ => Err(DecisionError::failed("expected a yes-or-no answer to site_failure").into()),
+            _ => Err(DecisionError::failed(format!("expected a yes-or-no answer to {key}")).into()),
         }
     }
 

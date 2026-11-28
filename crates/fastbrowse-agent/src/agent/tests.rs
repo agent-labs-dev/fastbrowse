@@ -6843,6 +6843,49 @@ async fn test_a_draft_rejected_again_unchanged_ends_the_run() {
     assert_eq!(ended, Status::Unverified);
 }
 
+/// Answers the sign-in wall question as given and every other question as the repair Jev does.
+struct WallJev(Arc<RepairComposeJev>, f64);
+
+impl DecisionClient for WallJev {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if !questions.contains_key("signin_required") {
+            return self.0.evaluate(state, questions);
+        }
+        let probability = self.1;
+        let answers = questions
+            .keys()
+            .map(|key| (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability })))
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A run that finished on a sign-in page ended unverified on its coverage check, so a caller keyed on needs_login
+/// offered no way to sign in (#1582). The wall decides the outcome before the rejected draft is sent back.
+#[tokio::test]
+async fn test_a_rejected_answer_on_a_sign_in_wall_ends_needs_login() {
+    let page = observation(&[]);
+    for (probability, ended) in [(1.0, Status::NeedsLogin), (0.0, Status::Unverified)] {
+        let jev = Arc::new(WallJev(repair_jev(vec![(0.0, 1.0); 4]), probability));
+        let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev, Arc::new(WrongRecord));
+        let mut state = composition_repair_state();
+        state.rewrites = super::finishing::MAX_REWRITES;
+        let Err(Flow::Stop(stop)) = agent.finish(&mut state, &page, None, None).await else {
+            panic!("the finish did not stop");
+        };
+        assert_eq!(stop.status, ended);
+    }
+}
+
 /// A run whose reader failed to copy a winner field went back to read for it, and every new page it reached renewed
 /// the recovery budget, so each rewrite got a fresh one: one trial sent three different rejected drafts back over 53
 /// steps and 455 Jev calls, $0.39 for a task that costs $0.03. Progress between drafts still renews the stall budget,

@@ -484,6 +484,15 @@ impl Agent {
             // A few rewrites are free of the stall budget; past them the next rejection is the recovery that runs out.
             // Spent as a recovery, the first rejection used the run's one recovery, and the driver's corrected draft,
             // rejected again with no page read between, ended the run and handed the answer to a composer.
+            // A wall is no answer to rewrite: the page the run stands on is what the caller has to act on (#1582).
+            if self.signin_required(state, observation).await? {
+                return Err(Stop::new(
+                    Status::NeedsLogin,
+                    "Finish/sign-in-wall",
+                    "The page asks to sign in before it shows what the task asks for.",
+                )
+                .into());
+            }
             let exhausted = state.rewrites >= MAX_REWRITES;
             if exhausted {
                 state.recoveries = state.recoveries.max(self.config.stall.max_recoveries);
