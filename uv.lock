@@ -363,7 +363,7 @@ wheels = [
 
 [[package]]
 name = "fastbrowse"
-version = "0.12.0"
+version = "0.12.1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx", extra = ["http2"] },
