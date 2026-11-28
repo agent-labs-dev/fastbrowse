@@ -543,15 +543,15 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     // Check secrets before browser setup so a missing credential names what the operator needs to supply.
     let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let extension = task.wants_extension();
+    if args.open_chrome && !extension {
+        return Err(ConfigurationError(
+            "--open-chrome starts the Chrome the extension runs in, which this run does not use".into(),
+        ));
+    }
     let recipe_sink =
         (args.recipe.is_some() || args.save_recipe.is_some()).then(fastbrowse_agent::agent::RecipeSink::default);
     let browser_api_key = options::environment(&task, &settings)?;
     if args.open_chrome {
-        if !extension {
-            return Err(ConfigurationError(
-                "--open-chrome starts the Chrome the extension runs in, which this run does not use".into(),
-            ));
-        }
         let binary = settings.local_chrome().binary;
         match crate::open_chrome::open(&context.environ, binary.as_deref()).await? {
             Opened::Connected => context.streams.eprint("  opened Chrome; its extension connected"),

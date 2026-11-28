@@ -483,6 +483,17 @@ async fn test_replay_accounting_is_printed_only_for_a_replayed_run() {
 }
 
 #[tokio::test]
+async fn test_open_chrome_is_refused_on_a_run_that_does_not_use_the_extension() {
+    for flag in ["--cloud", "--fetch"] {
+        let ran = cli(&["t", "--json", flag, "--open-chrome"]).await;
+        assert!(ran.call.is_none());
+        assert!(
+            ran.json()["error"].as_str().unwrap().contains("--open-chrome starts the Chrome the extension runs in")
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_usage_errors_match_argparse() {
     let usage = include_str!("../generated/cli.txt").split("\n\n").next().unwrap();
     for (argv, message) in [
