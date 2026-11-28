@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `--open-chrome` starts Chrome when no browser has the extension connected, and waits up to a minute for it to connect, so a Chrome that closed between two runs no longer ends the next one `unavailable` ([#1510](https://github.com/agent-labs-dev/fastbrowse/issues/1510)). A shell with no display still ends `unavailable`, since there is no window to open.
 - The published internal head-to-head adds two arms that drive their own browser on `openai/gpt-6-luna`: `agent-browser` (Codex) and `browser-use-1-luna` (browser-use 1.0.8). New publication candidates are schema 8; a schema 7 candidate still reads with the group's earlier five arms.
 
 ## [0.12.0] - 2026-11-26
