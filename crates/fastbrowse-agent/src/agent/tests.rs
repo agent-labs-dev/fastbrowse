@@ -351,6 +351,17 @@ async fn test_what_a_commit_sent_is_the_latest_fill_and_only_from_a_document_sti
     assert!(effect.contains("is not on it: 'final reply'"), "{effect}");
     let effect = run(Observation { viewport_text: "2 replies".into(), ..in_frame("two") }, submitted());
     assert!(!effect.contains("not been loaded"), "{effect}");
+    // A chosen option is sent as a typed value is.
+    let mut state = run_state();
+    state.history.extend([
+        HistoryEntry {
+            text: Some("Gold".into()),
+            form: Some(form()),
+            ..executed(Some(Operation::Select), Some("Tier"), true)
+        },
+        HistoryEntry { commit: Some(crate::policy::Commit::Taken), ..post() },
+    ]);
+    assert_eq!(super::finishing::sent_by_last(&state.history), vec!["Gold".to_string()]);
     // An unknown document identity proves nothing about what stayed loaded.
     let effect = run(page("2 replies", ""), None);
     assert!(!effect.contains("not been loaded"), "{effect}");

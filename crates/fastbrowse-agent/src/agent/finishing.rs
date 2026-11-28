@@ -662,8 +662,7 @@ fn walk(history: &[crate::policy::HistoryEntry], latest_sent: bool) -> (Vec<Sent
         };
         match (entry.operation, &entry.text, entry.target.as_deref()) {
             (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => {
-                let typed = (entry.operation == Some(Operation::Fill)).then(|| text.clone());
-                put(form, target, text::repr(text), true, typed)
+                put(form, target, text::repr(text), true, Some(text.clone()))
             }
             _ => entry.set.iter().for_each(|field| {
                 put(field.form.as_ref(), field.label.as_str(), field.value.clone(), field.was_target, None);
