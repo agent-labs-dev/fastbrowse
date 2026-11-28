@@ -2993,7 +2993,7 @@ async fn test_the_done_check_is_told_the_run_attaches_its_screenshot() {
         let asked = jev.5.lock().unwrap();
         let carried = asked.iter().find(|instructions| instructions.contains("been carried out?")).unwrap();
         assert_eq!(
-            carried.contains(&format!("been carried out? {}", crate::retrieval::SCREENSHOT_PICTURED)),
+            carried.contains(&format!("{} {}", super::acting::RELOADING_ACTS, crate::retrieval::SCREENSHOT_PICTURED)),
             told,
             "{intent:?}: {carried}"
         );
