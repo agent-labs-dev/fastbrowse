@@ -449,7 +449,7 @@ async fn test_a_link_that_redirected_still_leads_to_the_page_it_read() {
 
 #[tokio::test]
 async fn test_a_click_recorded_only_by_its_reply_is_told_the_text_it_added() {
-    let map = observation(&[]);
+    let map = Observation { document_key: "map".into(), ..observation(&[]) };
     let popup = Observation { viewport_text: "Null Island".into(), ..map.clone() };
     let step = "Open the popup of the marker drawn on the map.";
     for (sighted, told) in [(Some(step), "added the text: \"Null Island\""), (None, "only the page text changed")] {
