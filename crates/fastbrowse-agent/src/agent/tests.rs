@@ -6844,7 +6844,7 @@ async fn test_a_draft_rejected_again_unchanged_ends_the_run() {
 }
 
 /// Answers the sign-in wall question as given and every other question as the repair Jev does.
-struct WallJev(Arc<RepairComposeJev>, f64);
+struct WallJev(Arc<dyn DecisionClient>, f64);
 
 impl DecisionClient for WallJev {
     fn evaluate<'a>(
@@ -6875,7 +6875,7 @@ impl DecisionClient for WallJev {
 async fn test_a_rejected_answer_on_a_sign_in_wall_ends_needs_login() {
     let page = observation(&[]);
     for (probability, ended) in [(1.0, Status::NeedsLogin), (0.0, Status::Unverified)] {
-        let jev = Arc::new(WallJev(repair_jev(vec![(0.0, 1.0); 4]), probability));
+        let jev = Arc::new(WallJev(repair_jev(vec![(1.0, 0.0); 4]), probability));
         let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev, Arc::new(WrongRecord));
         let mut state = composition_repair_state();
         state.rewrites = super::finishing::MAX_REWRITES;
@@ -6883,6 +6883,57 @@ async fn test_a_rejected_answer_on_a_sign_in_wall_ends_needs_login() {
             panic!("the finish did not stop");
         };
         assert_eq!(stop.status, ended);
+        if ended == Status::NeedsLogin {
+            assert!(state.composition_partial.is_some(), "the validated partial is kept");
+        }
+    }
+}
+
+/// A text run with nothing to write finishes through the unanswered refusal, which a wall must end first.
+#[tokio::test]
+async fn test_an_unanswered_finish_on_a_sign_in_wall_ends_needs_login() {
+    let page = observation(&[]);
+    for (probability, ended) in [(1.0, Status::NeedsLogin), (0.0, Status::Unverified)] {
+        let screens =
+            Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false, false);
+        let jev = Arc::new(WallJev(Arc::new(IntentJev::new("text")), probability));
+        let agent = Agent::new(Arc::new(screens), jev, Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.recoveries = agent.config.stall.max_recoveries;
+        let stopped = match agent.finish(&mut state, &page, None, None).await {
+            Err(Flow::Stop(stop)) => stop.status,
+            other => panic!("finish gave {:?}", other.map(|r| r.map(|r| r.status))),
+        };
+        assert_eq!(stopped, ended);
+    }
+}
+
+/// A sign-in is filled with the secrets of its own frame's origin, so the stored secret decides by the credential
+/// field's origin and not the page's: an embedded sign-in with its own secret is a step, and a secret held only for the
+/// page leaves a sign-in embedded from another site a wall.
+#[tokio::test]
+async fn test_a_stored_secret_excuses_a_wall_by_its_credential_fields_origin() {
+    let secret = |origin: &str| {
+        fastbrowse_core::safety::ScopedSecrets::per_secret([(
+            "password".to_string(),
+            (fastbrowse_core::models::SecretValue::from("hunter2"), vec![origin.to_string()]),
+        )])
+    };
+    for (held, expected) in [("https://auth.test", Status::Unverified), ("https://shop.test", Status::NeedsLogin)] {
+        let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
+        password.input_type = Some("password".into());
+        password.frame_origin = Some("https://auth.test".into());
+        let page = at("https://shop.test/orders", std::slice::from_ref(&password));
+        let jev = Arc::new(WallJev(repair_jev(vec![(0.0, 1.0); 4]), 1.0));
+        let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev, Arc::new(WrongRecord))
+            .with_secrets(Some(Arc::new(secret(held))));
+        agent.seen().raw = Some(page.clone());
+        let mut state = composition_repair_state();
+        state.rewrites = super::finishing::MAX_REWRITES;
+        let Err(Flow::Stop(stop)) = agent.finish(&mut state, &page, None, None).await else {
+            panic!("the finish did not stop");
+        };
+        assert_eq!(stop.status, expected, "secret held for {held}");
     }
 }
 

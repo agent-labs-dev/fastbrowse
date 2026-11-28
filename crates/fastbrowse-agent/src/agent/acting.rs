@@ -1454,10 +1454,28 @@ impl Agent {
     /// finished ended unverified on its coverage check, so a caller keyed on needs_login offered no way to sign in
     /// (#1582). A site the run holds a stored sign-in for is no wall: signing in is a step the driver takes.
     pub(super) async fn signin_required(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
-        if !self.secret_names(&origin_of(&observation.url)).is_empty() {
+        if self.signs_in_with_secret(observation) {
             return Ok(false);
         }
         self.ask_page(state, observation, "signin_required", signin_required_question()).await
+    }
+
+    /// Whether a sign-in the page shows can be filled from a stored secret. A credential field takes the secrets of its
+    /// own frame's origin, as typing does, so a sign-in embedded from another site is judged by that site's secrets
+    /// and not the page's. A page with no credential field is judged by its own origin.
+    fn signs_in_with_secret(&self, observation: &Observation) -> bool {
+        let page = origin_of(&observation.url);
+        let origins: Vec<String> = observation
+            .controls
+            .iter()
+            .map(|control| self.raw_target(control))
+            .filter(asks_for_credentials)
+            .map(|control| control.frame_origin.unwrap_or_else(|| page.clone()))
+            .collect();
+        if origins.is_empty() {
+            return !self.secret_names(&page).is_empty();
+        }
+        origins.iter().any(|origin| !self.secret_names(origin).is_empty())
     }
 
     /// One yes-or-no question of Jev about the page as it stands, with the run's history as context.
