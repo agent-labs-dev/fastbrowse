@@ -498,6 +498,47 @@ def test_gh_distinguishes_a_gateway_timeout_from_an_http_rejection(
     assert type(raised.value) is expected
 
 
+def test_gh_reports_rate_limit_headers_and_the_wait_they_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = (
+        "HTTP/2.0 403 Forbidden\nX-Ratelimit-Resource: graphql\nX-Ratelimit-Remaining: 0\nX-Ratelimit-Reset: 1060\n\n{}"
+    )
+    result = subprocess.CompletedProcess(["gh"], 1, stdout=stdout, stderr="gh: API rate limit already exceeded\n")
+    monkeypatch.setattr(refill.subprocess, "run", lambda *args, **kwargs: result)
+    monkeypatch.setattr(refill.time, "time", lambda: 1000.0)
+    with pytest.raises(
+        refill.GitHubRateLimited, match=r"x-ratelimit-resource: graphql, x-ratelimit-remaining: 0"
+    ) as raised:
+        refill.gh("graphql", token="test")
+    assert raised.value.wait == 60
+
+
+def test_gh_names_the_headers_of_a_403_that_is_not_a_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = "HTTP/2.0 403 Forbidden\nX-Ratelimit-Remaining: 3909\n\n{}"
+    result = subprocess.CompletedProcess(["gh"], 1, stdout=stdout, stderr="gh: refused\n")
+    monkeypatch.setattr(refill.subprocess, "run", lambda *args, **kwargs: result)
+    with pytest.raises(RuntimeError, match=r"x-ratelimit-remaining: 3909") as raised:
+        refill.gh("graphql", token="test")
+    assert not isinstance(raised.value, refill.GitHubRateLimited)
+
+
+def test_commit_batch_waits_out_a_rate_limit_and_sends_the_same_commit_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[Any] = []
+    sleeps: list[float] = []
+
+    def gh(*args: str, token: str, body: Any = None) -> Any:
+        sent.append(body)
+        if len(sent) == 1:
+            raise refill.GitHubRateLimited("gh api graphql failed: rate limited", 30)
+        return {"data": {"createCommitOnBranch": {"commit": {"oid": "c" * 40, "url": "u"}}}}
+
+    monkeypatch.setattr(refill, "gh", gh)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    path = Path(__file__)
+    made = refill.commit_batch(REPO, "7", "b", "a" * 40, "feat: x\n\nbody", [path], "t", "c")
+    assert made == {"oid": "c" * 40, "url": "u"}
+    assert sleeps == [31] and sent[0] == sent[1]
+
+
 def test_gh_decodes_the_graphql_body_after_response_headers(monkeypatch: pytest.MonkeyPatch) -> None:
     result = subprocess.CompletedProcess(
         ["gh"], 0, stdout='HTTP/2.0 200 OK\nContent-Type: application/json\n\n{"data":{"commit":1}}', stderr=""

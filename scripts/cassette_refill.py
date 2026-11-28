@@ -396,6 +396,37 @@ class GitHubGatewayTimeout(RuntimeError):
     """GitHub's gateway returned HTTP 504, leaving the mutation outcome unknown."""
 
 
+class GitHubRateLimited(RuntimeError):
+    """GitHub refused a request for its rate limit, so the mutation was not applied. `wait` is the seconds until
+    the limit says to retry."""
+
+    def __init__(self, message: str, wait: float) -> None:
+        super().__init__(message)
+        self.wait = wait
+
+
+RATE_LIMIT_HEADERS = (
+    "x-ratelimit-resource",
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "retry-after",
+)
+RATE_LIMIT_ATTEMPTS = 3
+
+
+def rate_limit_wait(status: Sequence[str], headers: Mapping[str, str], now: float) -> float | None:
+    """Seconds GitHub's headers say to wait after a 403 or 429, or None when they do not describe a rate limit.
+    A secondary limit sends `retry-after`; an exhausted primary limit sends `x-ratelimit-remaining: 0` and the reset."""
+    if len(status) < 2 or status[1] not in ("403", "429"):
+        return None
+    if "retry-after" in headers:
+        return float(headers["retry-after"])
+    if headers.get("x-ratelimit-remaining") == "0":
+        return max(0.0, float(headers["x-ratelimit-reset"]) - now)
+    return None
+
+
 def gh(*args: str, token: str, body: Any = None) -> Any:
     """One GitHub REST or GraphQL call as `token`; the body, if any, goes in on stdin."""
     # A GraphQL mutation can commit even if the gateway loses its response. Read the HTTP status line
@@ -411,12 +442,22 @@ def gh(*args: str, token: str, body: Any = None) -> Any:
     )
     response = done.stdout
     status = []
+    limits: dict[str, str] = {}
     if with_status:
         headers, _, response = response.partition("\n\n")
-        status = headers.partition("\n")[0].split(maxsplit=2)
+        status_line, _, header_lines = headers.partition("\n")
+        status = status_line.split(maxsplit=2)
+        fields = (line.partition(":") for line in header_lines.splitlines())
+        limits = {name.strip().lower(): value.strip() for name, _, value in fields}
     if done.returncode != 0:
         stderr = done.stderr.strip()
         error = f"gh api {args[0]} failed: {stderr[:500]}"
+        shown = {name: limits[name] for name in RATE_LIMIT_HEADERS if name in limits}
+        if shown:
+            error += f" ({', '.join(f'{name}: {value}' for name, value in shown.items())})"
+        wait = rate_limit_wait(status, limits, time.time())
+        if wait is not None:
+            raise GitHubRateLimited(error, wait)
         if len(status) >= 2 and status[0].startswith("HTTP/") and status[1] == "504":
             raise GitHubGatewayTimeout(error)
         raise RuntimeError(error)
@@ -762,23 +803,29 @@ def commit_batch(
         {"path": f"bench/cassettes/{path.name}", "contents": base64.b64encode(path.read_bytes()).decode()}
         for path in batch
     ]
-    try:
-        made = gh(
-            "graphql",
-            token=commit_token,
-            body={
-                "query": COMMIT,
-                "variables": {
-                    "input": {
-                        "branch": {"repositoryNameWithOwner": repo, "branchName": branch},
-                        "message": {"headline": headline, "body": body},
-                        "expectedHeadOid": parent,
-                        "fileChanges": {"additions": additions},
-                    },
-                },
+    request = {
+        "query": COMMIT,
+        "variables": {
+            "input": {
+                "branch": {"repositoryNameWithOwner": repo, "branchName": branch},
+                "message": {"headline": headline, "body": body},
+                "expectedHeadOid": parent,
+                "fileChanges": {"additions": additions},
             },
-        )
-        return commit_response(made)
+        },
+    }
+    try:
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return commit_response(gh("graphql", token=commit_token, body=request))
+            except GitHubRateLimited as limited:
+                # A rate-limited request was refused before it ran, so waiting for the limit and sending it again
+                # cannot commit twice.
+                if attempt == RATE_LIMIT_ATTEMPTS:
+                    raise
+                time.sleep(limited.wait + 1)
     except (RuntimeError, json.JSONDecodeError) as error:
         try:
             recovered = recover_commit(
