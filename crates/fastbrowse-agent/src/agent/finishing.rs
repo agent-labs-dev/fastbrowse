@@ -617,41 +617,71 @@ pub(super) const UNSEEN: &str = "the run ended before the page showed whether it
 /// new value, checked or selected state, as a select that shows its choice only in its label does.
 pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports what it now holds";
 
-/// What a run's executed steps did to the page: each commit it sent, as [`COMMITTED`] says it, with what it entered in
-/// the commit's own form, then the fields left changed, the latest change to each, as [`CHANGED`] says it: text typed
-/// or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field it changed, as
-/// the page read it after the click. A commit sends only its own form, as the page reports it, so a field of another
-/// form stays among the changed fields. Without a form, only the committing control's own change is sent.
-pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
+/// The values the latest step, a commit, sent: what its form held as it went, each field's latest fill as
+/// `changed_fields` counts it (a fill a later fill replaced is not sent). A secret is its marker, not a value the page
+/// could show, so it is left out. Empty when the step is no commit, or reports no form, as `changed_fields` sends none
+/// of a form-less field either.
+pub(super) fn sent_by_last(history: &[crate::policy::HistoryEntry]) -> Vec<String> {
+    if !history.last().is_some_and(|last| last.form.is_some()) {
+        return Vec::new();
+    }
+    let (committed, _) = walk(history, true);
+    committed
+        .last()
+        .filter(|commit| commit.index + 1 == history.len())
+        .map(|commit| commit.typed.iter().filter(|text| *text != "<secret>").cloned().collect())
+        .unwrap_or_default()
+}
+
+/// A field's latest state: the step that directly targeted it, what it was left holding as recorded, and the text a
+/// fill typed.
+type Left = (Option<usize>, String, Option<String>);
+
+/// Each field of a form, as the steps left it.
+type Fields<'a> = IndexMap<(Option<&'a crate::policy::Form>, &'a str), Left>;
+
+/// A commit among the executed steps, and what it sent from its own form.
+struct Sent {
+    index: usize,
+    line: String,
+    typed: Vec<String>,
+}
+
+/// Each commit the executed steps sent, with what it entered in its form, and the fields left changed after them.
+/// `latest_sent` counts the latest step as a commit even before it records one: the step being noted is the commit.
+fn walk(history: &[crate::policy::HistoryEntry], latest_sent: bool) -> (Vec<Sent>, Fields<'_>) {
     // Each field's latest value, with its form and the step that directly targeted it.
-    let mut changed = IndexMap::new();
+    let mut changed = Fields::new();
     let mut committed = Vec::new();
     for (index, entry) in history.iter().enumerate().filter(|(_, entry)| entry.outcome == StepOutcome::Executed) {
         let form = entry.form.as_ref();
-        let mut put = |form, field, left, was_target: bool| {
+        let mut put = |form, field, left, was_target: bool, typed| {
             let key = (form, field);
             changed.shift_remove(&key);
-            changed.insert(key, (was_target.then_some(index), left));
+            changed.insert(key, (was_target.then_some(index), left, typed));
         };
         match (entry.operation, &entry.text, entry.target.as_deref()) {
             (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => {
-                put(form, target, text::repr(text), true)
+                put(form, target, text::repr(text), true, Some(text.clone()))
             }
             _ => entry.set.iter().for_each(|field| {
-                put(field.form.as_ref(), field.label.as_str(), field.value.clone(), field.was_target);
+                put(field.form.as_ref(), field.label.as_str(), field.value.clone(), field.was_target, None);
             }),
         }
-        let Some(commit) = entry.commit else { continue };
+        let last = latest_sent && index + 1 == history.len();
+        let Some(commit) = entry.commit.or(last.then_some(crate::policy::Commit::Taken)) else { continue };
         let step = match (entry.operation, entry.target.as_deref()) {
             (Some(operation), Some(target)) => format!("{operation} {}", text::repr(target)),
             (Some(operation), None) => operation.to_string(),
             (None, _) => "a step".to_string(),
         };
         let mut entered = Vec::new();
-        changed.retain(|(from, field), (by, left)| {
+        let mut typed = Vec::new();
+        changed.retain(|(from, field), (by, left, text)| {
             let sent = *from == form && (form.is_some() || *by == Some(index));
             if sent {
                 entered.push(format!("{field}: {left}"));
+                typed.extend(text.clone());
             }
             !sent
         });
@@ -662,11 +692,25 @@ pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<
         if !entered.is_empty() {
             line += &format!(", with {}", entered.join("; "));
         }
-        committed.push(line);
+        committed.push(Sent { index, line, typed });
     }
-    let committed = (!committed.is_empty()).then(|| format!("{COMMITTED}\n{}", committed.join("\n")));
+    (committed, changed)
+}
+
+/// What a run's executed steps did to the page: each commit it sent, as [`COMMITTED`] says it, with what it entered in
+/// the commit's own form, then the fields left changed, the latest change to each, as [`CHANGED`] says it: text typed
+/// or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field it changed, as
+/// the page read it after the click. A commit sends only its own form, as the page reports it, so a field of another
+/// form stays among the changed fields. Without a form, only the committing control's own change is sent.
+pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
+    let (committed, changed) = walk(history, false);
+    let committed = (!committed.is_empty()).then(|| {
+        let lines: Vec<&str> = committed.iter().map(|commit| commit.line.as_str()).collect();
+        format!("{COMMITTED}\n{}", lines.join("\n"))
+    });
     let changed = (!changed.is_empty()).then(|| {
-        let lines: Vec<String> = changed.iter().map(|((_, field), (_, left))| format!("- {field}: {left}")).collect();
+        let lines: Vec<String> =
+            changed.iter().map(|((_, field), (_, left, _))| format!("- {field}: {left}")).collect();
         format!("{CHANGED}\n{}", lines.join("\n"))
     });
     match (committed, changed) {

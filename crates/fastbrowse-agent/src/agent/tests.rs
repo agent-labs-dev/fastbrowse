@@ -269,6 +269,104 @@ fn executed(operation: Option<Operation>, target: Option<&str>, page_changed: bo
     HistoryEntry::new(operation, target, StepOutcome::Executed, page_changed)
 }
 
+/// A reply posted on a page the site redraws only on a load left the sent text absent, and Jev, told only what changed,
+/// chose done 5 times in 5 (#1458). The step's effect says the page was not loaded since, and what it sent is missing.
+#[tokio::test]
+async fn test_a_commit_that_stayed_on_its_page_says_the_page_was_not_loaded_since() {
+    let form = || crate::policy::Form { document: "d".into(), frame: None, id: "reply".into() };
+    let sent = |text: &str| HistoryEntry {
+        text: Some(text.into()),
+        form: Some(form()),
+        ..executed(Some(Operation::Fill), Some("Reply"), true)
+    };
+    let post = || HistoryEntry { form: Some(form()), ..executed(Some(Operation::Click), Some("Post"), true) };
+    let page = |text: &str, key: &str| Observation {
+        viewport_text: text.into(),
+        document_key: key.into(),
+        ..observation(&[button("Post")])
+    };
+    let run = |after: Observation, filled: HistoryEntry| {
+        let mut state = run_state();
+        state.history.extend([filled, post()]);
+        state.acted_from = Some(page("2 replies", "d"));
+        state.committing = true;
+        agent().note_effect(&mut state, &after);
+        state.history.last().unwrap().effect.clone().unwrap_or_default()
+    };
+    let effect = run(page("2 replies\nYour reply was posted.", "d"), sent("Glad it helps!"));
+    assert!(effect.contains("the page has not been loaded since this step sent"), "{effect}");
+    assert!(effect.contains("the text this step sent is not on it: 'Glad it helps!'"), "{effect}");
+    let effect = run(page("2 replies\nGlad  it\nhelps!", "d"), sent("Glad it helps!"));
+    assert!(effect.contains("the page has not been loaded since this step sent"), "{effect}");
+    assert!(!effect.contains("is not on it"), "{effect}");
+    let effect = run(page("2 replies\nYour reply was posted.", "d"), sent("<secret>"));
+    assert!(!effect.contains("is not on it"), "{effect}");
+    let effect = run(page("3 replies", "reloaded"), sent("Glad it helps!"));
+    assert!(!effect.contains("not been loaded"), "{effect}");
+}
+
+/// A fill the same field's later fill replaced was not what the commit sent, so it is not reported missing (the page
+/// shows only the final reply), and an iframe that navigated under an unchanged top-level document, or a document with
+/// no known identity, is a page that was loaded since.
+#[tokio::test]
+async fn test_what_a_commit_sent_is_the_latest_fill_and_only_from_a_document_still_loaded() {
+    let form = || crate::policy::Form { document: "d".into(), frame: None, id: "reply".into() };
+    let fill = |text: &str| HistoryEntry {
+        text: Some(text.into()),
+        form: Some(form()),
+        ..executed(Some(Operation::Fill), Some("Reply"), true)
+    };
+    let post = || HistoryEntry { form: Some(form()), ..executed(Some(Operation::Click), Some("Post"), true) };
+    let page = |text: &str, key: &str| Observation {
+        viewport_text: text.into(),
+        document_key: key.into(),
+        ..observation(&[button("Post")])
+    };
+    let run = |after: Observation, submitted: Option<crate::policy::Submitted>| {
+        let mut state = run_state();
+        state.history.extend([fill("first draft"), fill("final reply"), HistoryEntry { submitted, ..post() }]);
+        state.acted_from = Some(page("2 replies", "d"));
+        state.committing = true;
+        agent().note_effect(&mut state, &after);
+        state.history.last().unwrap().effect.clone().unwrap_or_default()
+    };
+    let effect = run(page("2 replies\nfinal reply", "d"), None);
+    assert!(effect.contains("not been loaded"), "{effect}");
+    assert!(!effect.contains("is not on it"), "{effect}");
+    let effect = run(page("2 replies", "d"), None);
+    assert!(effect.contains("is not on it: 'final reply'"), "{effect}");
+    assert!(!effect.contains("first draft"), "{effect}");
+    // A form in an iframe: only the same frame document is still loaded.
+    let inside = |document: &str| {
+        let mut control = Control::new("post", "button", "Post", [Operation::Click]);
+        control.frame_id = Some("frame".into());
+        control.form_id = Some("reply".into());
+        control.frame_document_key = Some(document.into());
+        control
+    };
+    let in_frame = |document: &str| Observation { document_key: "d".into(), ..observation(&[inside(document)]) };
+    let submitted = || crate::policy::Submitted::of(Operation::Click, &inside("one"), &in_frame("one"));
+    assert!(submitted().is_some());
+    let effect = run(Observation { viewport_text: "2 replies".into(), ..in_frame("one") }, submitted());
+    assert!(effect.contains("is not on it: 'final reply'"), "{effect}");
+    let effect = run(Observation { viewport_text: "2 replies".into(), ..in_frame("two") }, submitted());
+    assert!(!effect.contains("not been loaded"), "{effect}");
+    // A chosen option is sent as a typed value is.
+    let mut state = run_state();
+    state.history.extend([
+        HistoryEntry {
+            text: Some("Gold".into()),
+            form: Some(form()),
+            ..executed(Some(Operation::Select), Some("Tier"), true)
+        },
+        HistoryEntry { commit: Some(crate::policy::Commit::Taken), ..post() },
+    ]);
+    assert_eq!(super::finishing::sent_by_last(&state.history), vec!["Gold".to_string()]);
+    // An unknown document identity proves nothing about what stayed loaded.
+    let effect = run(page("2 replies", ""), None);
+    assert!(!effect.contains("not been loaded"), "{effect}");
+}
+
 #[tokio::test]
 async fn test_the_next_observation_records_what_an_action_did() {
     let field_before = field("Search elsewhere");
@@ -351,7 +449,7 @@ async fn test_a_link_that_redirected_still_leads_to_the_page_it_read() {
 
 #[tokio::test]
 async fn test_a_click_recorded_only_by_its_reply_is_told_the_text_it_added() {
-    let map = observation(&[]);
+    let map = Observation { document_key: "map".into(), ..observation(&[]) };
     let popup = Observation { viewport_text: "Null Island".into(), ..map.clone() };
     let step = "Open the popup of the marker drawn on the map.";
     for (sighted, told) in [(Some(step), "added the text: \"Null Island\""), (None, "only the page text changed")] {
@@ -374,7 +472,8 @@ async fn test_a_click_recorded_only_by_its_reply_is_told_the_text_it_added() {
     state.keeping = true;
     state.history.push(executed(Some(Operation::Click), Some("button"), true));
     agent().note_effect(&mut state, &popup);
-    assert_eq!(state.history[0].effect.as_deref(), Some("added the text: \"Null Island\""));
+    let effect = state.history[0].effect.clone().unwrap_or_default();
+    assert!(effect.starts_with("added the text: \"Null Island\"; the page has not been loaded since"), "{effect}");
     assert!(!state.keeping);
     // A control told apart only by its pixels is told the reply too: Leaflet's unnamed triangle swapped one popup for
     // another, which its controls alone read as one "Close popup" shown and one removed.

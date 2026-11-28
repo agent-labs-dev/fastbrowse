@@ -178,6 +178,22 @@ impl Submitted {
         })
     }
 
+    /// Whether the document this step submitted from is still the one observed: the top-level document and, for a
+    /// form in an iframe, that frame's own document, which can navigate under an unchanged top-level key. An identity
+    /// that is unknown is not a match.
+    pub fn stayed_in(&self, observation: &Observation) -> bool {
+        !self.document.1.is_empty()
+            && self.document.1 == observation.document_key
+            && self.frame_id.as_ref().is_none_or(|frame| {
+                self.frame_document_key.as_ref().is_some_and(|key| {
+                    observation
+                        .controls
+                        .iter()
+                        .any(|c| c.frame_id.as_ref() == Some(frame) && c.frame_document_key.as_ref() == Some(key))
+                })
+            })
+    }
+
     /// Which form this was beside the one `target` submits, and what it held.
     fn told(&self, target: Option<&Control>, observation: &Observation) -> String {
         // Back can reload the same form with fresh ids. Calling it different led to a duplicate submission.
