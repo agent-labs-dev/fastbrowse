@@ -112,12 +112,15 @@ jobs:
           git push --force "https://x-access-token:$GH_TOKEN@github.com/agent-labs-dev/fastbrowse-site.git" "HEAD:refs/heads/$branch"
           # REST for both calls: the GraphQL bucket this token shares runs dry first. The lookup is assigned before it
           # is tested so a failed request stops the step: `gh api` prints an error body to stdout.
+          body="Campaign \`$campaign\`, measured by $source. \`data/benchmark-$campaign.json\` is the candidate byte for byte (sha256 \`$digest\`), and the site computes every figure from its per-attempt rows. The group files under \`data/benchmarks/\` bind each card to it. Merging this pull request publishes the figures; it is the approval."
           open="$(gh api -X GET repos/agent-labs-dev/fastbrowse-site/pulls -f "head=agent-labs-dev:$branch" -f state=open --jq '.[0].number')"
           if [ -n "$open" ]; then
-            echo "the pull request for $branch is already open"
+            # A later run of the campaign force-pushes a rebuilt candidate, so the open PR's body must name it too:
+            # a stale digest left #207 naming bytes it no longer held.
+            gh api -X PATCH "repos/agent-labs-dev/fastbrowse-site/pulls/$open" -f "body=$body" --jq .html_url
             exit 0
           fi
           gh api -X POST repos/agent-labs-dev/fastbrowse-site/pulls -f base=main -f "head=$branch" \
             -f "title=feat(benchmarks): publish campaign $campaign" \
-            -f "body=Campaign \`$campaign\`, measured by $source. \`data/benchmark-$campaign.json\` is the candidate byte for byte (sha256 \`$digest\`), and the site computes every figure from its per-attempt rows. The group files under \`data/benchmarks/\` bind each card to it. Merging this pull request publishes the figures; it is the approval." \
+            -f "body=$body" \
             --jq .html_url
