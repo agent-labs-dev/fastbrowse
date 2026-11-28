@@ -456,6 +456,7 @@ def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
     response carries its cost; the key is computed from the body the agent sent.
     """
     client = httpx.Client(timeout=timeout)
+    api_key = api_key.strip()  # an HTTP server sees the key without its padding, so that is what it can echo back
 
     def forward(path: str, body: bytes) -> tuple[int, str, str]:
         mount = next(m for m in UPSTREAMS if path.startswith(m + "/"))
@@ -468,9 +469,43 @@ def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
             response = client.post(url, json=payload, headers={"Authorization": f"Bearer {api_key}"})
         except httpx.HTTPError as error:
             return 502, "application/json", json.dumps({"error": {"message": f"upstream: {type(error).__name__}"}})
-        return response.status_code, response.headers.get("content-type", "application/json"), response.text
+        # The key never reaches the cassette, the report or the agent, even if upstream echoes it back in an error.
+        text = response.text.replace(api_key, "[redacted]")
+        return response.status_code, response.headers.get("content-type", "application/json"), text
 
     return forward
+
+
+# A report line names why upstream refused; an error page (a gateway's HTML) is not a message, so it is cut here.
+# This is output for a person reading the refill report, not anything a model reads or writes.
+UPSTREAM_MESSAGE_REPORT_CHARS = 300
+
+
+@dataclass(frozen=True)
+class UpstreamError:
+    """A response upstream refused: its status and the provider's own message, which names the cause (a key limit
+    or an access refusal) that the status alone cannot."""
+
+    status: int
+    message: str
+
+    @classmethod
+    def of(cls, status: int, text: str) -> Self:
+        try:
+            body = json.loads(text)
+        except ValueError:
+            body = None
+        error = body.get("error") if isinstance(body, dict) else None
+        found = error.get("message") if isinstance(error, dict) else error
+        message = " ".join((found if isinstance(found, str) else text).split())
+        if len(message) > UPSTREAM_MESSAGE_REPORT_CHARS:
+            message = message[:UPSTREAM_MESSAGE_REPORT_CHARS] + "..."
+        return cls(status, message)
+
+
+def upstream_refusals(entry: dict[str, Any]) -> str:
+    """What a report entry says upstream refused: its statuses, then the providers' messages."""
+    return f"{entry['upstream_errors']}: {'; '.join(entry['upstream_messages'])}"
 
 
 class Proxy:
@@ -512,7 +547,7 @@ class Proxy:
         self.sent: list[dict[str, Any]] = []
         self.requests = 0
         self.forwarded = 0
-        self.upstream_errors: list[int] = []
+        self.upstream_errors: list[UpstreamError] = []
         self.budget_refusals = 0
         self._server: ThreadingHTTPServer | None = None
         self._fixture_origin: tuple[str, str] | None = None
@@ -601,7 +636,7 @@ class Proxy:
             # A provider's refusal (a 429, a 5xx) says nothing about what the model answers. Kept, a later replay
             # would serve it as the answer and never ask again (#1198); the agent still sees it, as it would live.
             with self._lock:
-                self.upstream_errors.append(status)
+                self.upstream_errors.append(UpstreamError.of(status, text))
             return status, content_type, text, 0.0
         exchange = Exchange(
             key=key,

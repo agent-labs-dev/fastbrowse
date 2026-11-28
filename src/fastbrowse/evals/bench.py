@@ -67,6 +67,7 @@ from fastbrowse.evals.replay import (
     Spend,
     openrouter_forward,
     translate_origin,
+    upstream_refusals,
 )
 from fastbrowse.evals.runner import LOCAL_LIMITS, MOCK_LIMITS, TASK_SECONDS
 from fastbrowse.evals.tasks import TASKS as LOCAL_TASKS
@@ -533,7 +534,8 @@ async def bench_task(
         | {"misses": sorted(f"{m.purpose} {m.model}" for m in proxy.misses)},
         "misses": [m.to_json() for m in proxy.misses],
         "forwarded": proxy.forwarded,
-        "upstream_errors": proxy.upstream_errors,
+        "upstream_errors": [error.status for error in proxy.upstream_errors],
+        "upstream_messages": [error.message for error in proxy.upstream_errors],
         "budget_refusals": proxy.budget_refusals,
         "unused_responses": proxy.unused(),
     }
@@ -665,9 +667,8 @@ async def run_suite(args: argparse.Namespace) -> int:
             if unpriced:
                 extra += f", {unpriced} unpriced, so the budget undercounts"
             if entry["upstream_errors"]:
-                extra += (
-                    f", upstream refused {len(entry['upstream_errors'])} (not recorded: {entry['upstream_errors']})"
-                )
+                refused = upstream_refusals(entry)
+                extra += f", upstream refused {len(entry['upstream_errors'])} (not recorded: {refused})"
             if entry["budget_refusals"]:
                 extra += f", {entry['budget_refusals']} not sent for the budget, so this pass is not kept"
         _print_row(entry, extra=extra)
