@@ -54,12 +54,13 @@ The mapping is:
 - `browser-use-cloud` with `bu-ultrafast` to `browser-use-ultrafast`;
 - other `browser-use-cloud` results to `browser-use`;
 - `browser-harness` to `browser-harness`;
-- `agent-browser` on its pinned model to `agent-browser`, a campaign arm that no publication group carries yet;
-- `browser-use-oss` to `browser-use-oss`.
+- `agent-browser` on its pinned model to `agent-browser`;
+- `browser-use-oss` to `browser-use-oss`;
+- `browser-use-1-luna` on `openai/gpt-6-luna` to `browser-use-1-luna`.
 
 `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` are diagnostic and have no public arm.
-Candidate schema 7, publication groups, site groups, task versions, and
-published history remain unchanged.
+Candidate schema 8 adds `agent-browser` and `browser-use-1-luna` to the `internal-hosted` head-to-head as
+partial arms; a schema 7 candidate still reads with that group's five arms. Published history is unchanged.
 
 Use `fastbrowse-evals browser catalog PATH` to export or check the public task
 catalog. Use `fastbrowse-evals browser publish-candidate RUN_DIR ...` to build a

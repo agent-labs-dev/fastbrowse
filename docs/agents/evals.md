@@ -92,12 +92,13 @@ The mapping preserves these public arm names:
 - `browser-use-cloud` with model `bu-ultrafast` to `browser-use-ultrafast`;
 - other `browser-use-cloud` results to `browser-use`;
 - `browser-harness` to `browser-harness`;
-- `agent-browser` on its pinned model to `agent-browser`, a campaign arm that no publication group carries yet;
+- `agent-browser` on its pinned model to `agent-browser`;
 - `browser-use-oss` to `browser-use-oss`;
-- `browser-use-1-luna` on `openai/gpt-6-luna` to `browser-use-1-luna`, a campaign arm that no publication group carries.
+- `browser-use-1-luna` on `openai/gpt-6-luna` to `browser-use-1-luna`.
 
-`fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` remain diagnostic. Candidate schema 7,
-`GROUPS`, site groups, and all files under `docs/results` stay as recorded.
+`fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` remain diagnostic. Candidate schema 8
+carries `agent-browser` and `browser-use-1-luna` as partial arms of `internal-hosted`; `GROUPS`, site groups and
+all files under `docs/results` stay as recorded.
 
 The official benchmark workflow uses the pinned Parallax's `bu-bench` and
 `online-mind2web` sources ([evals/PARALLAX.md](../../evals/PARALLAX.md)). It clones the pinned upstream judge for each source,

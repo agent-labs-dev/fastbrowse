@@ -33,7 +33,13 @@ def test_the_live_suite_names_the_head_to_head_group_and_its_exact_rows() -> Non
         "judge": "anthropic/claude-opus-5.5",
         "systems": {"fastbrowse": "fastbrowse", "browser-use": "browser-use"},
         "cost_not_reported": [],
-        "not_measured": ["browser-use-ultrafast", "browser-harness", "browser-use-oss"],
+        "not_measured": [
+            "browser-use-ultrafast",
+            "browser-harness",
+            "browser-use-oss",
+            "agent-browser",
+            "browser-use-1-luna",
+        ],
     }
 
 
@@ -46,7 +52,13 @@ def test_a_vendor_without_a_cost_or_without_rows_has_its_own_state() -> None:
     live = json.loads(group_files(content, FACTS, CURRENT)["data/benchmarks/live-suite.json"])["measured"]
     assert live["systems"] == {"fastbrowse": "fastbrowse", "browser-use": "browser-use"}
     assert live["cost_not_reported"] == ["browser-use"]
-    assert live["not_measured"] == ["browser-use-ultrafast", "browser-harness", "browser-use-oss"]
+    assert live["not_measured"] == [
+        "browser-use-ultrafast",
+        "browser-harness",
+        "browser-use-oss",
+        "agent-browser",
+        "browser-use-1-luna",
+    ]
 
 
 def test_a_fastbrowse_only_campaign_has_its_own_card_and_writes_it_the_first_time() -> None:
@@ -173,3 +185,49 @@ def test_republishing_a_campaign_keeps_the_previous_release_the_site_already_hol
     for held in (same, unmeasured):
         files = group_files(STAGED.read_bytes(), FACTS, {**CURRENT, "live-suite-fastbrowse": held})
         assert "data/previous-release.json" not in files
+
+
+def test_the_previous_release_rolls_only_when_the_solo_group_measures_another_release() -> None:
+    """A competitor refresh is a new campaign of the same release, and rolling then compared the release with itself."""
+    candidate = json.loads(STAGED.read_bytes())
+    candidate["campaign_id"] = "comparison-0.12.0"
+    group = next(g for g in candidate["groups"] if g["id"] == "internal-fastbrowse")
+    group["sources"] = [
+        {
+            "run_id": "r1",
+            "arm": "fastbrowse",
+            "agent_sha": group["agent_sha"],
+            "runner_sha": group["runner_sha"],
+            "measured_on": "2026-11-28",
+            "tasks": sorted({r["task"] for r in group["rows"] if r["arm"] == "fastbrowse"}),
+            "version": "fastbrowse==0.12.0",
+            "models": [],
+        }
+    ]
+    content = json.dumps(candidate).encode()
+
+    def rolled(campaign: str) -> bool:
+        held = {"measured": {"campaign_id": campaign}, "published": []}
+        return "data/previous-release.json" in group_files(content, FACTS, {**CURRENT, "live-suite-fastbrowse": held})
+
+    assert not rolled("release-0.12.0")
+    assert rolled("release-0.11.1")
+
+
+def test_each_measured_group_shows_the_day_its_own_runs_measured_it() -> None:
+    """A rerun of one group dates the campaign later; the other group's card keeps the day its runs were measured."""
+    candidate = json.loads(STAGED.read_bytes())
+    for group, day in (("internal-fastbrowse", "2026-11-26"), ("internal-hosted", "2026-11-27")):
+        held = next(g for g in candidate["groups"] if g["id"] == group)
+        run = {"agent_sha": held["agent_sha"], "runner_sha": held["runner_sha"]}
+        held["sources"] = []
+        for arm in sorted({r["arm"] for r in held["rows"]}):
+            tasks = sorted({r["task"] for r in held["rows"] if r["arm"] == arm})
+            held["sources"] += [
+                {**run, "arm": arm, "run_id": "r1", "measured_on": "2026-11-25", "tasks": tasks[:1]},
+                {**run, "arm": arm, "run_id": "r2", "measured_on": day, "tasks": tasks[1:]},
+            ]
+    files = group_files(json.dumps(candidate).encode(), FACTS.model_copy(update={"run_on": "2026-11-27"}), CURRENT)
+    names = ("live-suite", "live-suite-fastbrowse")
+    shown = {name: json.loads(files[f"data/benchmarks/{name}.json"])["measured"]["run_on"] for name in names}
+    assert shown == {"live-suite": "2026-11-27", "live-suite-fastbrowse": "2026-11-26"}

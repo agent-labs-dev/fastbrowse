@@ -12,6 +12,7 @@ import tempfile
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import asynccontextmanager
+from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import assert_never
 from urllib.parse import urlparse
@@ -110,6 +111,11 @@ class FastbrowseHarness(BrowserHarness):
         # One media type per content digest: an asset is named by its bytes, so the same bytes served under two
         # types are one asset, and the first type wins.
         self._asset_mimes: dict[str, str] = {}
+
+    async def version(self, box: object) -> str:
+        # Parallax's default reports the harness's name, so a published row could not say which fastbrowse release it
+        # measured, and the site guessed the release from the campaign's name (#1601).
+        return f"fastbrowse=={installed_version('fastbrowse')}"
 
     def bind_task(self, task: Task) -> None:
         super().bind_task(task)

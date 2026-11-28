@@ -89,10 +89,16 @@ def candidate() -> dict:
         "agent_sha": "a" * 40,
         "runner_sha": "b" * 40,
         "catalog_sha256": digest,
+        "catalog_sha": "c" * 40,
         "fixture": {"head_sha": "a" * 40, "run_id": 123, "passed": 108, "total": 108},
         "langfuse_verified": True,
         "groups": groups,
     }
+
+
+def _before_catalog_commit(candidate: dict) -> dict:
+    """`candidate` as a schema older than `CATALOG_COMMIT_SCHEMA` holds it: without `catalog_sha`."""
+    return {k: v for k, v in candidate.items() if k != "catalog_sha"}
 
 
 def test_complete_candidate_matches_the_catalog(candidate):
@@ -134,6 +140,7 @@ def test_internal_fastbrowse_group_covers_the_full_catalog_without_comparators(c
             for repeat in range(3)
         ],
     }
+    candidate.pop("catalog_sha")
     candidate.update(schema_version=3, groups=[group])
     check_catalog(Candidate.model_validate(candidate), CATALOG)
 
@@ -153,6 +160,7 @@ def test_internal_fastbrowse_group_rejects_a_missing_catalog_slot(candidate):
         "limits": ["Matched recorded limits"],
         "rows": [],
     }
+    candidate.pop("catalog_sha")
     candidate.update(schema_version=3, groups=[group])
     with pytest.raises(ValidationError):
         Candidate.model_validate(candidate)
@@ -213,7 +221,7 @@ def test_new_complete_suite_can_be_added_to_an_approved_campaign(candidate):
 
 def test_a_candidate_cannot_downgrade_the_schema(candidate):
     before = Candidate.model_validate(candidate)
-    older = {**candidate, "schema_version": 4, "groups": [candidate["groups"][2]]}
+    older = {**_before_catalog_commit(candidate), "schema_version": 4, "groups": [candidate["groups"][2]]}
     with pytest.raises(ValueError, match="cannot downgrade"):
         regressions(Candidate.model_validate(older), before)
 
@@ -287,7 +295,7 @@ def _official(candidate: dict, repeats: int, failed: int = 0) -> Candidate:
     group["rows"] = [{**template, "task": t, "repeat": r} for t in group["task_ids"] for r in range(repeats)]
     for row in group["rows"][repeats - failed : repeats]:
         row.update(status="stuck", completed=False)
-    return Candidate.model_validate({**candidate, "schema_version": 5, "groups": [group]})
+    return Candidate.model_validate({**_before_catalog_commit(candidate), "schema_version": 5, "groups": [group]})
 
 
 def test_official_completion_is_compared_as_a_rate_across_repeat_counts(candidate):
@@ -798,7 +806,9 @@ def _group(name: str, catalog: bytes) -> dict:
 
 
 def _published(candidate: dict, name: str, catalog: bytes) -> Candidate:
-    return Candidate.model_validate({**candidate, "schema_version": 4, "groups": [_group(name, catalog)]})
+    return Candidate.model_validate(
+        {**_before_catalog_commit(candidate), "schema_version": 4, "groups": [_group(name, catalog)]}
+    )
 
 
 def _transition(candidate: dict, monkeypatch, name: str, before: dict, after: dict, ids: list[str] | None = None):
@@ -815,7 +825,11 @@ def _transition(candidate: dict, monkeypatch, name: str, before: dict, after: di
         group["task_ids"] = ids
         group["rows"] = [{**template, "task": t, "repeat": r, "arm": a} for t in ids for r in range(3) for a in arms]
     published = _published(candidate, name, old)
-    regressions(Candidate.model_validate({**candidate, "schema_version": 4, "groups": [group]}), published, new)
+    regressions(
+        Candidate.model_validate({**_before_catalog_commit(candidate), "schema_version": 4, "groups": [group]}),
+        published,
+        new,
+    )
 
 
 @pytest.mark.parametrize("name", RETIRING)
@@ -865,7 +879,9 @@ def test_a_retirement_without_the_catalog_or_with_new_limits_is_a_protocol_chang
     with pytest.raises(ValueError, match="protocol changed"):
         _transition(candidate, monkeypatch, name, _before(catalog), {**catalog, "arms": {}})
     before = _published(candidate, name, _dump(_before(catalog)))
-    after = Candidate.model_validate({**candidate, "schema_version": 4, "groups": [_group(name, _dump(catalog))]})
+    after = Candidate.model_validate(
+        {**_before_catalog_commit(candidate), "schema_version": 4, "groups": [_group(name, _dump(catalog))]}
+    )
     with pytest.raises(ValueError, match="protocol changed"):
         regressions(after, before)
 
@@ -904,12 +920,14 @@ def test_internal_fastbrowse_both_retired_and_uncapped_publishes_only_as_a_proto
     )
     published = _published(candidate, "internal-fastbrowse", old_catalog)
     group = _group("internal-fastbrowse", CATALOG.read_bytes())
-    retired_only = Candidate.model_validate({**candidate, "schema_version": 4, "groups": [group]})
+    retired_only = Candidate.model_validate(
+        {**_before_catalog_commit(candidate), "schema_version": 4, "groups": [group]}
+    )
     regressions(retired_only, published, CATALOG.read_bytes())
     assert benchmarks.unapproved_changes(retired_only, published, CATALOG.read_bytes()) == set()
 
     group["limits"] = ["No arm capped"]
-    uncapped = {**candidate, "schema_version": 4, "groups": [group]}
+    uncapped = {**_before_catalog_commit(candidate), "schema_version": 4, "groups": [group]}
     parsed = Candidate.model_validate(uncapped)
     assert benchmarks.unapproved_changes(parsed, published, CATALOG.read_bytes()) == {"internal-fastbrowse"}
     with pytest.raises(ValueError, match="protocol changed: internal-fastbrowse"):
@@ -1010,7 +1028,7 @@ def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tm
         benchmarks, "catalog_at", lambda d: old_catalog if d == hashlib.sha256(old_catalog).hexdigest() else None
     )
     groups = [_group(name, old_catalog) for name in ("internal-backend", "internal-fastbrowse")]
-    published = Candidate.model_validate({**candidate, "schema_version": 4, "groups": groups})
+    published = Candidate.model_validate({**_before_catalog_commit(candidate), "schema_version": 4, "groups": groups})
     hosted, fastbrowse = (_group(name, CATALOG.read_bytes()) for name in ("internal-backend", "internal-fastbrowse"))
     hosted["limits"] = ["No arm capped"]
     baseline, staged, record = tmp_path / "benchmarks.json", tmp_path / "candidate.json", tmp_path / "record.json"
@@ -1019,7 +1037,9 @@ def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tm
     flags = ["--protocol-change", "--protocol-note", "Uncapped hosted", "--protocol-record", str(record)]
     monkeypatch.setattr(sys, "argv", [*argv, *flags])
 
-    staged.write_bytes(_bytes({**candidate, "schema_version": 4, "groups": [hosted, fastbrowse]}))
+    staged.write_bytes(
+        _bytes({**_before_catalog_commit(candidate), "schema_version": 4, "groups": [hosted, fastbrowse]})
+    )
     benchmarks.main()
     assert [g["id"] for g in json.loads(record.read_text())["groups"]] == ["internal-backend"]
 
@@ -1027,7 +1047,9 @@ def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tm
     for row in fastbrowse["rows"]:
         if row["task"] == task:
             row["score"] = 0.0
-    staged.write_bytes(_bytes({**candidate, "schema_version": 4, "groups": [hosted, fastbrowse]}))
+    staged.write_bytes(
+        _bytes({**_before_catalog_commit(candidate), "schema_version": 4, "groups": [hosted, fastbrowse]})
+    )
     with pytest.raises(ValueError, match=f"source-score regression: internal-fastbrowse/{task}"):
         benchmarks.main()
 
@@ -1036,7 +1058,7 @@ def test_check_diff_holds_a_changed_record_to_the_current_schema(candidate, tmp_
     from fastbrowse.evals.benchmarks import check_diff
 
     _repository(tmp_path, monkeypatch, {})
-    older = {**candidate, "schema_version": 4, "groups": [candidate["groups"][2]]}
+    older = {**_before_catalog_commit(candidate), "schema_version": 4, "groups": [candidate["groups"][2]]}
     (tmp_path / "docs/results/benchmark-candidate.json").write_bytes(_bytes(older))
     with pytest.raises(ValueError, match=f"must use schema {SCHEMA}"):
         check_diff("base", Path("catalog.json"))
@@ -1245,7 +1267,11 @@ def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...], task_ids: li
     group["rows"] = [
         {**template, "task": t, "repeat": r, "arm": a} for t in group["task_ids"] for r in range(3) for a in arms
     ]
-    return {**candidate, "schema_version": schema, "groups": [group]}
+    return {
+        **(candidate if schema >= benchmarks.CATALOG_COMMIT_SCHEMA else _before_catalog_commit(candidate)),
+        "schema_version": schema,
+        "groups": [group],
+    }
 
 
 @pytest.mark.parametrize(
@@ -1362,6 +1388,22 @@ def test_the_head_to_head_publishes_whichever_of_its_arms_ran(candidate, arms):
     assert len(group.task_ids) == 59
 
 
+def test_the_luna_arms_join_the_head_to_head_from_their_schema(candidate):
+    arms = ("fastbrowse", "agent-browser", "browser-use-1-luna")
+    parsed = Candidate.model_validate(_head_to_head(candidate, arms))
+    check_catalog(parsed, CATALOG)
+    assert parsed.groups[0].measured_arms(benchmarks.group_arms("internal-hosted", SCHEMA)) == arms
+    # Figures approved before keep the five arms they were measured with.
+    assert benchmarks.group_arms("internal-hosted", benchmarks.LUNA_ARMS_SCHEMA - 1) == benchmarks.HEAD_TO_HEAD
+    with pytest.raises(ValidationError, match="internal-hosted measures only"):
+        Candidate.model_validate(
+            {
+                **_before_catalog_commit(_head_to_head(candidate, arms)),
+                "schema_version": benchmarks.LUNA_ARMS_SCHEMA - 1,
+            }
+        )
+
+
 def test_an_arm_without_a_cost_has_none_on_every_row(candidate):
     data = _head_to_head(candidate, ("fastbrowse", "browser-use"))
     for row in data["groups"][0]["rows"]:
@@ -1416,6 +1458,7 @@ def test_an_official_suite_records_its_repeats_and_requires_fastbrowse(candidate
     group = candidate["groups"][2]
     group["repeats"] = repeats
     group["rows"] = [{**group["rows"][0], "task": t, "repeat": r} for t in group["task_ids"] for r in range(repeats)]
+    candidate.pop("catalog_sha")
     candidate.update(schema_version=5, groups=[group])
     assert Candidate.model_validate(candidate).groups[0].repeats == repeats
     for row in group["rows"]:
@@ -1451,6 +1494,7 @@ def test_a_group_never_mixes_timing_bases(candidate):
     """One rule for every arm: rows on two clocks are refused, whichever arm or reference they came from."""
     data = copy.deepcopy(candidate)
     del data["groups"][0]["rows"][-1]["timing_basis"]
+    data.pop("catalog_sha")
     data["schema_version"] = 5
     with pytest.raises(ValidationError, match="different bases"):
         Candidate.model_validate(data)
@@ -1465,7 +1509,7 @@ def test_a_new_schema_row_must_record_its_timing_basis(candidate):
         Candidate.model_validate(data)
     # The Ultrafast group's current pairing is schema 7's, so the older schema reads the other groups.
     older = [g for g in data["groups"] if g["id"] != "internal-ultrafast"]
-    Candidate.model_validate({**data, "schema_version": 5, "groups": older})
+    Candidate.model_validate({**_before_catalog_commit(data), "schema_version": 5, "groups": older})
 
 
 def test_only_the_session_ready_clock_can_be_published(candidate):
@@ -1629,3 +1673,21 @@ def test_physical_clock_rejects_partial_phase_totals(candidate, field):
     row[field] = 0.1
     with pytest.raises(ValidationError, match="without phase totals"):
         Row.model_validate(row)
+
+
+def test_a_candidate_names_its_catalog_commit_from_the_catalog_commit_schema(candidate):
+    """The site reads the catalog at `catalog_sha`, so a current candidate must name it and an older one cannot."""
+    without = _before_catalog_commit(candidate)
+    with pytest.raises(ValidationError, match="names its catalog commit"):
+        Candidate.model_validate(without)
+    older = {**candidate, "schema_version": benchmarks.CATALOG_COMMIT_SCHEMA - 1}
+    with pytest.raises(ValidationError, match="names its catalog commit"):
+        Candidate.model_validate(older)
+    with pytest.raises(ValidationError, match="names its catalog commit"):
+        Candidate.model_validate({**older, "catalog_sha": None})
+    with pytest.raises(ValidationError, match="names its catalog commit"):
+        Candidate.model_validate({**candidate, "catalog_sha": None})
+    # A candidate before schema 9 is written without the key, so it reads back.
+    data = [g for g in without["groups"] if g["id"] != "internal-ultrafast"]
+    parsed = Candidate.model_validate({**without, "schema_version": 5, "groups": data})
+    assert Candidate.model_validate_json(parsed.model_dump_json()) == parsed
