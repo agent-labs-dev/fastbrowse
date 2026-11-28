@@ -1351,12 +1351,14 @@ impl Agent {
             (
                 "acts".to_string(),
                 JsonValue::from(
-                    "The task asks for a step besides opening pages and finding, reading or reporting something, such as typing, choosing, submitting or signing in, even if only under some condition.",
+                    "The task asks for a step besides finding, reading or reporting something, such as typing, choosing, submitting, signing in, or reloading a page or opening it again because the task asks for that, even if only under some condition.",
                 ),
             ),
             (
                 "reads".to_string(),
-                JsonValue::from("The task asks only to open pages and find, read or report something."),
+                JsonValue::from(
+                    "The task asks only to find, read or report something, opening each page once as the way to get to it.",
+                ),
             ),
         ]);
         asked.push(("steps", "What does `task` ask to be done on a page?".into(), steps));
