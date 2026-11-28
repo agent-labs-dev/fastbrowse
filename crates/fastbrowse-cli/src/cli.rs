@@ -553,7 +553,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let browser_api_key = options::environment(&task, &settings)?;
     if args.open_chrome {
         let binary = settings.local_chrome().binary;
-        match crate::open_chrome::open(&context.environ, binary.as_deref()).await? {
+        match crate::open_chrome::open(&context.environ, binary.as_deref(), args.extension_browser.as_deref()).await? {
             Opened::Connected => context.streams.eprint("  opened Chrome; its extension connected"),
             Opened::NotConnected => context.streams.eprint("  opened Chrome; its extension did not connect"),
             Opened::Nothing => {}

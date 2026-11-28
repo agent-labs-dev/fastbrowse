@@ -227,6 +227,11 @@ fn host_listening(record: &HostRecord) -> std::io::Result<bool> {
     Ok(std::fs::read_dir(r"\\.\pipe\")?.flatten().any(|pipe| pipe.file_name() == name))
 }
 
+/// Whether `wanted` names the browser a record belongs to: its label, browser id or product, any case.
+pub fn names_host(record: &HostRecord, wanted: &str) -> bool {
+    [&record.label, &record.browser_id, &record.browser].iter().any(|name| name.eq_ignore_ascii_case(wanted))
+}
+
 /// The connected browser a run uses: the one named `wanted` (its label, browser id or product, any case), or the
 /// only one connected. Nothing connected is an outage, so the run ends `unavailable` before any spend.
 pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecord), BrowserError> {
@@ -234,9 +239,7 @@ pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecor
     let names = |hosts: &[(PathBuf, HostRecord)]| {
         hosts.iter().map(|(_, r)| format!("{} ({} {})", r.label, r.browser, r.version)).collect::<Vec<_>>().join(", ")
     };
-    let matches = |r: &HostRecord, wanted: &str| {
-        [&r.label, &r.browser_id, &r.browser].iter().any(|name| name.eq_ignore_ascii_case(wanted))
-    };
+    let matches = names_host;
     // A sandbox that hides the directory or refuses the socket is not fixed by reinstalling the extension.
     let refused = |reasons: Vec<&str>| {
         BrowserError::Unavailable(format!(
