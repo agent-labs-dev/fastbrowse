@@ -23,6 +23,15 @@ use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 /// three different ones back over 53 steps and 455 Jev calls ($0.39) before its time limit.
 pub(super) const MAX_REWRITES: i64 = 3;
 
+/// The stop of a run that finished on a page asking to sign in before it shows what the task asks for (#1582).
+fn sign_in_wall() -> Stop {
+    Stop::new(
+        Status::NeedsLogin,
+        "Finish/sign-in-wall",
+        "The page asks to sign in before it shows what the task asks for.",
+    )
+}
+
 impl Agent {
     /// Refuse a done for `reason`: spend a recovery on it and tell the driver why, in those words.
     async fn refuse(&self, state: &mut RunState, observation: &Observation, reason: &str, gives_up_as: Status) -> Step {
@@ -193,6 +202,9 @@ impl Agent {
             && !state.compose
             && matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage)
         {
+            if self.signin_required(state, observation).await? {
+                return Err(sign_in_wall().into());
+            }
             self.refuse(state, observation, UNANSWERED, Status::Unverified).await?;
             return Ok(None);
         }
@@ -484,7 +496,9 @@ impl Agent {
             // A few rewrites are free of the stall budget; past them the next rejection is the recovery that runs out.
             // Spent as a recovery, the first rejection used the run's one recovery, and the driver's corrected draft,
             // rejected again with no page read between, ended the run and handed the answer to a composer.
-            let exhausted = state.rewrites >= MAX_REWRITES;
+            // A wall is no answer to rewrite: the page the run stands on is what the caller has to act on (#1582).
+            let walled = self.signin_required(state, observation).await?;
+            let exhausted = !walled && state.rewrites >= MAX_REWRITES;
             if exhausted {
                 state.recoveries = state.recoveries.max(self.config.stall.max_recoveries);
             }
@@ -503,6 +517,10 @@ impl Agent {
             // Filled from the claims that passed, so a stop before the rewrite keeps no value the answer did not give.
             let passed = answered.as_ref().filter(|answer| !answer.claims.is_empty());
             state.schema_partial = self.schema_fields(state, output_schema, passed).await?;
+            // The stop carries the validated partial saved above, so a caller gets the wall and what was supported.
+            if walled {
+                return Err(sign_in_wall().into());
+            }
             if exhausted {
                 self.refuse(state, observation, &reason, Status::Unverified).await?;
             } else {
@@ -517,6 +535,9 @@ impl Agent {
             && answered.is_none()
             && matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage);
         if unanswered && recover_rejection {
+            if self.signin_required(state, observation).await? {
+                return Err(sign_in_wall().into());
+            }
             self.refuse(state, observation, UNANSWERED, Status::Unverified).await?;
             return Ok(None);
         }

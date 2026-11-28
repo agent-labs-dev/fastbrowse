@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A run that finishes on a sign-in page, such as an order history that redirected to the site's login, ends `needs_login` with its `wall` instead of `unverified` on a rejected answer. Jev is asked, on a rejected draft, whether the page asks to sign in before it shows what the task asks for; a site with a stored secret for the page's origin is not asked, since signing in is a step to take there ([#1582](https://github.com/agent-labs-dev/fastbrowse/issues/1582)).
 - The published internal head-to-head adds two arms that drive their own browser on `openai/gpt-6-luna`: `agent-browser` (Codex) and `browser-use-1-luna` (browser-use 1.0.8). New publication candidates are schema 8; a schema 7 candidate still reads with the group's earlier five arms.
 
 ## [0.12.0] - 2026-11-26
