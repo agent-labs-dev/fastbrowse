@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-28
+
+- A failed send at the start address stays with the start address alone, and a later successful send clears it. The start address took a failure the site sent elsewhere as its own, so a run whose later send succeeded could still end `unavailable` on the earlier one, and a page that answered 404 lost its own failure when another send went through.
 - The published internal head-to-head adds two arms that drive their own browser on `openai/gpt-6-luna`: `agent-browser` (Codex) and `browser-use-1-luna` (browser-use 1.0.8). New publication candidates are schema 8; a schema 7 candidate still reads with the group's earlier five arms.
 
 ## [0.12.0] - 2026-11-26
@@ -2366,7 +2369,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.12.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.12.1
 [0.12.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.12.0
 [0.11.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.2
 [0.11.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.1
