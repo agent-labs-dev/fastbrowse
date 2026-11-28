@@ -265,64 +265,70 @@ mod tests {
         assert_eq!(probe_version(&mut shell, Duration::from_secs(5)).await.unwrap(), "Chrome 123");
     }
 
+    /// The probe returns once the launcher exits, though the launcher's helper still holds its stdout, and the runtime
+    /// that ran the probe shuts down with that helper alive. Every step waits on an event: the launcher prints only
+    /// after its helper says it started, the probe thread reports only after its runtime is dropped, and the helper
+    /// holds a socket to this test that closes when it exits. The limits below only bound a hang; no step passes on
+    /// elapsed time.
     #[cfg(windows)]
     #[test]
     fn chrome_probe_runtime_exits_while_helper_holds_stdout() {
-        let fixture = tempfile::tempdir().unwrap();
-        let stop = fixture.path().join("stop");
-        let done = fixture.path().join("done");
-        let fixture_path = fixture.path().to_path_buf();
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
         let (send, receive) = std::sync::mpsc::channel();
         let probe = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             let mut command = Command::new(std::env::current_exe().unwrap());
             command
                 .args(["--ignored", "--exact", "doctor::tests::chrome_probe_windows_fixture", "--nocapture"])
-                .env("FASTBROWSE_DOCTOR_FIXTURE", &fixture_path)
+                .env("FASTBROWSE_DOCTOR_FIXTURE", address.to_string())
                 .env_remove("FASTBROWSE_DOCTOR_HELPER");
             let result = runtime.block_on(probe_version(&mut command, Duration::from_secs(60)));
             drop(runtime);
             send.send(result).unwrap();
         });
 
-        let result = receive.recv_timeout(Duration::from_secs(65));
-        std::fs::write(&stop, "").unwrap();
+        let result = receive.recv_timeout(Duration::from_secs(120)).expect("the probe and runtime exited");
         probe.join().unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(60);
-        while !done.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(done.exists(), "the fixture helper exited");
-        assert!(result.expect("the probe and runtime exited before the helper").unwrap().contains("Chrome 123"));
+        // Checked before waiting on the helper, which a failed probe may never have started.
+        let version = result.expect("the probe returned the launcher's output");
+        // The helper connected before the launcher printed, so it is waiting in the backlog and still holds stdout.
+        let (mut helper, _) = listener.accept().unwrap();
+        helper.write_all(b"stop").unwrap();
+        helper.set_read_timeout(Some(Duration::from_secs(120))).unwrap();
+        helper.read_to_end(&mut Vec::new()).expect("the helper exited");
+        // The launcher is a test binary run with --nocapture, so its own harness lines share the captured output.
+        assert!(version.contains("Chrome 123"), "{version}");
     }
 
     #[cfg(windows)]
     #[test]
     #[ignore = "launched by the Windows version-probe regression"]
     fn chrome_probe_windows_fixture() {
-        let directory = std::path::PathBuf::from(std::env::var_os("FASTBROWSE_DOCTOR_FIXTURE").unwrap());
+        use std::io::{BufRead, Read, Write};
+        let arguments = ["--ignored", "--exact", "doctor::tests::chrome_probe_windows_fixture", "--nocapture"];
         if std::env::var_os("FASTBROWSE_DOCTOR_HELPER").is_some() {
-            std::fs::write(directory.join("started"), "").unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(120);
-            while !directory.join("stop").exists() && std::time::Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            std::fs::write(directory.join("done"), "").unwrap();
+            let address = std::env::var("FASTBROWSE_DOCTOR_FIXTURE").unwrap();
+            let mut test = std::net::TcpStream::connect(address).unwrap();
+            // Tell the launcher this process runs and holds stdout, then hold it until the test says stop.
+            eprintln!("started");
+            let _ = test.read(&mut [0; 4]).unwrap();
+            // The socket closing as this process exits is the test's signal that the helper is gone.
         } else {
-            let helper = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--ignored", "--exact", "doctor::tests::chrome_probe_windows_fixture", "--nocapture"])
+            let mut helper = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(arguments)
                 .env("FASTBROWSE_DOCTOR_HELPER", "1")
+                .stderr(Stdio::piped())
                 .spawn()
                 .unwrap();
-            // Starting this test binary again took over five seconds on a Windows runner, so the helper wrote
-            // `done` after the test stopped waiting for it. The wrapper waits until the helper runs, then exits
-            // without closing the helper's copy of stdout, which is the case the probe must survive.
-            let deadline = std::time::Instant::now() + Duration::from_secs(60);
-            while !directory.join("started").exists() && std::time::Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            let mut started = String::new();
+            std::io::BufReader::new(helper.stderr.take().unwrap()).read_line(&mut started).unwrap();
+            assert_eq!(started.trim(), "started");
+            // Simulate a wrapper exiting without closing the helper's copy of stdout.
             drop(helper);
             println!("Chrome 123");
+            std::io::stdout().flush().unwrap();
         }
     }
 
