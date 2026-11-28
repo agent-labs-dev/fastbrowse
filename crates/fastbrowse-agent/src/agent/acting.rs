@@ -11,9 +11,9 @@ use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
     ALLOWED, DONE, EDITS_ALLOWED, EDITS_NONE, EDITS_REQUESTED_ONLY, HAPPENED, LATER_VALUES, MET, allowed_question,
     asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action,
-    downloads_question, edits_question, forbidden_question, happened_question, irreversible_question, lasting_question,
-    may_be_irreversible, met_question, origin_of, page_description, prohibits_question, requested_question,
-    resolve_secret, starts_download, values_question,
+    downloads_question, edit_fact, edits_question, forbidden_question, happened_question, irreversible_question,
+    lasting_question, may_be_irreversible, met_question, origin_of, page_description, prohibits_question,
+    requested_question, resolve_secret, starts_download, values_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -689,7 +689,22 @@ impl Agent {
         }
         let mut questions = IndexMap::new();
         if edits == Edits::RequestedOnly {
-            let action = control_action(decision.operation, control, None, &observation.controls);
+            let mut action = control_action(decision.operation, control, None, &observation.controls);
+            // The text as the driver wrote it, never as typed: a written address is masked, as the task Jev reads is,
+            // and both sides are redacted here too, as the question leaves the run. A fetched page reads no values, so
+            // it states no current value rather than an empty one.
+            let holds =
+                (!control.sensitive && !self.page.over_http()).then(|| control.value.as_deref().unwrap_or_default());
+            // A multiple select toggles the one option and keeps the others, so it would not come to hold only that
+            // option: it states nothing rather than a wipe.
+            let multiple = control.input_type.as_deref() == Some("select-multiple");
+            let fact = match (decision.operation, &decision.given) {
+                (Operation::Fill, Some(Given::Text(next))) => edit_fact(holds, next, false),
+                (Operation::Select, Some(Given::Text(next))) if !multiple => edit_fact(holds, next, false),
+                (Operation::Fill, Some(Given::Secret(name))) => edit_fact(holds, name, true),
+                _ => String::new(),
+            };
+            action.push_str(&self.redact(&fact));
             questions.insert("requested".to_string(), Question::Noul(requested_question(&action)));
         }
         self.gate_asked_edit(state, observation, decision, control, edits, questions).await
@@ -754,7 +769,17 @@ impl Agent {
         if !questions.is_empty() {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
             let context = json!({"task": self.caller_task(state), "page": {"origin": origin_of(&observation.url)}});
-            let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&context, &questions)).await?;
+            // Both texts of an edit to a long field go in whole, so they can pass what Jev takes: the edit is refused
+            // with that reason, never asked about a shortened text.
+            let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&context, &questions)).await
+            {
+                Ok(evaluation) => evaluation,
+                Err(DecisionError::InputTooLarge(_)) => {
+                    let why = "is too long to check against the task, and the task rules out other changes";
+                    return self.refuse_once(state, observation, decision, &describe(control), why).await;
+                }
+                Err(error) => return Err(error.into()),
+            };
             state.ledger.record([evaluation.cost])?;
             let noul = |key: &str| match evaluation.answers.get(key) {
                 Some(Answer::Noul(answer)) => Some(answer.probability),
