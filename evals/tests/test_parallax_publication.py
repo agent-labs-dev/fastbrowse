@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastbrowse.evals.benchmarks import check_catalog
+from fastbrowse.evals.benchmarks import Candidate, check_catalog
 from fastbrowse.evals.catalog import CATALOG, eligible
 from fastbrowse.evals.catalog import PATH as CATALOG_PATH
 from parallax.models import (
@@ -41,6 +41,10 @@ AGENT_SHA = "a" * 40
 RUNNER_SHA = "b" * 40
 
 
+CATALOG_SHA = "c" * 40
+"""The commit a test candidate names for its catalog: any commit, since only the site reads the catalog there."""
+
+
 def result(
     task_id: str,
     repeat: int,
@@ -49,6 +53,7 @@ def result(
     task_hash: str = "c" * 64,
     task_version: int = 1,
     details: dict[str, object] | None = None,
+    harness_version: str = "test",
 ) -> TrialResult:
     return TrialResult(
         key=f"{task_id}-{repeat}",
@@ -56,7 +61,7 @@ def result(
         task_version=task_version,
         task_hash=task_hash,
         harness="fastbrowse",
-        harness_version="test",
+        harness_version=harness_version,
         harness_kind=HarnessKind.OPEN,
         config_hash="d" * 64,
         model="test/model",
@@ -315,25 +320,29 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
         grading_policy="browser-evidence-v2",
     )
     (run / "manifest.json").write_text(manifest.model_dump_json() + "\n")
-    (run / "results.jsonl").write_text(
-        "".join(
-            result(
-                task.id,
-                repeat,
-                task_hash=source_task_map[task.id].hash,
-                task_version=source_task_map[task.id].meta.version,
-            ).model_dump_json()
-            + "\n"
-            for task in tasks
-            for repeat in range(3)
-        )
-    )
-    _support(run, manifest)
 
-    candidate = candidate_from_run(
-        run,
-        campaign_id="synthetic-campaign",
-    )
+    def measured(version: str) -> Candidate:
+        (run / "results.jsonl").write_text(
+            "".join(
+                result(
+                    task.id,
+                    repeat,
+                    task_hash=source_task_map[task.id].hash,
+                    task_version=source_task_map[task.id].meta.version,
+                    harness_version=version,
+                ).model_dump_json()
+                + "\n"
+                for task in tasks
+                for repeat in range(3)
+            )
+        )
+        return candidate_from_run(run, campaign_id="synthetic-campaign", catalog_sha=CATALOG_SHA)
+
+    _support(run, manifest)
+    # A run from before the harness reported its release recorded only the harness's name.
+    assert measured("fastbrowse").groups[0].sources[0].version is None
+    candidate = measured("fastbrowse==0.12.0")
+    assert candidate.groups[0].sources[0].version == "fastbrowse==0.12.0"
 
     assert len(candidate.groups) == 1
     assert len(candidate.groups[0].rows) == len(tasks) * 3
@@ -342,7 +351,7 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
     assert candidate.groups[0].sources[0].tasks == sorted(task.id for task in tasks)
     check_catalog(candidate, CATALOG_PATH)
 
-    duplicate = candidate_from_runs([run, run], campaign_id="synthetic-campaign")
+    duplicate = candidate_from_runs([run, run], campaign_id="synthetic-campaign", catalog_sha=CATALOG_SHA)
     assert len(duplicate.groups[0].rows) == len(tasks) * 3
 
     out = tmp_path / "candidate.json"
@@ -352,13 +361,16 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
                 str(run),
                 "--campaign-id",
                 "synthetic-campaign",
+                "--catalog-sha",
+                CATALOG_SHA,
                 "--out",
                 str(out),
             ]
         )
         == 0
     )
-    assert out.read_text().startswith('{\n  "schema_version": 7')
+    written = json.loads(out.read_text())
+    assert (written["schema_version"], written["catalog_sha"]) == (9, CATALOG_SHA)
 
 
 def test_official_run_uses_upstream_score_and_execution_completion(tmp_path: Path) -> None:
@@ -398,7 +410,7 @@ def test_official_run_uses_upstream_score_and_execution_completion(tmp_path: Pat
     )
     _support(run, manifest)
 
-    candidate = candidate_from_run(run, campaign_id="official-campaign")
+    candidate = candidate_from_run(run, campaign_id="official-campaign", catalog_sha=CATALOG_SHA)
 
     assert len(candidate.groups) == 1
     group = candidate.groups[0]
@@ -450,7 +462,7 @@ def test_official_groups_use_their_own_selected_task_ids(tmp_path: Path) -> None
     bu_run = write_official_run("bu-bench", "bu-bench-upstream-v1", 200)
     mind2web_run = write_official_run("online-mind2web", "online-mind2web-upstream-v1", 300)
 
-    candidate = candidate_from_runs([bu_run, mind2web_run], campaign_id="official-campaign")
+    candidate = candidate_from_runs([bu_run, mind2web_run], campaign_id="official-campaign", catalog_sha=CATALOG_SHA)
 
     groups = {group.id: group for group in candidate.groups}
     assert len(groups["bu-bench"].task_ids) == 200
@@ -458,9 +470,12 @@ def test_official_groups_use_their_own_selected_task_ids(tmp_path: Path) -> None
     assert set(groups["bu-bench"].task_ids).isdisjoint(groups["online-mind2web"].task_ids)
 
 
-def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_path: Path) -> None:
+@pytest.mark.parametrize("skipped", [False, True], ids=["not-applicable-rows", "skipped"])
+def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_path: Path, skipped: bool) -> None:
     """The group names its newest source's build, the candidate its newest fastbrowse run's, and the competitor's own
-    status words ("done") never reach fastbrowse's status vocabulary."""
+    status words ("done") never reach fastbrowse's status vocabulary. A task the catalog excludes the arm from is
+    excluded with the catalog's reason whether the run recorded it as not applicable or, as a campaign does, skipped
+    it and left no row."""
     source_task_map = {task.id: task for task in source_tasks(source_names=("fastbrowse",))}
     task_ids = sorted(_required_task_ids("internal-hosted"))
 
@@ -468,6 +483,7 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
 
     def parallax_run(name: str, day: int, harness: str, model: str, status: str, **support: str) -> Path:
         own = {task_id for task_id in task_ids if eligible(harness, catalog[task_id])}
+        ran = sorted(own) if skipped else task_ids
         run = tmp_path / name
         run.mkdir()
         manifest = RunManifest(
@@ -476,7 +492,7 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
             parallax_version="2.0.0.dev29",
             harnesses=(),
             models=(model,),
-            tasks=tuple((task_id, source_task_map[task_id].hash) for task_id in task_ids),
+            tasks=tuple((task_id, source_task_map[task_id].hash) for task_id in ran),
             repeats=3,
             judge=("test/judge",),
             isolation=Isolation.HOST,
@@ -506,7 +522,7 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
                 )
                 .model_dump_json()
                 + "\n"
-                for task_id in task_ids
+                for task_id in ran
                 for repeat in range(3)
             )
         )
@@ -518,7 +534,7 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
         "oss-run", 16, "browser-use-oss", "bu-fast", "done", agent_sha="c" * 40, runner_sha="d" * 40
     )
 
-    candidate = candidate_from_runs([fastbrowse, competitor], campaign_id="mixed-builds")
+    candidate = candidate_from_runs([fastbrowse, competitor], campaign_id="mixed-builds", catalog_sha=CATALOG_SHA)
 
     (group,) = candidate.groups
     assert (candidate.agent_sha, candidate.runner_sha) == (AGENT_SHA, RUNNER_SHA)
@@ -579,9 +595,9 @@ def test_a_changed_task_drops_only_its_own_earlier_rows(tmp_path: Path) -> None:
     earlier = fastbrowse_run("earlier", 14, [task.id for task in tasks], stale=changed)
     # The changed task's earlier rows no longer count, so the run alone leaves its slots unmeasured.
     with pytest.raises(ValueError, match=r"slots with no row \(first: "):
-        candidate_from_runs([earlier], campaign_id="changed-task")
+        candidate_from_runs([earlier], campaign_id="changed-task", catalog_sha=CATALOG_SHA)
 
     rerun = fastbrowse_run("rerun", 16, [changed])
-    candidate = candidate_from_runs([earlier, rerun], campaign_id="changed-task")
+    candidate = candidate_from_runs([earlier, rerun], campaign_id="changed-task", catalog_sha=CATALOG_SHA)
     assert len(candidate.groups[0].rows) == len(tasks) * 3
     check_catalog(candidate, CATALOG_PATH)

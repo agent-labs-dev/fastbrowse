@@ -34,6 +34,8 @@ SYSTEMS = {
     "jev-ultrafast": "jev-ultrafast",  # figures approved before schema 7 carry it
     "browser-harness": "browser-harness",
     "browser-use-oss": "browser-use-oss",
+    "agent-browser": "agent-browser",
+    "browser-use-1-luna": "browser-use-1-luna",
 }
 """The site system each candidate arm is shown as (`SYSTEM_ARMS` in the site's benchmark-groups.ts)."""
 RETIRED = frozenset({"jev-ultrafast"})
@@ -71,10 +73,14 @@ class RunFacts(BaseModel):
     judge: str = Field(min_length=1)
     groups: dict[SiteGroup, GroupFacts] = {}
 
-    def shown(self, group: SiteGroup) -> dict[str, str]:
+    def shown(self, group: SiteGroup, source: Group) -> dict[str, str]:
         own = self.groups.get(group)
+        # A group shows the day its own runs measured it: the campaign's newest date can belong to another group, and
+        # a card then names a day its results were not measured on. A group from before sources recorded dates has
+        # only the campaign's.
+        measured = max((s.measured_on for s in source.sources), default=self.run_on)
         return {
-            "run_on": own.run_on if own else self.run_on,
+            "run_on": own.run_on if own else measured,
             "harness": self.harness,
             "judge": own.judge if own else self.judge,
         }
@@ -97,6 +103,27 @@ def setups(group: Group, arms: tuple[str, ...]) -> dict[str, dict[str, object]]:
     return recorded
 
 
+RELEASE_CAMPAIGN = re.compile(r"^release-(\d+\.\d+\.\d+)$")
+"""How a group file from before sources recorded fastbrowse's version names its release (the site's own pattern)."""
+
+
+def _release(measured: dict) -> str:
+    """The fastbrowse release a measured solo group file shows: its recorded version, else its release campaign's,
+    else the campaign itself, which then counts as a release of its own."""
+    if version := (measured.get("setups") or {}).get("fastbrowse", {}).get("version"):
+        return version
+    named = RELEASE_CAMPAIGN.fullmatch(measured["campaign_id"])
+    return f"fastbrowse=={named[1]}" if named else measured["campaign_id"]
+
+
+def _candidate_release(candidate: Candidate) -> str:
+    solo = next((g for g in candidate.groups if g.id in SOURCES["live-suite-fastbrowse"]), None)
+    versions = {s.version for s in (solo.sources if solo else ()) if s.arm == "fastbrowse" and s.version}
+    if len(versions) == 1:
+        return next(iter(versions))
+    return _release({"campaign_id": candidate.campaign_id})
+
+
 def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> dict[str, bytes]:
     """Every site file this candidate changes, by path under the site root."""
     candidate = Candidate.model_validate_json(content)
@@ -107,9 +134,11 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
     held = {group.id: group for group in candidate.groups}
     files = {rows: content}
     # The site compares a release with the one before it, from the solo group file as that release left it. This
-    # candidate replaces the file, so an earlier campaign's copy is kept before it goes; republishing one keeps it.
+    # candidate replaces the file, so an earlier release's copy is kept before it goes. Another campaign of the same
+    # release, such as a competitor refresh, keeps it: rolling then compared the release with itself (#1601).
     solo = current.get("live-suite-fastbrowse", {})
-    if (solo.get("measured") or {}).get("campaign_id") not in (None, candidate.campaign_id):
+    measured = solo.get("measured")
+    if measured is not None and _release(measured) != _candidate_release(candidate):
         files["data/previous-release.json"] = (json.dumps(solo, indent=2) + "\n").encode()
     for site_group, sources in SOURCES.items():
         source = next((held[g] for g in sources if g in held), None)
@@ -146,7 +175,7 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
                 "agent_sha": candidate.agent_sha,
                 "candidate_sha256": digest,
                 "rows": rows,
-                **facts.shown(site_group),
+                **facts.shown(site_group, source),
                 "systems": {SYSTEMS[arm]: arm for arm in arms},
                 "cost_not_reported": [SYSTEMS[arm] for arm in arms if arm in unpriced],
                 "not_measured": [system for arm, system in SYSTEMS.items() if arm not in arms and arm not in RETIRED],

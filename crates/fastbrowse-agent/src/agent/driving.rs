@@ -983,28 +983,34 @@ impl Agent {
             && state.history.last().is_some_and(|last| last.outcome == StepOutcome::Executed)
             && state.acted_from.as_ref().is_some_and(|before| before.document_key != observation.document_key);
         if let Some(status) = observation.response_status {
-            if status < 400 && state.start_failure.as_ref().is_some_and(|failure| failure.url == observation.url) {
+            // A failed send stands until a later commit's reply, and a reload of the start address is none.
+            if status < 400
+                && state.start_failure.as_ref().is_some_and(|failure| failure.url == observation.url && !failure.sent)
+            {
                 state.start_failure = None;
             }
             if status >= 400 {
                 // A 4xx is the site refusing the request, so nothing went through, and the run can correct and send it
                 // again (an invalid postcode); only a 5xx leaves unknown whether the server acted on it.
                 let sent = replied && status >= 500;
-                match &state.site_failure {
-                    // Any later failure says nothing of whether a failed send went through, and replacing it let a page
-                    // left clear it, so the driver sent it again.
-                    Some(failure) if failure.sent && !sent => {}
-                    current => {
-                        let since = current
-                            .as_ref()
-                            .filter(|failure| failure.url == observation.url)
-                            .map_or(state.steps.len(), |failure| failure.since);
-                        state.site_failure =
-                            Some(SiteFailure { sent, ..SiteFailure::http(&observation.url, status, since) });
-                    }
+                let steps = state.steps.len();
+                let failure = |held: &Option<SiteFailure>| {
+                    let since = held
+                        .as_ref()
+                        .filter(|failure| failure.url == observation.url)
+                        .map_or(steps, |failure| failure.since);
+                    SiteFailure { sent, ..SiteFailure::http(&observation.url, status, since) }
+                };
+                // Any later failure says nothing of whether a failed send went through, and replacing it let a page
+                // left clear it, so the driver sent it again.
+                let keeps = |held: &Option<SiteFailure>| held.as_ref().is_some_and(|held| held.sent && !sent);
+                // The start address keeps the failure its own page answered with: copying the run's failure instead
+                // gave it a failed send made elsewhere, which a later commit then cleared along with the start's 404.
+                if state.first_url.as_deref() == Some(observation.url.as_str()) && !keeps(&state.start_failure) {
+                    state.start_failure = Some(failure(&state.start_failure));
                 }
-                if state.first_url.as_deref() == Some(observation.url.as_str()) {
-                    state.start_failure = state.site_failure.clone();
+                if !keeps(&state.site_failure) {
+                    state.site_failure = Some(failure(&state.site_failure));
                 }
             } else if status >= 200
                 && state.site_failure.as_ref().is_some_and(|failure| {
@@ -1016,11 +1022,10 @@ impl Agent {
                 })
             {
                 // A page that loads can still report the site failed; only Jev, reading it, clears that. A failed send
-                // is cleared only by a later commit's reply, wherever it lands, and with it the copy kept for the start
-                // address, which recovery would otherwise end the run on.
-                if state.site_failure.as_ref().is_some_and(|failure| failure.sent)
-                    && state.start_failure == state.site_failure
-                {
+                // is cleared only by a later commit's reply, wherever it lands, and with it any failed send the start
+                // address holds: a second failed send elsewhere replaced the run's, the start kept the first, and
+                // recovery ended the run on it.
+                if replied && state.start_failure.as_ref().is_some_and(|failure| failure.sent) {
                     state.start_failure = None;
                 }
                 state.site_failure = None;

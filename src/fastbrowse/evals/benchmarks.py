@@ -61,6 +61,8 @@ Arm = Literal[
     "jev-ultrafast",
     "browser-harness",
     "browser-use-oss",
+    "agent-browser",
+    "browser-use-1-luna",
 ]
 FASTBROWSE_ARMS: frozenset[Arm] = frozenset({"fastbrowse", "fastbrowse-pool"})
 RESULTS = Path("docs/results")
@@ -252,6 +254,9 @@ HEAD_TO_HEAD: tuple[Arm, ...] = (
     "browser-harness",
     "browser-use-oss",
 )
+"""The head-to-head's arms before `LUNA_ARMS_SCHEMA`."""
+LUNA_ARMS: tuple[Arm, ...] = ("agent-browser", "browser-use-1-luna")
+"""The head-to-head's arms on openai/gpt-6-luna that drive their own browser tool, from `LUNA_ARMS_SCHEMA`."""
 OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use")
 COVERAGE: dict[GroupId, Coverage] = {
     "internal-fastbrowse": Coverage(frozenset({53, 54, 59, 60}), 3, "task-success", ("fastbrowse",)),
@@ -259,10 +264,10 @@ COVERAGE: dict[GroupId, Coverage] = {
         frozenset({46, 47, 52, 53, 59}),
         3,
         "task-success",
-        HEAD_TO_HEAD,
+        (*HEAD_TO_HEAD, *LUNA_ARMS),
         (),
         # jev-ultrafast stays partial for the figures approved before BU_ULTRAFAST_SCHEMA (`group_arms`).
-        ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness", "browser-use-oss"),
+        ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness", "browser-use-oss", *LUNA_ARMS),
     ),
     "internal-ultrafast": Coverage(
         frozenset({6, 47, 52, 58}), 3, "task-success", ("fastbrowse-pool", "browser-use-ultrafast")
@@ -279,6 +284,9 @@ BU_ULTRAFAST_SCHEMA = 7
 """From this schema the Ultrafast comparison is fastbrowse on its own browser pool against the hosted Browser Use
 agent on bu-ultrafast (`browser-use-ultrafast`), and no group measures `jev-ultrafast`, which the harness no longer
 runs. Figures approved under an older schema keep the pairing they were measured under."""
+LUNA_ARMS_SCHEMA = 8
+"""From this schema the head-to-head also publishes `LUNA_ARMS`. Figures approved under an older schema keep the five
+arms they were published with."""
 
 
 def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
@@ -289,6 +297,8 @@ def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
         return ("fastbrowse-pool", "jev-ultrafast")
     if group == "internal-hosted" and schema_version < BU_ULTRAFAST_SCHEMA:
         return (*HEAD_TO_HEAD, "jev-ultrafast")
+    if group == "internal-hosted" and schema_version < LUNA_ARMS_SCHEMA:
+        return HEAD_TO_HEAD
     return COVERAGE[group].arms
 
 
@@ -479,12 +489,16 @@ class ExportReceipt(PublicModel):
     trace_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")]
 
 
-SCHEMA = 7
+SCHEMA = 9
 """The schema a new or changed record is written under. Older schemas still read: Parallax writes schema 2 for a
 candidate of official suites alone, and the approved published figures and the staged candidate were written under
 earlier ones, where an approval binds the bytes it approved."""
 TIMED_SCHEMA = 6
 """From this schema every row records its timing basis."""
+CATALOG_COMMIT_SCHEMA = 9
+"""From this schema a candidate names `catalog_sha`, the fastbrowse commit its catalog was read at. The catalog is the
+harness's, which can be newer than the measured build (an arm the harness gained after a release), so the site reads it
+there, not at `agent_sha`."""
 
 
 class CompetitorReference(PublicModel):
@@ -510,21 +524,32 @@ REFERENCE_PATH = "docs/results/competitor-reference.json"
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[2, 3, 4, 5, 6, 7]
+    schema_version: Literal[2, 3, 4, 5, 6, 7, 8, 9]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
     catalog_sha256: Digest
+    catalog_sha: Sha | None = None
     fixture: Fixture | None = None
     export: ExportReceipt | None = None
     langfuse_verified: Literal[True]
     groups: list[Group]
+
+    @model_serializer(mode="wrap")
+    def without_unnamed_catalog_commit(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A candidate before schema 9 is written without `catalog_sha`, so it reads back: the key is refused there
+        even as null."""
+        return _without_empty(handler(self), ("catalog_sha",))
 
     @model_validator(mode="after")
     def suites(self) -> Self:
         ids = {g.id for g in self.groups}
         if not self.groups or len(ids) != len(self.groups):
             raise ValueError("at least one complete, unique benchmark group is required")
+        # Presence, not value: the site refuses the key before schema 9 even when it holds null.
+        named = "catalog_sha" in self.model_fields_set
+        if named != (self.schema_version >= CATALOG_COMMIT_SCHEMA) or (named and self.catalog_sha is None):
+            raise ValueError(f"a candidate names its catalog commit from schema {CATALOG_COMMIT_SCHEMA}, and only then")
         for group in self.groups:
             group.check_slots(group_arms(group.id, self.schema_version))
             if self.schema_version >= TIMED_SCHEMA and any(r.timing_basis is None for r in group.rows):

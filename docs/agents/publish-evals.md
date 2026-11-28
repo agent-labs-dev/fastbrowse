@@ -30,6 +30,11 @@ Parallax writes `manifest.json`, `results.jsonl`, and private trial artifacts.
 Retry settings cover environment interruptions. The campaign keeps the complete
 run directory as the source for publication.
 
+A campaign that refreshes competitors for a release already published measures the solo group again under its own
+campaign id (`head_to_head_arms` keeps the head-to-head group to the arms it refreshes plus `fastbrowse`), since the
+site reads one candidate for every group. Each fastbrowse source records the release it ran (`fastbrowse==X.Y.Z`), and
+publication keeps `data/previous-release.json` until the solo group measures a different release.
+
 A narrowed rerun can use the workflow's `only` input for affected task ids. `candidate_only`
 skips new trials and builds from the campaign's downloaded run artifacts. The
 stage selects, for each task and repeat, the newest run that measured it in full.
@@ -47,9 +52,9 @@ Parallax supplies `browser-use-cloud`, `browser-use-oss`, `browser-harness`
 | `browser-use-cloud` with model `bu-ultrafast` | `browser-use-ultrafast` |
 | other `browser-use-cloud` results | `browser-use` |
 | `browser-harness` | `browser-harness` |
-| `agent-browser` on its pinned model | `agent-browser`, carried by no publication group yet |
+| `agent-browser` on its pinned model | `agent-browser`, a partial arm of `internal-hosted` |
 | `browser-use-oss` | `browser-use-oss` |
-| `browser-use-1-luna` on `openai/gpt-6-luna` | `browser-use-1-luna`, carried by no publication group |
+| `browser-use-1-luna` on `openai/gpt-6-luna` | `browser-use-1-luna`, a partial arm of `internal-hosted` |
 | `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` | diagnostic only |
 
 Every task record is world-less, uses `Area.BROWSER`, requires browser
@@ -60,20 +65,26 @@ provides the agent integration and final page observation.
 
 ## Build the candidate
 
-The adapter reads one or more Parallax run directories:
+The adapter reads one or more Parallax run directories. It runs on the harness's own fastbrowse, not
+the measured build: the candidate schema and catalog are the harness's, and each run's provenance names
+the build it measured. `--catalog-sha` names the commit of that harness checkout: the candidate records
+it as `catalog_sha`, and the site reads the catalog there to check `catalog_sha256`.
 
 ```sh
 uv run fastbrowse-evals browser publish-candidate \
   runs/internal-fastbrowse runs/internal-hosted \
   --campaign-id release-0.11.0 \
+  --catalog-sha "$(git rev-parse HEAD)" \
   --out benchmark-candidate.json
 ```
 
 `TrialResult` becomes one public `Row`. Physical attempts are retained in
 `physical_runs`, with their typed timing, usage, and costs summed on the row.
 The adapter then runs `fastbrowse.evals.benchmarks.check_catalog` before it
-writes the candidate. A candidate uses schema 7, the existing `GROUPS`, the
-existing site groups, and the existing task versions.
+writes the candidate. A candidate uses schema 9, the existing `GROUPS`, the
+existing site groups, and the existing task versions. Schema 9 adds `catalog_sha`; a candidate before it has
+its catalog read at `agent_sha`. Schema 8 adds `agent-browser` and `browser-use-1-luna` to `internal-hosted`;
+a schema 7 candidate keeps that group's five arms.
 
 The candidate carries an export receipt containing the run bundle digest,
 campaign id, measured build, group ids, row count, and Parallax run trace. It

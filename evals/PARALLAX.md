@@ -20,8 +20,8 @@ The pinned version supplies:
   bridges, and their interruption handling.
 
 The plugin supplies only fastbrowse's three harness entry points, its combined
-task source, the pool lease adapter, and the publication mapping into the
-unchanged fastbrowse schema 7. Official runs use the same mapping, with the
+task source, the pool lease adapter, and the publication mapping into
+fastbrowse candidate schema 8. Official runs use the same mapping, with the
 source from `RunManifest.selection` selecting the public group.
 
 The public fastbrowse wheel does not depend on Parallax. Its `evals` optional
