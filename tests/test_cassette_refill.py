@@ -512,6 +512,33 @@ def test_gh_reports_rate_limit_headers_and_the_wait_they_name(monkeypatch: pytes
     assert raised.value.wait == 60
 
 
+def test_gh_waits_out_a_graphql_rate_limit_sent_as_http_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = '{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}'
+    stdout = f"HTTP/2.0 200 OK\nX-Ratelimit-Remaining: 0\nX-Ratelimit-Reset: 1060\n\n{body}"
+    result = subprocess.CompletedProcess(["gh"], 1, stdout=stdout, stderr="")
+    monkeypatch.setattr(refill.subprocess, "run", lambda *args, **kwargs: result)
+    monkeypatch.setattr(refill.time, "time", lambda: 1000.0)
+    with pytest.raises(refill.GitHubRateLimited) as raised:
+        refill.gh("graphql", token="test")
+    assert raised.value.wait == 60
+
+
+def test_gh_keeps_a_successful_200_that_spent_the_last_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = 'HTTP/2.0 200 OK\nX-Ratelimit-Remaining: 0\nX-Ratelimit-Reset: 1060\n\n{"data":{"commit":1}}'
+    result = subprocess.CompletedProcess(["gh"], 0, stdout=stdout, stderr="")
+    monkeypatch.setattr(refill.subprocess, "run", lambda *args, **kwargs: result)
+    assert refill.gh("graphql", token="test") == {"data": {"commit": 1}}
+
+
+def test_gh_names_the_headers_of_a_200_error_that_is_not_a_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = 'HTTP/2.0 200 OK\nX-Ratelimit-Remaining: 0\nX-Ratelimit-Reset: 1060\n\n{"errors":[{"type":"NOT_FOUND"}]}'
+    result = subprocess.CompletedProcess(["gh"], 1, stdout=stdout, stderr="gh: not found\n")
+    monkeypatch.setattr(refill.subprocess, "run", lambda *args, **kwargs: result)
+    with pytest.raises(RuntimeError) as raised:
+        refill.gh("graphql", token="test")
+    assert not isinstance(raised.value, refill.GitHubRateLimited)
+
+
 def test_gh_names_the_headers_of_a_403_that_is_not_a_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     stdout = "HTTP/2.0 403 Forbidden\nX-Ratelimit-Remaining: 3909\n\n{}"
     result = subprocess.CompletedProcess(["gh"], 1, stdout=stdout, stderr="gh: refused\n")

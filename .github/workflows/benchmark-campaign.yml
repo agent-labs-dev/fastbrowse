@@ -544,7 +544,11 @@ jobs:
               arm_selection+=("$item"); arm_tasks=$((arm_tasks + 1))
             done
             if test "$arm_tasks" -eq 0; then
-              echo "::notice::$public has no task of this selection to run in the catalog"; continue
+              echo "::notice::$public has no task of this selection to run in the catalog"
+              # The track job tells this outcome from a run that lost its artifacts.
+              mkdir -p "$OUT/mirror-$CAMPAIGN_ID-$GROUP-$public"
+              : > "$OUT/mirror-$CAMPAIGN_ID-$GROUP-$public/no-eligible-tasks"
+              continue
             fi
             run_out="$OUT/$CAMPAIGN_ID-$GROUP-$public"
             mirror="$OUT/mirror-$CAMPAIGN_ID-$GROUP-$public"
@@ -666,6 +670,14 @@ jobs:
         id: verified
         run: |
           mapfile -t run_dirs < <(find "$OUT" -type f -name parallax-verify.json -exec dirname {} \; | sort -u)
+          # An arm the catalog excludes from every selected task runs nothing and says so; it has no receipt to check.
+          # Any other arm without one lost its run, which stays fatal.
+          if test "${#run_dirs[@]}" -eq 0 && test -n "$(find "$OUT" -type f -name no-eligible-tasks -print -quit)"; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.label }} had no eligible task, so it has no run to validate"
+            exit 0
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
           test "${#run_dirs[@]}" -gt 0
           for run_dir in "${run_dirs[@]}"; do
             test -f "$run_dir/results.jsonl"
@@ -681,7 +693,7 @@ jobs:
           sparse-checkout: scripts/eval_report.py
           persist-credentials: false
       - name: Report the verified group
-        if: success() && steps.verified.outcome == 'success'
+        if: success() && steps.verified.outputs.eligible == 'true'
         continue-on-error: true
         env:
           GROUP: ${{ matrix.label }}

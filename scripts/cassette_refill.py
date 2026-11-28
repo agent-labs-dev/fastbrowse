@@ -415,10 +415,26 @@ RATE_LIMIT_HEADERS = (
 RATE_LIMIT_ATTEMPTS = 3
 
 
-def rate_limit_wait(status: Sequence[str], headers: Mapping[str, str], now: float) -> float | None:
-    """Seconds GitHub's headers say to wait after a 403 or 429, or None when they do not describe a rate limit.
-    A secondary limit sends `retry-after`; an exhausted primary limit sends `x-ratelimit-remaining: 0` and the reset."""
-    if len(status) < 2 or status[1] not in ("403", "429"):
+def graphql_rate_limited(response: str) -> bool:
+    """Whether a GraphQL body carries the `RATE_LIMITED` error type GitHub documents for an exhausted primary limit."""
+    try:
+        errors = json.loads(response).get("errors") or []
+    except (ValueError, AttributeError):
+        return False
+    return any(isinstance(error, dict) and error.get("type") == "RATE_LIMITED" for error in errors)
+
+
+def rate_limit_wait(status: Sequence[str], headers: Mapping[str, str], now: float, response: str = "") -> float | None:
+    """Seconds GitHub's headers say to wait after a refused call, or None when they do not describe a rate limit.
+    A 403 or 429 is one; GitHub documents HTTP 200 for GraphQL primary exhaustion, so a failed 200 counts only when its
+    error payload says `RATE_LIMITED`. A secondary limit sends `retry-after`; an exhausted primary limit sends
+    `x-ratelimit-remaining: 0` and the reset."""
+    if len(status) < 2:
+        return None
+    if status[1] == "200":
+        if not graphql_rate_limited(response):
+            return None
+    elif status[1] not in ("403", "429"):
         return None
     if "retry-after" in headers:
         return float(headers["retry-after"])
@@ -455,7 +471,7 @@ def gh(*args: str, token: str, body: Any = None) -> Any:
         shown = {name: limits[name] for name in RATE_LIMIT_HEADERS if name in limits}
         if shown:
             error += f" ({', '.join(f'{name}: {value}' for name, value in shown.items())})"
-        wait = rate_limit_wait(status, limits, time.time())
+        wait = rate_limit_wait(status, limits, time.time(), response)
         if wait is not None:
             raise GitHubRateLimited(error, wait)
         if len(status) >= 2 and status[0].startswith("HTTP/") and status[1] == "504":
